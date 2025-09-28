@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Australian Cyber Security Events Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🛡️</text></svg>" />
+  <style>
+    body { background-color: #f8f9fa; }
+    .dashboard-header { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+    .chart-container { background: white; border-radius: 12px; padding: 1.25rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 2rem; height: 380px; }
+    .chart-title { font-size: 1.1rem; font-weight: 600; color: #374151; margin-bottom: 1rem; text-align: center; }
+    .last-updated { color: #e5e7eb; font-size: 0.9rem; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="dashboard-header">
+    <div class="container">
+      <div class="row align-items-center">
+        <div class="col-md-8">
+          <h1 class="mb-0">Australian Cyber Security Events Dashboard</h1>
+          <p class="mb-0 last-updated">Date Range: 2020-01-01 to 2025-09-29</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="row">
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Monthly Trends in Unique Event Count</div>
+          <canvas id="monthlyTrendsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Monthly Trends in Severity</div>
+          <canvas id="severityTrendsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Monthly Trends in Average Records Affected</div>
+          <canvas id="recordsAffectedChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Monthly Trends in Event Type Mix</div>
+          <canvas id="eventTypeMixChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Overall Mix of Entity Types</div>
+          <canvas id="entityTypeChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Overall Event Type Mix (Pie)</div>
+          <canvas id="overallEventTypePieChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Records Affected Histogram</div>
+          <canvas id="recordsHistogramChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Histogram of Monthly Unique Event Counts</div>
+          <canvas id="monthlyCountsHistChart"></canvas>
+          <div id="monthlyCountsStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>
+          <canvas id="oaicComparisonChart"></canvas>
+          <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Embedded data (static)
+    const monthlyCounts = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "counts": [7, 14, 10, 6, 16, 21, 8, 14, 13, 7, 11, 12, 11, 10, 19, 14, 9, 12, 14, 6, 2, 6, 16, 20, 11, 10, 11, 7, 21, 8, 10, 15, 20, 42, 26, 22, 16, 12, 49, 27, 29, 20, 14, 24, 34, 14, 40, 35, 43, 38, 23, 37, 57, 49, 42, 35, 29, 35, 32, 14, 41, 40, 34, 46, 25, 33, 66, 41], "total_events": 1555, "avg_per_month": 22.86764705882353};
+    const severityTrends = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "data": {"Critical": [2, 1, 2, 0, 2, 0, 1, 1, 2, 0, 4, 1, 1, 0, 2, 0, 0, 3, 0, 0, 0, 2, 1, 2, 1, 2, 0, 1, 2, 1, 1, 2, 8, 7, 4, 5, 2, 1, 5, 3, 6, 2, 2, 0, 3, 2, 6, 2, 8, 4, 2, 4, 3, 2, 4, 1, 2, 2, 3, 1, 4, 4, 4, 5, 4, 4, 8, 2], "High": [4, 12, 8, 6, 9, 17, 7, 11, 9, 6, 6, 10, 9, 9, 15, 14, 8, 7, 11, 4, 1, 4, 11, 17, 8, 8, 7, 3, 17, 6, 6, 9, 11, 32, 12, 16, 11, 7, 38, 17, 18, 9, 9, 17, 29, 8, 22, 18, 25, 28, 15, 27, 42, 35, 26, 29, 19, 24, 25, 9, 28, 19, 26, 30, 15, 19, 38, 29], "Unknown": [1, 0, 0, 0, 3, 3, 0, 2, 0, 1, 1, 0, 0, 0, 2, 0, 1, 0, 2, 1, 0, 0, 1, 0, 1, 0, 2, 0, 1, 0, 2, 3, 0, 2, 8, 1, 2, 3, 6, 2, 2, 6, 2, 3, 1, 0, 10, 9, 9, 3, 3, 3, 10, 8, 6, 5, 5, 7, 4, 1, 7, 17, 4, 10, 4, 8, 14, 8], "Medium": [0, 1, 0, 0, 2, 1, 0, 0, 2, 0, 0, 1, 1, 1, 0, 0, 0, 2, 1, 1, 1, 0, 3, 1, 1, 0, 1, 3, 1, 1, 1, 1, 1, 1, 2, 0, 1, 1, 0, 5, 3, 3, 1, 4, 1, 4, 2, 6, 1, 3, 3, 3, 2, 4, 6, 0, 3, 2, 0, 3, 2, 0, 0, 1, 2, 2, 6, 2], "Low": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}};
+    const recordsAffected = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-08", "2021-09", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "averages": [33826.666666666664, 15545.5, 68280.0, 38000.0, 17551011.75, 16480011.0, 6813466.666666667, 182236.77777777778, 54236.166666666664, 179000.0, 1000000.0, 124607.2, 1830000.0, 54510000.0, 1460000.0, 76153185.71428572, 1944333.3333333333, 175040250.0, 52700.0, 5300.0, 166955.66666666666, 14310062.5, 1786000.0, 309200.0, 4577.333333333333, 4100100.0, 82590.14285714286, 153250.0, 46980.0, 1099414.6, 8502749.916666666, 4027823.529411765, 7460500.0, 3394777.777777778, 5027.714285714285, 3337535.0, 3303881.9166666665, 4883271.454545454, 2621691.214285714, 7500.0, 4748.0, 2819080.0, 1337978.0588235294, 2185572.8333333335, 2656600.0, 11875.0, 3291000.0, 5379154.428571428, 5734583.333333333, 3085127.8181818184, 45599609.428571425, 3827139.75, 6822285.75, 4343782.0, 2075970.2727272727, 25728815.8, 3056677.875, 2628879.4, 2066311.875, 294845.6666666667, 2164166.6666666665, 770035.7142857143, 4653148.5, 6227500.0, 4506846.615384615, 2226764.1333333333], "confidence_intervals": [[27061.333333333332, 40592.0], [12436.4, 18654.6], [54624.0, 81936.0], [30400.0, 45600.0], [14040809.4, 21061214.1], [13184008.8, 19776013.2], [5450773.333333334, 8176160.0], [145789.42222222223, 218684.13333333333], [43388.933333333334, 65083.399999999994], [143200.0, 214800.0], [800000.0, 1200000.0], [99685.76, 149528.64], [1464000.0, 2196000.0], [43608000.0, 65412000.0], [1168000.0, 1752000.0], [60922548.571428575, 91383822.85714287], [1555466.6666666665, 2333200.0], [140032200.0, 210048300.0], [42160.0, 63240.0], [4240.0, 6360.0], [133564.53333333333, 200346.8], [11448050.0, 17172075.0], [1428800.0, 2143200.0], [247360.0, 371040.0], [3661.8666666666663, 5492.799999999999], [3280080.0, 4920120.0], [66072.11428571428, 99108.17142857143], [122600.0, 183900.0], [37584.0, 56376.0], [879531.68, 1319297.52], [6802199.933333333, 10203299.899999999], [3222258.823529412, 4833388.235294118], [5968400.0, 8952600.0], [2715822.2222222225, 4073733.3333333335], [4022.1714285714284, 6033.257142857143], [2670028.0, 4005042.0], [2643105.533333333, 3964658.3], [3906617.163636363, 5859925.745454545], [2097352.9714285713, 3146029.457142857], [6000.0, 9000.0], [3798.4, 5697.6], [2255264.0, 3382896.0], [1070382.4470588234, 1605573.6705882354], [1748458.2666666668, 2622687.4000000004], [2125280.0, 3187920.0], [9500.0, 14250.0], [2632800.0, 3949200.0], [4303323.542857142, 6454985.314285714], [4587666.666666666, 6881500.0], [2468102.254545455, 3702153.381818182], [36479687.54285714, 54719531.31428571], [3061711.8, 4592567.7], [5457828.6, 8186742.9], [3475025.6, 5212538.4], [1660776.2181818183, 2491164.327272727], [20583052.64, 30874578.96], [2445342.3, 3668013.45], [2103103.52, 3154655.28], [1653049.5, 2479574.25], [235876.53333333335, 353814.80000000005], [1731333.3333333333, 2597000.0], [616028.5714285715, 924042.8571428572], [3722518.8, 5583778.2], [4982000.0, 7473000.0], [3605477.292307692, 5408215.938461538], [1781411.3066666666, 2672116.96]], "sample_sizes": [3, 2, 5, 6, 4, 2, 3, 9, 6, 4, 1, 5, 1, 3, 4, 7, 3, 4, 2, 1, 9, 8, 5, 5, 3, 2, 7, 4, 2, 5, 12, 17, 5, 9, 7, 4, 24, 11, 14, 1, 5, 5, 17, 6, 10, 4, 6, 14, 6, 11, 14, 8, 12, 9, 11, 10, 8, 5, 8, 6, 6, 14, 4, 4, 13, 15]};
+    const eventTypeMix = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "types": {"Data Breach": [4, 5, 7, 6, 6, 2, 6, 11, 9, 5, 3, 8, 8, 7, 3, 6, 4, 7, 3, 3, 1, 6, 8, 9, 9, 9, 5, 4, 14, 5, 7, 11, 17, 33, 17, 14, 7, 7, 39, 18, 23, 11, 9, 19, 28, 11, 10, 16, 17, 23, 12, 25, 41, 27, 26, 13, 17, 19, 16, 8, 7, 12, 20, 18, 8, 15, 39, 26], "Other": [1, 1, 0, 0, 2, 3, 0, 2, 0, 1, 1, 0, 2, 0, 5, 0, 0, 0, 3, 2, 0, 0, 3, 2, 1, 0, 2, 1, 0, 0, 2, 2, 1, 3, 6, 2, 2, 3, 6, 2, 2, 5, 3, 3, 1, 0, 19, 11, 12, 3, 4, 3, 7, 7, 7, 6, 4, 6, 2, 0, 7, 17, 3, 11, 5, 6, 12, 8], "Ransomware": [2, 8, 2, 0, 5, 5, 1, 1, 3, 1, 4, 4, 0, 3, 4, 4, 2, 5, 3, 1, 1, 0, 5, 7, 1, 1, 2, 2, 4, 3, 1, 2, 1, 4, 3, 1, 6, 2, 4, 5, 4, 3, 1, 0, 5, 2, 3, 4, 11, 8, 5, 6, 7, 12, 8, 14, 5, 9, 12, 6, 23, 10, 8, 10, 12, 12, 13, 5], "Phishing": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "State Sponsored Attack": [0, 0, 0, 0, 2, 8, 0, 0, 1, 0, 0, 0, 0, 0, 3, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0], "Vulnerability Exploit": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Infrastructure Attack": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 3, 2, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 7, 2, 1, 2, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 4, 0, 2, 2, 0, 0, 2, 0], "Malware": [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0], "Financial Fraud": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], "Supply Chain Attack": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Insider Threat": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Denial Of Service": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2], "Identity Theft": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}};
+    const overallEventTypeMix = {"labels": ["Data Breach", "Ransomware", "Other", "Infrastructure Attack", "State Sponsored Attack", "Malware", "Vulnerability Exploit", "Denial Of Service", "Phishing", "Financial Fraud", "Supply Chain Attack", "Insider Threat", "Identity Theft"], "counts": [869, 331, 235, 44, 30, 14, 9, 8, 6, 6, 1, 1, 1]};
+    const entityTypes = {"types": [{"type": "EntityType.OTHER", "events": 810, "entities": 785}, {"type": "EntityType.GOVERNMENT", "events": 766, "entities": 464}, {"type": "EntityType.INDIVIDUAL", "events": 628, "entities": 492}, {"type": "EntityType.TECHNOLOGY", "events": 346, "entities": 250}, {"type": "EntityType.MEDIA", "events": 325, "entities": 103}, {"type": "EntityType.HEALTHCARE", "events": 283, "entities": 107}, {"type": "EntityType.FINANCIAL", "events": 146, "entities": 106}, {"type": "EntityType.EDUCATION", "events": 135, "entities": 63}, {"type": "EntityType.TELECOMMUNICATIONS", "events": 113, "entities": 20}, {"type": "EntityType.NON_PROFIT", "events": 107, "entities": 81}, {"type": "EntityType.TRANSPORTATION", "events": 66, "entities": 26}, {"type": "EntityType.RETAIL", "events": 62, "entities": 39}, {"type": "EntityType.MANUFACTURING", "events": 21, "entities": 10}, {"type": "EntityType.ENERGY", "events": 14, "entities": 8}]};
+    const recordsHistogram = {"bins": ["1-10", "11-100", "101-1K", "1K-10K", "10K-100K", "100K-1M", "1M-10M", "10M+"], "frequencies": [3, 15, 29, 85, 93, 94, 88, 53]};
+    const monthlyCountsStats = {"bins": ["2 - 8", "8 - 14", "14 - 21", "21 - 27", "27 - 34", "34 - 40", "40 - 46", "46 - 53", "53 - 59", "59 - 66"], "frequencies": [9, 20, 10, 6, 4, 9, 6, 2, 1, 1], "mean": 22.86764705882353, "variance": 204.08542387543253, "k_estimate": 2.885640091127047, "model": "Over-dispersed (likely Negative Binomial)"};
+    const oaicComparison = {"periods": ["2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2", "2025 H1", "2025 H2"], "database_counts": [74, 65, 75, 64, 68, 135, 153, 161, 247, 187, 219, 107], "oaic_counts": [447, 512, 530, 436, 250, 350, 409, 483, 527, 595, null, null], "oaic_available": 10, "database_available": 12};
+
+    const colors = {
+      primary: '#2563eb',
+      secondary: '#10b981',
+      warning: '#f59e0b',
+      danger: '#ef4444',
+      info: '#06b6d4',
+      severity: {
+        'Critical': '#dc2626', 'High': '#ea580c', 'Medium': '#ca8a04', 'Low': '#16a34a', 'Unknown': '#6b7280'
+      }
+    };
+
+    // 1) Monthly Trends (line)
+    new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: monthlyCounts.months,
+        datasets: [{
+          label: 'Unique Events',
+          data: monthlyCounts.counts,
+          borderColor: colors.primary,
+          backgroundColor: '#2563eb20',
+          fill: true,
+          tension: 0.4,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }},
+        scales: { y: { beginAtZero: true }, x: { title: { display: true, text: 'Month' }}}
+      }
+    });
+
+    // 2) Severity Trends (stacked bar)
+    const sevDatasets = Object.keys(severityTrends.data).map(sev => ({
+      label: sev,
+      data: severityTrends.data[sev],
+      backgroundColor: colors.severity[sev] || '#6b7280',
+      borderColor: colors.severity[sev] || '#6b7280',
+    }));
+    new Chart(document.getElementById('severityTrendsChart').getContext('2d'), {
+      type: 'bar',
+      data: { labels: severityTrends.months, datasets: sevDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' } },
+        scales: {
+          x: { stacked: true, title: { display: true, text: 'Month' }},
+          y: { stacked: true, beginAtZero: true, title: { display: true, text: 'Events' }}
+        }
+      }
+    });
+
+    // 3) Records Affected (line, log scale)
+    new Chart(document.getElementById('recordsAffectedChart').getContext('2d'), {
+      type: 'line',
+      data: { labels: recordsAffected.months, datasets: [{
+        label: 'Average Records Affected', data: recordsAffected.averages,
+        borderColor: colors.secondary, backgroundColor: '#10b98120', fill: false, tension: 0.4
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }},
+        scales: {
+          y: { type: 'logarithmic', beginAtZero: true, title: { display: true, text: 'Records (log)' }},
+          x: { title: { display: true, text: 'Month' }}
+        }
+      }
+    });
+
+    // 4) Event Type Mix (stacked bar)
+    function generateUniqueColors(n) {
+      // Golden angle based distinct colors
+      const colors = [];
+      const golden = 137.508;
+      for (let i = 0; i < n; i++) {
+        const hue = (i * golden) % 360;
+        const sat = 70;
+        const light = 50;
+        colors.push(`hsl(${hue}, ${sat}%, ${light}%)`);
+      }
+      return colors;
+    }
+    const etKeys = Object.keys(eventTypeMix.types);
+    const uniqueColors = generateUniqueColors(etKeys.length);
+    const etDatasets = etKeys.map((t, i) => ({
+      label: t,
+      data: eventTypeMix.types[t],
+      backgroundColor: uniqueColors[i],
+      borderColor: uniqueColors[i]
+    }));
+    new Chart(document.getElementById('eventTypeMixChart').getContext('2d'), {
+      type: 'bar',
+      data: { labels: eventTypeMix.months, datasets: etDatasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' }},
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true }}
+      }
+    });
+
+    // 5) Entity Type Distribution (doughnut)
+    const entityLabels = entityTypes.types.map(t => t.type);
+    const entityValues = entityTypes.types.map(t => t.events);
+    new Chart(document.getElementById('entityTypeChart').getContext('2d'), {
+      type: 'doughnut',
+      data: { labels: entityLabels, datasets: [{ data: entityValues, backgroundColor: entityLabels.map((_, i) => `hsl(${(i*360/entityLabels.length)||0},70%,50%)`) }]},
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }}}
+    });
+
+    // 6) Overall Event Type Mix (pie)
+    (function(){
+      const labels = overallEventTypeMix.labels || [];
+      const counts = overallEventTypeMix.counts || [];
+      const colors = generateUniqueColors(labels.length);
+      new Chart(document.getElementById('overallEventTypePieChart').getContext('2d'), {
+        type: 'pie',
+        data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderColor: colors }]},
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }}}
+      });
+    })();
+
+    // 6) Records Histogram (bar)
+    new Chart(document.getElementById('recordsHistogramChart').getContext('2d'), {
+      type: 'bar',
+      data: { labels: recordsHistogram.bins, datasets: [{ label: 'Frequency', data: recordsHistogram.frequencies, backgroundColor: '#06b6d480', borderColor: '#06b6d4' }]},
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }}, scales: { y: { beginAtZero: true }}}
+    });
+
+    // 7) Histogram of Monthly Unique Event Counts + dispersion stats
+    new Chart(document.getElementById('monthlyCountsHistChart').getContext('2d'), {
+      type: 'bar',
+      data: { labels: monthlyCountsStats.bins, datasets: [{ label: 'Months', data: monthlyCountsStats.frequencies, backgroundColor: '#64748b80', borderColor: '#64748b' }]},
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }}, scales: { y: { beginAtZero: true }}}
+    });
+    (function(){
+      const s = monthlyCountsStats;
+      const lines = [];
+      lines.push(`Mean: ${s.mean?.toFixed ? s.mean.toFixed(2) : s.mean}`);
+      lines.push(`Variance: ${s.variance?.toFixed ? s.variance.toFixed(2) : s.variance}`);
+      if (s.k_estimate) lines.push(`NB dispersion k (est.): ${s.k_estimate.toFixed ? s.k_estimate.toFixed(2) : s.k_estimate}`);
+      lines.push(`Model: ${s.model}`);
+      document.getElementById('monthlyCountsStats').textContent = lines.join(' • ');
+    })();
+
+    // 9) OAIC Comparison Chart
+    (function(){
+      const oaic = oaicComparison;
+      if (!oaic.periods || oaic.periods.length === 0) {
+        document.getElementById('oaicComparisonChart').parentElement.innerHTML =
+          '<div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.<br>Run <code>python oaic_data_scraper.py</code> first.</p></div>';
+        return;
+      }
+
+      const datasets = [
+        {
+          label: 'Database Events',
+          data: oaic.database_counts,
+          borderColor: colors.primary,
+          backgroundColor: colors.primary + '20',
+          fill: false,
+          tension: 0.1,
+          pointRadius: 5
+        }
+      ];
+
+      // Only add OAIC dataset if we have OAIC data
+      if (oaic.oaic_available > 0) {
+        datasets.push({
+          label: 'OAIC Official Notifications',
+          data: oaic.oaic_counts,
+          borderColor: colors.danger,
+          backgroundColor: colors.danger + '20',
+          fill: false,
+          tension: 0.1,
+          pointRadius: 5,
+          spanGaps: false  // Don't connect points where data is missing
+        });
+      }
+
+      new Chart(document.getElementById('oaicComparisonChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: oaic.periods,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                footer: function(tooltipItems) {
+                  const dbCount = tooltipItems.find(item => item.datasetIndex === 0);
+                  const oaicCount = tooltipItems.find(item => item.datasetIndex === 1);
+
+                  if (dbCount && oaicCount && oaicCount.raw !== null) {
+                    const ratio = (dbCount.raw / oaicCount.raw).toFixed(2);
+                    return `Ratio (DB/OAIC): ${ratio}x`;
+                  }
+                  return '';
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Number of Events/Notifications'
+              }
+            },
+            x: {
+              title: {
+                display: true,
+                text: 'Half-Year Period'
+              }
+            }
+          }
+        }
+      });
+
+      // Add summary statistics
+      const stats = [];
+      stats.push(`Database periods: ${oaic.database_available}`);
+      if (oaic.oaic_available > 0) {
+        stats.push(`OAIC periods: ${oaic.oaic_available}`);
+
+        // Calculate ratios for overlapping periods
+        const ratios = [];
+        for (let i = 0; i < oaic.periods.length; i++) {
+          const dbCount = oaic.database_counts[i];
+          const oaicCount = oaic.oaic_counts[i];
+          if (dbCount && oaicCount) {
+            ratios.push(dbCount / oaicCount);
+          }
+        }
+
+        if (ratios.length > 0) {
+          const avgRatio = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+          stats.push(`Avg ratio (DB/OAIC): ${avgRatio.toFixed(2)}x`);
+        }
+      } else {
+        stats.push('OAIC: No data available');
+      }
+
+      document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
+    })();
+  </script>
+</body>
+</html>

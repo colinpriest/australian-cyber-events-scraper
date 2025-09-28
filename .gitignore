@@ -1,0 +1,9 @@
+# Environment and secrets
+.env
+bigquery_token.json
+client_secrets.json
+
+# Local tooling directories
+.conda/
+.claude/
+
