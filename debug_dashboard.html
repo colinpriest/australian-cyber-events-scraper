@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Debug</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.js"></script>
+</head>
+<body>
+    <h1>Dashboard API Test</h1>
+    <div id="status">Testing...</div>
+    <div id="results"></div>
+    <canvas id="testChart" width="400" height="200"></canvas>
+
+    <script>
+        console.log('Debug page starting...');
+
+        // Test the API endpoints directly
+        async function testAPI() {
+            const results = document.getElementById('results');
+            const status = document.getElementById('status');
+
+            try {
+                console.log('Testing API endpoint...');
+                const response = await fetch('/api/v1/dashboard/monthly-event-counts?start_date=2020-01-01&end_date=2020-12-31');
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                console.log('API Data:', data);
+
+                results.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                status.textContent = 'API call successful!';
+
+                // Try to create a simple chart
+                const ctx = document.getElementById('testChart').getContext('2d');
+                const chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.months,
+                        datasets: [{
+                            label: 'Events',
+                            data: data.counts,
+                            borderColor: '#2563eb',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: false
+                    }
+                });
+
+                console.log('Chart created successfully');
+
+            } catch (error) {
+                console.error('Error:', error);
+                status.textContent = 'Error: ' + error.message;
+                results.innerHTML = '<div style="color: red;">Error: ' + error.message + '</div>';
+            }
+        }
+
+        // Run test when page loads
+        document.addEventListener('DOMContentLoaded', testAPI);
+    </script>
+</body>
+</html>

@@ -1,0 +1,298 @@
+[
+  {
+    "title": "Notifiable Data Breaches Report: January–June 2020",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-januaryjune-2020",
+    "year": 2020,
+    "period": "H1",
+    "quarter": "H1",
+    "start_month": 1,
+    "end_month": 6,
+    "total_notifications": 447,
+    "cyber_incidents_total": 308,
+    "cyber_incidents_percentage": 69,
+    "malicious_attacks": 61,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": 15,
+    "phishing": 36,
+    "hacking": 13,
+    "brute_force": null,
+    "malware": 4,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Health",
+        "notifications": 115
+      }
+    ],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: July–December 2020",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-julydecember-2020",
+    "year": 2020,
+    "period": "H2",
+    "quarter": "H2",
+    "start_month": 7,
+    "end_month": 12,
+    "total_notifications": 512,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": 58,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": 17,
+    "phishing": 25,
+    "hacking": 14,
+    "brute_force": null,
+    "malware": 7,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Health",
+        "notifications": 123
+      },
+      {
+        "sector": "Australian",
+        "notifications": 33
+      }
+    ],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: January–June 2021",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-januaryjune-2021",
+    "year": 2021,
+    "period": "H1",
+    "quarter": "H1",
+    "start_month": 1,
+    "end_month": 6,
+    "total_notifications": 530,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": 289,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": 24,
+    "phishing": 30,
+    "hacking": 9,
+    "brute_force": null,
+    "malware": 5,
+    "compromised_credentials": null,
+    "top_sectors": [],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: July–December 2021",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-july-to-december-2021",
+    "year": 2021,
+    "period": "H2",
+    "quarter": "H2",
+    "start_month": 7,
+    "end_month": 12,
+    "total_notifications": 436,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": 256,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": 23,
+    "phishing": 32,
+    "hacking": 8,
+    "brute_force": null,
+    "malware": 3,
+    "compromised_credentials": null,
+    "top_sectors": [],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: January to June 2022",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-january-to-june-2022",
+    "year": 2022,
+    "period": "H1",
+    "quarter": "H1",
+    "start_month": 1,
+    "end_month": 6,
+    "total_notifications": 250,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": 250,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": 51,
+    "phishing": 42,
+    "hacking": 13,
+    "brute_force": 200,
+    "malware": 9,
+    "compromised_credentials": null,
+    "top_sectors": [],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: July to December 2022",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-july-to-december-2022",
+    "year": 2022,
+    "period": "H2",
+    "quarter": "H2",
+    "start_month": 7,
+    "end_month": 12,
+    "total_notifications": 350,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": null,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": null,
+    "phishing": null,
+    "hacking": null,
+    "brute_force": null,
+    "malware": 109,
+    "compromised_credentials": null,
+    "top_sectors": [],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: January to June 2023",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-january-to-june-2023",
+    "year": 2023,
+    "period": "H1",
+    "quarter": "H1",
+    "start_month": 1,
+    "end_month": 6,
+    "total_notifications": 409,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": null,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": null,
+    "phishing": 331,
+    "hacking": 164,
+    "brute_force": null,
+    "malware": 133,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Finance",
+        "notifications": 54
+      }
+    ],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable data breaches report July to December 2023",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-july-to-december-2023",
+    "year": 2023,
+    "period": "H2",
+    "quarter": "H2",
+    "start_month": 7,
+    "end_month": 12,
+    "total_notifications": 483,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": null,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": null,
+    "phishing": 591,
+    "hacking": null,
+    "brute_force": null,
+    "malware": 103569,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Health",
+        "notifications": 10422
+      },
+      {
+        "sector": "Australian",
+        "notifications": 388
+      },
+      {
+        "sector": "Finance",
+        "notifications": 49
+      },
+      {
+        "sector": "Retail",
+        "notifications": 398
+      }
+    ],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: January to June 2024",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-january-to-june-2024",
+    "year": 2024,
+    "period": "H1",
+    "quarter": "H1",
+    "start_month": 1,
+    "end_month": 6,
+    "total_notifications": 527,
+    "cyber_incidents_total": 200,
+    "cyber_incidents_percentage": 38,
+    "malicious_attacks": null,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": null,
+    "phishing": null,
+    "hacking": null,
+    "brute_force": null,
+    "malware": 105,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Health",
+        "notifications": 10219
+      },
+      {
+        "sector": "Australian",
+        "notifications": 6312
+      },
+      {
+        "sector": "Education",
+        "notifications": 448
+      },
+      {
+        "sector": "Retail",
+        "notifications": 296
+      }
+    ],
+    "key_findings": []
+  },
+  {
+    "title": "Notifiable Data Breaches Report: July to December 2024",
+    "url": "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications/notifiable-data-breaches-report-july-to-december-2024",
+    "year": 2024,
+    "period": "H2",
+    "quarter": "H2",
+    "start_month": 7,
+    "end_month": 12,
+    "total_notifications": 595,
+    "cyber_incidents_total": null,
+    "cyber_incidents_percentage": null,
+    "malicious_attacks": null,
+    "human_error": null,
+    "system_faults": null,
+    "ransomware": null,
+    "phishing": null,
+    "hacking": null,
+    "brute_force": null,
+    "malware": 122,
+    "compromised_credentials": null,
+    "top_sectors": [
+      {
+        "sector": "Health",
+        "notifications": 12120
+      },
+      {
+        "sector": "Australian",
+        "notifications": 10017
+      },
+      {
+        "sector": "Retail",
+        "notifications": 346
+      }
+    ],
+    "key_findings": []
+  }
+]
