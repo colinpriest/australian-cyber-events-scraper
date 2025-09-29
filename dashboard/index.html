@@ -85,6 +85,13 @@
           <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
       </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container" style="height: 500px;">
+          <div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>
+          <canvas id="correlationMatrixChart"></canvas>
+          <div id="correlationMatrixStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -98,6 +105,7 @@
     const entityTypes = {"types": [{"type": "EntityType.OTHER", "events": 810, "entities": 785}, {"type": "EntityType.GOVERNMENT", "events": 766, "entities": 464}, {"type": "EntityType.INDIVIDUAL", "events": 628, "entities": 492}, {"type": "EntityType.TECHNOLOGY", "events": 346, "entities": 250}, {"type": "EntityType.MEDIA", "events": 325, "entities": 103}, {"type": "EntityType.HEALTHCARE", "events": 283, "entities": 107}, {"type": "EntityType.FINANCIAL", "events": 146, "entities": 106}, {"type": "EntityType.EDUCATION", "events": 135, "entities": 63}, {"type": "EntityType.TELECOMMUNICATIONS", "events": 113, "entities": 20}, {"type": "EntityType.NON_PROFIT", "events": 107, "entities": 81}, {"type": "EntityType.TRANSPORTATION", "events": 66, "entities": 26}, {"type": "EntityType.RETAIL", "events": 62, "entities": 39}, {"type": "EntityType.MANUFACTURING", "events": 21, "entities": 10}, {"type": "EntityType.ENERGY", "events": 14, "entities": 8}]};
     const recordsHistogram = {"bins": ["1-10", "11-100", "101-1K", "1K-10K", "10K-100K", "100K-1M", "1M-10M", "10M+"], "frequencies": [3, 15, 29, 85, 93, 94, 88, 53]};
     const monthlyCountsStats = {"bins": ["2 - 8", "8 - 14", "14 - 21", "21 - 27", "27 - 34", "34 - 40", "40 - 46", "46 - 53", "53 - 59", "59 - 66"], "frequencies": [9, 20, 10, 6, 4, 9, 6, 2, 1, 1], "mean": 22.86764705882353, "variance": 204.08542387543253, "k_estimate": 2.885640091127047, "model": "Over-dispersed (likely Negative Binomial)"};
+    const eventTypeCorrelation = {"labels": ["Data Breach", "Other", "Ransomware", "Phishing", "State Sponsored Attack", "Vulnerability Exploit", "Infrastructure Attack", "Malware", "Denial Of Service"], "correlation_matrix": [[1.0, 0.4, 0.317, -0.06, -0.08, -0.059, 0.039, 0.064, 0.236], [0.4, 1.0, 0.484, 0.017, 0.08, 0.107, 0.476, 0.108, 0.27], [0.317, 0.484, 1.0, 0.096, 0.059, -0.072, 0.225, 0.153, 0.183], [-0.06, 0.017, 0.096, 1.0, -0.03, -0.108, -0.038, -0.128, -0.091], [-0.08, 0.08, 0.059, -0.03, 1.0, 0.07, 0.2, 0.411, -0.049], [-0.059, 0.107, -0.072, -0.108, 0.07, 1.0, 0.166, 0.011, -0.102], [0.039, 0.476, 0.225, -0.038, 0.2, 0.166, 1.0, 0.095, 0.055], [0.064, 0.108, 0.153, -0.128, 0.411, 0.011, 0.095, 1.0, -0.047], [0.236, 0.27, 0.183, -0.091, -0.049, -0.102, 0.055, -0.047, 1.0]], "min_correlation": -0.128, "max_correlation": 1.0};
     const oaicComparison = {"periods": ["2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2", "2025 H1", "2025 H2"], "database_counts": [74, 65, 75, 64, 68, 135, 153, 161, 247, 187, 219, 107], "oaic_counts": [447, 512, 530, 436, 250, 350, 409, 483, 527, 595, null, null], "oaic_available": 10, "database_available": 12};
 
     const colors = {
@@ -351,6 +359,135 @@
       }
 
       document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
+    })();
+
+    // 10) Event Type Correlation Matrix
+    (function(){
+      const corr = eventTypeCorrelation;
+      if (!corr.labels || corr.labels.length === 0) {
+        document.getElementById('correlationMatrixChart').parentElement.innerHTML =
+          '<div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>' +
+          '<div class="text-center text-muted mt-5"><p>Insufficient data for correlation analysis.<br>Need at least 2 event types with 5+ months of data.</p></div>';
+        return;
+      }
+
+      const labels = corr.labels;
+      const matrix = corr.correlation_matrix;
+      
+      // Create a custom heatmap using HTML table since Chart.js doesn't have a native heatmap
+      const canvas = document.getElementById('correlationMatrixChart');
+      const ctx = canvas.getContext('2d');
+      const container = canvas.parentElement;
+      
+      // Create table-based heatmap
+      const table = document.createElement('table');
+      table.style.width = '100%';
+      table.style.height = '100%';
+      table.style.borderCollapse = 'collapse';
+      table.style.fontSize = '12px';
+      
+      // Create header row
+      const headerRow = document.createElement('tr');
+      const emptyCell = document.createElement('th');
+      emptyCell.style.border = '1px solid #ddd';
+      emptyCell.style.padding = '8px';
+      emptyCell.style.backgroundColor = '#f8f9fa';
+      headerRow.appendChild(emptyCell);
+      
+      labels.forEach(label => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        th.style.border = '1px solid #ddd';
+        th.style.padding = '8px';
+        th.style.backgroundColor = '#f8f9fa';
+        th.style.fontSize = '11px';
+        th.style.transform = 'rotate(-45deg)';
+        th.style.transformOrigin = 'center';
+        th.style.whiteSpace = 'nowrap';
+        headerRow.appendChild(th);
+      });
+      table.appendChild(headerRow);
+      
+      // Create data rows
+      labels.forEach((label, i) => {
+        const row = document.createElement('tr');
+        
+        // Row label
+        const rowLabel = document.createElement('td');
+        rowLabel.textContent = label;
+        rowLabel.style.border = '1px solid #ddd';
+        rowLabel.style.padding = '8px';
+        rowLabel.style.backgroundColor = '#f8f9fa';
+        rowLabel.style.fontSize = '11px';
+        rowLabel.style.fontWeight = 'bold';
+        row.appendChild(rowLabel);
+        
+        // Data cells
+        labels.forEach((_, j) => {
+          const cell = document.createElement('td');
+          const value = matrix[i][j];
+          cell.textContent = value.toFixed(3);
+          cell.style.border = '1px solid #ddd';
+          cell.style.padding = '8px';
+          cell.style.textAlign = 'center';
+          cell.style.fontSize = '11px';
+          cell.style.fontWeight = 'bold';
+          
+          // Color coding
+          if (value < 0) {
+            const intensity = Math.abs(value);
+            const alpha = 0.3 + intensity * 0.7;
+            cell.style.backgroundColor = `rgba(239, 68, 68, ${alpha})`;
+            cell.style.color = intensity > 0.5 ? 'white' : 'black';
+          } else if (value > 0) {
+            const intensity = value;
+            const alpha = 0.3 + intensity * 0.7;
+            cell.style.backgroundColor = `rgba(59, 130, 246, ${alpha})`;
+            cell.style.color = intensity > 0.5 ? 'white' : 'black';
+          } else {
+            cell.style.backgroundColor = 'rgba(156, 163, 175, 0.3)';
+            cell.style.color = 'black';
+          }
+          
+          // Tooltip
+          cell.title = `${labels[i]} vs ${labels[j]}: ${value.toFixed(3)}`;
+          row.appendChild(cell);
+        });
+        
+        table.appendChild(row);
+      });
+      
+      // Replace canvas with table
+      container.replaceChild(table, canvas);
+      
+      // Add correlation statistics
+      const stats = [];
+      stats.push(`Event types: ${labels.length}`);
+      stats.push(`Min correlation: ${corr.min_correlation.toFixed(3)}`);
+      stats.push(`Max correlation: ${corr.max_correlation.toFixed(3)}`);
+      
+      // Find strongest positive and negative correlations
+      let maxPos = -1, maxNeg = 1;
+      let maxPosPair = '', maxNegPair = '';
+      
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = i + 1; j < labels.length; j++) {
+          const corrValue = matrix[i][j];
+          if (corrValue > maxPos) {
+            maxPos = corrValue;
+            maxPosPair = `${labels[i]} & ${labels[j]}`;
+          }
+          if (corrValue < maxNeg) {
+            maxNeg = corrValue;
+            maxNegPair = `${labels[i]} & ${labels[j]}`;
+          }
+        }
+      }
+      
+      if (maxPosPair) stats.push(`Strongest positive: ${maxPosPair} (${maxPos.toFixed(3)})`);
+      if (maxNegPair) stats.push(`Strongest negative: ${maxNegPair} (${maxNeg.toFixed(3)})`);
+
+      document.getElementById('correlationMatrixStats').textContent = stats.join(' • ');
     })();
   </script>
 </body>

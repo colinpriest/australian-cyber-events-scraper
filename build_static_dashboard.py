@@ -19,6 +19,7 @@ import glob
 from datetime import date
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import pandas as pd
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -357,6 +358,49 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
     }
 
 
+def compute_event_type_correlation_matrix(event_type_mix: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate correlation matrix between event types based on monthly counts."""
+    types = event_type_mix['types']
+    
+    # Get all event types that have sufficient data (at least 5 non-zero months)
+    valid_types = []
+    for event_type, counts in types.items():
+        non_zero_count = sum(1 for count in counts if count > 0)
+        if non_zero_count >= 5:  # Require at least 5 months with events
+            valid_types.append(event_type)
+    
+    if len(valid_types) < 2:
+        return {
+            'labels': [],
+            'correlation_matrix': [],
+            'min_correlation': 0,
+            'max_correlation': 0
+        }
+    
+    # Create DataFrame with monthly counts for valid event types
+    data_dict = {}
+    for event_type in valid_types:
+        data_dict[event_type] = types[event_type]
+    
+    df = pd.DataFrame(data_dict)
+    
+    # Calculate correlation matrix
+    correlation_matrix = df.corr()
+    
+    # Handle NaN values (can occur if a type has zero variance)
+    correlation_matrix = correlation_matrix.fillna(0.0)
+    
+    # Round to 3 decimal places for cleaner display
+    correlation_matrix = correlation_matrix.round(3)
+    
+    return {
+        'labels': valid_types,
+        'correlation_matrix': correlation_matrix.values.tolist(),
+        'min_correlation': float(correlation_matrix.min().min()),
+        'max_correlation': float(correlation_matrix.max().max())
+    }
+
+
 def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, Any]:
     """Compute histogram and dispersion estimate for monthly unique event counts.
     - Uses 10 equal-width bins from min to max (inclusive).
@@ -422,6 +466,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     ent = json.dumps(data['entity_types'])
     rh = json.dumps(data['records_histogram'])
     mcs = json.dumps(data['monthly_counts_stats'])
+    etc = json.dumps(data['event_type_correlation'])
     oaic_comp = json.dumps(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
 
     template = """<!DOCTYPE html>
@@ -511,6 +556,13 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
       </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container" style="height: 500px;">
+          <div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>
+          <canvas id="correlationMatrixChart"></canvas>
+          <div id="correlationMatrixStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -524,6 +576,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const entityTypes = __ENT__;
     const recordsHistogram = __RH__;
     const monthlyCountsStats = __MCS__;
+    const eventTypeCorrelation = __ETC__;
     const oaicComparison = __OAIC_COMP__;
 
     const colors = {
@@ -778,6 +831,135 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
       document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
     })();
+
+    // 10) Event Type Correlation Matrix
+    (function(){
+      const corr = eventTypeCorrelation;
+      if (!corr.labels || corr.labels.length === 0) {
+        document.getElementById('correlationMatrixChart').parentElement.innerHTML =
+          '<div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>' +
+          '<div class="text-center text-muted mt-5"><p>Insufficient data for correlation analysis.<br>Need at least 2 event types with 5+ months of data.</p></div>';
+        return;
+      }
+
+      const labels = corr.labels;
+      const matrix = corr.correlation_matrix;
+      
+      // Create a custom heatmap using HTML table since Chart.js doesn't have a native heatmap
+      const canvas = document.getElementById('correlationMatrixChart');
+      const ctx = canvas.getContext('2d');
+      const container = canvas.parentElement;
+      
+      // Create table-based heatmap
+      const table = document.createElement('table');
+      table.style.width = '100%';
+      table.style.height = '100%';
+      table.style.borderCollapse = 'collapse';
+      table.style.fontSize = '12px';
+      
+      // Create header row
+      const headerRow = document.createElement('tr');
+      const emptyCell = document.createElement('th');
+      emptyCell.style.border = '1px solid #ddd';
+      emptyCell.style.padding = '8px';
+      emptyCell.style.backgroundColor = '#f8f9fa';
+      headerRow.appendChild(emptyCell);
+      
+      labels.forEach(label => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        th.style.border = '1px solid #ddd';
+        th.style.padding = '8px';
+        th.style.backgroundColor = '#f8f9fa';
+        th.style.fontSize = '11px';
+        th.style.transform = 'rotate(-45deg)';
+        th.style.transformOrigin = 'center';
+        th.style.whiteSpace = 'nowrap';
+        headerRow.appendChild(th);
+      });
+      table.appendChild(headerRow);
+      
+      // Create data rows
+      labels.forEach((label, i) => {
+        const row = document.createElement('tr');
+        
+        // Row label
+        const rowLabel = document.createElement('td');
+        rowLabel.textContent = label;
+        rowLabel.style.border = '1px solid #ddd';
+        rowLabel.style.padding = '8px';
+        rowLabel.style.backgroundColor = '#f8f9fa';
+        rowLabel.style.fontSize = '11px';
+        rowLabel.style.fontWeight = 'bold';
+        row.appendChild(rowLabel);
+        
+        // Data cells
+        labels.forEach((_, j) => {
+          const cell = document.createElement('td');
+          const value = matrix[i][j];
+          cell.textContent = value.toFixed(3);
+          cell.style.border = '1px solid #ddd';
+          cell.style.padding = '8px';
+          cell.style.textAlign = 'center';
+          cell.style.fontSize = '11px';
+          cell.style.fontWeight = 'bold';
+          
+          // Color coding
+          if (value < 0) {
+            const intensity = Math.abs(value);
+            const alpha = 0.3 + intensity * 0.7;
+            cell.style.backgroundColor = `rgba(239, 68, 68, ${alpha})`;
+            cell.style.color = intensity > 0.5 ? 'white' : 'black';
+          } else if (value > 0) {
+            const intensity = value;
+            const alpha = 0.3 + intensity * 0.7;
+            cell.style.backgroundColor = `rgba(59, 130, 246, ${alpha})`;
+            cell.style.color = intensity > 0.5 ? 'white' : 'black';
+          } else {
+            cell.style.backgroundColor = 'rgba(156, 163, 175, 0.3)';
+            cell.style.color = 'black';
+          }
+          
+          // Tooltip
+          cell.title = `${labels[i]} vs ${labels[j]}: ${value.toFixed(3)}`;
+          row.appendChild(cell);
+        });
+        
+        table.appendChild(row);
+      });
+      
+      // Replace canvas with table
+      container.replaceChild(table, canvas);
+      
+      // Add correlation statistics
+      const stats = [];
+      stats.push(`Event types: ${labels.length}`);
+      stats.push(`Min correlation: ${corr.min_correlation.toFixed(3)}`);
+      stats.push(`Max correlation: ${corr.max_correlation.toFixed(3)}`);
+      
+      // Find strongest positive and negative correlations
+      let maxPos = -1, maxNeg = 1;
+      let maxPosPair = '', maxNegPair = '';
+      
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = i + 1; j < labels.length; j++) {
+          const corrValue = matrix[i][j];
+          if (corrValue > maxPos) {
+            maxPos = corrValue;
+            maxPosPair = `${labels[i]} & ${labels[j]}`;
+          }
+          if (corrValue < maxNeg) {
+            maxNeg = corrValue;
+            maxNegPair = `${labels[i]} & ${labels[j]}`;
+          }
+        }
+      }
+      
+      if (maxPosPair) stats.push(`Strongest positive: ${maxPosPair} (${maxPos.toFixed(3)})`);
+      if (maxNegPair) stats.push(`Strongest negative: ${maxNegPair} (${maxNeg.toFixed(3)})`);
+
+      document.getElementById('correlationMatrixStats').textContent = stats.join(' • ');
+    })();
   </script>
 </body>
 </html>
@@ -794,6 +976,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__ENT__', ent)
             .replace('__RH__', rh)
             .replace('__MCS__', mcs)
+            .replace('__ETC__', etc)
             .replace('__OAIC_COMP__', oaic_comp)
            )
 
@@ -824,15 +1007,18 @@ def main():
         database_half_yearly = get_half_yearly_database_counts(conn, start_date, end_date)
         oaic_comparison = prepare_oaic_comparison_data(database_half_yearly, oaic_data)
 
+        event_type_mix = get_monthly_event_type_mix(conn, start_date, end_date)
+        
         data = {
             'monthly_counts': monthly_counts,
             'severity_trends': get_monthly_severity_trends(conn, start_date, end_date),
             'records_affected': get_monthly_records_affected(conn, start_date, end_date),
-            'event_type_mix': get_monthly_event_type_mix(conn, start_date, end_date),
+            'event_type_mix': event_type_mix,
             'overall_event_type_mix': get_overall_event_type_mix(conn, start_date, end_date),
             'entity_types': get_entity_type_distribution(conn, start_date, end_date),
             'records_histogram': get_records_affected_histogram(conn, start_date, end_date),
             'monthly_counts_stats': compute_monthly_counts_stats(monthly_counts),
+            'event_type_correlation': compute_event_type_correlation_matrix(event_type_mix),
             'oaic_comparison': oaic_comparison,
         }
 
