@@ -24,6 +24,8 @@ except ImportError:
 
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.utils import ConfigManager
+
 
 class PerplexityEventEnrichment(BaseModel):
     """Structured response from Perplexity for event enrichment."""
@@ -107,7 +109,23 @@ class PerplexityEnrichmentEngine:
     """Engine for enriching events using Perplexity AI."""
 
     def __init__(self, api_key: Optional[str] = None, logger: Optional[logging.Logger] = None):
-        self.api_key = api_key or os.environ.get("PERPLEXITY_API_KEY")
+        # Try to get API key from parameter, then environment, then .env file
+        if api_key:
+            self.api_key = api_key
+        else:
+            # First try environment variable
+            self.api_key = os.environ.get("PERPLEXITY_API_KEY")
+            
+            # If not found, try loading from .env file
+            if not self.api_key:
+                try:
+                    config_manager = ConfigManager()
+                    env_config = config_manager.load()
+                    self.api_key = env_config.get("PERPLEXITY_API_KEY")
+                except Exception as e:
+                    # ConfigManager might not be available, continue with None
+                    pass
+        
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.client: Optional[openai.OpenAI] = None
 

@@ -234,8 +234,9 @@ class DeduplicationProcessor:
                     (event.get('title') or '').lower()
                 ).ratio()
 
+                # Use INSERT OR IGNORE to handle UNIQUE constraint gracefully
                 cursor.execute("""
-                    INSERT INTO EventDeduplicationMap (
+                    INSERT OR IGNORE INTO EventDeduplicationMap (
                         map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
                         contribution_type, similarity_score, data_source_weight, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -369,7 +370,14 @@ class DeduplicationProcessor:
             self.consolidate_data_sources(deduplicated_event_id, group)
 
             print(f"  Created deduplicated event: {deduplicated_event_id}")
-            print(f"  Title: {group[0]['title'][:60]}...")
+                title = group[0]['title'][:60]
+                # Handle Unicode characters for Windows console
+                try:
+                    print(f"  Title: {title}...")
+                except UnicodeEncodeError:
+                    # Fallback to ASCII-safe version
+                    safe_title = title.encode('ascii', 'replace').decode('ascii')
+                    print(f"  Title: {safe_title}...")
 
             deduplicated_count += 1
             total_events_processed += len(group)

@@ -28,6 +28,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
+from cyber_data_collector.utils import ConfigManager
 
 # Configure logging
 logging.basicConfig(
@@ -222,7 +223,7 @@ class PerplexityBackfillProcessor:
         updates.append("perplexity_validated_at = ?")
         values.append(datetime.now().isoformat())
         updates.append("perplexity_enrichment_data = ?")
-        values.append(json.dumps(enrichment.dict(), default=str))
+            values.append(json.dumps(enrichment.model_dump(), default=str))
         updates.append("data_source_reliability = ?")
         values.append(0.85)  # Perplexity gets high reliability score
 
@@ -340,14 +341,23 @@ async def main():
 
     args = parser.parse_args()
 
+    # Load environment configuration
+    config_manager = ConfigManager()
+    env_config = config_manager.load()
+    
     # Initialize database
     db = CyberEventDataV2()
 
-    # Initialize Perplexity engine
-    perplexity_engine = PerplexityEnrichmentEngine()
+    # Initialize Perplexity engine with API key from .env
+    api_key = env_config.get("PERPLEXITY_API_KEY")
+    if not api_key:
+        logger.error("Perplexity API not configured. Set PERPLEXITY_API_KEY in .env file.")
+        return 1
+    
+    perplexity_engine = PerplexityEnrichmentEngine(api_key=api_key)
 
     if not perplexity_engine.client:
-        logger.error("Perplexity API not configured. Set PERPLEXITY_API_KEY environment variable.")
+        logger.error("Failed to initialize Perplexity client. Check your API key.")
         return 1
 
     # Initialize processor

@@ -112,7 +112,7 @@ def add_perplexity_validation_fields(db_path: str = "instance/cyber_events.db"):
             print(f"  Index creation warning: {e}")
 
         conn.commit()
-        print("\n✅ Perplexity validation fields added successfully!")
+        print("\n[SUCCESS] Perplexity validation fields added successfully!")
 
         # Show statistics
         print("\nDatabase statistics:")
@@ -136,7 +136,7 @@ def add_perplexity_validation_fields(db_path: str = "instance/cyber_events.db"):
         return True
 
     except Exception as e:
-        print(f"❌ Error adding Perplexity validation fields: {e}")
+        print(f"[ERROR] Error adding Perplexity validation fields: {e}")
         return False
 
 

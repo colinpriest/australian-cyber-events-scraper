@@ -224,16 +224,16 @@ class CyberDataCollector:
         try:
             if format.lower() == "json":
                 with open(filename, "w", encoding="utf-8") as file:
-                    json.dump([event.dict() for event in self.collected_events], file, indent=2, default=str)
+                    json.dump([event.model_dump() for event in self.collected_events], file, indent=2, default=str)
             elif format.lower() == "csv":
                 import pandas as pd
 
-                df = pd.DataFrame([event.dict() for event in self.collected_events])
+                df = pd.DataFrame([event.model_dump() for event in self.collected_events])
                 df.to_csv(filename, index=False)
             elif format.lower() == "excel":
                 import pandas as pd
 
-                df = pd.DataFrame([event.dict() for event in self.collected_events])
+                df = pd.DataFrame([event.model_dump() for event in self.collected_events])
                 df.to_excel(filename, index=False)
             else:
                 raise ValueError(f"Unsupported format: {format}")
