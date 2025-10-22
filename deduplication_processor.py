@@ -370,14 +370,14 @@ class DeduplicationProcessor:
             self.consolidate_data_sources(deduplicated_event_id, group)
 
             print(f"  Created deduplicated event: {deduplicated_event_id}")
-                title = group[0]['title'][:60]
-                # Handle Unicode characters for Windows console
-                try:
-                    print(f"  Title: {title}...")
-                except UnicodeEncodeError:
-                    # Fallback to ASCII-safe version
-                    safe_title = title.encode('ascii', 'replace').decode('ascii')
-                    print(f"  Title: {safe_title}...")
+            title = group[0]['title'][:60]
+            # Handle Unicode characters for Windows console
+            try:
+                print(f"  Title: {title}...")
+            except UnicodeEncodeError:
+                # Fallback to ASCII-safe version
+                safe_title = title.encode('ascii', 'replace').decode('ascii')
+                print(f"  Title: {safe_title}...")
 
             deduplicated_count += 1
             total_events_processed += len(group)
