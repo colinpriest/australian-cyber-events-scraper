@@ -30,8 +30,8 @@ class DeduplicationProcessor:
 
     def __init__(self, db: CyberEventDataV2):
         self.db = db
-        self.similarity_threshold = 0.8
-        self.date_tolerance_days = 30  # 1 month tolerance
+        self.similarity_threshold = 0.7  # Lowered from 0.8 for better fuzzy matching
+        self.date_tolerance_days = None  # Removed hard limit - use as scoring factor instead
 
     def get_enriched_events_for_deduplication(self) -> List[Dict[str, Any]]:
         """Get all enriched events that need deduplication."""
@@ -95,23 +95,12 @@ class DeduplicationProcessor:
         return groups
 
     def are_events_similar(self, event1: Dict[str, Any], event2: Dict[str, Any]) -> bool:
-        """Determine if two events are similar enough to be considered duplicates."""
+        """Determine if two events are similar enough to be considered duplicates.
 
-        # Check date similarity if both have dates
-        if event1.get('event_date') and event2.get('event_date'):
-            try:
-                from datetime import datetime
-                date1 = datetime.fromisoformat(event1['event_date']).date() if isinstance(event1['event_date'], str) else event1['event_date']
-                date2 = datetime.fromisoformat(event2['event_date']).date() if isinstance(event2['event_date'], str) else event2['event_date']
+        Note: Removed hard date cutoff. Date difference is now used as a scoring factor.
+        """
 
-                if date1 and date2:
-                    date_diff = abs((date1 - date2).days)
-                    if date_diff > self.date_tolerance_days:
-                        return False
-            except:
-                pass  # Continue with text similarity if date comparison fails
-
-        # Calculate text similarity
+        # Calculate text similarity first
         title1 = (event1.get('title') or '').lower()
         title2 = (event2.get('title') or '').lower()
 
@@ -121,8 +110,35 @@ class DeduplicationProcessor:
         title_similarity = SequenceMatcher(None, title1, title2).ratio()
         summary_similarity = SequenceMatcher(None, summary1, summary2).ratio()
 
-        # Weighted average (title is more important)
-        overall_similarity = (title_similarity * 0.7) + (summary_similarity * 0.3)
+        # Calculate date proximity factor (not a hard gate)
+        date_factor = 1.0
+        if event1.get('event_date') and event2.get('event_date'):
+            try:
+                from datetime import datetime
+                date1 = datetime.fromisoformat(event1['event_date']).date() if isinstance(event1['event_date'], str) else event1['event_date']
+                date2 = datetime.fromisoformat(event2['event_date']).date() if isinstance(event2['event_date'], str) else event2['event_date']
+
+                if date1 and date2:
+                    date_diff = abs((date1 - date2).days)
+                    # Graduated date factor (not a hard cutoff)
+                    if date_diff == 0:
+                        date_factor = 1.0
+                    elif date_diff <= 30:
+                        date_factor = 0.95
+                    elif date_diff <= 90:
+                        date_factor = 0.85
+                    elif date_diff <= 180:
+                        date_factor = 0.75
+                    elif date_diff <= 365:
+                        date_factor = 0.65
+                    else:
+                        date_factor = max(0.5, 1.0 - (date_diff / 1000.0))
+            except:
+                pass  # Keep default date_factor = 1.0 if date comparison fails
+
+        # Weighted similarity with date factor
+        text_similarity = (title_similarity * 0.7) + (summary_similarity * 0.3)
+        overall_similarity = text_similarity * date_factor
 
         return overall_similarity >= self.similarity_threshold
 
