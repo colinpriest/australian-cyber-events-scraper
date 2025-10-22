@@ -223,7 +223,7 @@ class PerplexityBackfillProcessor:
         updates.append("perplexity_validated_at = ?")
         values.append(datetime.now().isoformat())
         updates.append("perplexity_enrichment_data = ?")
-            values.append(json.dumps(enrichment.model_dump(), default=str))
+        values.append(json.dumps(enrichment.model_dump(), default=str))
         updates.append("data_source_reliability = ?")
         values.append(0.85)  # Perplexity gets high reliability score
 
