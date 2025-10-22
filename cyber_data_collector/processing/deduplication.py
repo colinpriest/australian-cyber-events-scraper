@@ -11,10 +11,11 @@ from cyber_data_collector.models.events import AffectedEntity, CyberEvent
 class DeduplicationEngine:
     """Intelligent event deduplication system."""
 
-    def __init__(self) -> None:
+    def __init__(self, perplexity_arbiter=None) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.similarity_threshold = 0.8
-        self.date_tolerance_days = 30  # 1 month tolerance
+        self.entity_similarity_threshold = 0.7  # Lowered from 0.8 for better fuzzy matching
+        self.date_tolerance_days = None  # Removed hard limit - use as scoring factor instead
+        self.perplexity_arbiter = perplexity_arbiter  # Optional Perplexity arbiter for uncertain cases
 
     async def deduplicate_events(self, events: List[CyberEvent]) -> List[CyberEvent]:
         """Deduplicate events while preserving all source information."""
@@ -115,8 +116,8 @@ class DeduplicationEngine:
         elif entity1_name and entity2_name:
             entity_similarity = self._calculate_entity_similarity(entity1_name, entity2_name)
             self.logger.debug(f"[ENTITY SIMILARITY] '{entity1_name}' vs '{entity2_name}' = {entity_similarity:.3f}")
-            if entity_similarity < 0.8:
-                self.logger.debug(f"[ENTITY REJECT] Entities too different ({entity_similarity:.3f} < 0.8)")
+            if entity_similarity < self.entity_similarity_threshold:
+                self.logger.debug(f"[ENTITY REJECT] Entities too different ({entity_similarity:.3f} < {self.entity_similarity_threshold})")
                 return False  # Entities are different, so events are different.
         else:
             # If we can't identify an entity in one or both titles, we can't be sure they are the same.
@@ -125,7 +126,7 @@ class DeduplicationEngine:
             return False
 
         # If entities are similar enough, proceed with more detailed content similarity checks.
-        self.logger.debug(f"[ENTITY PASS] Entities similar enough ({entity_similarity:.3f} >= 0.8), checking content similarity")
+        self.logger.debug(f"[ENTITY PASS] Entities similar enough ({entity_similarity:.3f} >= {self.entity_similarity_threshold}), checking content similarity")
         result = self._check_cyber_event_similarity(event1, event2)
         self.logger.debug(f"[SIMILARITY RESULT] Final result: {result}")
         return result
@@ -199,7 +200,7 @@ class DeduplicationEngine:
         return ""
 
     def _calculate_entity_similarity(self, entity1: str, entity2: str) -> float:
-        """Calculate entity similarity with special handling for common variations."""
+        """Calculate entity similarity with special handling for common variations, acronyms, and known aliases."""
         entity1_lower = entity1.lower().strip()
         entity2_lower = entity2.lower().strip()
 
@@ -207,13 +208,38 @@ class DeduplicationEngine:
         if entity1_lower == entity2_lower:
             return 1.0
 
+        # Acronym matching (e.g., "FBI" vs "Federal Bureau of Investigation")
+        acronym_similarity = self._check_acronym_match(entity1_lower, entity2_lower)
+        if acronym_similarity > 0.9:
+            self.logger.debug(f"[ACRONYM MATCH] '{entity1}' <-> '{entity2}' = {acronym_similarity:.3f}")
+            return acronym_similarity
+
+        # Common abbreviations and variations
+        common_variations = {
+            'boa': 'bank of america',
+            'bofa': 'bank of america',
+            'jpmc': 'jpmorgan chase',
+            'jpm': 'jpmorgan',
+            'anz': 'australia and new zealand banking group',
+            'nab': 'national australia bank',
+            'cba': 'commonwealth bank',
+            'westpac': 'westpac banking corporation',
+        }
+
+        # Check if either entity is a known abbreviation
+        for abbrev, full_name in common_variations.items():
+            if (abbrev in entity1_lower and full_name in entity2_lower) or \
+               (abbrev in entity2_lower and full_name in entity1_lower):
+                self.logger.debug(f"[VARIATION MATCH] '{entity1}' <-> '{entity2}' via '{abbrev}'")
+                return 0.95
+
         # Handle common entity variations
         # Remove common suffixes/variations
         def normalize_entity(name):
             name = name.lower().strip()
             # Remove common organizational suffixes
             suffixes = ['group', 'company', 'corp', 'corporation', 'inc', 'incorporated',
-                       'ltd', 'limited', 'llc', 'pty', 'bank', 'insurance']
+                       'ltd', 'limited', 'llc', 'pty', 'bank', 'insurance', 'holding', 'holdings']
             words = name.split()
 
             # Remove trailing suffixes
@@ -244,6 +270,28 @@ class DeduplicationEngine:
 
         # Return the higher of the two similarities
         return max(normalized_similarity, original_similarity)
+
+    def _check_acronym_match(self, name1: str, name2: str) -> float:
+        """Check if one name is an acronym of the other."""
+        def get_acronym(text: str) -> str:
+            """Generate acronym from text."""
+            words = text.split()
+            # Skip very short words (articles, prepositions)
+            skip_words = {'of', 'the', 'and', 'for', 'in', 'on', 'at', 'to', 'a', 'an'}
+            significant_words = [w for w in words if w not in skip_words and len(w) > 1]
+            return ''.join(w[0] for w in significant_words)
+
+        # Check if one is short (likely acronym) and other is long (likely full name)
+        if len(name1) <= 5 and len(name2) > 10:
+            acronym2 = get_acronym(name2)
+            if name1.replace(' ', '') == acronym2:
+                return 0.98
+        elif len(name2) <= 5 and len(name1) > 10:
+            acronym1 = get_acronym(name1)
+            if name2.replace(' ', '') == acronym1:
+                return 0.98
+
+        return 0.0
 
     def _are_both_generic_summaries(self, event1: CyberEvent, event2: CyberEvent) -> bool:
         """Check if both events are generic summaries that should be merged."""
@@ -506,13 +554,45 @@ class DeduplicationEngine:
                          f"KeyTerms: {key_terms_sim:.3f}, StrongIndicators: {strong_indicators:.3f}, "
                          f"Date: {date_factor:.3f}, Weighted: {weighted_similarity:.3f}, Threshold: {threshold:.3f}")
 
-        # If algorithmic similarity is close but not quite there, use LLM as final arbiter
-        if 0.5 <= weighted_similarity < threshold:
-            self.logger.debug(f"Similarity borderline ({weighted_similarity:.3f}), using LLM for final decision")
-            llm_decision = self._llm_similarity_check(event1, event2)
-            if llm_decision:
-                self.logger.info(f"LLM override: Events deemed similar despite algorithmic score of {weighted_similarity:.3f}")
-                return True
+        # If algorithmic similarity is uncertain (0.50-0.85 range), use arbiter for final decision
+        if 0.50 <= weighted_similarity < 0.85:
+            self.logger.debug(f"Similarity uncertain ({weighted_similarity:.3f}), checking with arbiter")
+
+            # Try Perplexity arbiter first (more reliable for uncertain cases)
+            if self.perplexity_arbiter:
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    perplexity_check = loop.run_until_complete(
+                        self.perplexity_arbiter.check_duplicate(
+                            event1.title,
+                            event1.description,
+                            str(event1.event_date) if event1.event_date else None,
+                            event1.primary_entity.name if event1.primary_entity else None,
+                            event2.title,
+                            event2.description,
+                            str(event2.event_date) if event2.event_date else None,
+                            event2.primary_entity.name if event2.primary_entity else None
+                        )
+                    )
+
+                    if perplexity_check and perplexity_check.confidence >= 0.7:
+                        decision = perplexity_check.are_same_incident
+                        self.logger.info(
+                            f"Perplexity arbiter: {'SAME' if decision else 'DIFFERENT'} "
+                            f"(confidence: {perplexity_check.confidence:.2f}, "
+                            f"reasoning: {perplexity_check.reasoning[:100]}...)"
+                        )
+                        return decision
+                except Exception as e:
+                    self.logger.warning(f"Perplexity arbiter failed: {e}, falling back to LLM")
+
+            # Fallback to LLM arbiter if Perplexity unavailable/failed
+            if weighted_similarity >= 0.6:  # Only use LLM for closer matches
+                llm_decision = self._llm_similarity_check(event1, event2)
+                if llm_decision:
+                    self.logger.info(f"LLM override: Events deemed similar despite algorithmic score of {weighted_similarity:.3f}")
+                    return True
 
         return weighted_similarity >= threshold
 
@@ -626,22 +706,32 @@ class DeduplicationEngine:
         return intersection / union if union > 0 else 0.0
 
     def _calculate_date_factor(self, event1: CyberEvent, event2: CyberEvent) -> float:
-        """Calculate date proximity factor for similarity weighting."""
+        """Calculate date proximity factor for similarity weighting.
+
+        Note: Removed hard date cutoff. Many breaches are disclosed months/years later.
+        Date difference is now used as a scoring factor, not a hard gate.
+        """
         if not event1.event_date or not event2.event_date:
-            return 0.8  # Neutral factor if dates missing
+            return 0.8  # Neutral factor if dates missing (don't penalize too much)
 
         date_diff = abs((event1.event_date - event2.event_date).days)
 
         if date_diff == 0:
             return 1.0  # Same date
         elif date_diff <= 7:
-            return 0.95  # Within a week
+            return 0.98  # Within a week
         elif date_diff <= 30:
-            return 0.85  # Within a month (for reporting delays)
+            return 0.90  # Within a month (common for reporting delays)
         elif date_diff <= 90:
-            return 0.7   # Within 3 months (for investigation/disclosure delays)
+            return 0.80  # Within 3 months (investigation/disclosure delays)
+        elif date_diff <= 180:
+            return 0.70  # Within 6 months (reasonable for delayed disclosures)
+        elif date_diff <= 365:
+            return 0.60  # Within a year (possible for late-reported incidents)
         else:
-            return 0.5   # Beyond 3 months - low confidence
+            # More than a year apart - still possible if other indicators are strong
+            # Use a sliding scale based on how strong other similarities are
+            return max(0.4, 1.0 - (date_diff / 1000.0))  # Gradual decline, minimum 0.4
 
     def _merge_event_group(self, events: List[CyberEvent]) -> CyberEvent:
         base_event = max(events, key=lambda event: event.confidence.overall)
