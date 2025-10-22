@@ -751,7 +751,7 @@ class DeduplicationEngine:
             for entity in event.affected_entities:
                 key = entity.name.lower()
                 if key not in entity_map:
-                    entity_map[key] = entity.dict()
+                    entity_map[key] = entity.model_dump()
         merged_event.affected_entities = [AffectedEntity(**data) for data in entity_map.values()]
 
         if merged_event.affected_entities:
