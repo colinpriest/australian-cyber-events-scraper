@@ -374,3 +374,11 @@ Return a comprehensive summary of the incident in paragraph form."""
             "coverage": "Australian entities",
             "data_types": ["Data breaches", "Privacy incidents"],
         }
+
+
+
+
+
+
+
+

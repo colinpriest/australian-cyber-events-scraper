@@ -42,3 +42,11 @@ class CacheManager:
         for key in expired_keys:
             self._store.pop(key, None)
 
+
+
+
+
+
+
+
+

@@ -36,3 +36,11 @@ class DatabaseManager:
         self.logger.warning("get_event_by_id is not implemented; returning None")
         return None
 
+
+
+
+
+
+
+
+
