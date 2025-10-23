@@ -42,7 +42,10 @@ This pipeline automatically discovers cyber security incidents affecting Austral
 
 ```
 australian-cyber-events-scraper/
-├── discover_enrich_events.py          # Main pipeline script
+├── run_full_pipeline.py               # 🆕 Unified pipeline script
+├── discover_enrich_events.py          # Original pipeline script
+├── generate_dashboard.py              # Flask dashboard server
+├── build_static_dashboard.py           # Static HTML dashboard
 ├── rf_event_filter.py                 # Random Forest filter implementation
 ├── train_rf_filter.py                 # ML model training script
 ├── cyber_data_collector/              # Core data collection framework
@@ -65,6 +68,8 @@ australian-cyber-events-scraper/
 │   └── text_vectorizer.pkl            # Text vectorizer
 ├── instance/                          # Database files
 │   └── cyber_events.db                # Main SQLite database
+├── dashboard/                         # 🆕 Generated dashboard files
+│   └── index.html                     # Static HTML dashboard
 ├── documentation/                     # Setup and configuration docs
 ├── specifications/                    # Technical specifications
 └── requirements.txt                   # Python dependencies
@@ -103,8 +108,12 @@ australian-cyber-events-scraper/
    python setup_bigquery_auth.py
    ```
 
-5. **Run the pipeline**
+5. **Run the unified pipeline**
    ```bash
+   # Full pipeline (discovery + dashboard)
+   python run_full_pipeline.py
+   
+   # Or use the original script
    python discover_enrich_events.py --discover --enrich
    ```
 
@@ -151,9 +160,33 @@ gdelt_config = DataSourceConfig(
 
 ## 📊 Usage
 
-### Main Pipeline
+### 🆕 Unified Pipeline (Recommended)
 
-The primary script `discover_enrich_events.py` provides several modes of operation:
+The new `run_full_pipeline.py` script combines discovery, enrichment, and dashboard generation:
+
+```bash
+# Full pipeline (discovery + dashboard)
+python run_full_pipeline.py
+
+# Discovery only
+python run_full_pipeline.py --discover-only
+
+# Dashboard only (if you already have data)
+python run_full_pipeline.py --dashboard-only
+
+# Use specific sources with limits
+python run_full_pipeline.py --source Perplexity OAIC --max-events 500
+
+# Generate both static and Flask dashboards
+python run_full_pipeline.py --dashboard-type both --launch-server
+
+# Extended date range
+python run_full_pipeline.py --days 14 --max-events 500
+```
+
+### Original Pipeline Script
+
+The original `discover_enrich_events.py` script still works:
 
 ```bash
 # Full pipeline (discover, scrape, enrich)
@@ -172,7 +205,42 @@ python discover_enrich_events.py --discover --source GDELT --source Perplexity
 python discover_enrich_events.py --discover --days 7
 ```
 
+### Dashboard Generation
+
+Generate interactive dashboards with enhanced visualizations:
+
+```bash
+# Static HTML dashboard
+python build_static_dashboard.py
+
+# Flask dashboard server
+python generate_dashboard.py --launch-server
+
+# Custom output directory
+python build_static_dashboard.py --out-dir my_dashboard
+```
+
 ### Command Line Options
+
+#### Unified Pipeline Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--discover-only` | Run only discovery phase | False |
+| `--dashboard-only` | Run only dashboard generation | False |
+| `--continue-on-error` | Continue to next phase if previous fails | False |
+| `--source SOURCE` | Data sources to use | All |
+| `--max-events N` | Maximum events per source per month | 1000 |
+| `--days N` | Number of days to look back | 7 |
+| `--dashboard-type TYPE` | Dashboard type: static, flask, both | static |
+| `--out-dir DIR` | Output directory for static dashboard | dashboard |
+| `--launch-server` | Launch Flask server after generation | False |
+| `--port N` | Port for Flask server | 5000 |
+| `--host HOST` | Host for Flask server | 127.0.0.1 |
+| `--debug` | Run Flask server in debug mode | False |
+| `--db-path PATH` | Database file path | instance/cyber_events.db |
+
+#### Original Pipeline Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -182,6 +250,38 @@ python discover_enrich_events.py --discover --days 7
 | `--source SOURCE` | Specific data sources | All |
 | `--days N` | Date range in days | 7 |
 | `--db-path PATH` | Database file path | instance/cyber_events.db |
+
+### 🆕 Enhanced Dashboard Features
+
+The dashboard now includes advanced visualizations for deeper insights:
+
+#### New Visualizations
+
+1. **Maximum Severity Per Month**
+   - Line chart showing the highest severity event each month
+   - Interactive tooltips with entity name and severity details
+   - Helps identify the worst incidents over time
+
+2. **Severity by Industry Radar Chart**
+   - Radar/spider chart comparing average severity across industries
+   - Shows which industries face the most severe attacks
+   - Interactive hover effects for detailed information
+
+3. **Severity by Attack Type Radar Chart**
+   - Radar chart comparing average severity across attack types
+   - Identifies which attack types are most severe
+   - Color-coded for easy interpretation
+
+4. **Enhanced Severity Analysis**
+   - Median severity calculations for better distribution understanding
+   - Numeric severity mapping (Critical=4, High=3, Medium=2, Low=1)
+   - Consistent severity scoring across all visualizations
+
+#### Dashboard Types
+
+- **Static HTML**: Self-contained dashboard with embedded data
+- **Flask Server**: Interactive web server with API endpoints
+- **Both**: Generate static file AND launch server
 
 ### Training ML Models
 
@@ -445,6 +545,20 @@ gcloud auth application-default login
 
 ## 🆕 Recent Improvements
 
+### 🆕 Unified Pipeline Script
+- **Single Command Operation**: `run_full_pipeline.py` combines discovery, enrichment, and dashboard generation
+- **Flexible Execution**: Run discovery-only, dashboard-only, or full pipeline
+- **Enhanced CLI**: Comprehensive command-line options for all operations
+- **Error Handling**: Continue-on-error option for robust pipeline execution
+- **Dashboard Integration**: Built-in dashboard generation with static and Flask options
+
+### 🆕 Enhanced Dashboard Visualizations
+- **Maximum Severity Per Month**: Line chart with entity details on hover
+- **Severity by Industry Radar**: Interactive radar chart comparing industry severity
+- **Severity by Attack Type Radar**: Radar chart showing attack type severity patterns
+- **Enhanced Severity Analysis**: Median severity calculations and numeric mapping
+- **Interactive Tooltips**: Rich hover information with entity names and severity details
+
 ### Enhanced Perplexity AI Integration
 - **Content Length Fallback**: Automatically triggers Perplexity when content is too short (< 50 chars)
 - **Alternative URL Discovery**: Finds working URLs for broken or inaccessible links
@@ -471,12 +585,14 @@ gcloud auth application-default login
 - **Additional Data Sources**: More cyber security feeds
 - **Advanced ML Models**: Deep learning for better classification
 - **Real-time Processing**: Stream processing capabilities
-- **Web Interface**: Dashboard for monitoring and management
+- **Enhanced Dashboard Features**: More interactive visualizations and filtering
 - **API Endpoints**: REST API for external integrations
 - **Cloud Deployment**: Docker and Kubernetes support
 - **Enhanced Fallback Systems**: Multiple fallback strategies for failed scrapes
 - **Advanced Deduplication**: ML-based similarity detection
 - **Performance Analytics**: Detailed performance metrics and optimization suggestions
+- **Dashboard Export**: PDF/PNG export of dashboard visualizations
+- **Real-time Updates**: Live dashboard updates as new events are discovered
 
 ---
 

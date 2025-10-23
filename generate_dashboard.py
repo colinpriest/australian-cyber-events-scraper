@@ -404,6 +404,284 @@ class DashboardDataService:
             print(f"Error fetching records histogram: {e}")
             return {'bins': [], 'frequencies': []}
 
+    def _severity_to_numeric(self, severity: str) -> int:
+        """Convert severity string to numeric value."""
+        mapping = {
+            'Critical': 4, 'EventSeverity.CRITICAL': 4,
+            'High': 3, 'EventSeverity.HIGH': 3,
+            'Medium': 2, 'EventSeverity.MEDIUM': 2,
+            'Low': 1, 'EventSeverity.LOW': 1,
+        }
+        return mapping.get(severity, 0)
+
+    def get_maximum_severity_per_month(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """Get maximum severity event per month with entity details."""
+        query = """
+        SELECT
+            strftime('%Y-%m', de.event_date) as month,
+            de.severity,
+            de.title,
+            e.entity_name,
+            de.deduplicated_event_id
+        FROM DeduplicatedEvents de
+        LEFT JOIN DeduplicatedEventEntities dee ON de.deduplicated_event_id = dee.deduplicated_event_id
+        LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
+        WHERE de.status = 'Active'
+            AND de.severity IS NOT NULL
+        """
+        params = []
+
+        if start_date:
+            query += " AND de.event_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND de.event_date <= ?"
+            params.append(end_date)
+
+        query += """
+        ORDER BY de.event_date, 
+            CASE de.severity
+                WHEN 'Critical' THEN 1
+                WHEN 'EventSeverity.CRITICAL' THEN 1
+                WHEN 'High' THEN 2
+                WHEN 'EventSeverity.HIGH' THEN 2
+                WHEN 'Medium' THEN 3
+                WHEN 'EventSeverity.MEDIUM' THEN 3
+                WHEN 'Low' THEN 4
+                WHEN 'EventSeverity.LOW' THEN 4
+                ELSE 5
+            END
+        """
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Group by month and get the first (highest severity) event
+                monthly_max = {}
+                for row in rows:
+                    month = row['month']
+                    if not month:
+                        continue
+                    
+                    if month not in monthly_max:
+                        monthly_max[month] = {
+                            'severity': row['severity'],
+                            'title': row['title'],
+                            'entity_name': row['entity_name'] or 'Unknown Entity',
+                            'severity_numeric': self._severity_to_numeric(row['severity'])
+                        }
+
+                months = sorted(monthly_max.keys())
+                severities = [monthly_max[month]['severity'] for month in months]
+                titles = [monthly_max[month]['title'] for month in months]
+                entities = [monthly_max[month]['entity_name'] for month in months]
+                severity_numeric = [monthly_max[month]['severity_numeric'] for month in months]
+
+                return {
+                    'months': months,
+                    'severities': severities,
+                    'titles': titles,
+                    'entities': entities,
+                    'severity_numeric': severity_numeric
+                }
+        except Exception as e:
+            print(f"Error fetching maximum severity per month: {e}")
+            return {'months': [], 'severities': [], 'titles': [], 'entities': [], 'severity_numeric': []}
+
+    def get_median_severity_per_month(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """Get median severity per month."""
+        query = """
+        SELECT
+            strftime('%Y-%m', event_date) as month,
+            severity
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND severity IS NOT NULL
+        """
+        params = []
+
+        if start_date:
+            query += " AND event_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND event_date <= ?"
+            params.append(end_date)
+
+        query += """
+        ORDER BY month, event_date
+        """
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Group by month and calculate median
+                monthly_severities = {}
+                for row in rows:
+                    month = row['month']
+                    if not month:
+                        continue
+                    
+                    if month not in monthly_severities:
+                        monthly_severities[month] = []
+                    
+                    severity_numeric = self._severity_to_numeric(row['severity'])
+                    monthly_severities[month].append(severity_numeric)
+
+                months = sorted(monthly_severities.keys())
+                median_severities = []
+                
+                for month in months:
+                    severities = monthly_severities[month]
+                    if severities:
+                        # Calculate median
+                        sorted_severities = sorted(severities)
+                        n = len(sorted_severities)
+                        if n % 2 == 0:
+                            median = (sorted_severities[n//2 - 1] + sorted_severities[n//2]) / 2
+                        else:
+                            median = sorted_severities[n//2]
+                        median_severities.append(median)
+                    else:
+                        median_severities.append(0)
+
+                return {
+                    'months': months,
+                    'median_severities': median_severities
+                }
+        except Exception as e:
+            print(f"Error fetching median severity per month: {e}")
+            return {'months': [], 'median_severities': []}
+
+    def get_severity_by_industry(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """Get average severity by industry."""
+        query = """
+        SELECT
+            COALESCE(e.industry, 'Unknown') as industry,
+            de.severity,
+            COUNT(*) as event_count
+        FROM DeduplicatedEvents de
+        LEFT JOIN DeduplicatedEventEntities dee ON de.deduplicated_event_id = dee.deduplicated_event_id
+        LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
+        WHERE de.status = 'Active'
+            AND de.severity IS NOT NULL
+        """
+        params = []
+
+        if start_date:
+            query += " AND de.event_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND de.event_date <= ?"
+            params.append(end_date)
+
+        query += """
+        GROUP BY e.industry, de.severity
+        ORDER BY e.industry
+        """
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Calculate weighted average severity by industry
+                industry_data = {}
+                for row in rows:
+                    industry = row['industry']
+                    severity_numeric = self._severity_to_numeric(row['severity'])
+                    count = row['event_count']
+                    
+                    if industry not in industry_data:
+                        industry_data[industry] = {'total_severity': 0, 'total_count': 0}
+                    
+                    industry_data[industry]['total_severity'] += severity_numeric * count
+                    industry_data[industry]['total_count'] += count
+
+                industries = []
+                avg_severities = []
+                
+                for industry, data in industry_data.items():
+                    if data['total_count'] > 0:
+                        avg_severity = data['total_severity'] / data['total_count']
+                        industries.append(industry)
+                        avg_severities.append(avg_severity)
+
+                return {
+                    'industries': industries,
+                    'avg_severities': avg_severities
+                }
+        except Exception as e:
+            print(f"Error fetching severity by industry: {e}")
+            return {'industries': [], 'avg_severities': []}
+
+    def get_severity_by_attack_type(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """Get average severity by attack type."""
+        query = """
+        SELECT
+            COALESCE(event_type, 'Unknown') as attack_type,
+            severity,
+            COUNT(*) as event_count
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND severity IS NOT NULL
+        """
+        params = []
+
+        if start_date:
+            query += " AND event_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND event_date <= ?"
+            params.append(end_date)
+
+        query += """
+        GROUP BY event_type, severity
+        ORDER BY event_type
+        """
+
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Calculate weighted average severity by attack type
+                attack_type_data = {}
+                for row in rows:
+                    attack_type = row['attack_type']
+                    # Clean up enum strings
+                    if attack_type.startswith('CyberEventType.'):
+                        attack_type = attack_type.replace('CyberEventType.', '').replace('_', ' ').title()
+                    
+                    severity_numeric = self._severity_to_numeric(row['severity'])
+                    count = row['event_count']
+                    
+                    if attack_type not in attack_type_data:
+                        attack_type_data[attack_type] = {'total_severity': 0, 'total_count': 0}
+                    
+                    attack_type_data[attack_type]['total_severity'] += severity_numeric * count
+                    attack_type_data[attack_type]['total_count'] += count
+
+                attack_types = []
+                avg_severities = []
+                
+                for attack_type, data in attack_type_data.items():
+                    if data['total_count'] > 0:
+                        avg_severity = data['total_severity'] / data['total_count']
+                        attack_types.append(attack_type)
+                        avg_severities.append(avg_severity)
+
+                return {
+                    'attack_types': attack_types,
+                    'avg_severities': avg_severities
+                }
+        except Exception as e:
+            print(f"Error fetching severity by attack type: {e}")
+            return {'attack_types': [], 'avg_severities': []}
+
 
 def create_flask_app(db_path: str, debug: bool = False) -> Flask:
     """Create and configure Flask application."""
@@ -493,6 +771,38 @@ def create_flask_app(db_path: str, debug: bool = False) -> Flask:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         data = data_service.get_records_affected_histogram(start_date, end_date)
+        return jsonify(data)
+
+    @app.route('/api/v1/dashboard/maximum-severity-per-month')
+    def api_maximum_severity_per_month():
+        """API endpoint for maximum severity per month."""
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        data = data_service.get_maximum_severity_per_month(start_date, end_date)
+        return jsonify(data)
+
+    @app.route('/api/v1/dashboard/median-severity-per-month')
+    def api_median_severity_per_month():
+        """API endpoint for median severity per month."""
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        data = data_service.get_median_severity_per_month(start_date, end_date)
+        return jsonify(data)
+
+    @app.route('/api/v1/dashboard/severity-by-industry')
+    def api_severity_by_industry():
+        """API endpoint for severity by industry."""
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        data = data_service.get_severity_by_industry(start_date, end_date)
+        return jsonify(data)
+
+    @app.route('/api/v1/dashboard/severity-by-attack-type')
+    def api_severity_by_attack_type():
+        """API endpoint for severity by attack type."""
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        data = data_service.get_severity_by_attack_type(start_date, end_date)
         return jsonify(data)
 
     return app
@@ -720,6 +1030,33 @@ DASHBOARD_HTML_TEMPLATE = '''
                     <canvas id="recordsHistogramChart" style="display: none;" aria-label="Records affected histogram chart"></canvas>
                 </div>
             </div>
+
+            <!-- Maximum Severity Per Month -->
+            <div class="col-lg-6 col-md-12">
+                <div class="chart-container">
+                    <div class="chart-title">Maximum Severity Per Month</div>
+                    <div class="loading" id="loading7">Loading...</div>
+                    <canvas id="maxSeverityChart" style="display: none;" aria-label="Maximum severity per month chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Severity by Industry Radar -->
+            <div class="col-lg-6 col-md-12">
+                <div class="chart-container">
+                    <div class="chart-title">Average Severity by Industry</div>
+                    <div class="loading" id="loading8">Loading...</div>
+                    <canvas id="severityByIndustryChart" style="display: none;" aria-label="Severity by industry radar chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Severity by Attack Type Radar -->
+            <div class="col-lg-6 col-md-12">
+                <div class="chart-container">
+                    <div class="chart-title">Average Severity by Attack Type</div>
+                    <div class="loading" id="loading9">Loading...</div>
+                    <canvas id="severityByAttackTypeChart" style="display: none;" aria-label="Severity by attack type radar chart"></canvas>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -830,6 +1167,12 @@ DASHBOARD_HTML_TEMPLATE = '''
                 await loadEntityTypes();
                 console.log('Loading records histogram...');
                 await loadRecordsHistogram();
+                console.log('Loading maximum severity per month...');
+                await loadMaxSeverityPerMonth();
+                console.log('Loading severity by industry...');
+                await loadSeverityByIndustry();
+                console.log('Loading severity by attack type...');
+                await loadSeverityByAttackType();
                 if (failures -eq 0) { announce('All charts loaded successfully'); } else { announce('Some charts loaded with errors'); }
             } catch (error) {
                 console.error('Error loading charts:', error);
@@ -1229,6 +1572,197 @@ DASHBOARD_HTML_TEMPLATE = '''
             } catch (error) {
                 console.error('Error loading records histogram:', error);
                 showError('loading6', 'Failed to load records histogram');
+            }
+        }
+
+        async function loadMaxSeverityPerMonth() {
+            try {
+                const response = await fetch(buildApiUrl('maximum-severity-per-month'));
+                const data = await response.json();
+
+                const ctx = document.getElementById('maxSeverityChart').getContext('2d');
+
+                if (charts.maxSeverity) {
+                    charts.maxSeverity.destroy();
+                }
+
+                charts.maxSeverity = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.months,
+                        datasets: [{
+                            label: 'Maximum Severity',
+                            data: data.severity_numeric,
+                            borderColor: colors.danger,
+                            backgroundColor: colors.danger + '20',
+                            fill: false,
+                            tension: 0.4,
+                            pointRadius: 6,
+                            pointHoverRadius: 8
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    title: function(tooltipItems) {
+                                        const index = tooltipItems[0].dataIndex;
+                                        return data.titles[index] || 'Unknown Event';
+                                    },
+                                    label: function(tooltipItem) {
+                                        const index = tooltipItem.dataIndex;
+                                        return [
+                                            `Entity: ${data.entities[index]}`,
+                                            `Severity: ${data.severities[index]}`
+                                        ];
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 4,
+                                ticks: {
+                                    callback: function(value) {
+                                        const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                                        return severityMap[value] || value;
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Severity Level'
+                                }
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Month'
+                                }
+                            }
+                        }
+                    }
+                });
+
+                hideLoading('loading7', 'maxSeverityChart');
+            } catch (error) {
+                console.error('Error loading maximum severity per month:', error);
+                showError('loading7', 'Failed to load maximum severity per month');
+            }
+        }
+
+        async function loadSeverityByIndustry() {
+            try {
+                const response = await fetch(buildApiUrl('severity-by-industry'));
+                const data = await response.json();
+
+                const ctx = document.getElementById('severityByIndustryChart').getContext('2d');
+
+                if (charts.severityByIndustry) {
+                    charts.severityByIndustry.destroy();
+                }
+
+                charts.severityByIndustry = new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: data.industries,
+                        datasets: [{
+                            label: 'Average Severity',
+                            data: data.avg_severities,
+                            backgroundColor: colors.primary + '20',
+                            borderColor: colors.primary,
+                            borderWidth: 2,
+                            pointBackgroundColor: colors.primary,
+                            pointBorderColor: colors.primary
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            r: {
+                                beginAtZero: true,
+                                max: 4,
+                                ticks: {
+                                    callback: function(value) {
+                                        const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                                        return severityMap[value] || value;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                hideLoading('loading8', 'severityByIndustryChart');
+            } catch (error) {
+                console.error('Error loading severity by industry:', error);
+                showError('loading8', 'Failed to load severity by industry');
+            }
+        }
+
+        async function loadSeverityByAttackType() {
+            try {
+                const response = await fetch(buildApiUrl('severity-by-attack-type'));
+                const data = await response.json();
+
+                const ctx = document.getElementById('severityByAttackTypeChart').getContext('2d');
+
+                if (charts.severityByAttackType) {
+                    charts.severityByAttackType.destroy();
+                }
+
+                charts.severityByAttackType = new Chart(ctx, {
+                    type: 'radar',
+                    data: {
+                        labels: data.attack_types,
+                        datasets: [{
+                            label: 'Average Severity',
+                            data: data.avg_severities,
+                            backgroundColor: colors.secondary + '20',
+                            borderColor: colors.secondary,
+                            borderWidth: 2,
+                            pointBackgroundColor: colors.secondary,
+                            pointBorderColor: colors.secondary
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            r: {
+                                beginAtZero: true,
+                                max: 4,
+                                ticks: {
+                                    callback: function(value) {
+                                        const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                                        return severityMap[value] || value;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                hideLoading('loading9', 'severityByAttackTypeChart');
+            } catch (error) {
+                console.error('Error loading severity by attack type:', error);
+                showError('loading9', 'Failed to load severity by attack type');
             }
         }
 
