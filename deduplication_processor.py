@@ -1,404 +1,890 @@
 #!/usr/bin/env python3
 """
-Event Deduplication Processor for V2 Database Schema
+DEPRECATED: Event Deduplication Processor - Multithreaded Enhanced Edition
 
-This script implements the proper deduplication logic that:
-1. Groups similar enriched events together
-2. Creates deduplicated events in DeduplicatedEvents table
-3. Maps all contributing raw events to deduplicated events
-4. Consolidates data sources and entities
-5. Provides full traceability from raw → enriched → deduplicated events
+⚠️  WARNING: This script is DEPRECATED and will be removed in a future version.
+    Use the new global deduplication system instead:
+    - cyber_data_collector/processing/deduplication_v2.py
+    - cyber_data_collector/storage/deduplication_storage.py
+
+This script implements intelligent deduplication logic that:
+1. Groups events by affected entity (victim organization)
+2. Uses Perplexity to find earliest known dates for events
+3. Performs deep duplicate checking regardless of timestamp
+4. Merges duplicates intelligently using best data from all sources
+5. Processes everything in parallel with 10 concurrent threads
+6. Merges URLs, dates, threat actors, and record counts from all sources
+
+LEGACY FEATURES (being replaced):
+- Multithreaded processing with 10 workers
+- Entity-based grouping (not just title similarity)
+- Perplexity-based date correction
+- Intelligent merging of all fields
+- JSON-based responses for reliability
+- Thread-safe database operations
+
+MIGRATION PATH:
+The new deduplication system provides:
+- Object-oriented design with clear separation of concerns
+- Comprehensive validation and error checking
+- Merge lineage tracking for transparency
+- Global deduplication (not month-by-month)
+- Better performance and reliability
+- Proper database constraints to prevent duplicates
+
+To migrate:
+1. Use the new global deduplication in discover_enrich_events.py
+2. Run the migration script: migrate_to_global_deduplication.py
+3. Remove this file after migration is complete
 """
 
-import asyncio
 import json
+import logging
+import os
+import sqlite3
 import sys
+import threading
+import time
 import uuid
-from datetime import datetime
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-from difflib import SequenceMatcher
+from dotenv import load_dotenv
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent))
+# Load environment variables
+load_dotenv()
 
-from cyber_event_data_v2 import CyberEventDataV2
+# Setup logging with UTF-8 encoding for Windows
+import sys
+
+# Create file handler with UTF-8 encoding
+file_handler = logging.FileHandler('deduplication.log', encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Create console handler with UTF-8 encoding
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[file_handler, console_handler]
+)
+logger = logging.getLogger(__name__)
+
+# Thread-safe counters
+lock = threading.Lock()
+stats = {
+    'events_processed': 0,
+    'duplicates_found': 0,
+    'dates_corrected': 0,
+    'dates_suspicious': 0,
+    'dates_confirmed': 0,
+    'dates_failed': 0,
+    'json_retries': 0,
+    'entities_grouped': 0,
+    'groups_merged': 0,
+    'urls_consolidated': 0
+}
 
 
-class DeduplicationProcessor:
-    """Process event deduplication using the V2 database schema."""
+class PerplexityDateCorrector:
+    """Use Perplexity to find earliest known dates for cyber events."""
 
-    def __init__(self, db: CyberEventDataV2):
-        self.db = db
-        self.similarity_threshold = 0.7  # Lowered from 0.8 for better fuzzy matching
-        self.date_tolerance_days = None  # Removed hard limit - use as scoring factor instead
+    def __init__(self, api_key: str, max_retries: int = 3):
+        self.api_key = api_key
+        self.max_retries = max_retries
 
-    def get_enriched_events_for_deduplication(self) -> List[Dict[str, Any]]:
-        """Get all enriched events that need deduplication."""
+    def query_perplexity(self, query: str) -> Optional[Dict]:
+        """Query Perplexity API with retry logic and JSON response."""
+        url = "https://api.perplexity.ai/chat/completions"
 
-        with self.db._lock:
-            cursor = self.db._conn.cursor()
+        headers = {
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json'
+        }
 
-            # Get enriched events with their raw event details
-            cursor.execute("""
-                SELECT
-                    ee.enriched_event_id,
-                    ee.raw_event_id,
-                    ee.title,
-                    ee.description,
-                    ee.summary,
-                    ee.event_type,
-                    ee.severity,
-                    ee.event_date,
-                    ee.records_affected,
-                    ee.is_australian_event,
-                    ee.is_specific_event,
-                    ee.confidence_score,
-                    ee.australian_relevance_score,
-                    re.raw_title,
-                    re.source_url,
-                    re.source_type,
-                    re.discovered_at
-                FROM EnrichedEvents ee
-                JOIN RawEvents re ON ee.raw_event_id = re.raw_event_id
-                WHERE ee.status = 'Active'
-                ORDER BY ee.created_at ASC
-            """)
+        payload = {
+            "model": "sonar-pro",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": query
+                }
+            ],
+            "max_tokens": 500,
+            "temperature": 0.1,
+            "stream": False
+        }
 
-            return [dict(row) for row in cursor.fetchall()]
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
 
-    def group_similar_events(self, events: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-        """Group similar events together for deduplication."""
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'choices' in data and data['choices']:
+                        content = data['choices'][0]['message']['content'].strip()
 
-        groups = []
-        processed_indices = set()
+                        # Try to extract JSON from the response
+                        json_start = content.find('{')
+                        json_end = content.rfind('}') + 1
 
-        for i, event in enumerate(events):
-            if i in processed_indices:
-                continue
+                        if json_start >= 0 and json_end > json_start:
+                            json_str = content[json_start:json_end]
+                            try:
+                                result = json.loads(json_str)
+                                return result
+                            except json.JSONDecodeError as e:
+                                # Retry if JSON parsing fails (Perplexity didn't format correctly)
+                                with lock:
+                                    stats['json_retries'] += 1
+                                if attempt < self.max_retries - 1:
+                                    logger.warning(f"Failed to parse JSON (attempt {attempt + 1}/{self.max_retries}), retrying...")
+                                    logger.debug(f"JSON parse error: {e}")
+                                    logger.debug(f"Content received: {content[:200]}")
+                                    time.sleep(1)  # Brief pause before retry
+                                    continue
+                                else:
+                                    logger.error(f"Failed to parse JSON after {self.max_retries} attempts")
+                                    logger.debug(f"Final content: {content[:500]}")
+                                    with lock:
+                                        stats['dates_failed'] += 1
+                                    return None
+                        else:
+                            # No JSON object found - retry
+                            with lock:
+                                stats['json_retries'] += 1
+                            if attempt < self.max_retries - 1:
+                                logger.warning(f"No JSON object found (attempt {attempt + 1}/{self.max_retries}), retrying...")
+                                logger.debug(f"Content received: {content[:200]}")
+                                time.sleep(1)
+                                continue
+                            else:
+                                logger.error(f"No JSON object found after {self.max_retries} attempts")
+                                logger.debug(f"Final content: {content[:500]}")
+                                with lock:
+                                    stats['dates_failed'] += 1
+                                return None
 
-            # Start a new group with this event
-            group = [event]
-            processed_indices.add(i)
-
-            # Find similar events to add to this group
-            for j in range(i + 1, len(events)):
-                if j in processed_indices:
+                elif response.status_code in [429, 503]:
+                    wait_time = 2 ** attempt
+                    retry_after = response.headers.get('Retry-After')
+                    if retry_after:
+                        wait_time = int(retry_after)
+                    logger.warning(f"Rate limit hit, retrying in {wait_time}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait_time)
                     continue
+                else:
+                    logger.error(f"API error: HTTP {response.status_code}")
+                    return None
 
-                if self.are_events_similar(event, events[j]):
-                    group.append(events[j])
-                    processed_indices.add(j)
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"API call failed: {e}, retrying in {wait_time}s (attempt {attempt + 1}/{self.max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"API call failed after {self.max_retries} attempts: {e}")
+                    return None
 
-            groups.append(group)
+        return None
 
-        return groups
+    def get_earliest_event_date(self, event_title: str, entity_name: str,
+                                 summary: str, known_dates: List[str]) -> Optional[Dict]:
+        """Query Perplexity for the earliest known date of an event."""
 
-    def are_events_similar(self, event1: Dict[str, Any], event2: Dict[str, Any]) -> bool:
-        """Determine if two events are similar enough to be considered duplicates.
+        dates_str = ", ".join(known_dates[:5]) if known_dates else "No dates available"
+        summary_snippet = summary[:400] if summary else "No additional details"
 
-        Note: Removed hard date cutoff. Date difference is now used as a scoring factor.
-        """
+        query = f"""
+Cyber Security Incident Analysis:
 
-        # Calculate text similarity first
+AFFECTED ENTITY: {entity_name}
+INCIDENT TITLE: {event_title}
+DETAILS: {summary_snippet}
+DATES FROM SOURCES: {dates_str}
+
+CRITICAL TASK: Find the ACTUAL date when this cyber incident occurred or was first discovered.
+
+WARNING: The provided dates may be:
+- News article publication dates (not the incident date)
+- Follow-up story dates (covering an older incident)
+- Placeholder dates (1st of month)
+- Incorrect dates from unreliable sources
+
+Your job is to research this SPECIFIC incident involving {entity_name} and find:
+1. When did the cyber attack/breach actually occur?
+2. When was it first discovered/detected?
+3. When was it first publicly disclosed?
+
+Respond ONLY with valid JSON in this exact format:
+{{
+    "earliest_date": "YYYY-MM-DD",
+    "date_type": "<one of: incident_date, discovery_date, disclosure_date>",
+    "confidence": <0.0-1.0>,
+    "explanation": "<source and reasoning>",
+    "is_corrected": <true if different from provided dates, false otherwise>
+}}
+
+GUIDELINES:
+- If provided dates are news publication dates about a historical event, find the actual incident date
+- Search for official statements, regulatory filings, company announcements
+- Cite specific sources (e.g., "OAIC report dated...", "Company statement on...")
+- If uncertain, indicate lower confidence
+- Do NOT just repeat the provided dates unless you verify they are correct
+
+Do not include any text outside the JSON object.
+"""
+
+        return self.query_perplexity(query)
+
+
+class EnhancedDeduplicationProcessor:
+    """Enhanced deduplication processor with multithreading and intelligent merging."""
+
+    def __init__(self, db_path: str, api_key: str = None):
+        self.db_path = db_path
+        self.date_corrector = PerplexityDateCorrector(api_key) if api_key else None
+        self.similarity_threshold = 0.75
+
+    def get_connection(self) -> sqlite3.Connection:
+        """Get a database connection."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def get_all_events(self) -> List[Dict[str, Any]]:
+        """Get all enriched events for deduplication."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                ee.enriched_event_id,
+                ee.raw_event_id,
+                ee.title,
+                ee.description,
+                ee.summary,
+                ee.event_type,
+                ee.severity,
+                ee.event_date,
+                ee.records_affected,
+                ee.is_australian_event,
+                ee.is_specific_event,
+                ee.confidence_score,
+                ee.australian_relevance_score,
+                ee.attacking_entity_name,
+                ee.attack_method,
+                re.raw_title,
+                re.source_url,
+                re.source_type,
+                re.discovered_at
+            FROM EnrichedEvents ee
+            JOIN RawEvents re ON ee.raw_event_id = re.raw_event_id
+            WHERE ee.status = 'Active'
+            ORDER BY ee.event_date ASC NULLS LAST, ee.created_at ASC
+        """)
+
+        events = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return events
+
+    def extract_entity_name(self, title: str) -> Optional[str]:
+        """Extract victim entity name from event title."""
+        # Common patterns for entity extraction
+        title_lower = title.lower()
+
+        # Try various patterns
+        import re
+
+        # Pattern: "EntityName Data Breach", "EntityName Cyber Attack", etc.
+        patterns = [
+            r'^([A-Z][a-zA-Z0-9\s&\'-]+?)(?:\s+(?:data breach|cyber attack|hack|breach|incident|ransomware))',
+            r'(?:breach at|attack on|incident at|hack of)\s+([A-Z][a-zA-Z0-9\s&\'-]+)',
+            r'^([A-Z][a-zA-Z0-9\s&\'-]+?)(?:\s+suffers?|\s+experiences?|\s+reports?)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                entity = match.group(1).strip()
+                # Filter out too-short or generic terms
+                if len(entity) > 3 and entity.lower() not in ['the', 'a', 'an', 'data', 'cyber']:
+                    return entity
+
+        # Fallback: use first 2-3 capitalized words
+        words = title.split()
+        entity_words = []
+        for word in words[:5]:
+            if word[0].isupper() and len(word) > 2:
+                entity_words.append(word)
+            elif entity_words:  # Stop after first non-capitalized word after starting
+                break
+            if len(entity_words) >= 3:
+                break
+
+        if entity_words:
+            return ' '.join(entity_words)
+
+        return None
+
+    def group_events_by_entity(self, events: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """Group events by affected entity, regardless of date."""
+        entity_groups = {}
+
+        for event in events:
+            entity = self.extract_entity_name(event.get('title', ''))
+
+            if entity:
+                entity_lower = entity.lower().strip()
+
+                # Find if this entity already exists (fuzzy matching)
+                found_group = None
+                for existing_entity in entity_groups.keys():
+                    similarity = SequenceMatcher(None, entity_lower, existing_entity.lower()).ratio()
+                    if similarity > 0.85:  # High threshold for entity matching
+                        found_group = existing_entity
+                        break
+
+                if found_group:
+                    entity_groups[found_group].append(event)
+                else:
+                    entity_groups[entity] = [event]
+            else:
+                # Events without clear entity go in a special group
+                if 'UNKNOWN_ENTITY' not in entity_groups:
+                    entity_groups['UNKNOWN_ENTITY'] = []
+                entity_groups['UNKNOWN_ENTITY'].append(event)
+
+        return entity_groups
+
+    def are_events_duplicates(self, event1: Dict[str, Any], event2: Dict[str, Any]) -> Tuple[bool, float]:
+        """Deep check if two events are duplicates."""
+
+        # Calculate text similarity
         title1 = (event1.get('title') or '').lower()
         title2 = (event2.get('title') or '').lower()
 
-        summary1 = (event1.get('summary') or '').lower()[:200]  # First 200 chars
-        summary2 = (event2.get('summary') or '').lower()[:200]
+        summary1 = (event1.get('summary') or event1.get('description') or '')[:300].lower()
+        summary2 = (event2.get('summary') or event2.get('description') or '')[:300].lower()
 
         title_similarity = SequenceMatcher(None, title1, title2).ratio()
         summary_similarity = SequenceMatcher(None, summary1, summary2).ratio()
 
-        # Calculate date proximity factor (not a hard gate)
-        date_factor = 1.0
-        if event1.get('event_date') and event2.get('event_date'):
+        # Check entity match
+        entity1 = self.extract_entity_name(event1.get('title', ''))
+        entity2 = self.extract_entity_name(event2.get('title', ''))
+
+        entity_match = False
+        if entity1 and entity2:
+            entity_similarity = SequenceMatcher(None, entity1.lower(), entity2.lower()).ratio()
+            entity_match = entity_similarity > 0.85
+
+        # Check attack type similarity
+        attack_type_match = False
+        type1 = (event1.get('event_type') or '').lower()
+        type2 = (event2.get('event_type') or '').lower()
+        if type1 and type2 and type1 == type2:
+            attack_type_match = True
+
+        # Calculate overall similarity score
+        score = (
+            title_similarity * 0.5 +
+            summary_similarity * 0.3 +
+            (1.0 if entity_match else 0.0) * 0.15 +
+            (1.0 if attack_type_match else 0.0) * 0.05
+        )
+
+        is_duplicate = score >= self.similarity_threshold
+
+        return is_duplicate, score
+
+    def find_duplicates_in_group(self, events: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """Find duplicate clusters within an entity group."""
+        if len(events) <= 1:
+            return [events]
+
+        clusters = []
+        processed = set()
+
+        for i, event1 in enumerate(events):
+            if i in processed:
+                continue
+
+            cluster = [event1]
+            processed.add(i)
+
+            for j, event2 in enumerate(events):
+                if j <= i or j in processed:
+                    continue
+
+                is_dup, score = self.are_events_duplicates(event1, event2)
+                if is_dup:
+                    cluster.append(event2)
+                    processed.add(j)
+
+            clusters.append(cluster)
+
+        return clusters
+
+    def merge_duplicate_cluster(self, cluster: List[Dict[str, Any]],
+                                use_date_correction: bool = False) -> Dict[str, Any]:
+        """Intelligently merge a cluster of duplicate events."""
+
+        # Sort by confidence score (highest first)
+        cluster_sorted = sorted(cluster, key=lambda e: e.get('confidence_score', 0.0), reverse=True)
+
+        # Choose best event as base
+        best_event = cluster_sorted[0]
+
+        # Collect all dates
+        dates = []
+        for event in cluster:
+            if event.get('event_date'):
+                try:
+                    date_str = event['event_date']
+                    if isinstance(date_str, str):
+                        dates.append(date_str)
+                except:
+                    pass
+
+        # Find earliest date
+        earliest_date = min(dates) if dates else None
+
+        # Check if date looks suspicious (likely placeholder or news article date)
+        date_is_suspicious = False
+        suspicious_reasons = []
+
+        if earliest_date:
             try:
-                from datetime import datetime
-                date1 = datetime.fromisoformat(event1['event_date']).date() if isinstance(event1['event_date'], str) else event1['event_date']
-                date2 = datetime.fromisoformat(event2['event_date']).date() if isinstance(event2['event_date'], str) else event2['event_date']
+                from datetime import datetime as dt
+                date_obj = dt.fromisoformat(earliest_date.replace('Z', ''))
 
-                if date1 and date2:
-                    date_diff = abs((date1 - date2).days)
-                    # Graduated date factor (not a hard cutoff)
-                    if date_diff == 0:
-                        date_factor = 1.0
-                    elif date_diff <= 30:
-                        date_factor = 0.95
-                    elif date_diff <= 90:
-                        date_factor = 0.85
-                    elif date_diff <= 180:
-                        date_factor = 0.75
-                    elif date_diff <= 365:
-                        date_factor = 0.65
-                    else:
-                        date_factor = max(0.5, 1.0 - (date_diff / 1000.0))
+                # Suspicious if it's the 1st of the month (likely placeholder)
+                if date_obj.day == 1:
+                    date_is_suspicious = True
+                    suspicious_reasons.append("1st of month")
+
+                # Suspicious if all dates are very close to each other but spread over weeks
+                # (might be follow-up news articles about same incident)
+                if len(dates) > 2:
+                    date_objs = []
+                    for d in dates:
+                        try:
+                            date_objs.append(dt.fromisoformat(d.replace('Z', '')))
+                        except:
+                            pass
+
+                    if len(date_objs) >= 2:
+                        date_range = (max(date_objs) - min(date_objs)).days
+                        # Suspicious if dates span 7-60 days (likely follow-up stories)
+                        if 7 <= date_range <= 60:
+                            date_is_suspicious = True
+                            suspicious_reasons.append(f"dates span {date_range} days")
+
+                # Suspicious if date is very recent compared to typical incident discovery lag
+                # (might be publication date of a historical story)
+                if len(cluster) > 1:
+                    # If we have multiple sources for same event, dates should be close
+                    # unless one is a follow-up story
+                    pass  # Already handled above
+
+                if date_is_suspicious:
+                    reason_str = ", ".join(suspicious_reasons)
+                    logger.debug(f"  [WARNING] Suspicious date: {earliest_date} ({reason_str})")
+                    with lock:
+                        stats['dates_suspicious'] += 1
             except:
-                pass  # Keep default date_factor = 1.0 if date comparison fails
+                pass
 
-        # Weighted similarity with date factor
-        text_similarity = (title_similarity * 0.7) + (summary_similarity * 0.3)
-        overall_similarity = text_similarity * date_factor
+        # Extract entity name for better date correction
+        entity_name = self.extract_entity_name(best_event.get('title', ''))
+        if not entity_name:
+            entity_name = "Unknown Entity"
 
-        return overall_similarity >= self.similarity_threshold
+        # Get best summary/description for context
+        summary = best_event.get('summary') or best_event.get('description') or ""
 
-    def create_deduplicated_event(self, event_group: List[Dict[str, Any]]) -> str:
-        """Create a deduplicated event from a group of similar events."""
+        # Always use Perplexity when date correction is enabled
+        # The AI will validate correct dates and fix incorrect ones
+        if use_date_correction and self.date_corrector:
+            try:
+                date_result = self.date_corrector.get_earliest_event_date(
+                    best_event.get('title', ''),
+                    entity_name,
+                    summary,
+                    dates
+                )
 
-        # Choose the best event as the master (highest confidence score)
-        master_event = max(event_group, key=lambda e: e.get('confidence_score', 0.0))
+                if date_result and date_result.get('earliest_date'):
+                    corrected_date = date_result['earliest_date']
+                    confidence = date_result.get('confidence', 0.0)
+                    explanation = date_result.get('explanation', 'No explanation')
+                    date_type = date_result.get('date_type', 'unknown')
+                    is_corrected = date_result.get('is_corrected', False)
 
-        deduplicated_event_id = str(uuid.uuid4())
+                    # Only log and count if date actually changed
+                    if corrected_date != earliest_date:
+                        reason_marker = " (SUSPICIOUS)" if date_is_suspicious else ""
+                        logger.info(f"  [DATE CHANGED]{reason_marker}: {earliest_date} -> {corrected_date} ({date_type})")
+                        logger.info(f"     Confidence: {confidence:.2f} | {explanation[:120]}")
+                        earliest_date = corrected_date
+                        with lock:
+                            stats['dates_corrected'] += 1
+                    else:
+                        if date_is_suspicious:
+                            reason_str = ", ".join(suspicious_reasons)
+                            logger.info(f"  [OK] Suspicious date ({reason_str}) verified as correct: {earliest_date}")
+                            logger.info(f"     {explanation[:120]}")
+                        logger.debug(f"  Date confirmed: {earliest_date} (confidence: {confidence:.2f})")
+                        with lock:
+                            stats['dates_confirmed'] += 1
+            except Exception as e:
+                logger.warning(f"  Date correction failed: {e}")
 
-        # Calculate aggregate statistics
-        total_data_sources = len(set(e['source_url'] for e in event_group if e.get('source_url')))
-        contributing_raw_events = len(set(e['raw_event_id'] for e in event_group))
-        contributing_enriched_events = len(event_group)
+        # Merge URLs from all sources
+        urls = set()
+        for event in cluster:
+            if event.get('source_url'):
+                urls.add(event['source_url'])
 
-        # Calculate average similarity within the group
-        similarities = []
-        for i in range(len(event_group)):
-            for j in range(i + 1, len(event_group)):
-                title_sim = SequenceMatcher(
-                    None,
-                    (event_group[i].get('title') or '').lower(),
-                    (event_group[j].get('title') or '').lower()
-                ).ratio()
-                similarities.append(title_sim)
+        # Choose best threat actor (prefer non-Unknown, longest)
+        threat_actors = [e.get('attacking_entity_name') for e in cluster
+                        if e.get('attacking_entity_name')
+                        and e['attacking_entity_name'] != 'Unknown'
+                        and len(e['attacking_entity_name']) > 3]
+        best_threat_actor = max(threat_actors, key=len) if threat_actors else 'Unknown'
 
-        avg_similarity = sum(similarities) / len(similarities) if similarities else 1.0
+        # Choose best attack method
+        attack_methods = [e.get('attack_method') for e in cluster
+                         if e.get('attack_method') and e['attack_method'] != 'Unknown']
+        best_attack_method = max(attack_methods, key=len) if attack_methods else None
 
-        # Create deduplicated event
-        with self.db._lock:
-            cursor = self.db._conn.cursor()
+        # Choose most reliable records_affected (prefer higher confidence sources)
+        records_affected = None
+        best_confidence = 0.0
+        for event in cluster:
+            if event.get('records_affected') and event.get('records_affected', 0) > 0:
+                confidence = event.get('confidence_score', 0.5)
+                if confidence > best_confidence or records_affected is None:
+                    records_affected = event['records_affected']
+                    best_confidence = confidence
 
-            cursor.execute("""
-                INSERT INTO DeduplicatedEvents (
-                    deduplicated_event_id, master_enriched_event_id, title, description, summary,
-                    event_type, severity, event_date, records_affected, is_australian_event,
-                    is_specific_event, confidence_score, australian_relevance_score,
-                    total_data_sources, contributing_raw_events, contributing_enriched_events,
-                    similarity_score, deduplication_method, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                deduplicated_event_id,
-                master_event['enriched_event_id'],
-                master_event['title'],
-                master_event['description'],
-                master_event['summary'],
-                master_event['event_type'],
-                master_event['severity'],
-                master_event['event_date'],
-                master_event['records_affected'],
-                master_event['is_australian_event'],
-                master_event['is_specific_event'],
-                master_event['confidence_score'],
-                master_event['australian_relevance_score'],
-                total_data_sources,
-                contributing_raw_events,
-                contributing_enriched_events,
-                avg_similarity,
-                'title_similarity',
-                'Active',
-                datetime.now().isoformat(),
-                datetime.now().isoformat()
-            ))
+        # Choose best severity (prefer non-Unknown)
+        severities = [e.get('severity') for e in cluster
+                     if e.get('severity') and e['severity'] != 'Unknown']
+        severity_order = {'Critical': 4, 'High': 3, 'Medium': 2, 'Low': 1}
+        best_severity = max(severities, key=lambda s: severity_order.get(s, 0)) if severities else 'Unknown'
 
-            self.db._conn.commit()
+        # Merge descriptions (use longest/most detailed)
+        descriptions = [e.get('description') or e.get('summary') for e in cluster if e.get('description') or e.get('summary')]
+        best_description = max(descriptions, key=len) if descriptions else best_event.get('description')
 
-        return deduplicated_event_id
+        # Create merged event
+        merged = {
+            'deduplicated_event_id': str(uuid.uuid4()),
+            'title': best_event.get('title'),
+            'description': best_description,
+            'summary': best_event.get('summary'),
+            'event_type': best_event.get('event_type'),
+            'severity': best_severity,
+            'event_date': earliest_date,
+            'records_affected': records_affected,
+            'is_australian_event': best_event.get('is_australian_event'),
+            'is_specific_event': best_event.get('is_specific_event'),
+            'confidence_score': best_event.get('confidence_score'),
+            'australian_relevance_score': best_event.get('australian_relevance_score'),
+            'attacking_entity_name': best_threat_actor,
+            'attack_method': best_attack_method,
+            'total_data_sources': len(urls),
+            'contributing_raw_events': len(set(e['raw_event_id'] for e in cluster)),
+            'contributing_enriched_events': len(cluster),
+            'master_enriched_event_id': best_event['enriched_event_id'],
+            'source_urls': list(urls),
+            'original_events': cluster
+        }
 
-    def create_event_mappings(self, deduplicated_event_id: str, event_group: List[Dict[str, Any]]):
-        """Create mappings from raw events to deduplicated events."""
+        with lock:
+            stats['urls_consolidated'] += len(urls)
 
-        master_event = max(event_group, key=lambda e: e.get('confidence_score', 0.0))
+        return merged
 
-        with self.db._lock:
-            cursor = self.db._conn.cursor()
+    def save_deduplicated_event(self, merged_event: Dict[str, Any]) -> str:
+        """Save deduplicated event to database (thread-safe)."""
+        with lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
 
-            for i, event in enumerate(event_group):
-                map_id = str(uuid.uuid4())
+            try:
+                # Calculate similarity score
+                cluster = merged_event['original_events']
+                similarities = []
+                for i in range(len(cluster)):
+                    for j in range(i + 1, len(cluster)):
+                        _, score = self.are_events_duplicates(cluster[i], cluster[j])
+                        similarities.append(score)
+                avg_similarity = sum(similarities) / len(similarities) if similarities else 1.0
 
-                # Determine contribution type
-                if event['enriched_event_id'] == master_event['enriched_event_id']:
-                    contribution_type = 'primary'
-                elif i < 2:  # First few are supporting
-                    contribution_type = 'supporting'
-                else:
-                    contribution_type = 'duplicate'
-
-                # Calculate similarity to master
-                similarity = SequenceMatcher(
-                    None,
-                    (master_event.get('title') or '').lower(),
-                    (event.get('title') or '').lower()
-                ).ratio()
-
-                # Use INSERT OR IGNORE to handle UNIQUE constraint gracefully
                 cursor.execute("""
-                    INSERT OR IGNORE INTO EventDeduplicationMap (
-                        map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
-                        contribution_type, similarity_score, data_source_weight, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO DeduplicatedEvents (
+                        deduplicated_event_id, master_enriched_event_id, title, description, summary,
+                        event_type, severity, event_date, records_affected, is_australian_event,
+                        is_specific_event, confidence_score, australian_relevance_score,
+                        total_data_sources, contributing_raw_events, contributing_enriched_events,
+                        similarity_score, deduplication_method, attacking_entity_name, attack_method,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    map_id,
-                    event['raw_event_id'],
-                    event['enriched_event_id'],
-                    deduplicated_event_id,
-                    contribution_type,
-                    similarity,
-                    1.0,  # Default weight
+                    merged_event['deduplicated_event_id'],
+                    merged_event['master_enriched_event_id'],
+                    merged_event['title'],
+                    merged_event['description'],
+                    merged_event['summary'],
+                    merged_event['event_type'],
+                    merged_event['severity'],
+                    merged_event['event_date'],
+                    merged_event['records_affected'],
+                    merged_event['is_australian_event'],
+                    merged_event['is_specific_event'],
+                    merged_event['confidence_score'],
+                    merged_event['australian_relevance_score'],
+                    merged_event['total_data_sources'],
+                    merged_event['contributing_raw_events'],
+                    merged_event['contributing_enriched_events'],
+                    avg_similarity,
+                    'entity_based_multithreaded',
+                    merged_event.get('attacking_entity_name'),
+                    merged_event.get('attack_method'),
+                    'Active',
+                    datetime.now().isoformat(),
                     datetime.now().isoformat()
                 ))
 
-            self.db._conn.commit()
+                # Save URLs
+                for url in merged_event['source_urls']:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO DeduplicatedEventSources (
+                            deduplicated_event_id, source_url, source_type,
+                            credibility_score, discovered_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        merged_event['deduplicated_event_id'],
+                        url,
+                        'Web',
+                        0.8,
+                        datetime.now().isoformat()
+                    ))
 
-    def create_deduplication_cluster(self, deduplicated_event_id: str, event_group: List[Dict[str, Any]]):
-        """Create deduplication cluster information."""
+                # Create event mappings
+                for event in merged_event['original_events']:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO EventDeduplicationMap (
+                            map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
+                            contribution_type, similarity_score, data_source_weight, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(uuid.uuid4()),
+                        event['raw_event_id'],
+                        event['enriched_event_id'],
+                        merged_event['deduplicated_event_id'],
+                        'primary' if event['enriched_event_id'] == merged_event['master_enriched_event_id'] else 'supporting',
+                        event.get('confidence_score', 0.8),
+                        1.0,
+                        datetime.now().isoformat()
+                    ))
 
-        # Calculate average pairwise similarity
-        similarities = []
-        for i in range(len(event_group)):
-            for j in range(i + 1, len(event_group)):
-                sim = SequenceMatcher(
-                    None,
-                    (event_group[i].get('title') or '').lower(),
-                    (event_group[j].get('title') or '').lower()
-                ).ratio()
-                similarities.append(sim)
+                conn.commit()
+                conn.close()
 
-        avg_similarity = sum(similarities) / len(similarities) if similarities else 1.0
+                return merged_event['deduplicated_event_id']
 
-        cluster_id = str(uuid.uuid4())
+            except Exception as e:
+                conn.rollback()
+                conn.close()
+                logger.error(f"Error saving deduplicated event: {e}")
+                raise
 
-        with self.db._lock:
-            cursor = self.db._conn.cursor()
+    def process_entity_group(self, entity_name: str, events: List[Dict[str, Any]],
+                            group_num: int, total_groups: int,
+                            use_date_correction: bool) -> Dict[str, Any]:
+        """Process a single entity group (thread-safe)."""
+        logger.info(f"[{group_num}/{total_groups}] Processing entity: {entity_name} ({len(events)} events)")
 
-            cursor.execute("""
-                INSERT INTO DeduplicationClusters (
-                    cluster_id, deduplicated_event_id, cluster_size,
-                    average_similarity, deduplication_timestamp, algorithm_version
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                cluster_id,
-                deduplicated_event_id,
-                len(event_group),
-                avg_similarity,
-                datetime.now().isoformat(),
-                'v1.0'
-            ))
+        try:
+            # Find duplicate clusters within this entity group
+            clusters = self.find_duplicates_in_group(events)
 
-            self.db._conn.commit()
+            deduplicated_ids = []
+            duplicates_merged = 0
 
-    def consolidate_data_sources(self, deduplicated_event_id: str, event_group: List[Dict[str, Any]]):
-        """Consolidate data sources for the deduplicated event."""
+            for cluster in clusters:
+                if len(cluster) > 1:
+                    logger.info(f"  Found duplicate cluster with {len(cluster)} events")
+                    duplicates_merged += len(cluster) - 1
 
-        # Collect unique data sources
-        sources = {}
-        for event in event_group:
-            if event.get('source_url'):
-                url = event['source_url']
-                if url not in sources:
-                    sources[url] = {
-                        'source_url': url,
-                        'source_type': event.get('source_type', 'Unknown'),
-                        'credibility_score': 0.8,  # Default credibility
-                        'content_snippet': None,  # Could be populated from raw content
-                        'discovered_at': event.get('discovered_at')
-                    }
+                # Merge cluster
+                merged_event = self.merge_duplicate_cluster(cluster, use_date_correction)
 
-        # Insert consolidated sources
-        with self.db._lock:
-            cursor = self.db._conn.cursor()
+                # Save to database
+                dedup_id = self.save_deduplicated_event(merged_event)
+                deduplicated_ids.append(dedup_id)
 
-            for source_data in sources.values():
-                cursor.execute("""
-                    INSERT OR IGNORE INTO DeduplicatedEventSources (
-                        deduplicated_event_id, source_url, source_type,
-                        credibility_score, content_snippet, discovered_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    deduplicated_event_id,
-                    source_data['source_url'],
-                    source_data['source_type'],
-                    source_data['credibility_score'],
-                    source_data['content_snippet'],
-                    source_data['discovered_at']
-                ))
+            with lock:
+                stats['events_processed'] += len(events)
+                stats['duplicates_found'] += duplicates_merged
+                stats['groups_merged'] += len(deduplicated_ids)
 
-            self.db._conn.commit()
+            return {
+                'status': 'success',
+                'entity': entity_name,
+                'events_processed': len(events),
+                'duplicates_merged': duplicates_merged,
+                'deduplicated_events': len(deduplicated_ids)
+            }
 
-    async def process_deduplication(self):
-        """Main deduplication processing function."""
+        except Exception as e:
+            logger.error(f"  Error processing entity {entity_name}: {e}")
+            return {
+                'status': 'error',
+                'entity': entity_name,
+                'error': str(e)
+            }
 
-        print("Starting event deduplication process...")
 
-        # Get all enriched events
-        events = self.get_enriched_events_for_deduplication()
-        print(f"Found {len(events)} enriched events to process")
+def main():
+    import argparse
+    
+    # DEPRECATION WARNING
+    print("⚠️  WARNING: This script is DEPRECATED!")
+    print("   Use the new global deduplication system instead.")
+    print("   See: cyber_data_collector/processing/deduplication_v2.py")
+    print("   Migration script: migrate_to_global_deduplication.py")
+    print()
 
-        if not events:
-            print("No events to deduplicate")
-            return
+    parser = argparse.ArgumentParser(
+        description='DEPRECATED: Enhanced Deduplication Processor with Multithreading'
+    )
+    parser.add_argument('--db-path', default='instance/cyber_events.db',
+                       help='Path to SQLite database file')
+    parser.add_argument('--max-workers', type=int, default=10,
+                       help='Number of concurrent workers (default: 10)')
+    parser.add_argument('--correct-dates', action='store_true',
+                       help='Use Perplexity to correct event dates (requires API key)')
+    parser.add_argument('--limit', type=int,
+                       help='Limit number of entity groups to process (for testing)')
 
-        # Group similar events
-        print("Grouping similar events...")
-        event_groups = self.group_similar_events(events)
+    args = parser.parse_args()
 
-        unique_groups = [g for g in event_groups if len(g) == 1]
-        duplicate_groups = [g for g in event_groups if len(g) > 1]
+    # Get API key if date correction is enabled
+    api_key = None
+    if args.correct_dates:
+        api_key = os.getenv('PERPLEXITY_API_KEY')
+        if not api_key:
+            logger.error("PERPLEXITY_API_KEY required for date correction")
+            sys.exit(1)
+        logger.info("Date correction enabled via Perplexity")
 
-        print(f"Found {len(unique_groups)} unique events and {len(duplicate_groups)} groups with duplicates")
+    # Create processor
+    processor = EnhancedDeduplicationProcessor(args.db_path, api_key)
 
-        # Process each group
-        deduplicated_count = 0
-        total_events_processed = 0
+    logger.info("="*60)
+    logger.info("Enhanced Deduplication Processor")
+    logger.info("="*60)
+    logger.info(f"Database: {args.db_path}")
+    logger.info(f"Max workers: {args.max_workers}")
+    logger.info(f"Date correction: {args.correct_dates}")
 
-        for i, group in enumerate(event_groups, 1):
-            print(f"\nProcessing group {i}/{len(event_groups)} ({len(group)} events)")
+    # Get all events
+    logger.info("\nLoading events...")
+    events = processor.get_all_events()
+    logger.info(f"Loaded {len(events)} enriched events")
 
-            # Create deduplicated event
-            deduplicated_event_id = self.create_deduplicated_event(group)
+    if not events:
+        logger.info("No events to process")
+        return
 
-            # Create mappings
-            self.create_event_mappings(deduplicated_event_id, group)
+    # Group by entity
+    logger.info("\nGrouping events by affected entity...")
+    entity_groups = processor.group_events_by_entity(events)
 
-            # Create cluster info
-            self.create_deduplication_cluster(deduplicated_event_id, group)
+    logger.info(f"Found {len(entity_groups)} unique entities")
+    with lock:
+        stats['entities_grouped'] = len(entity_groups)
 
-            # Consolidate data sources
-            self.consolidate_data_sources(deduplicated_event_id, group)
+    # Show entity distribution
+    multi_event_entities = [(name, len(events)) for name, events in entity_groups.items() if len(events) > 1]
+    multi_event_entities.sort(key=lambda x: x[1], reverse=True)
 
-            print(f"  Created deduplicated event: {deduplicated_event_id}")
-            title = group[0]['title'][:60]
-            # Handle Unicode characters for Windows console
+    if multi_event_entities:
+        logger.info(f"\nEntities with multiple events (top 10):")
+        for name, count in multi_event_entities[:10]:
+            logger.info(f"  {name}: {count} events")
+
+    # Limit if requested
+    entity_groups_to_process = list(entity_groups.items())
+    if args.limit:
+        entity_groups_to_process = entity_groups_to_process[:args.limit]
+        logger.info(f"\nLimited to {len(entity_groups_to_process)} entity groups")
+
+    # Process entity groups in parallel
+    logger.info(f"\nProcessing with {args.max_workers} concurrent workers...")
+    logger.info("="*60)
+
+    start_time = time.time()
+
+    results = []
+    with ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = []
+        for i, (entity_name, entity_events) in enumerate(entity_groups_to_process, 1):
+            future = executor.submit(
+                processor.process_entity_group,
+                entity_name,
+                entity_events,
+                i,
+                len(entity_groups_to_process),
+                args.correct_dates
+            )
+            futures.append(future)
+
+        for future in as_completed(futures):
             try:
-                print(f"  Title: {title}...")
-            except UnicodeEncodeError:
-                # Fallback to ASCII-safe version
-                safe_title = title.encode('ascii', 'replace').decode('ascii')
-                print(f"  Title: {safe_title}...")
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Task failed: {e}")
 
-            deduplicated_count += 1
-            total_events_processed += len(group)
+    end_time = time.time()
+    processing_time = end_time - start_time
 
-        print(f"\nDeduplication complete!")
-        print(f"  Processed: {total_events_processed} enriched events")
-        print(f"  Created: {deduplicated_count} deduplicated events")
-        print(f"  Reduction: {total_events_processed - deduplicated_count} duplicate events merged")
+    # Summary
+    logger.info("\n" + "="*60)
+    logger.info("=== Deduplication Summary ===")
+    logger.info("="*60)
+    logger.info(f"Total entity groups: {stats['entities_grouped']}")
+    logger.info(f"Events processed: {stats['events_processed']}")
+    logger.info(f"Duplicates found and merged: {stats['duplicates_found']}")
+    logger.info(f"Deduplicated events created: {stats['groups_merged']}")
+    logger.info(f"URLs consolidated: {stats['urls_consolidated']}")
+    if args.correct_dates:
+        logger.info(f"\nDate Correction Statistics:")
+        logger.info(f"  Suspicious dates found: {stats['dates_suspicious']}")
+        logger.info(f"  Dates actually corrected: {stats['dates_corrected']}")
+        logger.info(f"  Dates confirmed as correct: {stats['dates_confirmed']}")
+        logger.info(f"  Date corrections failed: {stats['dates_failed']}")
+        logger.info(f"  JSON parsing retries: {stats['json_retries']}")
+    logger.info(f"\nProcessing time: {processing_time/60:.1f} minutes")
 
-
-async def main():
-    """Main function."""
-
-    db = CyberEventDataV2()
-    processor = DeduplicationProcessor(db)
-
-    try:
-        await processor.process_deduplication()
-    finally:
-        db.close()
+    success_count = sum(1 for r in results if r['status'] == 'success')
+    error_count = sum(1 for r in results if r['status'] == 'error')
+    logger.info(f"Successful: {success_count}, Errors: {error_count}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

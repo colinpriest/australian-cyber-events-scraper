@@ -1,5 +1,23 @@
 from __future__ import annotations
 
+"""
+LEGACY DEDUPLICATION ENGINE
+
+⚠️  WARNING: This module is LEGACY and will be deprecated in a future version.
+    Use the new deduplication system instead:
+    - cyber_data_collector/processing/deduplication_v2.py
+    - cyber_data_collector/storage/deduplication_storage.py
+
+This legacy module is kept for backward compatibility but should not be used
+for new implementations. The new system provides:
+- Object-oriented design with clear separation of concerns
+- Comprehensive validation and error checking
+- Merge lineage tracking for transparency
+- Global deduplication (not month-by-month)
+- Better performance and reliability
+- Proper database constraints to prevent duplicates
+"""
+
 import logging
 import os
 from difflib import SequenceMatcher
@@ -811,6 +829,41 @@ class DeduplicationEngine:
         merged_event.description = best_description
 
         merged_event.merged_events = [event.event_id for event in events if event.event_id != merged_event.event_id]
+        
+        # Intelligent selection of records_affected
+        # Prefer smallest reasonable value among events with records_affected
+        records_values = []
+        for event in events:
+            if hasattr(event, 'financial_impact') and event.financial_impact:
+                if event.financial_impact.customers_affected:
+                    records_values.append(event.financial_impact.customers_affected)
+
+        if records_values:
+            # Filter out unrealistic values (> 30M for Australian events)
+            MAX_AUSTRALIAN_RECORDS = 30000000
+            valid_values = [r for r in records_values if r <= MAX_AUSTRALIAN_RECORDS]
+            
+            if valid_values:
+                # Take median of valid values (more robust than min/max)
+                valid_values.sort()
+                median_records = valid_values[len(valid_values) // 2]
+                
+                if merged_event.financial_impact:
+                    merged_event.financial_impact.customers_affected = median_records
+                else:
+                    from cyber_data_collector.models.events import FinancialImpact
+                    merged_event.financial_impact = FinancialImpact(
+                        customers_affected=median_records
+                    )
+                
+                self.logger.debug(
+                    f"Selected median records_affected: {median_records:,} from {len(valid_values)} valid values"
+                )
+            else:
+                self.logger.warning(
+                    f"No valid records_affected values found (all {len(records_values)} values exceed {MAX_AUSTRALIAN_RECORDS:,})"
+                )
+        
         source_count = len(all_sources)
         confidence_boost = min(source_count * 0.1, 0.3)
         merged_event.confidence.overall = min(merged_event.confidence.overall + confidence_boost, 1.0)
