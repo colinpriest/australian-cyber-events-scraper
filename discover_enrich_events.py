@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 
 # Local imports
 from cyber_event_data_v2 import CyberEventDataV2
-from entity_scraper import PlaywrightScraper
+from entity_scraper import PlaywrightScraper 
 from llm_extractor import extract_event_details_with_llm
 
 # Data collection imports
@@ -108,9 +108,10 @@ async def check_gdelt_authentication() -> bool:
             return False
 
         # Now actually test a query to verify authentication works
-        # Use a very recent date range to minimize query size
-        test_date = datetime.now()
-        test_range = DateRange(start_date=test_date, end_date=test_date)
+        # Use a broader date range to ensure we find events (last 30 days)
+        test_start = datetime.now() - timedelta(days=30)
+        test_end = datetime.now()
+        test_range = DateRange(start_date=test_start, end_date=test_end)
 
         # Try to collect events - this will test the actual BigQuery query execution
         test_events = await gdelt_source.collect_events(test_range)
@@ -189,14 +190,20 @@ class EventDiscoveryEnrichmentPipeline:
         if not source_types:
             source_types = ['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC']
 
-        # Get list of unprocessed months from January 2020 to August 2025
+        # Get current year and month for dynamic date range
+        from datetime import datetime
+        now = datetime.now()
+        current_year = now.year
+        current_month = now.month
+
+        # Get list of unprocessed months from January 2020 to current month
         unprocessed_months = self.db.get_unprocessed_months(
             start_year=2020, start_month=1,
-            end_year=2025, end_month=8
+            end_year=current_year, end_month=current_month
         )
 
         if not unprocessed_months:
-            logger.info("[DISCOVERY] All months from Jan 2020 to Aug 2025 have been processed!")
+            logger.info(f"[DISCOVERY] All months from Jan 2020 to {now.strftime('%b %Y')} have been processed!")
             return
 
         logger.info(f"[DISCOVERY] Found {len(unprocessed_months)} unprocessed months to process")
@@ -217,6 +224,11 @@ class EventDiscoveryEnrichmentPipeline:
 
         self.stats['events_discovered'] = total_events_discovered
         logger.info(f"[DISCOVERY] Completed processing all months. Total events discovered: {total_events_discovered}")
+        
+        # Run global deduplication after all data collection is complete
+        if total_events_discovered > 0:
+            logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication process...")
+            await self.run_global_deduplication()
 
     async def _discover_events_for_month(self, year: int, month: int, source_types: List[str], max_events: int) -> int:
         """
@@ -372,27 +384,12 @@ class EventDiscoveryEnrichmentPipeline:
                             event_copy.event_date = datetime.fromisoformat(db_event['event_date'].replace('Z', '+00:00')).date()
                         enriched_cyber_events.append(event_copy)
 
-                logger.info(f"[PIPELINE] Deduplicating {len(enriched_cyber_events)} enriched events for {year}-{month:02d}")
-                deduplicated_events = await collector.deduplication_engine.deduplicate_events(enriched_cyber_events)
-                logger.info(f"[DEDUPLICATED] Merged to {len(deduplicated_events)} unique events for {year}-{month:02d}")
-
-                # Step 7: Store deduplicated events and related data
-                logger.info(f"[PIPELINE] Persisting deduplicated events for {year}-{month:02d}")
-                deduplicated_events_stored, deduplicated_event_ids = await self._store_deduplicated_events(deduplicated_events, enriched_event_ids, raw_event_ids)
-
-                # Store entities for deduplicated events
-                await self._store_entities_for_deduplicated_events(deduplicated_events, deduplicated_event_ids)
-
-                # Store data sources for deduplicated events
-                for i, event in enumerate(deduplicated_events):
-                    if i < len(deduplicated_event_ids):
-                        await self._store_data_sources_for_deduplicated_event(event, deduplicated_event_ids[i])
-
-                # Store deduplication clusters
-                await self._store_deduplication_cluster(deduplicated_events, deduplicated_event_ids)
-            else:
-                deduplicated_events = processed_events
-                deduplicated_events_stored = 0
+                # Step 7: Store enriched events (no deduplication yet)
+                logger.info(f"[PIPELINE] Storing {len(enriched_cyber_events)} enriched events for {year}-{month:02d}")
+                # Store enriched events directly without deduplication
+                enriched_events_stored = len(enriched_cyber_events)
+                deduplicated_events = enriched_cyber_events
+                deduplicated_events_stored = 0  # No deduplication at month level
 
             # Final filtering by confidence
             high_confidence_events = [
@@ -414,14 +411,7 @@ class EventDiscoveryEnrichmentPipeline:
 
             logger.info(f"[SUCCESS] Month {year}-{month:02d} complete: {events_for_month} events stored")
 
-            # Final step: Cross-month deduplication
-            if collector.config.enable_deduplication and deduplicated_events_stored > 0:
-                logger.info(f"[CROSS-MONTH] Starting cross-month deduplication after {year}-{month:02d}")
-                try:
-                    cross_month_merges = await self._perform_cross_month_deduplication_final(collector.deduplication_engine)
-                    logger.info(f"[CROSS-MONTH] Completed: {cross_month_merges} events merged across months")
-                except Exception as e:
-                    logger.warning(f"[WARNING] Cross-month deduplication failed: {e}")
+            # Note: Cross-month deduplication removed - will be handled globally
 
         except Exception as e:
             logger.error(f"[ERROR] Discovery failed for {year}-{month:02d}: {e}")
@@ -840,7 +830,7 @@ class EventDiscoveryEnrichmentPipeline:
 
     async def _perform_cross_month_deduplication_final(self, deduplication_engine):
         """Perform cross-month deduplication as a final step to merge events across months."""
-        from cyber_data_collector.models.events import CyberEvent
+        from cyber_data_collector.processing.deduplication_v2 import CyberEvent
 
         logger.info(f"[CROSS-MONTH] Loading deduplicated events from last 3 months for cross-month deduplication...")
 
@@ -901,7 +891,7 @@ class EventDiscoveryEnrichmentPipeline:
         logger.info(f"[CROSS-MONTH] Events span from {min_date.year}-{min_date.month:02d} to {max_date.year}-{max_date.month:02d} - proceeding with cross-month deduplication")
 
         # Convert to CyberEvent objects
-        from cyber_data_collector.models.events import CyberEventType, EventSeverity, ConfidenceScore
+        from cyber_data_collector.processing.deduplication_v2 import CyberEventType, EventSeverity, ConfidenceScore
         cyber_events = []
         for db_event in all_deduplicated_events:
             try:
@@ -1903,6 +1893,112 @@ class EventDiscoveryEnrichmentPipeline:
         print(f"[RF_FILTER] Prediction errors: {filter_stats['prediction_errors']} ({filter_stats['error_rate']:.1%})")
 
         print("="*60)
+
+    async def run_global_deduplication(self):
+        """Run global deduplication once after all data collection"""
+        logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication...")
+        
+        try:
+            # Import the new deduplication system
+            from cyber_data_collector.processing.deduplication_v2 import DeduplicationEngine, LLMArbiter, DeduplicationValidator
+            from cyber_data_collector.storage.deduplication_storage import DeduplicationStorage
+            
+            # Load ALL enriched events (not just recent months)
+            all_events = await self._load_all_enriched_events()
+            logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(all_events)} enriched events for deduplication")
+            
+            if not all_events:
+                logger.warning("[GLOBAL DEDUPLICATION] No enriched events found, skipping deduplication")
+                return
+            
+            # Clear existing deduplications
+            storage = DeduplicationStorage(self.db._conn)
+            storage.clear_existing_deduplications()
+            logger.info("[GLOBAL DEDUPLICATION] Cleared existing deduplicated events")
+            
+            # Run deduplication
+            engine = DeduplicationEngine(
+                similarity_threshold=0.75,
+                llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
+                validators=[DeduplicationValidator()]
+            )
+            
+            logger.info("[GLOBAL DEDUPLICATION] Running deduplication engine...")
+            result = engine.deduplicate(all_events)
+            
+            # Validate result
+            if result.validation_errors:
+                logger.error(f"[GLOBAL DEDUPLICATION] Validation failed: {len(result.validation_errors)} errors")
+                for error in result.validation_errors:
+                    logger.error(f"[VALIDATION ERROR] {error.error_type}: {error.message}")
+                raise ValueError("Deduplication produced invalid results")
+            
+            # Store result
+            logger.info("[GLOBAL DEDUPLICATION] Storing deduplication results...")
+            storage_result = storage.store_deduplication_result(result)
+            
+            if not storage_result.success:
+                logger.error(f"[GLOBAL DEDUPLICATION] Storage failed: {len(storage_result.validation_errors)} errors")
+                raise ValueError("Failed to store deduplication results")
+            
+            # Final validation
+            logger.info("[GLOBAL DEDUPLICATION] Validating storage integrity...")
+            integrity_errors = storage.validate_storage_integrity()
+            if integrity_errors:
+                logger.error(f"[GLOBAL DEDUPLICATION] Storage integrity check failed: {len(integrity_errors)} issues")
+                for error in integrity_errors:
+                    logger.error(f"[INTEGRITY ERROR] {error.error_type}: {error.message}")
+                raise ValueError("Database contains duplicates after deduplication")
+            
+            # Log success statistics
+            stats = result.statistics
+            logger.info(f"[GLOBAL DEDUPLICATION] Deduplication complete: {stats.input_events} -> {stats.output_events} events")
+            logger.info(f"[GLOBAL DEDUPLICATION] Merge groups: {stats.merge_groups}, Total merges: {stats.total_merges}")
+            logger.info(f"[GLOBAL DEDUPLICATION] Average confidence: {stats.avg_confidence:.2f}")
+            logger.info(f"[GLOBAL DEDUPLICATION] Processing time: {stats.processing_time_seconds:.1f}s")
+            
+            return result.statistics
+            
+        except Exception as e:
+            logger.error(f"[GLOBAL DEDUPLICATION] Failed: {e}")
+            raise
+    
+    async def _load_all_enriched_events(self):
+        """Load all enriched events from the database for global deduplication"""
+        try:
+            # Query all enriched events from the database
+            cursor = self.db._conn.cursor()
+            cursor.execute("""
+                SELECT enriched_event_id, title, summary, event_date, event_type, severity, 
+                       records_affected, confidence_score
+                FROM EnrichedEvents
+                WHERE status = 'Active'
+                ORDER BY event_date DESC
+            """)
+            
+            enriched_events = []
+            for row in cursor.fetchall():
+                # Convert database row to CyberEvent object
+                event = CyberEvent(
+                    event_id=row[0],
+                    title=row[1],
+                    summary=row[2],
+                    event_date=datetime.fromisoformat(row[3]).date() if row[3] else None,
+                    event_type=row[4],
+                    severity=row[5],
+                    records_affected=row[6],
+                    data_sources=[],  # Not available in EnrichedEvents
+                    urls=[],  # Not available in EnrichedEvents
+                    confidence=row[7] if row[7] else 0.5
+                )
+                enriched_events.append(event)
+            
+            logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(enriched_events)} enriched events from database")
+            return enriched_events
+            
+        except Exception as e:
+            logger.error(f"[GLOBAL DEDUPLICATION] Failed to load enriched events: {e}")
+            return []
 
     def close(self):
         """Clean up resources"""
