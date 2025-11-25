@@ -13,6 +13,11 @@ try:
 except ImportError:
     openai = None
 
+try:
+    from cyber_data_collector.utils.pdf_extractor import PDFExtractor
+except ImportError:
+    PDFExtractor = None
+
 class PlaywrightScraper:
     """
     A robust Playwright-based scraper designed to fetch web page content while
@@ -24,41 +29,68 @@ class PlaywrightScraper:
         self.headless = headless
         self.playwright = None
         self.browser = None
+        self.pdf_extractor = PDFExtractor() if PDFExtractor else None
+        self.logger = logging.getLogger(__name__)
 
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=self.headless)
+        # Use new headless mode and stealth launch arguments
+        self.browser = await self.playwright.chromium.launch(
+            headless=self.headless,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-infobars',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
+                '--ignore-certificate-errors',
+                '--ignore-ssl-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+            ]
+        )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
     def _get_random_user_agent(self):
-        """Returns a random user agent with more recent versions."""
+        """Returns a random user agent with current 2025 versions."""
         user_agents = [
-            # Recent Chrome versions
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            # Current Chrome versions (Nov 2025)
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
 
-            # Recent Firefox versions
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:124.0) Gecko/20100101 Firefox/124.0",
+            # Current Firefox versions
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
 
-            # Safari
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+            # Current Safari
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
 
-            # Edge
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0",
+            # Current Edge
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
         ]
         return random.choice(user_agents)
 
     async def get_page_text(self, url: str, timeout: int = 30, event_date: str = None) -> Optional[str]:
         """
         Visits a URL and extracts the primary text content from the page.
+        Supports both HTML pages and PDF files.
 
         Args:
             url: The URL to scrape.
@@ -67,6 +99,29 @@ class PlaywrightScraper:
         Returns:
             The extracted text content of the page, or None if scraping fails.
         """
+        # Check if URL points to a PDF file
+        if self.pdf_extractor and self.pdf_extractor.is_pdf_url(url):
+            self.logger.info(f"Detected PDF URL, using PDF extractor: {url}")
+            try:
+                result = self.pdf_extractor.extract_from_url(url, timeout=timeout)
+                if result and result['success']:
+                    self.logger.info(f"Successfully extracted {len(result['text'])} chars from PDF using {result['extraction_method']}")
+                    return result['text']
+                else:
+                    self.logger.warning(f"PDF extraction failed: {result.get('error')}")
+                    return None
+            except Exception as e:
+                self.logger.error(f"PDF extraction error: {e}")
+                return None
+
+        # For sites known to heavily block scrapers, try Perplexity first
+        if self._is_stubborn_site(url):
+            self.logger.info(f"Stubborn site detected, trying Perplexity first: {url}")
+            perplexity_content = await self._perplexity_fallback(url, event_date)
+            if perplexity_content and len(perplexity_content) > 200:
+                return perplexity_content
+            # If Perplexity fails, still try direct scraping
+
         # Enhanced context with more realistic browser fingerprint
         context = await self.browser.new_context(
             user_agent=self._get_random_user_agent(),
@@ -74,18 +129,19 @@ class PlaywrightScraper:
             accept_downloads=False,
             viewport={'width': random.choice([1920, 1366, 1440]), 'height': random.choice([1080, 768, 900])},
             screen={'width': 1920, 'height': 1080},
-            locale='en-US',
-            timezone_id='America/New_York',
+            locale='en-AU',
+            timezone_id='Australia/Sydney',
             extra_http_headers={
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Language': 'en-AU,en-US;q=0.9,en;q=0.8',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-Site': 'cross-site',
+                'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0'
             }
         )
@@ -97,17 +153,67 @@ class PlaywrightScraper:
             // Override webdriver property
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-            // Override chrome property
-            window.chrome = { runtime: {} };
+            // Delete automation-related properties
+            delete navigator.__proto__.webdriver;
 
-            // Override plugins length
+            // Override chrome property to look like real Chrome
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+
+            // Override plugins to look realistic
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
+                get: () => {
+                    const plugins = [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                    ];
+                    plugins.length = 3;
+                    return plugins;
+                }
             });
 
             // Override languages
             Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
+                get: () => ['en-AU', 'en-US', 'en']
+            });
+
+            // Override permissions query
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+
+            // Override hardwareConcurrency
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+            // Override deviceMemory
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+            // Override platform
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+            // Override connection
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 50,
+                    downlink: 10,
+                    saveData: false
+                })
+            });
+
+            // Fix iframe contentWindow
+            Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                get: function() {
+                    return window;
+                }
             });
         """)
 
@@ -155,13 +261,35 @@ class PlaywrightScraper:
 
             await self._human_like_scroll(page)
 
-            content_selectors = ["article", "main", ".post-content", ".entry-content", ".content", "div[role='main']"]
+            # Extended content selectors for various site types
+            content_selectors = [
+                # Standard article selectors
+                "article", "main", ".post-content", ".entry-content", ".content",
+                "div[role='main']", "#main-content", "#content", ".article-content",
+                # News site specific
+                ".story-content", ".article-body", ".article__body", ".story__body",
+                ".news-article", ".article-text", "#article-body", ".body-content",
+                # Blog/corporate site specific
+                ".blog-post", ".post-body", ".page-content", "#page-content",
+                ".single-post-content", ".wysiwyg-content", ".rich-text",
+                # Government site specific
+                ".publication-content", ".page-body", ".gov-content", "#main",
+                ".rte-content", ".field-body", ".body-field",
+                # Generic fallbacks
+                "[itemprop='articleBody']", "[class*='article']", "[class*='content']"
+            ]
             main_content_handle = None
             for selector in content_selectors:
-                main_content_handle = await page.query_selector(selector)
-                if main_content_handle:
-                        break
-            
+                try:
+                    main_content_handle = await page.query_selector(selector)
+                    if main_content_handle:
+                        inner = await main_content_handle.inner_text()
+                        if inner and len(inner.strip()) > 200:  # Only use if substantial content
+                            break
+                        main_content_handle = None  # Reset if content too short
+                except:
+                    continue
+
             if main_content_handle:
                 text = await main_content_handle.inner_text()
             else:
@@ -214,6 +342,15 @@ class PlaywrightScraper:
             'ntnews.com.au', 'themercury.com.au', 'thewest.com.au'
         ]
         return any(domain in url.lower() for domain in australian_domains)
+
+    def _is_stubborn_site(self, url: str) -> bool:
+        """Check if URL is from a site known to block scrapers."""
+        stubborn_domains = [
+            'nytimes.com', 'reuters.com', 'facebook.com', 'twitter.com',
+            'linkedin.com', 'news.com.au', 'theaustralian.com.au',
+            'afr.com', 'wsj.com', 'ft.com', 'bloomberg.com'
+        ]
+        return any(domain in url.lower() for domain in stubborn_domains)
 
     async def _apply_australian_site_strategies(self, page, url: str):
         """Apply specific strategies for Australian news sites."""

@@ -131,9 +131,16 @@ class PerplexityDataSource(DataSource):
         return all_events
 
     def _generate_search_queries(self, date_range: DateRange) -> List[str]:
-        date_str = f"after:{date_range.start_date.strftime('%m/%d/%Y')}"
+        # Expand search window to 3 months back to catch late-reported events
+        # Events may be reported months after they occurred
+        from dateutil.relativedelta import relativedelta
+        expanded_start = date_range.start_date - relativedelta(months=2)
+
+        date_str = f"after:{expanded_start.strftime('%m/%d/%Y')}"
         if date_range.end_date:
             date_str += f" before:{date_range.end_date.strftime('%m/%d/%Y')}"
+
+        self.logger.info(f"Perplexity searching with expanded 3-month window: {expanded_start.strftime('%Y-%m-%d')} to {date_range.end_date.strftime('%Y-%m-%d') if date_range.end_date else 'now'}")
 
         base_queries = [
             "Australian cyber attack {date_range} data breach security incident",

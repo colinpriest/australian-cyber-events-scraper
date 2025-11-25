@@ -1,0 +1,65 @@
+[
+  {
+    "deduplicated_event_id": "f698439d-bb11-4d81-9faa-221856c604ac",
+    "title": "Tens of thousands locked out of ATO Online accounts after payroll hack",
+    "event_date": "2021-11-13",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 80000,
+    "severity_category": "C3",
+    "primary_stakeholder_category": "Federal government",
+    "impact_type": "Extensive compromise",
+    "confidence_score": 0.9,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-25T16:26:16.319107",
+    "reasoning": {
+      "severity_reasoning": "The event affected 80,000 records, which falls into the 10,000-100,000 range, suggesting a C3-C4 severity. Given the involvement of the Australian Taxation Office (ATO), a federal entity, and the high severity of the event, C3 is appropriate.",
+      "stakeholder_reasoning": "The primary stakeholder affected is the Federal government, as the ATO is a federal entity. The impact on ATO services directly affects government operations and public trust.",
+      "impact_reasoning": "The locking out of tens of thousands of accounts indicates an extensive compromise, as it significantly disrupts access to important government services for a large number of individuals.",
+      "information_quality": "The information is limited in detail, lacking specifics about the attack method and the attacking entity. However, the number of affected records and the involvement of the ATO provide sufficient context for classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "cc23c6bb-38dc-4809-8ab1-ad58d35206bf",
+    "title": "Ransomware Attack on Melbourne Metropolitan Public Health Service",
+    "event_date": "2021-03-16",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 31500,
+    "severity_category": "C3",
+    "primary_stakeholder_category": "Regulated critical infrastructure",
+    "impact_type": "Extensive compromise",
+    "confidence_score": 0.9,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-25T16:26:16.319107",
+    "reasoning": {
+      "severity_reasoning": "The severity category C3 is chosen because the ransomware attack affected 31,500 records, which falls into the range of 10,000-100,000 records. This aligns with the criteria for C3, which involves substantial impact on organizations and moderate data breaches.",
+      "stakeholder_reasoning": "The primary stakeholder category is 'Regulated critical infrastructure' because the attack targeted a public health service, which is considered part of critical infrastructure due to its essential role in public health and safety.",
+      "impact_reasoning": "The impact type is classified as 'Extensive compromise' because the ransomware attack resulted in a significant number of records being affected, indicating a widespread impact on the data integrity and availability of the health service.",
+      "information_quality": "The information quality is moderate, as the number of records affected is known, but there is limited information on the specific attack method or the full extent of service disruption. The lack of detailed description and summary limits the assessment's depth."
+    }
+  },
+  {
+    "deduplicated_event_id": "c59f5256-49f6-4c0b-88f8-a7c91a87e619",
+    "title": "BlueScope confirms a 'cyber incident' is disrupting its operations ...",
+    "event_date": "2020-05-15",
+    "event_type": "CyberEventType.OTHER",
+    "victim_organization_name": "BlueScope Steel Limited",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Large organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.7,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-25T16:26:16.319107",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of information on the number of records affected. According to the ASD framework, if the number of records is unknown, the default severity is C6, indicating minimal to no impact.",
+      "stakeholder_reasoning": "BlueScope Steel Limited is a large organization within the manufacturing industry, which aligns with the 'Large organisation(s)' stakeholder category.",
+      "impact_reasoning": "The impact type is classified as 'Isolated compromise' due to the disruption of operations. However, without more detailed information on the extent of the compromise or data breach, it cannot be classified as more severe.",
+      "information_quality": "The available information is limited, with key details such as the number of records affected, the attack method, and the description of the incident missing. This limits the ability to accurately assess the severity and impact."
+    }
+  }
+]

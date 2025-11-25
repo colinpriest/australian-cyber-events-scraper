@@ -213,6 +213,7 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
         WHERE status = 'Active'
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
+            AND CAST(records_affected AS INTEGER) <= 1000000000
             AND event_date >= ?
             AND event_date <= ?
         ORDER BY month, records_affected
@@ -238,6 +239,7 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
         WHERE status = 'Active'
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
+            AND CAST(records_affected AS INTEGER) <= 1000000000
             AND event_date >= ?
             AND event_date <= ?
         GROUP BY strftime('%Y-%m', event_date)
@@ -482,7 +484,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             AND de.severity IS NOT NULL
             AND de.event_date >= ?
             AND de.event_date <= ?
-        ORDER BY de.event_date,
+        ORDER BY strftime('%Y-%m', de.event_date),
             CASE de.severity
                 WHEN 'Critical' THEN 1
                 WHEN 'EventSeverity.CRITICAL' THEN 1
@@ -1104,8 +1106,9 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     # Sort by total notifications
     sorted_sectors = sorted(sector_totals.items(), key=lambda x: x[1], reverse=True)
 
-    # Take top 10
-    top_10 = sorted_sectors[:10]
+    # Take up to top 10 (may be fewer if less data available)
+    top_sectors_list = sorted_sectors[:10]
+    sector_count = len(top_sectors_list)
 
     # Get database counts for 2019-2024
     db_counts = {}
@@ -1135,11 +1138,12 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     }
 
     # Build comparison data
-    sectors = [s[0] for s in top_10]
-    oaic_counts = [s[1] for s in top_10]
+    sectors = [s[0] for s in top_sectors_list]
+    oaic_counts = [s[1] for s in top_sectors_list]
     database_counts = []
+    ratios = []
 
-    for sector in sectors:
+    for sector, oaic_count in zip(sectors, oaic_counts):
         # Find matching database count
         db_count = 0
         for db_industry, oaic_sector in industry_mapping.items():
@@ -1147,11 +1151,16 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
                 db_count = db_counts[db_industry]
                 break
         database_counts.append(db_count)
+        # Calculate ratio (database / OAIC), handle division by zero
+        ratio = round(db_count / oaic_count, 2) if oaic_count > 0 else 0
+        ratios.append(ratio)
 
     return {
         'sectors': sectors,
         'oaic_counts': oaic_counts,
-        'database_counts': database_counts
+        'database_counts': database_counts,
+        'ratios': ratios,
+        'sector_count': sector_count
     }
 
 
@@ -1313,7 +1322,11 @@ def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, An
 
 
 def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) -> Dict[str, Any]:
-    """Aggregate ASD risk classifications into a matrix by impact type and stakeholder groups."""
+    """Aggregate ASD risk classifications into a matrix by impact type and stakeholder groups.
+
+    NOTE: ASDRiskClassifications.deduplicated_event_id references DeduplicatedEvents.deduplicated_event_id
+    (NOT EnrichedEvents). Always join to DeduplicatedEvents for date filtering.
+    """
     stakeholder_groups = list(ASD_STAKEHOLDER_GROUPS.keys())
 
     def empty_matrix() -> Dict[str, Any]:
@@ -1332,6 +1345,7 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
     try:
         cursor = conn.cursor()
         params: List[Any] = []
+        # IMPORTANT: Join to DeduplicatedEvents (not EnrichedEvents) - that's where the FK points
         base_sql = """
             SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count
             FROM ASDRiskClassifications arc
@@ -1347,7 +1361,8 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         query = f"{base_sql} {where_sql} GROUP BY arc.impact_type, arc.primary_stakeholder_category"
         rows = cursor.execute(query, params).fetchall()
-    except Exception:
+    except Exception as e:
+        print(f"ERROR in get_asd_risk_matrix: {e}")
         return empty_matrix()
 
     if not rows:
@@ -1518,10 +1533,12 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
-        <div class="chart-container" style="height: 440px;">
+        <div class="chart-container" style="height: 440px; overflow: hidden;">
           <div class="chart-title">Histogram of Monthly Unique Event Counts</div>
           <div id="monthlyCountsSubtitle" class="chart-subtitle" style="font-size: 0.95rem; color: #6b7280; margin-top: -8px; margin-bottom: 8px;"></div>
-          <canvas id="monthlyCountsHistChart"></canvas>
+          <div style="height: 300px; position: relative;">
+            <canvas id="monthlyCountsHistChart"></canvas>
+          </div>
           <div id="monthlyCountsStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
       </div>
@@ -1546,8 +1563,14 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>
+          <div class="chart-title" id="oaicSectorsTitle">OAIC Top Affected Sectors (2019-2024)</div>
           <canvas id="oaicSectorsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Database/OAIC Ratio by Sector</div>
+          <canvas id="oaicSectorRatioChart"></canvas>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
@@ -2174,10 +2197,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicSectors;
       if (!data.sectors || data.sectors.length === 0) {
         document.getElementById('oaicSectorsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>' +
+          '<div class="chart-title">OAIC Top Affected Sectors (2019-2024)</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
+
+      // Update title based on actual sector count
+      const sectorCount = data.sector_count || data.sectors.length;
+      document.getElementById('oaicSectorsTitle').textContent =
+        `OAIC Top ${sectorCount} Affected Sectors (2019-2024)`;
 
       new Chart(document.getElementById('oaicSectorsChart').getContext('2d'), {
         type: 'bar',
@@ -2215,6 +2243,93 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               title: {
                 display: true,
                 text: 'Total Notifications (2019-2024)'
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 12b) OAIC Sector Ratio Chart (Database/OAIC)
+    (function(){
+      const data = oaicSectors;
+      if (!data.sectors || data.sectors.length === 0 || !data.ratios) {
+        document.getElementById('oaicSectorRatioChart').parentElement.innerHTML =
+          '<div class="chart-title">Database/OAIC Ratio by Sector</div>' +
+          '<div class="text-center text-muted mt-5"><p>No ratio data available.</p></div>';
+        return;
+      }
+
+      // Convert ratios to percentages and color bars (green if >= 100%, orange if < 100%)
+      const ratiosPct = data.ratios.map(r => Math.round(r * 100));
+      const barColors = ratiosPct.map(r => r >= 100 ? colors.success : colors.warning);
+
+      new Chart(document.getElementById('oaicSectorRatioChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: data.sectors,
+          datasets: [
+            {
+              label: 'Database/OAIC %',
+              data: ratiosPct,
+              backgroundColor: barColors,
+              borderColor: barColors,
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  const pct = context.raw;
+                  const idx = context.dataIndex;
+                  const dbCount = data.database_counts[idx];
+                  const oaicCount = data.oaic_counts[idx];
+                  return [
+                    `Coverage: ${pct}%`,
+                    `Database: ${dbCount}`,
+                    `OAIC: ${oaicCount}`
+                  ];
+                }
+              }
+            },
+            annotation: {
+              annotations: {
+                line1: {
+                  type: 'line',
+                  xMin: 100,
+                  xMax: 100,
+                  borderColor: '#ef4444',
+                  borderWidth: 2,
+                  borderDash: [5, 5],
+                  label: {
+                    display: true,
+                    content: '100%',
+                    position: 'end'
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Database Coverage of OAIC Count (%)'
+              },
+              beginAtZero: true,
+              ticks: {
+                callback: function(value) {
+                  return value + '%';
+                }
               }
             }
           }
@@ -2331,6 +2446,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       table.style.height = '100%';
       table.style.borderCollapse = 'collapse';
       table.style.fontSize = '12px';
+      table.style.tableLayout = 'fixed';
       
       // Create header row
       const headerRow = document.createElement('tr');
@@ -2344,12 +2460,13 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         const th = document.createElement('th');
         th.textContent = label;
         th.style.border = '1px solid #ddd';
-        th.style.padding = '8px';
+        th.style.padding = '6px 8px';
         th.style.backgroundColor = '#f8f9fa';
         th.style.fontSize = '11px';
-        th.style.transform = 'rotate(-45deg)';
-        th.style.transformOrigin = 'center';
-        th.style.whiteSpace = 'nowrap';
+        th.style.textAlign = 'center';
+        th.style.whiteSpace = 'normal';
+        th.style.wordBreak = 'break-word';
+        th.style.lineHeight = '1.2';
         headerRow.appendChild(th);
       });
       table.appendChild(headerRow);
@@ -2475,14 +2592,19 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               callbacks: {
                 title: function(tooltipItems) {
                   const index = tooltipItems[0].dataIndex;
-                  return maxSeverityData.titles[index] || 'Unknown Event';
+                  return maxSeverityData.months[index];
                 },
                 label: function(tooltipItem) {
                   const index = tooltipItem.dataIndex;
-                  return [
-                    `Entity: ${maxSeverityData.entities[index]}`,
-                    `Severity: ${maxSeverityData.severities[index]}`
-                  ];
+                  const datasetLabel = tooltipItem.dataset.label;
+                  if (datasetLabel === 'Maximum Severity') {
+                    return `Maximum: ${maxSeverityData.severities[index]}`;
+                  } else {
+                    const avgValue = maxSeverityData.avg_severity_numeric[index];
+                    const severityLabels = ['Unknown', 'Low', 'Medium', 'High', 'Critical'];
+                    const nearestLabel = severityLabels[Math.round(avgValue)] || 'Unknown';
+                    return `Average: ${nearestLabel} (${avgValue.toFixed(2)})`;
+                  }
                 }
               }
             }

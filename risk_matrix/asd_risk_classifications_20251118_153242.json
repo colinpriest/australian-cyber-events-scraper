@@ -1,0 +1,107 @@
+[
+  {
+    "deduplicated_event_id": "a9e313e3-ac0a-4e04-8028-aae48c29c6f3",
+    "title": "Australian Internet Provider Cybersecurity Breach",
+    "event_date": "2025-10-17",
+    "event_type": "CyberEventType.DATA_BREACH",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 1600,
+    "severity_category": "C4",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:32:42.232471",
+    "reasoning": {
+      "severity_reasoning": "The event affected 1,600 records, which falls into the 1,000-10,000 range, suggesting a C4-C5 severity. Given the 'HIGH' current severity and the fact that it is an Australian event, C4 is selected to reflect a moderate impact.",
+      "stakeholder_reasoning": "Without specific information on the victim organization or industry, and considering the nature of an internet provider breach, it is reasonable to assume that members of the public are primarily affected.",
+      "impact_reasoning": "The breach appears to involve a limited number of records and lacks details on broader systemic impacts, suggesting an 'Isolated compromise' rather than a widespread or coordinated attack.",
+      "information_quality": "The information provided is limited, with key details such as the victim organization and attack method missing. This affects the precision of the classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "3280e717-6656-4202-880d-f1ad41878b2d",
+    "title": "Aussie Fluid Power Ransomware Attack",
+    "event_date": "2025-10-16",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Aussie Fluid Power Pty Ltd",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Medium-sized organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:32:42.232471",
+    "reasoning": {
+      "severity_reasoning": "The severity category is defaulted to C6 due to the lack of information on the number of records affected. Without specific data on the extent of the breach, it is not possible to accurately assess the severity beyond the default classification for unknown records.",
+      "stakeholder_reasoning": "Aussie Fluid Power Pty Ltd is likely a medium-sized organization within the manufacturing industry. This classification is based on the typical size and structure of companies in this sector.",
+      "impact_reasoning": "The impact type is classified as 'Isolated compromise' due to the nature of ransomware attacks, which typically affect the targeted organization without broader systemic implications unless specified otherwise.",
+      "information_quality": "The available information is limited, particularly regarding the number of records affected and the specific impact on the organization. This lack of detail necessitates a conservative approach to classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "59bc2d9f-e181-4412-996b-67fc9385d918",
+    "title": "Company Announcements // The Motley Fool Australia",
+    "event_date": "2025-10-16",
+    "event_type": "CyberEventType.OTHER",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 0,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:32:42.232471",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of information on records affected, the absence of a victim organization, and no details on the attack method or impact. According to the guidelines, unknown or no data defaults to the least severe category.",
+      "stakeholder_reasoning": "Since there is no specific victim organization or industry mentioned, the most generic category, 'Member(s) of the public,' is selected to reflect the broadest potential impact.",
+      "impact_reasoning": "The impact type is classified as 'Unsuccessful low-level malicious attack' because there is no evidence of a successful attack or any significant impact described in the event details.",
+      "information_quality": "The available information is minimal and lacks critical details such as records affected, victim organization, and attack specifics, leading to a low confidence in the classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "ac03a879-1e42-4e9e-af9d-bb4119643863",
+    "title": "Exclusive: Tassie aged care NFP confirms Lynx ransomware breach",
+    "event_date": "2025-10-10",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Community Based Support Ltd",
+    "victim_organization_industry": "Healthcare",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Medium-sized organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:32:42.232471",
+    "reasoning": {
+      "severity_reasoning": "The severity category is defaulted to C6 due to the lack of information on the number of records affected. Without specific data on the scale of the breach, the default classification is the least severe as per the guidelines.",
+      "stakeholder_reasoning": "Community Based Support Ltd operates in the healthcare sector and is likely a medium-sized organization given its classification as a not-for-profit aged care provider.",
+      "impact_reasoning": "The impact type is classified as 'Isolated compromise' because the event is described as a ransomware breach affecting a single organization, without indications of broader systemic impact or coordination.",
+      "information_quality": "The available information is limited, particularly regarding the number of records affected and the specific impact on services. This limitation necessitates defaulting to the least severe classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "bdf496d3-bc79-476f-a7fd-059bf9cde780",
+    "title": "Exclusive: Aussie firm Benedict listed by INC Ransom hacking group",
+    "event_date": "2025-10-09",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Benedict Industries Pty Ltd",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": 100,
+    "severity_category": "C5",
+    "primary_stakeholder_category": "Large organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:32:42.232471",
+    "reasoning": {
+      "severity_reasoning": "The event affected 100 records, which falls under the <1,000 records category, suggesting a C5-C6 severity. Given the current severity is marked as HIGH, we consider C5 as a more appropriate classification.",
+      "stakeholder_reasoning": "Benedict Industries Pty Ltd is a manufacturing firm, which typically aligns with a large organisation due to the nature of the industry.",
+      "impact_reasoning": "The attack is a ransomware event with no reported disruption to essential services or extensive data compromise, indicating an isolated compromise.",
+      "information_quality": "The available information is limited, with no details on the attack method or specific impacts beyond the number of records affected. This limits the precision of the classification."
+    }
+  }
+]

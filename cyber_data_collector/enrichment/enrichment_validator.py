@@ -19,14 +19,19 @@ class EnrichmentValidator:
         """Initialize validator with database path for duplicate checking"""
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+        self.event_title = None  # Will be set during validation
+        self.event_url = None  # Will be set during validation
 
-    def validate(self, extraction: Dict[str, Any], fact_check: Dict[str, Any]) -> Dict[str, Any]:
+    def validate(self, extraction: Dict[str, Any], fact_check: Dict[str, Any],
+                 event_title: str = None, event_url: str = None) -> Dict[str, Any]:
         """
         Run comprehensive validation checks.
 
         Args:
             extraction: GPT-4o extraction result
             fact_check: Perplexity fact-check result
+            event_title: Original event title (for title-matching validation)
+            event_url: Original event URL (for aggregate detection)
 
         Returns:
             {
@@ -40,6 +45,10 @@ class EnrichmentValidator:
         warnings = []
         errors = []
 
+        # Store for use in other validation methods
+        self.event_title = event_title
+        self.event_url = event_url
+
         self.logger.info("Running validation checks...")
 
         # Check 1: Organization name validation
@@ -50,6 +59,16 @@ class EnrichmentValidator:
             errors.extend(org_check['errors'])
         if org_check['has_warnings']:
             warnings.extend(org_check['warnings'])
+
+        # Check 1b: Title matching validation (NEW)
+        if event_title:
+            title_check = self._validate_title_match(
+                extraction.get('victim', {}).get('organization'),
+                event_title,
+                event_url
+            )
+            if title_check['has_warnings']:
+                warnings.extend(title_check['warnings'])
 
         # Check 2: Date plausibility
         date_check = self._validate_dates(extraction.get('incident', {}))
@@ -75,6 +94,14 @@ class EnrichmentValidator:
                 f"{dup_check['similar_event_title'][:60]}"
             )
 
+        # Check 6: Specificity validation (NEW - catches GPT-4o misclassifications)
+        spec_check = self._validate_specificity(extraction, event_title, event_url)
+        if spec_check['has_warnings']:
+            warnings.extend(spec_check['warnings'])
+
+        # Use modified extraction if specificity overrides were applied
+        final_extraction = spec_check['modified_extraction'] if spec_check['overrides'] else extraction
+
         # Calculate validation confidence
         validation_confidence = self._calculate_validation_confidence(
             errors, warnings, fact_check
@@ -86,7 +113,9 @@ class EnrichmentValidator:
             'is_valid': len(errors) == 0,
             'warnings': warnings,
             'errors': errors,
-            'validation_confidence': validation_confidence
+            'validation_confidence': validation_confidence,
+            'modified_extraction': final_extraction,  # Include modified extraction with overrides
+            'specificity_overrides': spec_check['overrides']  # Track which overrides were applied
         }
 
     def _validate_organization_name(self, org_name: str) -> Dict:
@@ -105,6 +134,8 @@ class EnrichmentValidator:
             (r'new\s+zealand\s+\w+\s+(company|firm)', "New Zealand X company"),
             (r'\w+\s+sector\s+organization', "X sector organization"),
             (r'\w+\s+industry\s+company', "X industry company"),
+            (r'\w+\s+(companies|organizations|firms)$', "X companies/organizations (plural)"),
+            (r'^(dutch|german|french|british|american|chinese)\s+\w+\s+companies', "Country X companies"),
             (r'^company$', "just 'company'"),
             (r'^organization$', "just 'organization'"),
             (r'^the\s+company$', "just 'the company'"),
@@ -146,6 +177,79 @@ class EnrichmentValidator:
             'has_errors': len(errors) > 0,
             'has_warnings': len(warnings) > 0,
             'errors': errors,
+            'warnings': warnings
+        }
+
+    def _validate_title_match(self, org_name: str, title: str, url: str = None) -> Dict:
+        """
+        Validate that the extracted victim organization appears in the article title.
+
+        This helps catch cases where:
+        - Aggregate blog posts mention multiple incidents
+        - URL/content mismatch (title about A, content about B)
+        - GPT-4o extracted a contextual mention instead of primary victim
+        """
+
+        warnings = []
+
+        if not org_name or not title:
+            return {'has_warnings': False, 'warnings': []}
+
+        # Normalize for comparison
+        org_lower = org_name.lower()
+        title_lower = title.lower()
+
+        # Check for exact match or partial match
+        # Split org name into words and check if key parts appear in title
+        org_words = org_lower.split()
+
+        # For organizations like "Singtel Optus Pty Limited", check for "optus"
+        # For "HWL Ebsworth", check for both "hwl" and "ebsworth"
+        key_words = [w for w in org_words if len(w) > 3 and w not in [
+            'limited', 'ltd', 'inc', 'corp', 'corporation', 'company', 'pty',
+            'australia', 'australian', 'group', 'holdings'
+        ]]
+
+        # If no key words, use all non-stopwords
+        if not key_words:
+            key_words = [w for w in org_words if len(w) > 2]
+
+        # Check if ANY key word appears in title
+        found_match = False
+        for word in key_words:
+            if word in title_lower:
+                found_match = True
+                break
+
+        # Also check full org name (for short names like "Qantas", "Optus")
+        if org_lower in title_lower:
+            found_match = True
+
+        # If no match found, this is suspicious
+        if not found_match:
+            # Check if this is likely an aggregate URL
+            is_aggregate_url = False
+            if url:
+                aggregate_patterns = [
+                    'blog/', 'weekly', 'monthly', 'roundup', 'digest', 'update',
+                    'news-feed', 'bulletin', 'newsletter', 'recap'
+                ]
+                url_lower = url.lower()
+                is_aggregate_url = any(pattern in url_lower for pattern in aggregate_patterns)
+
+            warning_msg = (
+                f"Victim '{org_name}' not found in title '{title[:80]}...'. "
+                f"This may indicate: (1) aggregate article extracting wrong incident, "
+                f"(2) URL/content mismatch, or (3) contextual mention instead of primary victim."
+            )
+
+            if is_aggregate_url:
+                warning_msg += f" URL appears to be aggregate content: {url}"
+
+            warnings.append(warning_msg)
+
+        return {
+            'has_warnings': len(warnings) > 0,
             'warnings': warnings
         }
 
@@ -299,6 +403,123 @@ class EnrichmentValidator:
             self.logger.warning(f"Duplicate check failed: {e}")
 
         return {'likely_duplicate': False}
+
+    def _validate_specificity(self, extraction: Dict, event_title: str = None, event_url: str = None) -> Dict:
+        """
+        Validate is_specific_incident classification using heuristics.
+
+        Catches GPT-4o mistakes by checking if the classification makes sense
+        given other extracted signals.
+
+        Returns:
+            {
+                'has_warnings': bool,
+                'warnings': List[str],
+                'overrides': List[Dict],
+                'modified_extraction': Dict (with overrides applied)
+            }
+        """
+
+        warnings = []
+        overrides = []
+
+        is_specific = extraction.get('specificity', {}).get('is_specific_incident')
+        victim = extraction.get('victim', {}).get('organization')
+        australian_rel = extraction.get('australian_relevance', {}).get('relevance_score', 0)
+        records_affected = extraction.get('incident', {}).get('records_affected')
+        incident_date = extraction.get('incident', {}).get('date')
+        attack_type = extraction.get('attacker', {}).get('attack_type', '')
+
+        # RULE 1: Override False -> True if strong incident indicators present
+        if is_specific == False and victim and australian_rel > 0.7:
+            # Check for concrete incident details
+            has_concrete_details = (
+                records_affected and records_affected > 0
+            ) or (
+                incident_date is not None
+            ) or (
+                attack_type and attack_type.lower() not in ['cyber incident', 'unknown', 'not specified']
+            )
+
+            if has_concrete_details:
+                overrides.append({
+                    'original': False,
+                    'override': True,
+                    'reason': f"Event has concrete incident details (victim: {victim}, australian_relevance: {australian_rel:.2f}, details present)"
+                })
+                warnings.append(
+                    f"SPECIFICITY OVERRIDE: GPT-4o marked as non-specific, but event has victim + concrete details. "
+                    f"Overriding to is_specific=True for Australian event about {victim}"
+                )
+
+        # RULE 2: Override False -> True if title contains incident keywords
+        if is_specific == False and event_title and victim:
+            title_lower = event_title.lower()
+            # EXPANDED keywords to catch more legitimate incident reports
+            incident_keywords = [
+                'breach', 'attack', 'hack', 'ransomware', 'incident', 'compromised', 'exposed', 'hit by',
+                'flags', 'reports', 'confirms', 'discloses', 'reveals', 'data leak', 'cyberattack'
+            ]
+
+            has_incident_keyword = any(kw in title_lower for kw in incident_keywords)
+            victim_in_title = victim.lower() in title_lower or any(word.lower() in title_lower for word in victim.split() if len(word) > 3)
+
+            # Check if it's NOT an aggregate URL
+            is_aggregate = False
+            if event_url:
+                aggregate_patterns = ['blog/', 'weekly', 'monthly', 'roundup', 'digest', 'update']
+                is_aggregate = any(pattern in event_url.lower() for pattern in aggregate_patterns)
+
+            # LOWERED threshold from 0.5 to 0.3 to catch more Australian events
+            if has_incident_keyword and victim_in_title and not is_aggregate and australian_rel > 0.3:
+                overrides.append({
+                    'original': False,
+                    'override': True,
+                    'reason': f"Title contains incident keywords and victim name, high Australian relevance"
+                })
+                warnings.append(
+                    f"SPECIFICITY OVERRIDE: Title contains incident keywords + victim name. "
+                    f"Overriding to is_specific=True"
+                )
+
+        # RULE 3: Override True -> False if clearly educational/generic
+        if is_specific == True and event_title:
+            title_lower = event_title.lower()
+            educational_prefixes = ['how to', 'guide to', 'best practices', 'tips for', '5 ways', '10 steps']
+
+            is_educational = any(title_lower.startswith(prefix) for prefix in educational_prefixes)
+
+            if is_educational and not victim:
+                overrides.append({
+                    'original': True,
+                    'override': False,
+                    'reason': f"Title suggests educational content, no victim identified"
+                })
+                warnings.append(
+                    f"SPECIFICITY OVERRIDE: Title appears educational without specific victim. "
+                    f"Overriding to is_specific=False"
+                )
+
+        # Apply overrides to extraction if any
+        modified_extraction = extraction.copy()
+        if overrides:
+            for override in overrides:
+                if 'specificity' not in modified_extraction:
+                    modified_extraction['specificity'] = {}
+                modified_extraction['specificity']['is_specific_incident'] = override['override']
+
+                # Update reasoning to show override was applied
+                current_reasoning = modified_extraction['specificity'].get('specificity_reasoning', '')
+                modified_extraction['specificity']['specificity_reasoning'] = (
+                    f"{current_reasoning} [VALIDATOR OVERRIDE: {override['reason']}]"
+                )
+
+        return {
+            'has_warnings': len(warnings) > 0,
+            'warnings': warnings,
+            'overrides': overrides,
+            'modified_extraction': modified_extraction
+        }
 
     def _calculate_validation_confidence(self, errors: List[str], warnings: List[str],
                                          fact_check: Dict) -> float:

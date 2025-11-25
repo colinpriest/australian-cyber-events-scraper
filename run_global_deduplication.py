@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Migration script to transition from old to new global deduplication system.
+Global deduplication script for cyber events.
+
+This script runs the deduplication engine to merge duplicate events from
+EnrichedEvents into a deduplicated set in DeduplicatedEvents.
 
 This script:
-1. Backs up the current DeduplicatedEvents table
-2. Applies database constraints to prevent duplicates
-3. Clears existing deduplications
-4. Runs the new global deduplication system
-5. Validates the results
-6. Generates a migration report
+1. Backs up the current database
+2. Clears existing DeduplicatedEvents and ASDRiskClassifications
+3. Loads all EnrichedEvents with Perplexity enrichment data
+4. Runs global deduplication (merges events about same incident)
+5. Stores deduplicated events with preserved victim organization info
+6. Validates the results and generates a report
 
 Usage:
-    python migrate_to_global_deduplication.py [--db-path PATH] [--backup-path PATH] [--dry-run]
+    python run_global_deduplication.py [--db-path PATH] [--backup-path PATH] [--dry-run]
 """
 
 import argparse
@@ -172,12 +175,15 @@ class DeduplicationMigration:
             cursor = conn.cursor()
             
             # First, clear existing deduplicated events to avoid constraint conflicts
-            logger.info("🧹 Clearing existing deduplicated events before applying constraints...")
+            # IMPORTANT: Also clear ASDRiskClassifications since it has FK to DeduplicatedEvents
+            # The classifications will be regenerated in the next pipeline run
+            logger.info("🧹 Clearing existing deduplicated events and related tables...")
+            cursor.execute("DELETE FROM ASDRiskClassifications")  # Must delete first (FK constraint)
             cursor.execute("DELETE FROM DeduplicatedEvents")
             cursor.execute("DELETE FROM EventDeduplicationMap")
             cursor.execute("DELETE FROM DeduplicationClusters")
             conn.commit()
-            logger.info("✅ Cleared existing deduplicated events")
+            logger.info("✅ Cleared existing deduplicated events and ASD classifications")
             
             # Read and execute the migration SQL
             migration_sql_path = "database_migrations/add_deduplication_constraints.sql"
@@ -204,20 +210,22 @@ class DeduplicationMigration:
     def _load_enriched_events(self) -> list:
         """Load all enriched events from the database"""
         logger.info("📥 Loading enriched events from database...")
-        
+
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Query all enriched events
+
+            # Query all enriched events including perplexity enrichment data and raw description
             cursor.execute("""
-                SELECT enriched_event_id, title, summary, event_date, event_type, severity, 
-                       records_affected, confidence_score
-                FROM EnrichedEvents
-                WHERE status = 'Active'
-                ORDER BY event_date DESC
+                SELECT e.enriched_event_id, e.title, e.summary, e.event_date, e.event_type, e.severity,
+                       e.records_affected, e.confidence_score, e.perplexity_enrichment_data,
+                       r.raw_description
+                FROM EnrichedEvents e
+                LEFT JOIN RawEvents r ON e.raw_event_id = r.raw_event_id
+                WHERE e.status = 'Active'
+                ORDER BY e.event_date DESC
             """)
-            
+
             enriched_events = []
             for row in cursor.fetchall():
                 # Parse event date safely
@@ -240,26 +248,40 @@ class DeduplicationMigration:
                         except ValueError:
                             logger.warning(f"Could not parse date '{row[3]}' for event {row[0]}")
 
+                # Extract victim organization name and industry from Perplexity enrichment JSON
+                victim_org_name = None
+                victim_org_industry = None
+                if row[8]:  # perplexity_enrichment_data
+                    try:
+                        enrichment_data = json.loads(row[8])
+                        victim_org_name = enrichment_data.get('formal_entity_name')
+                        victim_org_industry = enrichment_data.get('victim_industry')
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug(f"Could not parse enrichment data for event {row[0]}: {e}")
+
                 event = CyberEvent(
                     event_id=row[0],
                     title=row[1],
                     summary=row[2],
+                    description=row[9] if len(row) > 9 else None,  # raw_description from RawEvents
                     event_date=event_date,
                     event_type=row[4],
                     severity=row[5],
                     records_affected=row[6],
+                    victim_organization_name=victim_org_name,
+                    victim_organization_industry=victim_org_industry,
                     data_sources=[],  # Not available in EnrichedEvents
                     urls=[],  # Not available in EnrichedEvents
                     confidence=row[7] if row[7] else 0.5
                 )
                 enriched_events.append(event)
-            
+
             conn.close()
-            
+
             logger.info(f"✅ Loaded {len(enriched_events)} enriched events")
             self.migration_report['statistics']['enriched_events_loaded'] = len(enriched_events)
             return enriched_events
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to load enriched events: {e}")
             self.migration_report['errors'].append(f"Load events failed: {e}")

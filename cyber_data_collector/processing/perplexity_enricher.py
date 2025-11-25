@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import requests
 from cyber_data_collector.models.vulnerability_taxonomy import VULNERABILITY_CATEGORIES, validate_vulnerability_category
+from cyber_data_collector.utils.validation import validate_records_affected, validate_and_correct_enrichment_data
 
 
 class PerplexityEventEnricher:
@@ -198,53 +199,58 @@ class PerplexityEventEnricher:
                 return {}
             
             content = data['choices'][0]['message']['content']
-            
-            return self._parse_perplexity_response(content, missing_fields)
+
+            # Get event title for validation logging
+            event_title = event.get('title', 'Unknown Event')
+            return self._parse_perplexity_response(content, missing_fields, event_title)
             
         except Exception as e:
             self.logger.error(f"Perplexity API error: {e}")
             return {}
     
-    def _parse_perplexity_response(self, response: str, missing_fields: List[str]) -> Dict:
+    def _parse_perplexity_response(self, response: str, missing_fields: List[str], event_title: str = "") -> Dict:
         """Extract structured data from Perplexity response."""
         enriched_data = {}
-        
+
         # Parse attacker information
         if 'attacker' in missing_fields:
             attacker = self._extract_attacker_info(response)
             if attacker:
                 enriched_data['threat_actor'] = attacker
-        
+
         # Parse vulnerability details
         if 'vulnerability' in missing_fields:
             vulnerability = self._extract_vulnerability_details(response)
             if vulnerability:
                 enriched_data['vulnerability_details'] = vulnerability
-        
+
         # Parse vulnerability category
         if 'vulnerability_category' in missing_fields:
             category = self._extract_vulnerability_category(response)
             if category:
                 enriched_data['vulnerability_category'] = category
-        
+
         # Parse regulatory fines
         if 'regulatory_fines' in missing_fields:
             fine_info = self._extract_regulatory_fines(response)
             if fine_info:
                 enriched_data.update(fine_info)
-        
+
         # Parse severity
         if 'severity' in missing_fields:
             severity = self._extract_severity(response)
             if severity:
                 enriched_data['severity'] = severity
-        
+
         # Parse records affected
         if 'records_affected' in missing_fields:
             records = self._extract_records_affected(response)
             if records:
                 enriched_data['records_affected'] = records
-        
+
+        # Apply validation to all extracted data
+        enriched_data = validate_and_correct_enrichment_data(enriched_data, event_title)
+
         return enriched_data
     
     def _extract_attacker_info(self, response: str) -> Optional[str]:

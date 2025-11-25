@@ -47,6 +47,10 @@ class PerplexityEventEnrichment(BaseModel):
         None,
         description="Confidence in the entity name (0.0-1.0)"
     )
+    victim_industry: Optional[str] = Field(
+        None,
+        description="Industry sector of the victim organization (e.g., Healthcare, Finance, Education, Government, Technology, Retail)"
+    )
 
     threat_actor: Optional[str] = Field(
         None,
@@ -296,6 +300,7 @@ Return your response as a JSON object with this exact structure:
     "date_confidence": 0.0-1.0,
     "formal_entity_name": "Official name or null",
     "entity_confidence": 0.0-1.0,
+    "victim_industry": "Industry sector (e.g., Healthcare, Finance, Education, Government, Technology, Retail, Manufacturing, Energy, Transportation, Telecommunications) or null",
     "threat_actor": "Actor name or null",
     "threat_actor_confidence": 0.0-1.0,
     "attack_method": "Method or null",

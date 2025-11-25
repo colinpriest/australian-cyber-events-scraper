@@ -49,3 +49,11 @@ CREATE INDEX IF NOT EXISTS idx_enriched_data_quality
 ON EnrichedEvents(data_completeness_score, data_source_reliability_score);
 
 COMMIT;
+
+
+
+
+
+
+
+
