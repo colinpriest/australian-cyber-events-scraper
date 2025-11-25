@@ -12,6 +12,9 @@
     .chart-container { background: white; border-radius: 12px; padding: 1.25rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 2rem; height: 380px; }
     .chart-title { font-size: 1.1rem; font-weight: 600; color: #374151; margin-bottom: 1rem; text-align: center; }
     .last-updated { color: #e5e7eb; font-size: 0.9rem; }
+    .risk-matrix table { font-size: 0.9rem; }
+    .risk-matrix .impact-label { width: 260px; text-align: left; font-weight: 600; }
+    .risk-matrix .group-header { white-space: normal; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
@@ -21,7 +24,7 @@
       <div class="row align-items-center">
         <div class="col-md-8">
           <h1 class="mb-0">Australian Cyber Security Events Dashboard</h1>
-          <p class="mb-0 last-updated">Date Range: 2020-01-01 to 2025-09-29</p>
+          <p class="mb-0 last-updated">Date Range: 2020-01-01 to 2025-11-25</p>
         </div>
       </div>
     </div>
@@ -73,7 +76,38 @@
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
+          <div class="chart-title">Severity per Month</div>
+          <canvas id="maxSeverityChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Maximum Records Affected Per Month</div>
+          <canvas id="maxRecordsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Average Severity by Industry</div>
+          <canvas id="severityByIndustryChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Average Severity by Attack Type</div>
+          <canvas id="severityByAttackTypeChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Average Records Affected by Attack Type</div>
+          <canvas id="recordsByAttackTypeChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container" style="height: 440px;">
           <div class="chart-title">Histogram of Monthly Unique Event Counts</div>
+          <div id="monthlyCountsSubtitle" class="chart-subtitle" style="font-size: 0.95rem; color: #6b7280; margin-top: -8px; margin-bottom: 8px;"></div>
           <canvas id="monthlyCountsHistChart"></canvas>
           <div id="monthlyCountsStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
@@ -83,6 +117,48 @@
           <div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>
           <canvas id="oaicComparisonChart"></canvas>
           <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>
+          <canvas id="oaicCyberIncidentsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Attack Types Over Time</div>
+          <canvas id="oaicAttackTypesChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>
+          <canvas id="oaicSectorsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Individuals Affected Trends</div>
+          <canvas id="oaicIndividualsAffectedChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container risk-matrix" style="height: auto;">
+          <div class="chart-title d-flex justify-content-between align-items-center">
+            <span>ASD Risk Matrix (All Years)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdAllTotal">0</span></span>
+          </div>
+          <div id="asdRiskMatrixAll"></div>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container risk-matrix" style="height: auto;">
+          <div class="chart-title d-flex justify-content-between align-items-center">
+            <span>ASD Risk Matrix (Current Year)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdCurrentTotal">0</span></span>
+          </div>
+          <div id="asdRiskMatrixCurrent"></div>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
@@ -97,20 +173,29 @@
 
   <script>
     // Embedded data (static)
-    const monthlyCounts = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "counts": [7, 14, 10, 6, 16, 21, 8, 14, 13, 7, 11, 12, 11, 10, 19, 14, 9, 12, 14, 6, 2, 6, 16, 20, 11, 10, 11, 7, 21, 8, 10, 15, 20, 42, 26, 22, 16, 12, 49, 27, 29, 20, 14, 24, 34, 14, 40, 35, 43, 38, 23, 37, 57, 49, 42, 35, 29, 35, 32, 14, 41, 40, 34, 46, 25, 33, 66, 41], "total_events": 1555, "avg_per_month": 22.86764705882353};
-    const severityTrends = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "data": {"Critical": [2, 1, 2, 0, 2, 0, 1, 1, 2, 0, 4, 1, 1, 0, 2, 0, 0, 3, 0, 0, 0, 2, 1, 2, 1, 2, 0, 1, 2, 1, 1, 2, 8, 7, 4, 5, 2, 1, 5, 3, 6, 2, 2, 0, 3, 2, 6, 2, 8, 4, 2, 4, 3, 2, 4, 1, 2, 2, 3, 1, 4, 4, 4, 5, 4, 4, 8, 2], "High": [4, 12, 8, 6, 9, 17, 7, 11, 9, 6, 6, 10, 9, 9, 15, 14, 8, 7, 11, 4, 1, 4, 11, 17, 8, 8, 7, 3, 17, 6, 6, 9, 11, 32, 12, 16, 11, 7, 38, 17, 18, 9, 9, 17, 29, 8, 22, 18, 25, 28, 15, 27, 42, 35, 26, 29, 19, 24, 25, 9, 28, 19, 26, 30, 15, 19, 38, 29], "Unknown": [1, 0, 0, 0, 3, 3, 0, 2, 0, 1, 1, 0, 0, 0, 2, 0, 1, 0, 2, 1, 0, 0, 1, 0, 1, 0, 2, 0, 1, 0, 2, 3, 0, 2, 8, 1, 2, 3, 6, 2, 2, 6, 2, 3, 1, 0, 10, 9, 9, 3, 3, 3, 10, 8, 6, 5, 5, 7, 4, 1, 7, 17, 4, 10, 4, 8, 14, 8], "Medium": [0, 1, 0, 0, 2, 1, 0, 0, 2, 0, 0, 1, 1, 1, 0, 0, 0, 2, 1, 1, 1, 0, 3, 1, 1, 0, 1, 3, 1, 1, 1, 1, 1, 1, 2, 0, 1, 1, 0, 5, 3, 3, 1, 4, 1, 4, 2, 6, 1, 3, 3, 3, 2, 4, 6, 0, 3, 2, 0, 3, 2, 0, 0, 1, 2, 2, 6, 2], "Low": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}};
-    const recordsAffected = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-08", "2021-09", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "averages": [33826.666666666664, 15545.5, 68280.0, 38000.0, 17551011.75, 16480011.0, 6813466.666666667, 182236.77777777778, 54236.166666666664, 179000.0, 1000000.0, 124607.2, 1830000.0, 54510000.0, 1460000.0, 76153185.71428572, 1944333.3333333333, 175040250.0, 52700.0, 5300.0, 166955.66666666666, 14310062.5, 1786000.0, 309200.0, 4577.333333333333, 4100100.0, 82590.14285714286, 153250.0, 46980.0, 1099414.6, 8502749.916666666, 4027823.529411765, 7460500.0, 3394777.777777778, 5027.714285714285, 3337535.0, 3303881.9166666665, 4883271.454545454, 2621691.214285714, 7500.0, 4748.0, 2819080.0, 1337978.0588235294, 2185572.8333333335, 2656600.0, 11875.0, 3291000.0, 5379154.428571428, 5734583.333333333, 3085127.8181818184, 45599609.428571425, 3827139.75, 6822285.75, 4343782.0, 2075970.2727272727, 25728815.8, 3056677.875, 2628879.4, 2066311.875, 294845.6666666667, 2164166.6666666665, 770035.7142857143, 4653148.5, 6227500.0, 4506846.615384615, 2226764.1333333333], "confidence_intervals": [[27061.333333333332, 40592.0], [12436.4, 18654.6], [54624.0, 81936.0], [30400.0, 45600.0], [14040809.4, 21061214.1], [13184008.8, 19776013.2], [5450773.333333334, 8176160.0], [145789.42222222223, 218684.13333333333], [43388.933333333334, 65083.399999999994], [143200.0, 214800.0], [800000.0, 1200000.0], [99685.76, 149528.64], [1464000.0, 2196000.0], [43608000.0, 65412000.0], [1168000.0, 1752000.0], [60922548.571428575, 91383822.85714287], [1555466.6666666665, 2333200.0], [140032200.0, 210048300.0], [42160.0, 63240.0], [4240.0, 6360.0], [133564.53333333333, 200346.8], [11448050.0, 17172075.0], [1428800.0, 2143200.0], [247360.0, 371040.0], [3661.8666666666663, 5492.799999999999], [3280080.0, 4920120.0], [66072.11428571428, 99108.17142857143], [122600.0, 183900.0], [37584.0, 56376.0], [879531.68, 1319297.52], [6802199.933333333, 10203299.899999999], [3222258.823529412, 4833388.235294118], [5968400.0, 8952600.0], [2715822.2222222225, 4073733.3333333335], [4022.1714285714284, 6033.257142857143], [2670028.0, 4005042.0], [2643105.533333333, 3964658.3], [3906617.163636363, 5859925.745454545], [2097352.9714285713, 3146029.457142857], [6000.0, 9000.0], [3798.4, 5697.6], [2255264.0, 3382896.0], [1070382.4470588234, 1605573.6705882354], [1748458.2666666668, 2622687.4000000004], [2125280.0, 3187920.0], [9500.0, 14250.0], [2632800.0, 3949200.0], [4303323.542857142, 6454985.314285714], [4587666.666666666, 6881500.0], [2468102.254545455, 3702153.381818182], [36479687.54285714, 54719531.31428571], [3061711.8, 4592567.7], [5457828.6, 8186742.9], [3475025.6, 5212538.4], [1660776.2181818183, 2491164.327272727], [20583052.64, 30874578.96], [2445342.3, 3668013.45], [2103103.52, 3154655.28], [1653049.5, 2479574.25], [235876.53333333335, 353814.80000000005], [1731333.3333333333, 2597000.0], [616028.5714285715, 924042.8571428572], [3722518.8, 5583778.2], [4982000.0, 7473000.0], [3605477.292307692, 5408215.938461538], [1781411.3066666666, 2672116.96]], "sample_sizes": [3, 2, 5, 6, 4, 2, 3, 9, 6, 4, 1, 5, 1, 3, 4, 7, 3, 4, 2, 1, 9, 8, 5, 5, 3, 2, 7, 4, 2, 5, 12, 17, 5, 9, 7, 4, 24, 11, 14, 1, 5, 5, 17, 6, 10, 4, 6, 14, 6, 11, 14, 8, 12, 9, 11, 10, 8, 5, 8, 6, 6, 14, 4, 4, 13, 15]};
-    const eventTypeMix = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"], "types": {"Data Breach": [4, 5, 7, 6, 6, 2, 6, 11, 9, 5, 3, 8, 8, 7, 3, 6, 4, 7, 3, 3, 1, 6, 8, 9, 9, 9, 5, 4, 14, 5, 7, 11, 17, 33, 17, 14, 7, 7, 39, 18, 23, 11, 9, 19, 28, 11, 10, 16, 17, 23, 12, 25, 41, 27, 26, 13, 17, 19, 16, 8, 7, 12, 20, 18, 8, 15, 39, 26], "Other": [1, 1, 0, 0, 2, 3, 0, 2, 0, 1, 1, 0, 2, 0, 5, 0, 0, 0, 3, 2, 0, 0, 3, 2, 1, 0, 2, 1, 0, 0, 2, 2, 1, 3, 6, 2, 2, 3, 6, 2, 2, 5, 3, 3, 1, 0, 19, 11, 12, 3, 4, 3, 7, 7, 7, 6, 4, 6, 2, 0, 7, 17, 3, 11, 5, 6, 12, 8], "Ransomware": [2, 8, 2, 0, 5, 5, 1, 1, 3, 1, 4, 4, 0, 3, 4, 4, 2, 5, 3, 1, 1, 0, 5, 7, 1, 1, 2, 2, 4, 3, 1, 2, 1, 4, 3, 1, 6, 2, 4, 5, 4, 3, 1, 0, 5, 2, 3, 4, 11, 8, 5, 6, 7, 12, 8, 14, 5, 9, 12, 6, 23, 10, 8, 10, 12, 12, 13, 5], "Phishing": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "State Sponsored Attack": [0, 0, 0, 0, 2, 8, 0, 0, 1, 0, 0, 0, 0, 0, 3, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 3, 0, 0, 0, 0], "Vulnerability Exploit": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Infrastructure Attack": [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 3, 2, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 4, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 7, 2, 1, 2, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 4, 0, 2, 2, 0, 0, 2, 0], "Malware": [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0], "Financial Fraud": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], "Supply Chain Attack": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Insider Threat": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Denial Of Service": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2], "Identity Theft": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}};
-    const overallEventTypeMix = {"labels": ["Data Breach", "Ransomware", "Other", "Infrastructure Attack", "State Sponsored Attack", "Malware", "Vulnerability Exploit", "Denial Of Service", "Phishing", "Financial Fraud", "Supply Chain Attack", "Insider Threat", "Identity Theft"], "counts": [869, 331, 235, 44, 30, 14, 9, 8, 6, 6, 1, 1, 1]};
-    const entityTypes = {"types": [{"type": "EntityType.OTHER", "events": 810, "entities": 785}, {"type": "EntityType.GOVERNMENT", "events": 766, "entities": 464}, {"type": "EntityType.INDIVIDUAL", "events": 628, "entities": 492}, {"type": "EntityType.TECHNOLOGY", "events": 346, "entities": 250}, {"type": "EntityType.MEDIA", "events": 325, "entities": 103}, {"type": "EntityType.HEALTHCARE", "events": 283, "entities": 107}, {"type": "EntityType.FINANCIAL", "events": 146, "entities": 106}, {"type": "EntityType.EDUCATION", "events": 135, "entities": 63}, {"type": "EntityType.TELECOMMUNICATIONS", "events": 113, "entities": 20}, {"type": "EntityType.NON_PROFIT", "events": 107, "entities": 81}, {"type": "EntityType.TRANSPORTATION", "events": 66, "entities": 26}, {"type": "EntityType.RETAIL", "events": 62, "entities": 39}, {"type": "EntityType.MANUFACTURING", "events": 21, "entities": 10}, {"type": "EntityType.ENERGY", "events": 14, "entities": 8}]};
-    const recordsHistogram = {"bins": ["1-10", "11-100", "101-1K", "1K-10K", "10K-100K", "100K-1M", "1M-10M", "10M+"], "frequencies": [3, 15, 29, 85, 93, 94, 88, 53]};
-    const monthlyCountsStats = {"bins": ["2 - 8", "8 - 14", "14 - 21", "21 - 27", "27 - 34", "34 - 40", "40 - 46", "46 - 53", "53 - 59", "59 - 66"], "frequencies": [9, 20, 10, 6, 4, 9, 6, 2, 1, 1], "mean": 22.86764705882353, "variance": 204.08542387543253, "k_estimate": 2.885640091127047, "model": "Over-dispersed (likely Negative Binomial)"};
-    const eventTypeCorrelation = {"labels": ["Data Breach", "Other", "Ransomware", "Phishing", "State Sponsored Attack", "Vulnerability Exploit", "Infrastructure Attack", "Malware", "Denial Of Service"], "correlation_matrix": [[1.0, 0.4, 0.317, -0.06, -0.08, -0.059, 0.039, 0.064, 0.236], [0.4, 1.0, 0.484, 0.017, 0.08, 0.107, 0.476, 0.108, 0.27], [0.317, 0.484, 1.0, 0.096, 0.059, -0.072, 0.225, 0.153, 0.183], [-0.06, 0.017, 0.096, 1.0, -0.03, -0.108, -0.038, -0.128, -0.091], [-0.08, 0.08, 0.059, -0.03, 1.0, 0.07, 0.2, 0.411, -0.049], [-0.059, 0.107, -0.072, -0.108, 0.07, 1.0, 0.166, 0.011, -0.102], [0.039, 0.476, 0.225, -0.038, 0.2, 0.166, 1.0, 0.095, 0.055], [0.064, 0.108, 0.153, -0.128, 0.411, 0.011, 0.095, 1.0, -0.047], [0.236, 0.27, 0.183, -0.091, -0.049, -0.102, 0.055, -0.047, 1.0]], "min_correlation": -0.128, "max_correlation": 1.0};
-    const oaicComparison = {"periods": ["2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2", "2025 H1", "2025 H2"], "database_counts": [74, 65, 75, 64, 68, 135, 153, 161, 247, 187, 219, 107], "oaic_counts": [447, 512, 530, 436, 250, 350, 409, 483, 527, 595, null, null], "oaic_available": 10, "database_available": 12};
+    const monthlyCounts = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11"], "counts": [9, 11, 9, 2, 8, 18, 8, 9, 7, 3, 6, 8, 13, 9, 8, 5, 3, 4, 7, 3, 1, 5, 14, 8, 4, 7, 4, 3, 8, 3, 9, 14, 13, 10, 9, 8, 13, 3, 16, 16, 10, 12, 5, 9, 9, 4, 33, 21, 13, 13, 8, 27, 23, 11, 21, 14, 16, 16, 8, 10, 29, 15, 22, 15, 9, 16, 10, 16, 8, 12, 3], "total_events": 756, "avg_per_month": 10.647887323943662, "overdispersion": {"mean": 10.65, "variance": 41.95, "overdispersion_param": 3.939, "poisson_lambda": 10.65, "nb_n": 3.62, "nb_p": 0.254, "interpretation": "Negative Binomial"}};
+    const severityTrends = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11"], "data": {"Critical": [2, 0, 2, 0, 0, 1, 1, 0, 2, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 2, 0, 1, 0, 0, 0, 1, 0, 2, 1, 0, 0, 0, 0, 0, 4, 1, 1, 0, 1, 4, 1, 1, 3, 2, 1, 0, 0, 0, 3, 0, 2, 3, 0, 2, 0, 0, 2, 0, 1], "High": [7, 11, 6, 2, 5, 12, 6, 7, 3, 2, 4, 6, 12, 6, 7, 4, 3, 3, 5, 3, 1, 3, 11, 5, 3, 4, 3, 1, 6, 2, 8, 10, 9, 6, 6, 7, 10, 1, 10, 10, 7, 9, 2, 8, 8, 1, 23, 14, 11, 11, 4, 20, 18, 6, 15, 10, 12, 11, 5, 8, 20, 9, 13, 8, 5, 8, 7, 13, 3, 8, 1], "Medium": [0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 2, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 2, 1, 1, 0, 1, 1, 2, 0, 1, 0, 2, 1, 0, 0, 0, 0, 2, 3, 1, 2, 1, 0, 0, 3, 1, 3, 0, 1, 2, 3, 1, 3, 2, 0, 0, 1, 0, 1, 2, 1, 1, 0, 1, 2, 1, 0, 0, 2, 1], "Unknown": [0, 0, 0, 0, 2, 4, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 2, 0, 0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 0, 2, 2, 2, 3, 1, 3, 1, 4, 1, 1, 1, 2, 1, 1, 0, 5, 3, 1, 1, 1, 0, 3, 1, 1, 2, 3, 4, 3, 1, 4, 5, 6, 4, 3, 4, 2, 3, 1, 2, 0], "Low": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}};
+    const recordsAffected = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10"], "averages": [66296.0, 10006.666666666666, 264500.0, 7050.0, 17636055.0, 23214866.14285714, 11086209.0, 210000.0, 22400154.25, 114000000.0, 500.0, 155675.0, 1658904.3, 1704833.3333333333, 31500.0, 31676.0, 350037000.0, 1500.0, 1244333.3333333333, 1200000.0, 100003343833.33333, 802990.75, 2744044.8, 416781.5, 269166.6666666667, 187611.33333333334, 500.0, 108146.2, 193000.0, 545453.3333333334, 7817708.333333333, 4121018.4, 1740571.4285714286, 3564.0, 27593.666666666668, 1230461.6363636365, 8617849.0, 1233210.0, 570029.0, 965611.1111111111, 104000.0, 132500.0, 304835.3333333333, 4352.666666666667, 4851529.583333333, 65285.71428571428, 8754000.0, 13553648.0, 6725103.0, 34658812.0, 71352779.94117647, 168119.75, 2103999.25, 7825774.0, 21244055.0, 4075674.5, 549100.0, 112049.75, 85518450406.45454, 62476.0, 203767.35714285713, 873514.2857142857, 4050.0, 11033240.888888888, 159333.33333333334, 190027.5, 2854661.5, 35275.4], "medians": [40000.0, 10000.0, 186000.0, 7050.0, 272000.0, 19000000.0, 900.0, 54000.0, 6200000.0, 114000000.0, 500.0, 52650.0, 31000.0, 9500.0, 31500.0, 9828.0, 350037000.0, 1500.0, 1850000.0, 1200000.0, 10000000.0, 80000.0, 80000.0, 369000.0, 223000.0, 13000.0, 500.0, 50000.0, 193000.0, 46980.0, 9700000.0, 492804.0, 80000.0, 3564.0, 8927.5, 16000.0, 14000000.0, 1125000.0, 18000.0, 1240000.0, 104000.0, 161500.0, 193000.0, 192.0, 71302.5, 100000.0, 792000.0, 762856.0, 6450200.0, 12900000.0, 1050169.0, 59239.5, 759808.5, 151503.0, 56186.5, 296124.0, 800000.0, 22964.5, 9000.0, 13967.0, 20000.0, 20000.0, 4050.0, 5700000.0, 98000.0, 164600.0, 2854661.5, 1634.0], "confidence_intervals": [[53036.8, 79555.2], [8005.333333333333, 12008.0], [211600.0, 317400.0], [5640.0, 8460.0], [14108844.0, 21163266.0], [18571892.914285712, 27857839.37142857], [8868967.2, 13303450.8], [168000.0, 252000.0], [17920123.4, 26880185.1], [91200000.0, 136800000.0], [400.0, 600.0], [124540.0, 186810.0], [1327123.44, 1990685.1600000001], [1363866.6666666665, 2045800.0], [25200.0, 37800.0], [25340.8, 38011.2], [280029600.0, 420044400.0], [1200.0, 1800.0], [995466.6666666666, 1493200.0], [960000.0, 1440000.0], [80002675066.66666, 120004012600.0], [642392.6, 963588.9], [2195235.84, 3292853.76], [333425.2, 500137.8], [215333.33333333334, 323000.0], [150089.06666666668, 225133.6], [400.0, 600.0], [86516.95999999999, 129775.44], [154400.0, 231600.0], [436362.6666666667, 654544.0], [6254166.666666666, 9381250.0], [3296814.7199999997, 4945222.08], [1392457.142857143, 2088685.7142857143], [2851.2, 4276.8], [22074.933333333334, 33112.4], [984369.3090909092, 1476553.9636363639], [6894279.2, 10341418.8], [986568.0, 1479852.0], [456023.2, 684034.8], [772488.8888888889, 1158733.3333333335], [83200.0, 124800.0], [106000.0, 159000.0], [243868.26666666666, 365802.39999999997], [3482.1333333333337, 5223.200000000001], [3881223.6666666665, 5821835.5], [52228.57142857143, 78342.85714285714], [7003200.0, 10504800.0], [10842918.4, 16264377.6], [5380082.4, 8070123.6], [27727049.6, 41590574.4], [57082223.95294118, 85623335.92941177], [134495.8, 201743.7], [1683199.4, 2524799.1], [6260619.2, 9390928.8], [16995244.0, 25492866.0], [3260539.6, 4890809.4], [439280.0, 658920.0], [89639.8, 134459.7], [68414760325.163635, 102622140487.74545], [49980.8, 74971.2], [163013.88571428572, 244520.82857142854], [698811.4285714285, 1048217.1428571428], [3240.0, 4860.0], [8826592.71111111, 13239889.066666666], [127466.66666666667, 191200.0], [152022.0, 228033.0], [2283729.2, 3425593.8], [28220.32, 42330.48]], "sample_sizes": [5, 3, 4, 2, 4, 7, 7, 5, 4, 1, 1, 4, 10, 6, 2, 3, 2, 1, 3, 1, 3, 12, 5, 4, 6, 3, 1, 5, 1, 6, 12, 10, 7, 2, 6, 11, 13, 10, 5, 9, 2, 4, 6, 3, 24, 7, 3, 5, 4, 21, 17, 4, 8, 4, 10, 8, 3, 4, 11, 6, 14, 7, 2, 9, 3, 4, 2, 5]};
+    const eventTypeMix = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11"], "types": {"Data Breach": [6, 6, 4, 2, 3, 6, 7, 6, 4, 1, 3, 7, 7, 4, 1, 1, 1, 4, 2, 2, 1, 3, 9, 4, 4, 4, 2, 1, 4, 1, 9, 9, 10, 4, 6, 5, 9, 1, 9, 11, 8, 10, 4, 6, 6, 3, 15, 9, 6, 7, 3, 21, 17, 2, 10, 1, 6, 7, 4, 3, 10, 4, 12, 4, 3, 7, 2, 6, 0, 4, 1], "Ransomware": [3, 3, 2, 0, 2, 5, 1, 2, 0, 1, 3, 0, 1, 3, 4, 2, 1, 0, 1, 1, 0, 1, 4, 3, 0, 1, 0, 1, 3, 1, 0, 3, 0, 2, 0, 1, 1, 1, 1, 4, 1, 1, 0, 2, 2, 0, 5, 6, 5, 4, 3, 6, 3, 8, 7, 7, 8, 4, 2, 5, 14, 5, 4, 7, 3, 5, 2, 5, 5, 5, 1], "Other": [0, 1, 0, 0, 2, 2, 0, 1, 1, 1, 0, 1, 2, 1, 2, 1, 0, 0, 2, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 3, 2, 2, 2, 3, 1, 4, 1, 1, 1, 0, 0, 1, 0, 7, 4, 1, 0, 0, 0, 2, 1, 3, 4, 2, 4, 0, 1, 4, 5, 5, 3, 3, 4, 2, 3, 1, 2, 0], "Phishing": [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0], "State Sponsored Attack": [0, 0, 1, 0, 1, 2, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0], "Vulnerability Exploit": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], "Infrastructure Attack": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 4, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0], "Malware": [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], "Financial Fraud": [0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Supply Chain Attack": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "Denial Of Service": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0], "Unknown": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0]}};
+    const overallEventTypeMix = {"labels": ["Data Breach", "Ransomware", "Other", "State Sponsored Attack", "Infrastructure Attack", "Vulnerability Exploit", "Phishing", "Malware", "Denial Of Service", "Financial Fraud", "Unknown", "Supply Chain Attack"], "counts": [384, 197, 106, 17, 16, 8, 8, 8, 6, 3, 2, 1]};
+    const entityTypes = {"types": [{"type": "Unknown", "events": 330, "entities": 330}, {"type": "Technology", "events": 93, "entities": 93}, {"type": "Healthcare", "events": 81, "entities": 81}, {"type": "Others", "events": 59, "entities": 59}, {"type": "Government & Defense", "events": 57, "entities": 57}, {"type": "Financial Services", "events": 45, "entities": 45}, {"type": "Education", "events": 28, "entities": 28}, {"type": "Transportation", "events": 27, "entities": 27}, {"type": "Infrastructure", "events": 13, "entities": 13}, {"type": "Professional Services", "events": 12, "entities": 12}, {"type": "Telecommunications", "events": 6, "entities": 6}, {"type": "Not for Profit", "events": 5, "entities": 5}]};
+    const recordsHistogram = {"bins": ["1-10", "11-100", "101-1K", "1K-10K", "10K-100K", "100K-1M", "1M-10M", "10M+"], "frequencies": [5, 15, 34, 57, 102, 70, 60, 63]};
+    const maxRecordsPerMonth = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10"], "max_records": [186000, 19900, 500000, 8800, 70000000, 77159696, 77159696, 444000, 77200000, 114000000, 500, 515000, 11000000, 5700000, 31500, 80000, 700000000, 1500, 1850000, 1200000, 10000000, 8200000, 8200000, 928760, 500000, 548000, 500, 285631, 193000, 2200000, 11000000, 11000000, 9700000, 6000, 130000, 12900000, 14000000, 2500000, 2800000, 1240000, 193000, 193000, 1240000, 12745, 25000000, 100000, 25000000, 49000000, 14000000, 560000000, 560000000, 524000, 8500000, 31000000, 150000000, 31000000, 800000, 400000, 2369481, 318150, 2690000, 6000000, 8094, 64000000, 310000, 430000, 5700000, 148538], "titles": ["Advances in technology and efforts to protect important personal ...", "University of Tasmania IT bungle leads to mass student data breach", "Sensitive business addresses among 500,000 published in COVID data breach", "Confidential details of entire WA Police Force accessed in 'startling' audit breach, CCC finds", "Lion Dairy and Drinks Ransomware Attacks", "NetWalker Ransomware Attack on Australian Firm Company F", "Nitro PDF suffers massive data breach, exposing Microsoft, Google, Amazon documents", "Hackers hit university online exam tool", "Untitled Event", "Gravatar profile add-on leaks data on millions of users", "Data theft at Australian Securities and Investments Commission (ASIC)", "TfNSW hit by another data breach", "Telstra explains how internal data breach exposed more than 130,000 customers' details", "SITA data breach affects millions of airline passengers", "UnitingCare Queensland Ransomware Attack Impacts Major ...", "South Australian Government Payroll Data Breach via Frontier Software Ransomware Attack", "LinkedIn data from 700 million users for sale on hacking forum", "Kaseya VSA Supply-Chain Ransomware Attack | Cyber.gov.au", "The Good Guys customers possibly affected by data breach at former third-party provider My Rewards", "Cybersecurity experts weigh in on GoDaddy data breach", "Twitch hack reveals multi-million-dollar sums top streamers earn from playing computer games", "Okta says third-party breach may have impacted up to 366 customers", "Afterpay shareholders sue Dorsey\u2019s Block for breach disclosure", "Vinomofo did not protect personal information from security risks, Privacy Commissioner finds", "NSW nurses strike as data breach defended", "Microsoft Data Breach (Australia)", "Australian Healthcare Sector Targeted by Ransomware and Remote Access Tool Attacks", "Leak of Nauru Police Force Files Related to Australian Offshore Processing", "Icare data breach due to \u2018human error\u2019, agency says", "Woolworths MyDeal Data Breach", "Australia Blames Russian Hacker for Major Cyber Attack - The ...", "Optus fined $826,000 over Coles Mobile scam security breach | The ...", "Chaos at Brisbane Airport after security breach evacuates Virgin ...", "Energy company AGL reports cyber incident | Insurance Business ...", "Telstra blames privacy breach on 'database misalignment'", "Data breach | IDMatch", "Recent Data Breaches \u2013 advice for foreign passport holders", "1.2 million customers caught up in Dymocks hack", "Amazon Says Employee Data Impacted In Third-Party Breach", "Dymocks warns customers of data breach after account information leaked on dark web", "Pizza Hut Australia Data Breach", "Pizza Hut says nearly two-hundred thousand customers affected by ...", "Dymocks links data breach to \"external data partner\"", "SA Health patient records accessed in data breach of third-party system Personify Care", "Hacker offers the personal details of 25m Aussies for sale", "Nissan A/NZ's outsourced cyber incident call centre breached", "DJI suffers alleged data breach at the hands of R00TK1T", "Suncorp Bank Data Breach and Customer Funds Theft", "Sale of 14 Million Australian Emails and Addresses on Hacking Forum", "Live Nation probing Ticketmaster hack", "Exclusive: Melbourne-based Regent Caravans confirms RansomHub attack", "Op-Ed: Patties Foods\u2019 \u2018data leak\u2019 proves cyber reporting needs to do better", "Widespread outages relating to CrowdStrike software update ...", "Exclusive: RansomHub hits third-party ASIC compliance firm in ...", "MoneyGram confirms data breach after major outage", "What is the Internet Archive, and what could a full-scale hack on its data mean?", "Navigating the privacy risks of electric vehicles - Law Society Journal", "SquareX reveals critical breach of Cyberhaven extension", "BREAKING NEWS:JB Hi FI Denies Massive Cyber Attack Claim", "Cybersecurity Incident Impacting Compumedics Limited ...", "DaVita Inc. Healthcare Data Breach", "Queensland data security breach exposes data of thousands as ...", "Exclusive: Legal Practice Board of Western Australia confirms Dire Wolf ransomware attack", "McDonald's AI chatbot hacked leaving Aussie job applicants exposed", "iiNet cyber incident | The Telecommunications Industry Ombudsman", "Update on response to cyber incident - ReadyTech Holdings Limited ...", "Update on VETtrak Cyber Incident - METS Training Services", "Australian estate agencies hit by Radar ransomware attack | 3 Point ..."], "entities": ["New South Wales Department of Customer Service", "University of Tasmania", "Department of Customer Service, New South Wales Government", "Office of the Auditor General for Western Australia", "Lion Pty Ltd", "Unknown", "Nitro Software Inc.", "ProctorU LLC", "Nitro Software Limited", "Automattic Inc.", "Australian Securities and Investments Commission", "Transport for New South Wales", "Telstra Corporation Limited", "Soci\u00e9t\u00e9 Internationale de T\u00e9l\u00e9communications A\u00e9ronautiques SC", "UnitingCare Queensland", "Government of South Australia", "LinkedIn Corporation", "Kaseya Limited", "Pegasus Group Australia Pty Ltd (now My Rewards Pty Ltd)", "GoDaddy Inc.", "Twitch Interactive, Inc.", "Okta, Inc.", "Afterpay Limited", "Vinomofo Pty Ltd", "NSW Government", "Microsoft Corporation", "Unknown", "Nauru Police Force", "Insurance and Care NSW", "MyDeal.com.au Pty Ltd", "Medibank Private Limited", "Optus Mobile Pty Limited", "Brisbane Airport Corporation Pty Limited", "AGL Energy Limited", "Telstra Corporation Limited", "MediSecure Pty Ltd", "Latitude Financial Services Pty Ltd", "Unknown", "Amazon.com, Inc.", "Dymocks Holdings Pty Ltd", "Pizza Hut Australia Pty Ltd", "Pizza Pan Group Pty Ltd", "Unknown", "South Australian Health and Medical Research Institute (SA Health)", "Unknown", "Nissan Motor Co. (Australia) Pty Ltd", "SZ DJI Technology Co., Ltd.", "Suncorp-Metway Limited", "Unknown", "Live Nation Entertainment, Inc.", "Regent Caravans Pty Ltd", "Patties Foods Limited", "CrowdStrike Holdings, Inc.", "Unknown", "MoneyGram International Inc.", "Internet Archive", "Volkswagen AG", "Cyberhaven, Inc.", "JB Hi-Fi Limited", "Compumedics Limited", "DaVita Inc.", "Unknown", "Legal Practice Board of Western Australia", "McDonald's Australia Limited", "iiNet Limited", "ReadyTech Holdings Limited", "METS Training Services Pty Ltd", "Malibu Boats Australia Pty Ltd"]};
+    const recordsByAttackType = {"attack_types": ["Data Breach", "Ransomware", "Other", "Malware", "Denial Of Service", "State Sponsored Attack", "Infrastructure Attack", "Phishing", "Financial Fraud", "Vulnerability Exploit", "Supply Chain Attack"], "avg_records": [11890805.822393822, 12013319.47368421, 2074381.8333333333, 16515000.0, 31000000.0, 5049894.4, 1398600.0, 33000.0, 15000.0, 7000.0, 1500.0]};
+    const monthlyCountsStats = {"bins": ["1 - 4", "4 - 7", "7 - 10", "10 - 13", "13 - 17", "17 - 20", "20 - 23", "23 - 26", "26 - 29", "29 - 33"], "frequencies": [13, 7, 23, 9, 11, 1, 4, 0, 2, 1], "mean": 10.647887323943662, "variance": 41.35488990279706, "k_estimate": 3.692236133183457, "model": "Over-dispersed (likely Negative Binomial)", "overdispersion": {"mean": 10.65, "variance": 41.95, "overdispersion_param": 3.939, "poisson_lambda": 10.65, "nb_n": 3.62, "nb_p": 0.254, "interpretation": "Negative Binomial"}};
+    const eventTypeCorrelation = {"labels": ["Data Breach", "Ransomware", "Other", "Phishing", "State Sponsored Attack", "Vulnerability Exploit", "Infrastructure Attack", "Malware", "Denial Of Service"], "correlation_matrix": [[1.0, 0.264, 0.339, 0.11, 0.008, 0.054, 0.168, 0.031, -0.096], [0.264, 1.0, 0.469, 0.119, 0.107, 0.136, 0.204, -0.038, -0.013], [0.339, 0.469, 1.0, 0.238, 0.155, 0.326, 0.448, -0.175, 0.001], [0.11, 0.119, 0.238, 1.0, -0.089, 0.296, 0.243, -0.127, 0.212], [0.008, 0.107, 0.155, -0.089, 1.0, 0.3, 0.009, 0.202, -0.159], [0.054, 0.136, 0.326, 0.296, 0.3, 1.0, 0.471, 0.155, 0.052], [0.168, 0.204, 0.448, 0.243, 0.009, 0.471, 1.0, -0.061, -0.03], [0.031, -0.038, -0.175, -0.127, 0.202, 0.155, -0.061, 1.0, 0.212], [-0.096, -0.013, 0.001, 0.212, -0.159, 0.052, -0.03, 0.212, 1.0]], "min_correlation": -0.175, "max_correlation": 1.0};
+    const oaicComparison = {"periods": ["2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2", "2025 H1", "2025 H2"], "database_counts": [57, 41, 42, 38, 29, 63, 70, 81, 95, 85, 106, 49], "oaic_counts": [447, 512, 530, 436, 250, 350, 409, 483, 527, 595, null, null], "oaic_available": 10, "database_available": 12, "prorata_period": null, "prorata_estimate": null, "prorata_actual": null};
+    const oaicCyberIncidents = {"periods": ["2019 Q1", "2019 Q2", "2019 H2", "2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2"], "cyber_incidents": [null, null, 71, 308, 212, 192, 173, 162, 222, 172, 211, 200, 247], "total_notifications": [215, 245, 106, 447, 512, 530, 436, 250, 350, 409, 483, 527, 595]};
+    const oaicAttackTypes = {"periods": ["2019 Q1", "2019 Q2", "2019 H2", "2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2"], "attack_types": {"ransomware": [7, 8, 6, 15, 17, 24, 23, 51, 64, null, null, null, null], "phishing": [20, 4, 36, 36, 25, 30, 32, 42, null, 331, 591, null, null], "hacking": [13, 8, 6, 13, 14, 9, 8, 13, null, 164, null, null, null], "malware": [13, 2, 10, 4, 7, 5, 3, 9, 109, 133, 10, 105, 122], "brute_force": [null, null, null, null, null, null, null, 200, null, null, null, null, null], "compromised_credentials": [null, 43, null, null, null, null, null, null, null, null, null, null, null]}};
+    const oaicSectors = {"sectors": ["Retail", "Education", "Australian government", "Health", "Finance"], "oaic_counts": [1066, 458, 421, 385, 114], "database_counts": [33, 23, 46, 62, 35]};
+    const oaicIndividualsAffected = {"periods": ["2019 Q1", "2019 Q2", "2019 H2", "2020 H1", "2020 H2", "2021 H1", "2021 H2", "2022 H1", "2022 H2", "2023 H1", "2023 H2", "2024 H1", "2024 H2"], "averages": [36993, 9479, 340, 486, 20117, 523998, 745, 134, 1328, 845, 9080, 107123, 15357], "medians": [null, null, null, null, null, null, null, null, null, null, null, 341, 182], "db_averages": [null, null, 76174288.85714285, 6513385.638888889, 11315091.2, 24235002.366666667, 10715654361.178572, 228959.55, 3347824.311111111, 2621751.9298245613, 2059892.7586206896, 32737070.507936507, 6419055.108695652]};
+    const asdRiskAll = {"impact_types": ["Sustained disruption of essential systems and associated services", "Extensive compromise", "Isolated compromise", "Coordinated low-level malicious attack", "Low-level malicious attack", "Unsuccessful low-level malicious attack"], "stakeholder_groups": ["Member(s) of the public", "Small organisation(s) / Sole traders", "Medium-sized organisation(s) / Schools / Local government", "State government / Academia/R&D / Large organisation(s) / Supply chain", "Federal government / Government shared services / Regulated critical infrastructure", "National security / Systems of National Significance"], "matrix": [{"impact_type": "Sustained disruption of essential systems and associated services", "counts": {"Member(s) of the public": 0, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 0, "State government / Academia/R&D / Large organisation(s) / Supply chain": 8, "Federal government / Government shared services / Regulated critical infrastructure": 13, "National security / Systems of National Significance": 0}}, {"impact_type": "Extensive compromise", "counts": {"Member(s) of the public": 94, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 2, "State government / Academia/R&D / Large organisation(s) / Supply chain": 125, "Federal government / Government shared services / Regulated critical infrastructure": 47, "National security / Systems of National Significance": 6}}, {"impact_type": "Isolated compromise", "counts": {"Member(s) of the public": 41, "Small organisation(s) / Sole traders": 10, "Medium-sized organisation(s) / Schools / Local government": 65, "State government / Academia/R&D / Large organisation(s) / Supply chain": 198, "Federal government / Government shared services / Regulated critical infrastructure": 46, "National security / Systems of National Significance": 0}}, {"impact_type": "Coordinated low-level malicious attack", "counts": {"Member(s) of the public": 1, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 0, "State government / Academia/R&D / Large organisation(s) / Supply chain": 0, "Federal government / Government shared services / Regulated critical infrastructure": 3, "National security / Systems of National Significance": 0}}, {"impact_type": "Low-level malicious attack", "counts": {"Member(s) of the public": 1, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 1, "State government / Academia/R&D / Large organisation(s) / Supply chain": 2, "Federal government / Government shared services / Regulated critical infrastructure": 6, "National security / Systems of National Significance": 0}}, {"impact_type": "Unsuccessful low-level malicious attack", "counts": {"Member(s) of the public": 39, "Small organisation(s) / Sole traders": 4, "Medium-sized organisation(s) / Schools / Local government": 13, "State government / Academia/R&D / Large organisation(s) / Supply chain": 46, "Federal government / Government shared services / Regulated critical infrastructure": 19, "National security / Systems of National Significance": 2}}], "total_classifications": 792, "max_value": 198, "year": null};
+    const asdRiskCurrent = {"impact_types": ["Sustained disruption of essential systems and associated services", "Extensive compromise", "Isolated compromise", "Coordinated low-level malicious attack", "Low-level malicious attack", "Unsuccessful low-level malicious attack"], "stakeholder_groups": ["Member(s) of the public", "Small organisation(s) / Sole traders", "Medium-sized organisation(s) / Schools / Local government", "State government / Academia/R&D / Large organisation(s) / Supply chain", "Federal government / Government shared services / Regulated critical infrastructure", "National security / Systems of National Significance"], "matrix": [{"impact_type": "Sustained disruption of essential systems and associated services", "counts": {"Member(s) of the public": 0, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 0, "State government / Academia/R&D / Large organisation(s) / Supply chain": 1, "Federal government / Government shared services / Regulated critical infrastructure": 1, "National security / Systems of National Significance": 0}}, {"impact_type": "Extensive compromise", "counts": {"Member(s) of the public": 14, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 1, "State government / Academia/R&D / Large organisation(s) / Supply chain": 11, "Federal government / Government shared services / Regulated critical infrastructure": 4, "National security / Systems of National Significance": 1}}, {"impact_type": "Isolated compromise", "counts": {"Member(s) of the public": 13, "Small organisation(s) / Sole traders": 5, "Medium-sized organisation(s) / Schools / Local government": 14, "State government / Academia/R&D / Large organisation(s) / Supply chain": 35, "Federal government / Government shared services / Regulated critical infrastructure": 8, "National security / Systems of National Significance": 0}}, {"impact_type": "Coordinated low-level malicious attack", "counts": {"Member(s) of the public": 0, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 0, "State government / Academia/R&D / Large organisation(s) / Supply chain": 0, "Federal government / Government shared services / Regulated critical infrastructure": 1, "National security / Systems of National Significance": 0}}, {"impact_type": "Low-level malicious attack", "counts": {"Member(s) of the public": 0, "Small organisation(s) / Sole traders": 0, "Medium-sized organisation(s) / Schools / Local government": 1, "State government / Academia/R&D / Large organisation(s) / Supply chain": 0, "Federal government / Government shared services / Regulated critical infrastructure": 2, "National security / Systems of National Significance": 0}}, {"impact_type": "Unsuccessful low-level malicious attack", "counts": {"Member(s) of the public": 14, "Small organisation(s) / Sole traders": 2, "Medium-sized organisation(s) / Schools / Local government": 8, "State government / Academia/R&D / Large organisation(s) / Supply chain": 13, "Federal government / Government shared services / Regulated critical infrastructure": 6, "National security / Systems of National Significance": 0}}], "total_classifications": 155, "max_value": 35, "year": 2025};
 
     const colors = {
       primary: '#2563eb',
       secondary: '#10b981',
+      success: '#10b981',
       warning: '#f59e0b',
       danger: '#ef4444',
       info: '#06b6d4',
@@ -119,26 +204,122 @@
       }
     };
 
-    // 1) Monthly Trends (line)
-    new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
-      type: 'line',
-      data: {
-        labels: monthlyCounts.months,
-        datasets: [{
-          label: 'Unique Events',
-          data: monthlyCounts.counts,
-          borderColor: colors.primary,
-          backgroundColor: '#2563eb20',
-          fill: true,
-          tension: 0.4,
-        }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }},
-        scales: { y: { beginAtZero: true }, x: { title: { display: true, text: 'Month' }}}
+    function renderRiskMatrix(targetId, matrixData, totalId) {
+      const container = document.getElementById(targetId);
+      const totalElement = totalId ? document.getElementById(totalId) : null;
+      if (!container) return;
+
+      if (!matrixData || !Array.isArray(matrixData.matrix) || matrixData.matrix.length === 0) {
+        container.innerHTML = '<p class="text-muted mb-0">No ASD risk classifications available.</p>';
+        if (totalElement) totalElement.textContent = '0';
+        return;
       }
-    });
+
+      const groups = matrixData.stakeholder_groups || [];
+      const matrixRows = matrixData.matrix;
+      const maxValue = matrixData.max_value || 0;
+
+      const colorForValue = (value) => {
+        if (!value || !maxValue) return '';
+        const opacity = 0.18 + 0.72 * (value / maxValue);
+        const textColor = opacity > 0.45 ? '#ffffff' : '#111827';
+        return `background-color: rgba(37, 99, 235, ${opacity.toFixed(3)}); color: ${textColor};`;
+      };
+
+      let html = '<div class="table-responsive"><table class="table table-sm table-bordered align-middle text-center mb-1">';
+      html += '<thead><tr><th class="text-start">Impact Type</th>';
+      groups.forEach(group => { html += `<th class="group-header">${group}</th>`; });
+      html += '</tr></thead><tbody>';
+
+      matrixRows.forEach(row => {
+        html += `<tr><th scope="row" class="text-start impact-label">${row.impact_type}</th>`;
+        groups.forEach(group => {
+          const value = (row.counts && row.counts[group]) ? row.counts[group] : 0;
+          const display = value > 0 ? value : '';
+          const style = colorForValue(value);
+          html += `<td style="${style}">${display}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+
+      if (totalElement) {
+        totalElement.textContent = (matrixData.total_classifications || 0).toLocaleString();
+      }
+    }
+
+    renderRiskMatrix('asdRiskMatrixAll', asdRiskAll, 'asdAllTotal');
+    renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
+
+    // 1) Monthly Trends (line) with trend line
+    (function() {
+      const counts = monthlyCounts.counts;
+      const n = counts.length;
+
+      // Calculate linear regression for trend line
+      let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+      for (let i = 0; i < n; i++) {
+        sumX += i;
+        sumY += counts[i];
+        sumXY += i * counts[i];
+        sumXX += i * i;
+      }
+
+      const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+
+      // Generate trend line data
+      const trendLine = [];
+      for (let i = 0; i < n; i++) {
+        trendLine.push(slope * i + intercept);
+      }
+
+      new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: monthlyCounts.months,
+          datasets: [
+            {
+              label: 'Unique Events',
+              data: counts,
+              borderColor: colors.primary,
+              backgroundColor: '#2563eb20',
+              fill: true,
+              tension: 0.4,
+              order: 2
+            },
+            {
+              label: 'Trend',
+              data: trendLine,
+              borderColor: '#dc2626',
+              backgroundColor: 'transparent',
+              borderWidth: 2,
+              borderDash: [5, 5],
+              fill: false,
+              tension: 0,
+              pointRadius: 0,
+              order: 1
+            }
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            }
+          },
+          scales: {
+            y: { beginAtZero: true },
+            x: { title: { display: true, text: 'Month' }}
+          }
+        }
+      });
+    })();
 
     // 2) Severity Trends (stacked bar)
     const sevDatasets = Object.keys(severityTrends.data).map(sev => ({
@@ -160,19 +341,51 @@
       }
     });
 
-    // 3) Records Affected (line, log scale)
+    // 3) Records Affected (line, log scale) with Average and Median
     new Chart(document.getElementById('recordsAffectedChart').getContext('2d'), {
       type: 'line',
-      data: { labels: recordsAffected.months, datasets: [{
-        label: 'Average Records Affected', data: recordsAffected.averages,
-        borderColor: colors.secondary, backgroundColor: '#10b98120', fill: false, tension: 0.4
-      }]},
+      data: {
+        labels: recordsAffected.months,
+        datasets: [
+          {
+            label: 'Average Records Affected',
+            data: recordsAffected.averages,
+            borderColor: colors.secondary,
+            backgroundColor: '#10b98120',
+            fill: false,
+            tension: 0.4,
+            borderWidth: 2
+          },
+          {
+            label: 'Median Records Affected',
+            data: recordsAffected.medians,
+            borderColor: colors.primary,
+            backgroundColor: '#2563eb20',
+            fill: false,
+            tension: 0.4,
+            borderWidth: 2,
+            borderDash: [5, 5]
+          }
+        ]
+      },
       options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }},
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top'
+          }
+        },
         scales: {
-          y: { type: 'logarithmic', beginAtZero: true, title: { display: true, text: 'Records (log)' }},
-          x: { title: { display: true, text: 'Month' }}
+          y: {
+            type: 'logarithmic',
+            beginAtZero: true,
+            title: { display: true, text: 'Records (log)' }
+          },
+          x: {
+            title: { display: true, text: 'Month' }
+          }
         }
       }
     });
@@ -244,12 +457,49 @@
     });
     (function(){
       const s = monthlyCountsStats;
-      const lines = [];
-      lines.push(`Mean: ${s.mean?.toFixed ? s.mean.toFixed(2) : s.mean}`);
-      lines.push(`Variance: ${s.variance?.toFixed ? s.variance.toFixed(2) : s.variance}`);
-      if (s.k_estimate) lines.push(`NB dispersion k (est.): ${s.k_estimate.toFixed ? s.k_estimate.toFixed(2) : s.k_estimate}`);
-      lines.push(`Model: ${s.model}`);
-      document.getElementById('monthlyCountsStats').textContent = lines.join(' • ');
+      const od = s.overdispersion || {};
+      const statsEl = document.getElementById('monthlyCountsStats');
+      const subtitleEl = document.getElementById('monthlyCountsSubtitle');
+
+      // Calculate and display overdispersion percentage in subtitle
+      const mean = od.mean || s.mean;
+      const variance = od.variance || s.variance;
+      if (mean && variance && mean > 0) {
+        const overdispersionPct = ((variance - mean) / mean * 100).toFixed(1);
+        if (variance > mean) {
+          subtitleEl.textContent = `Overdispersion: +${overdispersionPct}% vs Poisson`;
+        } else if (variance < mean) {
+          subtitleEl.textContent = `Underdispersion: ${overdispersionPct}% vs Poisson`;
+        } else {
+          subtitleEl.textContent = `Dispersion: 0% vs Poisson (perfect match)`;
+        }
+      }
+
+      // Create formatted display with overdispersion analysis
+      if (od.overdispersion_param) {
+        const phi = od.overdispersion_param;
+        const interpretation = od.interpretation || s.model;
+
+        statsEl.innerHTML = `
+          <div style="font-weight: 600; margin-bottom: 4px;">
+            Overdispersion Analysis: φ = ${phi} (${interpretation})
+          </div>
+          <div style="font-size: 0.85rem;">
+            Mean: ${od.mean} • Variance: ${od.variance} •
+            ${phi > 1.5 ? `Negative Binomial (n=${od.nb_n}, p=${od.nb_p})` :
+              phi < 1.2 ? `Poisson (λ=${od.poisson_lambda})` :
+              'Mixed distribution'}
+          </div>
+        `;
+      } else {
+        // Fallback to old format if overdispersion not available
+        const lines = [];
+        lines.push(`Mean: ${s.mean?.toFixed ? s.mean.toFixed(2) : s.mean}`);
+        lines.push(`Variance: ${s.variance?.toFixed ? s.variance.toFixed(2) : s.variance}`);
+        if (s.k_estimate) lines.push(`NB dispersion k (est.): ${s.k_estimate.toFixed ? s.k_estimate.toFixed(2) : s.k_estimate}`);
+        lines.push(`Model: ${s.model}`);
+        statsEl.textContent = lines.join(' • ');
+      }
     })();
 
     // 9) OAIC Comparison Chart
@@ -285,6 +535,26 @@
           tension: 0.1,
           pointRadius: 5,
           spanGaps: false  // Don't connect points where data is missing
+        });
+      }
+
+      // Add pro-rata estimate if available
+      if (oaic.prorata_estimate && oaic.prorata_period) {
+        // Create array with null values except for the last period
+        const prorataData = oaic.periods.map((p, idx) =>
+          (p === oaic.prorata_period && idx === oaic.periods.length - 1) ? oaic.prorata_estimate : null
+        );
+
+        datasets.push({
+          label: 'Estimated Full Period (Pro-rata)',
+          data: prorataData,
+          borderColor: colors.secondary,
+          backgroundColor: colors.secondary,
+          fill: false,
+          tension: 0,
+          pointRadius: 8,
+          pointStyle: 'triangle',
+          showLine: false  // Don't draw lines between points
         });
       }
 
@@ -358,10 +628,273 @@
         stats.push('OAIC: No data available');
       }
 
+      // Add pro-rata estimate information if available
+      if (oaic.prorata_estimate && oaic.prorata_period) {
+        stats.push(`${oaic.prorata_period} (partial): ${oaic.prorata_actual} → Est. ${oaic.prorata_estimate}`);
+      }
+
       document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
     })();
 
-    // 10) Event Type Correlation Matrix
+    // 10) OAIC Cyber Incidents Chart
+    (function(){
+      const data = oaicCyberIncidents;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicCyberIncidentsChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicCyberIncidentsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: [
+            {
+              label: 'Cyber Incidents',
+              data: data.cyber_incidents,
+              borderColor: colors.danger,
+              backgroundColor: colors.danger + '20',
+              fill: true,
+              tension: 0.3,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Total Notifications',
+              data: data.total_notifications,
+              borderColor: colors.primary,
+              backgroundColor: colors.primary + '20',
+              fill: true,
+              tension: 0.3,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Cyber Incidents'
+              }
+            },
+            y1: {
+              type: 'linear',
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Total Notifications'
+              },
+              grid: {
+                drawOnChartArea: false
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 11) OAIC Attack Types Chart
+    (function(){
+      const data = oaicAttackTypes;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicAttackTypesChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Attack Types Over Time</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      const datasets = [];
+      const attackColors = {
+        'ransomware': '#dc2626',
+        'phishing': '#ea580c',
+        'hacking': '#ca8a04',
+        'malware': '#16a34a',
+        'brute_force': '#0891b2',
+        'compromised_credentials': '#7c3aed'
+      };
+
+      for (const [attackType, values] of Object.entries(data.attack_types)) {
+        datasets.push({
+          label: attackType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+          data: values,
+          borderColor: attackColors[attackType] || colors.primary,
+          backgroundColor: (attackColors[attackType] || colors.primary) + '20',
+          fill: false,
+          tension: 0.3
+        });
+      }
+
+      new Chart(document.getElementById('oaicAttackTypesChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top'
+            }
+          }
+        }
+      });
+    })();
+
+    // 12) OAIC Top Sectors Chart
+    (function(){
+      const data = oaicSectors;
+      if (!data.sectors || data.sectors.length === 0) {
+        document.getElementById('oaicSectorsChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicSectorsChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: data.sectors,
+          datasets: [
+            {
+              label: 'OAIC Official Count',
+              data: data.oaic_counts,
+              backgroundColor: colors.primary,
+              borderColor: colors.primary,
+              borderWidth: 1
+            },
+            {
+              label: 'Database Count',
+              data: data.database_counts,
+              backgroundColor: colors.success,
+              borderColor: colors.success,
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Total Notifications (2019-2024)'
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 13) OAIC Individuals Affected Chart
+    (function(){
+      const data = oaicIndividualsAffected;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicIndividualsAffectedChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Individuals Affected Trends</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicIndividualsAffectedChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: [
+            {
+              label: 'OAIC Average Individuals Affected',
+              data: data.averages,
+              borderColor: colors.danger,
+              backgroundColor: colors.danger + '20',
+              fill: true,
+              tension: 0.3
+            },
+            {
+              label: 'OAIC Median Individuals Affected',
+              data: data.medians,
+              borderColor: colors.primary,
+              backgroundColor: colors.primary + '20',
+              fill: true,
+              tension: 0.3
+            },
+            {
+              label: 'Database Average Records Affected',
+              data: data.db_averages,
+              borderColor: colors.success,
+              backgroundColor: colors.success + '20',
+              fill: true,
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  let label = context.dataset.label || '';
+                  if (label) {
+                    label += ': ';
+                  }
+                  if (context.parsed.y !== null) {
+                    label += new Intl.NumberFormat('en-US').format(context.parsed.y);
+                  }
+                  return label;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              type: 'logarithmic',
+              title: {
+                display: true,
+                text: 'Number of Individuals (log scale)'
+              },
+              ticks: {
+                callback: function(value) {
+                  return new Intl.NumberFormat('en-US', { notation: 'compact' }).format(value);
+                }
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 14) Event Type Correlation Matrix
     (function(){
       const corr = eventTypeCorrelation;
       if (!corr.labels || corr.labels.length === 0) {
@@ -488,6 +1021,265 @@
       if (maxNegPair) stats.push(`Strongest negative: ${maxNegPair} (${maxNeg.toFixed(3)})`);
 
       document.getElementById('correlationMatrixStats').textContent = stats.join(' • ');
+    })();
+
+    // Maximum Severity Per Month Chart
+    (() => {
+      const maxSeverityData = {"months": ["2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11"], "severities": ["EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.UNKNOWN", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.MEDIUM", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.HIGH", "EventSeverity.CRITICAL", "EventSeverity.HIGH", "EventSeverity.HIGH"], "titles": ["Home Affairs Department cyber security breach compromises visa ...", "Controversial facial recognition startup Clearview AI hit by massive client data breach", "Federal court data breach sees names of protection visa applicants made public", "Australian University Event Registration System Data Breach", "Exclusive: 70 million records exposed in data leak from AFL fan website, cyber researchers claim", "Albanese government loses national security information in data hack", "NSW Health Accellion Data Breach", "NSW driver's licence data breach left Sydney health worker 'sickened'", "Emergence unveils in-house cyber incident and claims team ...", "Gravatar profile add-on leaks data on millions of users", "Ransomware Attack on B&R Enclosures", "TfNSW hit by another data breach", "Telstra explains how internal data breach exposed more than 130,000 customers' details", "Cyber attacks on rise as criminals target Australian agricultural ...", "China suspected of cyber attack on Western Australia's Parliament ...", "South Australian Government Payroll Data Breach via Frontier Software Ransomware Attack", "BLK Sport DarkSide Ransomware Attack", "NSW Health admits personal data accessed in Accellion breach", "SonicWall devices at risk of ransomware, ACSC rings alarm bells ...", "The Good Guys customers possibly affected by data breach at former third-party provider My Rewards", "Cybersecurity experts weigh in on GoDaddy data breach", "Finite Recruitment Data Breach", "Refer compo spreadsheet data breach to privacy watchdog: ACT firies' union", "Australian Healthcare Sector Targeted by Ransomware and Remote Access Tool Attacks", "Vinomofo did not protect personal information from security risks, Privacy Commissioner finds", "Suspected State-Sponsored Compromise of Australian Organisation's Infrastructure", "Toyota suspends domestic factory operations after suspected cyber attack", "Australian Healthcare Sector Targeted by Ransomware and Remote Access Tool Attacks", "Leak of Nauru Police Force Files Related to Australian Offshore Processing", "Royal Flying Doctors Service's Rapid Ransomware Recovery ...", "Woolworths MyDeal Data Breach", "A full timeline of the Medibank data leak", "AFP officer data leaked in cyber breach", "Cyber attack cripples Fire Rescue Victoria", "Privacy | NSW Health Pathology", "Data breach hits Victoria\u2019s revenue office", "Cyber Incident at Western Sydney University", "Pound Road Medical Center Ransomware Attack", "Latitude Financial cyber-attack worse than first thought with 14m ...", "Cyber Security Report 2022 - Australian Digital Health Agency", "Paramedics' mobile numbers 'exposed' in data breach", "Dymocks warns customers of data breach after account information leaked on dark web", "Pizza Hut Australia Data Breach", "TissuPath data breach victim upset by delayed notification", "Defence Housing Australia Third-Party Provider Data Breach", "Personal data of almost 200 patients exposed in hack of Melbourne hospital staff member\u2019s email", "MediSecure Ransomware Attack and Massive Health Data Breach", "Serious vulnerabilities in Atlassian products including Confluence ...", "ZircoDATA data breach | NSW Government", "Untitled Event", "Raft of Australian companies compromised in hosting service hack", "Valuation firm HTW suspended by banks after data breach", "BianLian Ransomware Attack on Insula Group", "Akira Ransomware Group Claims Attack on Panasonic Australia", "Exclusive: Rhysida ransomware gang claims hack on disability support organisation Engedi", "F5 Cybersecurity Breach Sparks National Security Concerns", "Dell allegedly breached twice in 1 weekend", "New Ransomware Group Sarcoma Targets Australian Companies ...", "Telstra employee and partner data breach: what you need to know", "Exclusive: Qilin ransomware operation claims hack of Aussie freight forwarder", "Freshwater Bay Primary School investigating major security breach ...", "List of Data Breaches and Cyber Attacks in Australia 2018-2025", "Vroom by YouX Fintech Data Breach", "AUD 500,000 Lost in Cyber Attack on Australian Superannuation ...", "Victorian hospital provider suffers alleged data breach | Information ...", "Government face $1 million ransom for cyber attack on health ...", "Mercer Super reports security breach after Australia Post Melbourne ...", "Privacy Policy | Australian Dental Association", "Ransomware Hits New Peak: Data Theft Nearly Doubles to 238TB ...", "Aussie Fluid Power hit by cyberattack as ransomware group Anubis ...", "Latest security alerts | ANZ"], "entities": ["Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity", "Unknown Entity"], "severity_numeric": [3, 3, 4, 3, 3, 3, 3, 3, 0, 3, 4, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 2, 4, 3, 3, 3, 4, 3, 4, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3, 3, 4, 3, 3], "avg_severity_numeric": [3.22, 3.0, 3.11, 3.0, 2.12, 2.33, 3.0, 2.56, 2.71, 2.0, 3.33, 2.75, 2.92, 2.67, 2.88, 2.4, 3.0, 2.75, 2.14, 3.0, 3.0, 2.6, 2.64, 2.62, 2.75, 2.43, 2.75, 3.0, 2.75, 2.0, 2.89, 2.71, 2.38, 2.4, 2.0, 2.62, 2.31, 2.33, 2.12, 2.75, 2.7, 2.58, 1.6, 2.67, 2.67, 2.25, 2.64, 2.48, 2.85, 2.69, 2.5, 3.04, 2.61, 2.55, 2.9, 2.71, 2.5, 2.19, 1.88, 2.6, 2.62, 1.93, 2.23, 2.4, 1.89, 2.25, 2.3, 2.44, 2.83, 2.33, 3.0]};
+      new Chart(document.getElementById('maxSeverityChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: maxSeverityData.months,
+          datasets: [{
+            label: 'Maximum Severity',
+            data: maxSeverityData.severity_numeric,
+            borderColor: '#dc2626',
+            backgroundColor: '#dc262620',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            borderWidth: 3
+          }, {
+            label: 'Average Severity',
+            data: maxSeverityData.avg_severity_numeric,
+            borderColor: '#f59e0b',
+            backgroundColor: '#f59e0b20',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 2,
+            borderDash: [5, 5]
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true, position: 'top' },
+            tooltip: {
+              callbacks: {
+                title: function(tooltipItems) {
+                  const index = tooltipItems[0].dataIndex;
+                  return maxSeverityData.titles[index] || 'Unknown Event';
+                },
+                label: function(tooltipItem) {
+                  const index = tooltipItem.dataIndex;
+                  return [
+                    `Entity: ${maxSeverityData.entities[index]}`,
+                    `Severity: ${maxSeverityData.severities[index]}`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              max: 4,
+              ticks: {
+                callback: function(value) {
+                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  return severityMap[value] || value;
+                }
+              },
+              title: { display: true, text: 'Severity Level' }
+            },
+            x: { title: { display: true, text: 'Month' } }
+          }
+        }
+      });
+    })();
+
+    // 12) Maximum Records Affected Per Month
+    (function() {
+      const maxRecordsData = maxRecordsPerMonth;
+      new Chart(document.getElementById('maxRecordsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: maxRecordsData.months,
+          datasets: [{
+            label: 'Maximum Records Affected',
+            data: maxRecordsData.max_records,
+            borderColor: '#dc2626',
+            backgroundColor: '#dc262620',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 6,
+            pointHoverRadius: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: function(tooltipItems) {
+                  const index = tooltipItems[0].dataIndex;
+                  return maxRecordsData.titles[index] || 'Unknown Event';
+                },
+                label: function(tooltipItem) {
+                  const index = tooltipItem.dataIndex;
+                  const records = maxRecordsData.max_records[index];
+                  return [
+                    `Entity: ${maxRecordsData.entities[index]}`,
+                    `Records: ${records.toLocaleString()}`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              type: 'logarithmic',
+              beginAtZero: true,
+              title: { display: true, text: 'Records Affected (log scale)' }
+            },
+            x: {
+              title: { display: true, text: 'Month' }
+            }
+          }
+        }
+      });
+    })();
+
+    // Severity by Industry Radar Chart
+    (() => {
+      const severityByIndustry = {"industries": ["Technology", "Healthcare", "Others", "Government & Defense", "Financial Services", "Education", "Transportation", "Infrastructure", "Professional Services", "Telecommunications", "Not for Profit"], "avg_severities": [2.630434782608696, 2.6296296296296298, 2.3220338983050848, 2.4464285714285716, 2.7111111111111112, 2.7142857142857144, 2.4074074074074074, 2.230769230769231, 1.75, 2.5, 2.8], "no_data": false};
+
+      // Check if there's no data (all Unknown industries)
+      if (severityByIndustry.no_data || !severityByIndustry.industries || severityByIndustry.industries.length === 0) {
+        const container = document.getElementById('severityByIndustryChart').parentElement;
+        container.innerHTML =
+          '<div class="chart-title">Average Severity by Industry</div>' +
+          '<div class="text-center text-muted mt-5">' +
+          '<p>No industry data available.</p>' +
+          '<p style="font-size: 0.9rem;">The enrichment process has not yet populated industry information for events.</p>' +
+          '</div>';
+        return;
+      }
+
+      new Chart(document.getElementById('severityByIndustryChart').getContext('2d'), {
+        type: 'radar',
+        data: {
+          labels: severityByIndustry.industries,
+          datasets: [{
+            label: 'Average Severity',
+            data: severityByIndustry.avg_severities,
+            backgroundColor: '#2563eb20',
+            borderColor: '#2563eb',
+            borderWidth: 2,
+            pointBackgroundColor: '#2563eb',
+            pointBorderColor: '#2563eb'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            r: {
+              beginAtZero: true,
+              max: 4,
+              ticks: {
+                callback: function(value) {
+                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  return severityMap[value] || value;
+                }
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // Severity by Attack Type Radar Chart
+    (() => {
+      const severityByAttackType = {"attack_types": ["Data Breach", "Denial Of Service", "Financial Fraud", "Infrastructure Attack", "Malware", "Other", "Phishing", "Ransomware", "State Sponsored Attack", "Supply Chain Attack", "Vulnerability Exploit"], "avg_severities": [2.7942708333333335, 2.8333333333333335, 3.3333333333333335, 3.0, 2.375, 0.5660377358490566, 2.375, 3.0710659898477157, 3.1176470588235294, 3.0, 3.0]};
+      new Chart(document.getElementById('severityByAttackTypeChart').getContext('2d'), {
+        type: 'radar',
+        data: {
+          labels: severityByAttackType.attack_types,
+          datasets: [{
+            label: 'Average Severity',
+            data: severityByAttackType.avg_severities,
+            backgroundColor: '#05966920',
+            borderColor: '#059669',
+            borderWidth: 2,
+            pointBackgroundColor: '#059669',
+            pointBorderColor: '#059669'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            r: {
+              beginAtZero: true,
+              max: 4,
+              ticks: {
+                callback: function(value) {
+                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  return severityMap[value] || value;
+                }
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 13) Average Records Affected by Attack Type
+    (function() {
+      const recordsData = recordsByAttackType;
+      new Chart(document.getElementById('recordsByAttackTypeChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: recordsData.attack_types,
+          datasets: [{
+            label: 'Average Records Affected',
+            data: recordsData.avg_records,
+            backgroundColor: '#7c3aed',
+            borderColor: '#7c3aed',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(tooltipItem) {
+                  const value = tooltipItem.raw;
+                  return `Average: ${value.toLocaleString(undefined, {maximumFractionDigits: 0})} records`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'logarithmic',
+              beginAtZero: true,
+              title: { display: true, text: 'Average Records Affected (log scale)' },
+              ticks: {
+                callback: function(value) {
+                  return value.toLocaleString();
+                }
+              }
+            },
+            y: {
+              title: { display: true, text: 'Attack Type' }
+            }
+          }
+        }
+      });
     })();
   </script>
 </body>
