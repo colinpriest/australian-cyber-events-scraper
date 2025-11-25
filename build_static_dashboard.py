@@ -20,6 +20,63 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import pandas as pd
+import numpy as np
+from scipy import stats
+
+ASD_VALID_STAKEHOLDER_CATEGORIES = [
+    "Member(s) of the public",
+    "Small organisation(s)",
+    "Sole traders",
+    "Medium-sized organisation(s)",
+    "Schools",
+    "Local government",
+    "State government",
+    "Academia/R&D",
+    "Large organisation(s)",
+    "Supply chain",
+    "Federal government",
+    "Government shared services",
+    "Regulated critical infrastructure",
+    "National security",
+    "Systems of National Significance"
+]
+
+ASD_STAKEHOLDER_GROUPS = {
+    "Member(s) of the public": ["Member(s) of the public"],
+    "Small organisation(s) / Sole traders": [
+        "Small organisation(s)",
+        "Sole traders"
+    ],
+    "Medium-sized organisation(s) / Schools / Local government": [
+        "Medium-sized organisation(s)",
+        "Schools",
+        "Local government"
+    ],
+    "State government / Academia/R&D / Large organisation(s) / Supply chain": [
+        "State government",
+        "Academia/R&D",
+        "Large organisation(s)",
+        "Supply chain"
+    ],
+    "Federal government / Government shared services / Regulated critical infrastructure": [
+        "Federal government",
+        "Government shared services",
+        "Regulated critical infrastructure"
+    ],
+    "National security / Systems of National Significance": [
+        "National security",
+        "Systems of National Significance"
+    ]
+}
+
+ASD_VALID_IMPACT_TYPES = [
+    "Sustained disruption of essential systems and associated services",
+    "Extensive compromise",
+    "Isolated compromise",
+    "Coordinated low-level malicious attack",
+    "Low-level malicious attack",
+    "Unsuccessful low-level malicious attack"
+]
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -43,11 +100,63 @@ def get_monthly_event_counts(conn: sqlite3.Connection, start_date: str, end_date
     rows = conn.execute(query, (start_date, end_date)).fetchall()
     months = [r['month'] for r in rows if r['month']]
     counts = [r['unique_events'] for r in rows if r['month']]
+
+    # Calculate overdispersion statistics
+    overdispersion_stats = {}
+    if len(counts) > 1:
+        counts_arr = np.array(counts)
+        mean_count = np.mean(counts_arr)
+        var_count = np.var(counts_arr, ddof=1)  # Sample variance
+
+        # Overdispersion parameter: φ = variance / mean
+        # φ ≈ 1 suggests Poisson, φ > 1 suggests Negative Binomial
+        overdispersion_param = var_count / mean_count if mean_count > 0 else 0
+
+        # Fit Poisson distribution (single parameter: λ = mean)
+        poisson_lambda = mean_count
+
+        # Fit Negative Binomial distribution
+        # Using method of moments: n = mean²/(variance - mean)
+        if var_count > mean_count:
+            nb_n = (mean_count ** 2) / (var_count - mean_count)
+            nb_p = mean_count / var_count
+        else:
+            # Fall back if variance <= mean (unusual for overdispersion)
+            nb_n = mean_count
+            nb_p = 0.5
+
+        # Goodness of fit test (chi-square)
+        # Create histogram bins
+        observed_freq, bin_edges = np.histogram(counts_arr, bins=min(10, len(counts)//2 + 1))
+
+        # Calculate expected frequencies for Poisson
+        poisson_expected = []
+        for i in range(len(bin_edges) - 1):
+            bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+            poisson_expected.append(len(counts) * stats.poisson.pmf(int(bin_center), poisson_lambda))
+
+        # Calculate expected frequencies for Negative Binomial
+        nb_expected = []
+        for i in range(len(bin_edges) - 1):
+            bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+            nb_expected.append(len(counts) * stats.nbinom.pmf(int(bin_center), nb_n, nb_p))
+
+        overdispersion_stats = {
+            'mean': round(mean_count, 2),
+            'variance': round(var_count, 2),
+            'overdispersion_param': round(overdispersion_param, 3),
+            'poisson_lambda': round(poisson_lambda, 2),
+            'nb_n': round(nb_n, 2),
+            'nb_p': round(nb_p, 3),
+            'interpretation': 'Negative Binomial' if overdispersion_param > 1.5 else 'Poisson' if overdispersion_param < 1.2 else 'Mixed'
+        }
+
     return {
         'months': months,
         'counts': counts,
         'total_events': sum(counts),
         'avg_per_month': (sum(counts) / len(counts)) if counts else 0,
+        'overdispersion': overdispersion_stats
     }
 
 
@@ -95,6 +204,29 @@ def get_monthly_severity_trends(conn: sqlite3.Connection, start_date: str, end_d
 
 
 def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    # First, get all records_affected values grouped by month for median calculation
+    detail_query = """
+        SELECT
+            strftime('%Y-%m', event_date) as month,
+            CAST(records_affected AS FLOAT) as records_affected
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND records_affected IS NOT NULL
+            AND CAST(records_affected AS INTEGER) > 0
+            AND event_date >= ?
+            AND event_date <= ?
+        ORDER BY month, records_affected
+    """
+    detail_rows = conn.execute(detail_query, (start_date, end_date)).fetchall()
+
+    # Group by month and calculate median
+    from collections import defaultdict
+    monthly_values = defaultdict(list)
+    for r in detail_rows:
+        if r['month']:
+            monthly_values[r['month']].append(r['records_affected'])
+
+    # Get aggregate stats per month
     query = """
         SELECT
             strftime('%Y-%m', event_date) as month,
@@ -112,17 +244,37 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
         ORDER BY month
     """
     rows = conn.execute(query, (start_date, end_date)).fetchall()
-    months, averages, ci, sample_sizes = [], [], [], []
+    months, averages, medians, ci, sample_sizes = [], [], [], [], []
     for r in rows:
         if not r['month']:
             continue
-        months.append(r['month'])
+        month = r['month']
+        months.append(month)
         avg = r['avg_records'] or 0
         averages.append(avg)
         sample_sizes.append(r['sample_size'] or 0)
         margin = avg * 0.2
         ci.append([max(0, avg - margin), avg + margin])
-    return {'months': months, 'averages': averages, 'confidence_intervals': ci, 'sample_sizes': sample_sizes}
+
+        # Calculate median for this month
+        values = sorted(monthly_values[month])
+        n = len(values)
+        if n > 0:
+            if n % 2 == 0:
+                median = (values[n//2 - 1] + values[n//2]) / 2
+            else:
+                median = values[n//2]
+            medians.append(median)
+        else:
+            medians.append(0)
+
+    return {
+        'months': months,
+        'averages': averages,
+        'medians': medians,
+        'confidence_intervals': ci,
+        'sample_sizes': sample_sizes
+    }
 
 
 def get_monthly_event_type_mix(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -186,22 +338,74 @@ def get_overall_event_type_mix(conn: sqlite3.Connection, start_date: str, end_da
 
 
 def get_entity_type_distribution(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """
+    Get entity type distribution based on victim_organization_industry field.
+    Maps detailed industry values to broader categories using the IndustryGroupings table.
+    """
+
+    # Load industry groupings from database
+    groupings_query = """
+        SELECT group_name, keywords, display_order
+        FROM IndustryGroupings
+        WHERE group_name != 'Others'
+        ORDER BY display_order
+    """
+    groupings = conn.execute(groupings_query).fetchall()
+
+    # Parse keywords from JSON and create mapping
+    category_mapping = {}
+    for group in groupings:
+        group_name = group['group_name']
+        keywords_json = group['keywords']
+        keywords = json.loads(keywords_json) if keywords_json else []
+        category_mapping[group_name] = keywords
+
+    # Query for industry event counts
     query = """
         SELECT
-            COALESCE(e.entity_type, 'Unknown') as entity_type,
-            COUNT(DISTINCT de.deduplicated_event_id) as linked_events,
-            COUNT(DISTINCT e.entity_id) as unique_entities
-        FROM EntitiesV2 e
-        INNER JOIN DeduplicatedEventEntities dee ON e.entity_id = dee.entity_id
-        INNER JOIN DeduplicatedEvents de ON dee.deduplicated_event_id = de.deduplicated_event_id
-        WHERE de.status = 'Active'
-            AND de.event_date >= ?
-            AND de.event_date <= ?
-        GROUP BY e.entity_type
-        ORDER BY linked_events DESC
+            COALESCE(victim_organization_industry, 'Unknown') as industry,
+            COUNT(DISTINCT deduplicated_event_id) as event_count
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND event_date >= ?
+            AND event_date <= ?
+        GROUP BY victim_organization_industry
+        ORDER BY event_count DESC
     """
     rows = conn.execute(query, (start_date, end_date)).fetchall()
-    types = [{'type': r['entity_type'], 'events': r['linked_events'], 'entities': r['unique_entities']} for r in rows]
+
+    # Count events by category
+    category_counts = {}
+    unknown_count = 0
+
+    for row in rows:
+        industry = row['industry']
+        count = row['event_count']
+
+        if industry == 'Unknown' or not industry:
+            unknown_count += count
+            continue
+
+        # Find matching category
+        matched = False
+        for category, keywords in category_mapping.items():
+            if any(keyword.lower() in industry.lower() for keyword in keywords):
+                category_counts[category] = category_counts.get(category, 0) + count
+                matched = True
+                break
+
+        if not matched:
+            # Add to "Others" category
+            category_counts['Others'] = category_counts.get('Others', 0) + count
+
+    # If there are unknown values, add them
+    if unknown_count > 0:
+        category_counts['Unknown'] = unknown_count
+
+    # Convert to list format expected by dashboard, sorted by count
+    types = [{'type': cat, 'events': count, 'entities': count}
+             for cat, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)]
+
     return {'types': types}
 
 
@@ -262,8 +466,9 @@ def _severity_to_numeric(severity: str) -> int:
 
 
 def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    """Get maximum severity event per month with entity details."""
-    query = """
+    """Get maximum and average severity per month with entity details."""
+    # Query for maximum severity
+    query_max = """
         SELECT
             strftime('%Y-%m', de.event_date) as month,
             de.severity,
@@ -277,7 +482,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             AND de.severity IS NOT NULL
             AND de.event_date >= ?
             AND de.event_date <= ?
-        ORDER BY de.event_date, 
+        ORDER BY de.event_date,
             CASE de.severity
                 WHEN 'Critical' THEN 1
                 WHEN 'EventSeverity.CRITICAL' THEN 1
@@ -290,7 +495,33 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
                 ELSE 5
             END
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+
+    # Query for average severity
+    query_avg = """
+        SELECT
+            strftime('%Y-%m', event_date) as month,
+            AVG(CASE severity
+                WHEN 'Critical' THEN 4
+                WHEN 'EventSeverity.CRITICAL' THEN 4
+                WHEN 'High' THEN 3
+                WHEN 'EventSeverity.HIGH' THEN 3
+                WHEN 'Medium' THEN 2
+                WHEN 'EventSeverity.MEDIUM' THEN 2
+                WHEN 'Low' THEN 1
+                WHEN 'EventSeverity.LOW' THEN 1
+                ELSE 0
+            END) as avg_severity_numeric
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND severity IS NOT NULL
+            AND event_date >= ?
+            AND event_date <= ?
+        GROUP BY month
+        ORDER BY month
+    """
+
+    # Get maximum severity per month
+    rows = conn.execute(query_max, (start_date, end_date)).fetchall()
 
     # Group by month and get the first (highest severity) event
     monthly_max = {}
@@ -298,7 +529,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
         month = row['month']
         if not month:
             continue
-        
+
         if month not in monthly_max:
             monthly_max[month] = {
                 'severity': row['severity'],
@@ -307,18 +538,28 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
                 'severity_numeric': _severity_to_numeric(row['severity'])
             }
 
+    # Get average severity per month
+    avg_rows = conn.execute(query_avg, (start_date, end_date)).fetchall()
+    monthly_avg = {}
+    for row in avg_rows:
+        month = row['month']
+        if month:
+            monthly_avg[month] = round(row['avg_severity_numeric'], 2)
+
     months = sorted(monthly_max.keys())
     severities = [monthly_max[month]['severity'] for month in months]
     titles = [monthly_max[month]['title'] for month in months]
     entities = [monthly_max[month]['entity_name'] for month in months]
     severity_numeric = [monthly_max[month]['severity_numeric'] for month in months]
+    avg_severity_numeric = [monthly_avg.get(month, 0) for month in months]
 
     return {
         'months': months,
         'severities': severities,
         'titles': titles,
         'entities': entities,
-        'severity_numeric': severity_numeric
+        'severity_numeric': severity_numeric,
+        'avg_severity_numeric': avg_severity_numeric
     }
 
 
@@ -373,50 +614,159 @@ def get_median_severity_per_month(conn: sqlite3.Connection, start_date: str, end
     }
 
 
-def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    """Get average severity by industry."""
+def get_maximum_records_affected_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get maximum records affected per month with event details.
+
+    Filters out unrealistic values (> 1 billion) to exclude data quality issues.
+    """
     query = """
         SELECT
-            COALESCE(e.industry, 'Unknown') as industry,
-            de.severity,
-            COUNT(*) as event_count
+            strftime('%Y-%m', de.event_date) as month,
+            de.title,
+            COALESCE(
+                e.entity_name,
+                JSON_EXTRACT(me.perplexity_enrichment_data, '$.formal_entity_name'),
+                'Unknown'
+            ) as entity_name,
+            CAST(de.records_affected AS INTEGER) as records_affected,
+            de.deduplicated_event_id
         FROM DeduplicatedEvents de
         LEFT JOIN DeduplicatedEventEntities dee ON de.deduplicated_event_id = dee.deduplicated_event_id
         LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
+        LEFT JOIN EnrichedEvents me ON de.master_enriched_event_id = me.enriched_event_id
         WHERE de.status = 'Active'
-            AND de.severity IS NOT NULL
+            AND de.records_affected IS NOT NULL
+            AND CAST(de.records_affected AS INTEGER) > 0
+            AND CAST(de.records_affected AS INTEGER) <= 1000000000
             AND de.event_date >= ?
             AND de.event_date <= ?
-        GROUP BY e.industry, de.severity
-        ORDER BY e.industry
+        ORDER BY de.event_date, CAST(de.records_affected AS INTEGER) DESC
     """
     rows = conn.execute(query, (start_date, end_date)).fetchall()
 
-    # Calculate weighted average severity by industry
-    industry_data = {}
+    # Get maximum record for each month
+    monthly_max = {}
+    for row in rows:
+        month = row['month']
+        if not month:
+            continue
+
+        if month not in monthly_max:
+            monthly_max[month] = {
+                'max_records': row['records_affected'],
+                'title': row['title'],
+                'entity_name': row['entity_name']
+            }
+        elif row['records_affected'] > monthly_max[month]['max_records']:
+            monthly_max[month] = {
+                'max_records': row['records_affected'],
+                'title': row['title'],
+                'entity_name': row['entity_name']
+            }
+
+    months = sorted(monthly_max.keys())
+    max_records = [monthly_max[month]['max_records'] for month in months]
+    titles = [monthly_max[month]['title'] or 'Unknown Event' for month in months]
+    entities = [monthly_max[month]['entity_name'] for month in months]
+
+    return {
+        'months': months,
+        'max_records': max_records,
+        'titles': titles,
+        'entities': entities
+    }
+
+
+def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get average severity by industry grouped into 12 higher-level categories."""
+
+    # Load industry groupings from database
+    groupings_query = """
+        SELECT group_name, keywords, display_order
+        FROM IndustryGroupings
+        WHERE group_name != 'Others'
+        ORDER BY display_order
+    """
+    groupings = conn.execute(groupings_query).fetchall()
+
+    # Parse keywords from JSON and create mapping
+    category_mapping = {}
+    for group in groupings:
+        group_name = group['group_name']
+        keywords_json = group['keywords']
+        keywords = json.loads(keywords_json) if keywords_json else []
+        category_mapping[group_name] = keywords
+
+    # Query for severity data by raw industry
+    query = """
+        SELECT
+            COALESCE(victim_organization_industry, 'Unknown') as industry,
+            severity,
+            COUNT(*) as event_count
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND severity IS NOT NULL
+            AND event_date >= ?
+            AND event_date <= ?
+        GROUP BY victim_organization_industry, severity
+        ORDER BY victim_organization_industry
+    """
+    rows = conn.execute(query, (start_date, end_date)).fetchall()
+
+    # Map raw industries to categories and calculate weighted average severity
+    category_data = {}
+    unknown_count = 0
+
     for row in rows:
         industry = row['industry']
         severity_numeric = _severity_to_numeric(row['severity'])
         count = row['event_count']
-        
-        if industry not in industry_data:
-            industry_data[industry] = {'total_severity': 0, 'total_count': 0}
-        
-        industry_data[industry]['total_severity'] += severity_numeric * count
-        industry_data[industry]['total_count'] += count
+
+        if industry == 'Unknown' or not industry:
+            unknown_count += count
+            continue
+
+        # Find matching category
+        matched = False
+        for category, keywords in category_mapping.items():
+            if any(keyword.lower() in industry.lower() for keyword in keywords):
+                if category not in category_data:
+                    category_data[category] = {'total_severity': 0, 'total_count': 0}
+
+                category_data[category]['total_severity'] += severity_numeric * count
+                category_data[category]['total_count'] += count
+                matched = True
+                break
+
+        if not matched:
+            # Add to "Others" category
+            if 'Others' not in category_data:
+                category_data['Others'] = {'total_severity': 0, 'total_count': 0}
+            category_data['Others']['total_severity'] += severity_numeric * count
+            category_data['Others']['total_count'] += count
+
+    # If all data is "Unknown", return empty lists to indicate no data
+    if len(category_data) == 0 and unknown_count > 0:
+        return {
+            'industries': [],
+            'avg_severities': [],
+            'no_data': True
+        }
 
     industries = []
     avg_severities = []
-    
-    for industry, data in industry_data.items():
+
+    # Calculate average severity for each category
+    for category, data in sorted(category_data.items(), key=lambda x: x[1]['total_count'], reverse=True):
         if data['total_count'] > 0:
             avg_severity = data['total_severity'] / data['total_count']
-            industries.append(industry)
+            industries.append(category)
             avg_severities.append(avg_severity)
 
     return {
         'industries': industries,
-        'avg_severities': avg_severities
+        'avg_severities': avg_severities,
+        'no_data': len(industries) == 0
     }
 
 
@@ -466,6 +816,49 @@ def get_severity_by_attack_type(conn: sqlite3.Connection, start_date: str, end_d
     return {
         'attack_types': attack_types,
         'avg_severities': avg_severities
+    }
+
+
+def get_records_affected_by_attack_type(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get average records affected by attack type.
+
+    Filters out unrealistic values (> 1 billion) to exclude data quality issues.
+    """
+    query = """
+        SELECT
+            COALESCE(event_type, 'Unknown') as attack_type,
+            CAST(records_affected AS FLOAT) as records_affected,
+            COUNT(*) as event_count,
+            SUM(CAST(records_affected AS FLOAT)) as total_records
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+            AND records_affected IS NOT NULL
+            AND CAST(records_affected AS INTEGER) > 0
+            AND CAST(records_affected AS INTEGER) <= 1000000000
+            AND event_date >= ?
+            AND event_date <= ?
+        GROUP BY event_type
+        ORDER BY total_records DESC
+    """
+    rows = conn.execute(query, (start_date, end_date)).fetchall()
+
+    attack_types = []
+    avg_records = []
+
+    for row in rows:
+        attack_type = row['attack_type']
+        # Clean up enum strings
+        if attack_type.startswith('CyberEventType.'):
+            attack_type = attack_type.replace('CyberEventType.', '').replace('_', ' ').title()
+
+        if row['event_count'] > 0:
+            avg = row['total_records'] / row['event_count']
+            attack_types.append(attack_type)
+            avg_records.append(avg)
+
+    return {
+        'attack_types': attack_types,
+        'avg_records': avg_records
     }
 
 
@@ -533,8 +926,14 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
     }
 
 
-def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Prepare data for OAIC vs Database comparison chart."""
+def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[Dict[str, Any]], end_date: str = None) -> Dict[str, Any]:
+    """Prepare data for OAIC vs Database comparison chart.
+
+    If end_date is provided and the latest period is partial, calculates a pro-rata estimate
+    for the full 6-month period.
+    """
+    from datetime import datetime
+
     # Create a mapping of OAIC data by period
     oaic_lookup = {}
     for record in oaic_data:
@@ -546,14 +945,19 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
             period_key = f"{year} {period}"
             oaic_lookup[period_key] = total_notifications
 
-    # Align database and OAIC data
-    periods = database_data['periods']
-    database_counts = database_data['database_counts']
+    # Align database and OAIC data (use union so OAIC-only periods still render)
+    db_periods = database_data.get('periods', [])
+    db_counts_map = {p: c for p, c in zip(db_periods, database_data.get('database_counts', []))}
+
+    all_periods = sorted(set(list(db_periods) + list(oaic_lookup.keys())))
+    periods = []
+    database_counts = []
     oaic_counts = []
 
-    for period in periods:
-        oaic_count = oaic_lookup.get(period, None)
-        oaic_counts.append(oaic_count)
+    for period in all_periods:
+        periods.append(period)
+        database_counts.append(db_counts_map.get(period))
+        oaic_counts.append(oaic_lookup.get(period))
 
     # Filter to only include periods where we have both datasets (from 2020 H1 onwards)
     filtered_periods = []
@@ -568,12 +972,240 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
             filtered_database.append(database_counts[i])
             filtered_oaic.append(oaic_counts[i])
 
+    # Calculate pro-rata estimate for partial periods
+    prorata_period = None
+    prorata_estimate = None
+    prorata_actual = None
+
+    if end_date and filtered_periods:
+        # Get the last period
+        last_period = filtered_periods[-1]
+        last_count = filtered_database[-1]
+
+        # Parse the period (e.g., "2025 H1")
+        parts = last_period.split()
+        if len(parts) == 2:
+            year = int(parts[0])
+            half = parts[1]  # H1 or H2
+
+            # Determine the period end date
+            if half == 'H1':
+                period_end = datetime(year, 6, 30)
+                period_start = datetime(year, 1, 1)
+            else:  # H2
+                period_end = datetime(year, 12, 31)
+                period_start = datetime(year, 7, 1)
+
+            # Parse the actual end date
+            actual_end = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Check if this is a partial period
+            if actual_end < period_end and actual_end >= period_start:
+                # Calculate months elapsed (as a fraction)
+                days_elapsed = (actual_end - period_start).days + 1
+                days_in_period = (period_end - period_start).days + 1
+                months_elapsed = (days_elapsed / days_in_period) * 6
+
+                # Calculate pro-rata estimate
+                if months_elapsed > 0 and last_count:
+                    prorata_factor = 6.0 / months_elapsed
+                    prorata_estimate = round(last_count * prorata_factor)
+                    prorata_actual = last_count
+                    prorata_period = last_period
+
     return {
         'periods': filtered_periods,
         'database_counts': filtered_database,
         'oaic_counts': filtered_oaic,
         'oaic_available': len([x for x in filtered_oaic if x is not None]),
-        'database_available': len([x for x in filtered_database if x is not None])
+        'database_available': len([x for x in filtered_database if x is not None]),
+        'prorata_period': prorata_period,
+        'prorata_estimate': prorata_estimate,
+        'prorata_actual': prorata_actual
+    }
+
+
+def prepare_oaic_cyber_incidents_data(oaic_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Prepare OAIC cyber incidents trends over time."""
+    from collections import defaultdict
+
+    # Group by year-period
+    periods = []
+    cyber_incidents = []
+    total_notifications = []
+
+    for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
+        year = record.get('year')
+        period = record.get('period')
+
+        if year and period:
+            period_key = f"{year} {period}"
+            periods.append(period_key)
+
+            # Get cyber incidents (prefer total over percentage calculation)
+            cyber_inc = record.get('cyber_incidents_total')
+            if not cyber_inc and record.get('cyber_incidents_percentage') and record.get('total_notifications'):
+                cyber_inc = round((record['cyber_incidents_percentage'] / 100) * record['total_notifications'])
+
+            cyber_incidents.append(cyber_inc)
+            total_notifications.append(record.get('total_notifications'))
+
+    return {
+        'periods': periods,
+        'cyber_incidents': cyber_incidents,
+        'total_notifications': total_notifications
+    }
+
+
+def prepare_oaic_attack_types_data(oaic_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Prepare OAIC attack types breakdown over time."""
+    periods = []
+    attack_types = {
+        'ransomware': [],
+        'phishing': [],
+        'hacking': [],
+        'malware': [],
+        'brute_force': [],
+        'compromised_credentials': []
+    }
+
+    for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
+        year = record.get('year')
+        period = record.get('period')
+
+        if year and period:
+            period_key = f"{year} {period}"
+            periods.append(period_key)
+
+            for attack_type in attack_types.keys():
+                attack_types[attack_type].append(record.get(attack_type))
+
+    return {
+        'periods': periods,
+        'attack_types': attack_types
+    }
+
+
+def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'instance/cyber_events.db') -> Dict[str, Any]:
+    """Prepare OAIC top sectors affected with database comparison (aggregated 2019-2024)."""
+    from collections import defaultdict
+    import sqlite3
+
+    sector_totals = defaultdict(int)
+
+    for record in oaic_data:
+        top_sectors = record.get('top_sectors', [])
+        for sector_entry in top_sectors:
+            sector = sector_entry.get('sector')
+            notifications = sector_entry.get('notifications', 0)
+            if sector and notifications:
+                sector_totals[sector] += notifications
+
+    # Sort by total notifications
+    sorted_sectors = sorted(sector_totals.items(), key=lambda x: x[1], reverse=True)
+
+    # Take top 10
+    top_10 = sorted_sectors[:10]
+
+    # Get database counts for 2019-2024
+    db_counts = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT victim_organization_industry, COUNT(*) as count
+            FROM DeduplicatedEvents
+            WHERE event_date >= '2019-01-01' AND event_date <= '2024-12-31'
+            AND victim_organization_industry IS NOT NULL
+            GROUP BY victim_organization_industry
+        """)
+        for row in cursor.fetchall():
+            db_counts[row[0]] = row[1]
+        conn.close()
+    except Exception as e:
+        print(f"Warning: Could not query database for sector counts: {e}")
+
+    # Map database industry names to OAIC sector names
+    industry_mapping = {
+        'Healthcare': 'Health',
+        'Government': 'Australian government',
+        'Finance': 'Finance',
+        'Retail': 'Retail',
+        'Education': 'Education'
+    }
+
+    # Build comparison data
+    sectors = [s[0] for s in top_10]
+    oaic_counts = [s[1] for s in top_10]
+    database_counts = []
+
+    for sector in sectors:
+        # Find matching database count
+        db_count = 0
+        for db_industry, oaic_sector in industry_mapping.items():
+            if sector == oaic_sector and db_industry in db_counts:
+                db_count = db_counts[db_industry]
+                break
+        database_counts.append(db_count)
+
+    return {
+        'sectors': sectors,
+        'oaic_counts': oaic_counts,
+        'database_counts': database_counts
+    }
+
+
+def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_path: str = 'instance/cyber_events.db') -> Dict[str, Any]:
+    """Prepare OAIC individuals affected trends with database comparison."""
+    import sqlite3
+
+    periods = []
+    averages = []
+    medians = []
+    db_averages = []
+
+    # Get database averages by half-year period
+    db_data = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                strftime('%Y', event_date) as year,
+                CASE WHEN CAST(strftime('%m', event_date) AS INTEGER) <= 6 THEN 'H1' ELSE 'H2' END as half,
+                AVG(records_affected) as avg_records
+            FROM DeduplicatedEvents
+            WHERE event_date >= '2019-01-01' AND event_date <= '2024-12-31'
+            AND records_affected IS NOT NULL
+            GROUP BY year, half
+            ORDER BY year, half
+        """)
+        for row in cursor.fetchall():
+            period_key = f"{row[0]} {row[1]}"
+            db_data[period_key] = row[2]
+        conn.close()
+    except Exception as e:
+        print(f"Warning: Could not query database for records affected: {e}")
+
+    for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
+        year = record.get('year')
+        period = record.get('period')
+
+        if year and period:
+            period_key = f"{year} {period}"
+            periods.append(period_key)
+
+            averages.append(record.get('individuals_affected_average'))
+            medians.append(record.get('individuals_affected_median'))
+
+            # Add database average for this period (or None if not available)
+            db_averages.append(db_data.get(period_key))
+
+    return {
+        'periods': periods,
+        'averages': averages,
+        'medians': medians,
+        'db_averages': db_averages
     }
 
 
@@ -625,11 +1257,12 @@ def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, An
     - Uses 10 equal-width bins from min to max (inclusive).
     - Estimates Negative Binomial dispersion k = mean^2 / (var - mean) when var > mean; else k = None.
     - Provides a model suggestion string.
+    - Includes overdispersion analysis from monthly_counts if available.
     """
     counts = [int(x) for x in monthly_counts.get('counts', []) if x is not None]
     n = len(counts)
     if n == 0:
-        return {'bins': [], 'frequencies': [], 'mean': 0, 'variance': 0, 'k_estimate': None, 'model': 'No data'}
+        return {'bins': [], 'frequencies': [], 'mean': 0, 'variance': 0, 'k_estimate': None, 'model': 'No data', 'overdispersion': {}}
 
     mean = sum(counts) / n
     variance = sum((c - mean) ** 2 for c in counts) / n if n > 0 else 0
@@ -665,6 +1298,9 @@ def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, An
         k_estimate = None
         model = 'Under-dispersed (not Poisson/NB)'
 
+    # Include overdispersion statistics if available from get_monthly_event_counts
+    overdispersion = monthly_counts.get('overdispersion', {})
+
     return {
         'bins': bins,
         'frequencies': freqs,
@@ -672,6 +1308,81 @@ def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, An
         'variance': variance,
         'k_estimate': k_estimate,
         'model': model,
+        'overdispersion': overdispersion,
+    }
+
+
+def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) -> Dict[str, Any]:
+    """Aggregate ASD risk classifications into a matrix by impact type and stakeholder groups."""
+    stakeholder_groups = list(ASD_STAKEHOLDER_GROUPS.keys())
+
+    def empty_matrix() -> Dict[str, Any]:
+        return {
+            'impact_types': ASD_VALID_IMPACT_TYPES,
+            'stakeholder_groups': stakeholder_groups,
+            'matrix': [
+                {'impact_type': impact, 'counts': {group: 0 for group in stakeholder_groups}}
+                for impact in ASD_VALID_IMPACT_TYPES
+            ],
+            'total_classifications': 0,
+            'max_value': 0,
+            'year': year,
+        }
+
+    try:
+        cursor = conn.cursor()
+        params: List[Any] = []
+        base_sql = """
+            SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count
+            FROM ASDRiskClassifications arc
+            LEFT JOIN DeduplicatedEvents de ON arc.deduplicated_event_id = de.deduplicated_event_id
+        """
+        where_clauses = []
+
+        if year:
+            where_clauses.append("de.event_date IS NOT NULL")
+            where_clauses.append("CAST(strftime('%Y', de.event_date) AS INTEGER) = ?")
+            params.append(year)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        query = f"{base_sql} {where_sql} GROUP BY arc.impact_type, arc.primary_stakeholder_category"
+        rows = cursor.execute(query, params).fetchall()
+    except Exception:
+        return empty_matrix()
+
+    if not rows:
+        return empty_matrix()
+
+    valid_stakeholders = {cat for cats in ASD_STAKEHOLDER_GROUPS.values() for cat in cats}
+    count_map: Dict[tuple, int] = {}
+    for row in rows:
+        impact = row['impact_type']
+        stakeholder = row['primary_stakeholder_category']
+        count = int(row['count'])
+        if impact not in ASD_VALID_IMPACT_TYPES or stakeholder not in valid_stakeholders:
+            continue
+        count_map[(impact, stakeholder)] = count
+
+    matrix = []
+    max_value = 0
+    total_classifications = 0
+
+    for impact in ASD_VALID_IMPACT_TYPES:
+        row_counts: Dict[str, int] = {}
+        for group_name, categories in ASD_STAKEHOLDER_GROUPS.items():
+            group_total = sum(count_map.get((impact, category), 0) for category in categories)
+            row_counts[group_name] = group_total
+            max_value = max(max_value, group_total)
+            total_classifications += group_total
+        matrix.append({'impact_type': impact, 'counts': row_counts})
+
+    return {
+        'impact_types': ASD_VALID_IMPACT_TYPES,
+        'stakeholder_groups': stakeholder_groups,
+        'matrix': matrix,
+        'total_classifications': total_classifications,
+        'max_value': max_value,
+        'year': year,
     }
 
 
@@ -686,11 +1397,19 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     rh = json.dumps(data['records_histogram'])
     mspm = json.dumps(data['max_severity_per_month'])
     medspm = json.dumps(data['median_severity_per_month'])
+    mrpm = json.dumps(data['max_records_per_month'])
     sbi = json.dumps(data['severity_by_industry'])
     sbat = json.dumps(data['severity_by_attack_type'])
+    rbat = json.dumps(data['records_by_attack_type'])
     mcs = json.dumps(data['monthly_counts_stats'])
     etc = json.dumps(data['event_type_correlation'])
     oaic_comp = json.dumps(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
+    oaic_ci = json.dumps(data.get('oaic_cyber_incidents', {'periods': [], 'cyber_incidents': [], 'total_notifications': []}))
+    oaic_at = json.dumps(data.get('oaic_attack_types', {'periods': [], 'attack_types': {}}))
+    oaic_sec = json.dumps(data.get('oaic_sectors', {'sectors': [], 'oaic_counts': [], 'database_counts': []}))
+    oaic_ind_aff = json.dumps(data.get('oaic_individuals_affected', {'periods': [], 'averages': [], 'medians': [], 'db_averages': []}))
+    asd_all = json.dumps(data.get('asd_risk_all', {}))
+    asd_current = json.dumps(data.get('asd_risk_current', {}))
 
     template = """<!DOCTYPE html>
 <html lang="en">
@@ -706,6 +1425,9 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     .chart-container { background: white; border-radius: 12px; padding: 1.25rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 2rem; height: 380px; }
     .chart-title { font-size: 1.1rem; font-weight: 600; color: #374151; margin-bottom: 1rem; text-align: center; }
     .last-updated { color: #e5e7eb; font-size: 0.9rem; }
+    .risk-matrix table { font-size: 0.9rem; }
+    .risk-matrix .impact-label { width: 260px; text-align: left; font-weight: 600; }
+    .risk-matrix .group-header { white-space: normal; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
@@ -767,8 +1489,14 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Maximum Severity Per Month</div>
+          <div class="chart-title">Severity per Month</div>
           <canvas id="maxSeverityChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Maximum Records Affected Per Month</div>
+          <canvas id="maxRecordsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
@@ -785,7 +1513,14 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
+          <div class="chart-title">Average Records Affected by Attack Type</div>
+          <canvas id="recordsByAttackTypeChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container" style="height: 440px;">
           <div class="chart-title">Histogram of Monthly Unique Event Counts</div>
+          <div id="monthlyCountsSubtitle" class="chart-subtitle" style="font-size: 0.95rem; color: #6b7280; margin-top: -8px; margin-bottom: 8px;"></div>
           <canvas id="monthlyCountsHistChart"></canvas>
           <div id="monthlyCountsStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
@@ -795,6 +1530,48 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           <div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>
           <canvas id="oaicComparisonChart"></canvas>
           <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>
+          <canvas id="oaicCyberIncidentsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Attack Types Over Time</div>
+          <canvas id="oaicAttackTypesChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>
+          <canvas id="oaicSectorsChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC Individuals Affected Trends</div>
+          <canvas id="oaicIndividualsAffectedChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container risk-matrix" style="height: auto;">
+          <div class="chart-title d-flex justify-content-between align-items-center">
+            <span>ASD Risk Matrix (All Years)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdAllTotal">0</span></span>
+          </div>
+          <div id="asdRiskMatrixAll"></div>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container risk-matrix" style="height: auto;">
+          <div class="chart-title d-flex justify-content-between align-items-center">
+            <span>ASD Risk Matrix (Current Year)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdCurrentTotal">0</span></span>
+          </div>
+          <div id="asdRiskMatrixCurrent"></div>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
@@ -816,13 +1593,22 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const overallEventTypeMix = __OETM__;
     const entityTypes = __ENT__;
     const recordsHistogram = __RH__;
+    const maxRecordsPerMonth = __MRP__;
+    const recordsByAttackType = __RBAT__;
     const monthlyCountsStats = __MCS__;
     const eventTypeCorrelation = __ETC__;
     const oaicComparison = __OAIC_COMP__;
+    const oaicCyberIncidents = __OAIC_CI__;
+    const oaicAttackTypes = __OAIC_AT__;
+    const oaicSectors = __OAIC_SEC__;
+    const oaicIndividualsAffected = __OAIC_IND_AFF__;
+    const asdRiskAll = __ASD_ALL__;
+    const asdRiskCurrent = __ASD_CURR__;
 
     const colors = {
       primary: '#2563eb',
       secondary: '#10b981',
+      success: '#10b981',
       warning: '#f59e0b',
       danger: '#ef4444',
       info: '#06b6d4',
@@ -831,26 +1617,122 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       }
     };
 
-    // 1) Monthly Trends (line)
-    new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
-      type: 'line',
-      data: {
-        labels: monthlyCounts.months,
-        datasets: [{
-          label: 'Unique Events',
-          data: monthlyCounts.counts,
-          borderColor: colors.primary,
-          backgroundColor: '#2563eb20',
-          fill: true,
-          tension: 0.4,
-        }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }},
-        scales: { y: { beginAtZero: true }, x: { title: { display: true, text: 'Month' }}}
+    function renderRiskMatrix(targetId, matrixData, totalId) {
+      const container = document.getElementById(targetId);
+      const totalElement = totalId ? document.getElementById(totalId) : null;
+      if (!container) return;
+
+      if (!matrixData || !Array.isArray(matrixData.matrix) || matrixData.matrix.length === 0) {
+        container.innerHTML = '<p class="text-muted mb-0">No ASD risk classifications available.</p>';
+        if (totalElement) totalElement.textContent = '0';
+        return;
       }
-    });
+
+      const groups = matrixData.stakeholder_groups || [];
+      const matrixRows = matrixData.matrix;
+      const maxValue = matrixData.max_value || 0;
+
+      const colorForValue = (value) => {
+        if (!value || !maxValue) return '';
+        const opacity = 0.18 + 0.72 * (value / maxValue);
+        const textColor = opacity > 0.45 ? '#ffffff' : '#111827';
+        return `background-color: rgba(37, 99, 235, ${opacity.toFixed(3)}); color: ${textColor};`;
+      };
+
+      let html = '<div class="table-responsive"><table class="table table-sm table-bordered align-middle text-center mb-1">';
+      html += '<thead><tr><th class="text-start">Impact Type</th>';
+      groups.forEach(group => { html += `<th class="group-header">${group}</th>`; });
+      html += '</tr></thead><tbody>';
+
+      matrixRows.forEach(row => {
+        html += `<tr><th scope="row" class="text-start impact-label">${row.impact_type}</th>`;
+        groups.forEach(group => {
+          const value = (row.counts && row.counts[group]) ? row.counts[group] : 0;
+          const display = value > 0 ? value : '';
+          const style = colorForValue(value);
+          html += `<td style="${style}">${display}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table></div>';
+      container.innerHTML = html;
+
+      if (totalElement) {
+        totalElement.textContent = (matrixData.total_classifications || 0).toLocaleString();
+      }
+    }
+
+    renderRiskMatrix('asdRiskMatrixAll', asdRiskAll, 'asdAllTotal');
+    renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
+
+    // 1) Monthly Trends (line) with trend line
+    (function() {
+      const counts = monthlyCounts.counts;
+      const n = counts.length;
+
+      // Calculate linear regression for trend line
+      let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+      for (let i = 0; i < n; i++) {
+        sumX += i;
+        sumY += counts[i];
+        sumXY += i * counts[i];
+        sumXX += i * i;
+      }
+
+      const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+
+      // Generate trend line data
+      const trendLine = [];
+      for (let i = 0; i < n; i++) {
+        trendLine.push(slope * i + intercept);
+      }
+
+      new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: monthlyCounts.months,
+          datasets: [
+            {
+              label: 'Unique Events',
+              data: counts,
+              borderColor: colors.primary,
+              backgroundColor: '#2563eb20',
+              fill: true,
+              tension: 0.4,
+              order: 2
+            },
+            {
+              label: 'Trend',
+              data: trendLine,
+              borderColor: '#dc2626',
+              backgroundColor: 'transparent',
+              borderWidth: 2,
+              borderDash: [5, 5],
+              fill: false,
+              tension: 0,
+              pointRadius: 0,
+              order: 1
+            }
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            }
+          },
+          scales: {
+            y: { beginAtZero: true },
+            x: { title: { display: true, text: 'Month' }}
+          }
+        }
+      });
+    })();
 
     // 2) Severity Trends (stacked bar)
     const sevDatasets = Object.keys(severityTrends.data).map(sev => ({
@@ -872,19 +1754,51 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       }
     });
 
-    // 3) Records Affected (line, log scale)
+    // 3) Records Affected (line, log scale) with Average and Median
     new Chart(document.getElementById('recordsAffectedChart').getContext('2d'), {
       type: 'line',
-      data: { labels: recordsAffected.months, datasets: [{
-        label: 'Average Records Affected', data: recordsAffected.averages,
-        borderColor: colors.secondary, backgroundColor: '#10b98120', fill: false, tension: 0.4
-      }]},
+      data: {
+        labels: recordsAffected.months,
+        datasets: [
+          {
+            label: 'Average Records Affected',
+            data: recordsAffected.averages,
+            borderColor: colors.secondary,
+            backgroundColor: '#10b98120',
+            fill: false,
+            tension: 0.4,
+            borderWidth: 2
+          },
+          {
+            label: 'Median Records Affected',
+            data: recordsAffected.medians,
+            borderColor: colors.primary,
+            backgroundColor: '#2563eb20',
+            fill: false,
+            tension: 0.4,
+            borderWidth: 2,
+            borderDash: [5, 5]
+          }
+        ]
+      },
       options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }},
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top'
+          }
+        },
         scales: {
-          y: { type: 'logarithmic', beginAtZero: true, title: { display: true, text: 'Records (log)' }},
-          x: { title: { display: true, text: 'Month' }}
+          y: {
+            type: 'logarithmic',
+            beginAtZero: true,
+            title: { display: true, text: 'Records (log)' }
+          },
+          x: {
+            title: { display: true, text: 'Month' }
+          }
         }
       }
     });
@@ -956,12 +1870,49 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     });
     (function(){
       const s = monthlyCountsStats;
-      const lines = [];
-      lines.push(`Mean: ${s.mean?.toFixed ? s.mean.toFixed(2) : s.mean}`);
-      lines.push(`Variance: ${s.variance?.toFixed ? s.variance.toFixed(2) : s.variance}`);
-      if (s.k_estimate) lines.push(`NB dispersion k (est.): ${s.k_estimate.toFixed ? s.k_estimate.toFixed(2) : s.k_estimate}`);
-      lines.push(`Model: ${s.model}`);
-      document.getElementById('monthlyCountsStats').textContent = lines.join(' • ');
+      const od = s.overdispersion || {};
+      const statsEl = document.getElementById('monthlyCountsStats');
+      const subtitleEl = document.getElementById('monthlyCountsSubtitle');
+
+      // Calculate and display overdispersion percentage in subtitle
+      const mean = od.mean || s.mean;
+      const variance = od.variance || s.variance;
+      if (mean && variance && mean > 0) {
+        const overdispersionPct = ((variance - mean) / mean * 100).toFixed(1);
+        if (variance > mean) {
+          subtitleEl.textContent = `Overdispersion: +${overdispersionPct}% vs Poisson`;
+        } else if (variance < mean) {
+          subtitleEl.textContent = `Underdispersion: ${overdispersionPct}% vs Poisson`;
+        } else {
+          subtitleEl.textContent = `Dispersion: 0% vs Poisson (perfect match)`;
+        }
+      }
+
+      // Create formatted display with overdispersion analysis
+      if (od.overdispersion_param) {
+        const phi = od.overdispersion_param;
+        const interpretation = od.interpretation || s.model;
+
+        statsEl.innerHTML = `
+          <div style="font-weight: 600; margin-bottom: 4px;">
+            Overdispersion Analysis: φ = ${phi} (${interpretation})
+          </div>
+          <div style="font-size: 0.85rem;">
+            Mean: ${od.mean} • Variance: ${od.variance} •
+            ${phi > 1.5 ? `Negative Binomial (n=${od.nb_n}, p=${od.nb_p})` :
+              phi < 1.2 ? `Poisson (λ=${od.poisson_lambda})` :
+              'Mixed distribution'}
+          </div>
+        `;
+      } else {
+        // Fallback to old format if overdispersion not available
+        const lines = [];
+        lines.push(`Mean: ${s.mean?.toFixed ? s.mean.toFixed(2) : s.mean}`);
+        lines.push(`Variance: ${s.variance?.toFixed ? s.variance.toFixed(2) : s.variance}`);
+        if (s.k_estimate) lines.push(`NB dispersion k (est.): ${s.k_estimate.toFixed ? s.k_estimate.toFixed(2) : s.k_estimate}`);
+        lines.push(`Model: ${s.model}`);
+        statsEl.textContent = lines.join(' • ');
+      }
     })();
 
     // 9) OAIC Comparison Chart
@@ -997,6 +1948,26 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           tension: 0.1,
           pointRadius: 5,
           spanGaps: false  // Don't connect points where data is missing
+        });
+      }
+
+      // Add pro-rata estimate if available
+      if (oaic.prorata_estimate && oaic.prorata_period) {
+        // Create array with null values except for the last period
+        const prorataData = oaic.periods.map((p, idx) =>
+          (p === oaic.prorata_period && idx === oaic.periods.length - 1) ? oaic.prorata_estimate : null
+        );
+
+        datasets.push({
+          label: 'Estimated Full Period (Pro-rata)',
+          data: prorataData,
+          borderColor: colors.secondary,
+          backgroundColor: colors.secondary,
+          fill: false,
+          tension: 0,
+          pointRadius: 8,
+          pointStyle: 'triangle',
+          showLine: false  // Don't draw lines between points
         });
       }
 
@@ -1070,10 +2041,273 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         stats.push('OAIC: No data available');
       }
 
+      // Add pro-rata estimate information if available
+      if (oaic.prorata_estimate && oaic.prorata_period) {
+        stats.push(`${oaic.prorata_period} (partial): ${oaic.prorata_actual} → Est. ${oaic.prorata_estimate}`);
+      }
+
       document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
     })();
 
-    // 10) Event Type Correlation Matrix
+    // 10) OAIC Cyber Incidents Chart
+    (function(){
+      const data = oaicCyberIncidents;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicCyberIncidentsChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicCyberIncidentsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: [
+            {
+              label: 'Cyber Incidents',
+              data: data.cyber_incidents,
+              borderColor: colors.danger,
+              backgroundColor: colors.danger + '20',
+              fill: true,
+              tension: 0.3,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Total Notifications',
+              data: data.total_notifications,
+              borderColor: colors.primary,
+              backgroundColor: colors.primary + '20',
+              fill: true,
+              tension: 0.3,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Cyber Incidents'
+              }
+            },
+            y1: {
+              type: 'linear',
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Total Notifications'
+              },
+              grid: {
+                drawOnChartArea: false
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 11) OAIC Attack Types Chart
+    (function(){
+      const data = oaicAttackTypes;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicAttackTypesChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Attack Types Over Time</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      const datasets = [];
+      const attackColors = {
+        'ransomware': '#dc2626',
+        'phishing': '#ea580c',
+        'hacking': '#ca8a04',
+        'malware': '#16a34a',
+        'brute_force': '#0891b2',
+        'compromised_credentials': '#7c3aed'
+      };
+
+      for (const [attackType, values] of Object.entries(data.attack_types)) {
+        datasets.push({
+          label: attackType.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase()),
+          data: values,
+          borderColor: attackColors[attackType] || colors.primary,
+          backgroundColor: (attackColors[attackType] || colors.primary) + '20',
+          fill: false,
+          tension: 0.3
+        });
+      }
+
+      new Chart(document.getElementById('oaicAttackTypesChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: datasets
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top'
+            }
+          }
+        }
+      });
+    })();
+
+    // 12) OAIC Top Sectors Chart
+    (function(){
+      const data = oaicSectors;
+      if (!data.sectors || data.sectors.length === 0) {
+        document.getElementById('oaicSectorsChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Top 10 Affected Sectors (2019-2024)</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicSectorsChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: data.sectors,
+          datasets: [
+            {
+              label: 'OAIC Official Count',
+              data: data.oaic_counts,
+              backgroundColor: colors.primary,
+              borderColor: colors.primary,
+              borderWidth: 1
+            },
+            {
+              label: 'Database Count',
+              data: data.database_counts,
+              backgroundColor: colors.success,
+              borderColor: colors.success,
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Total Notifications (2019-2024)'
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 13) OAIC Individuals Affected Chart
+    (function(){
+      const data = oaicIndividualsAffected;
+      if (!data.periods || data.periods.length === 0) {
+        document.getElementById('oaicIndividualsAffectedChart').parentElement.innerHTML =
+          '<div class="chart-title">OAIC Individuals Affected Trends</div>' +
+          '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
+        return;
+      }
+
+      new Chart(document.getElementById('oaicIndividualsAffectedChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: data.periods,
+          datasets: [
+            {
+              label: 'OAIC Average Individuals Affected',
+              data: data.averages,
+              borderColor: colors.danger,
+              backgroundColor: colors.danger + '20',
+              fill: true,
+              tension: 0.3
+            },
+            {
+              label: 'OAIC Median Individuals Affected',
+              data: data.medians,
+              borderColor: colors.primary,
+              backgroundColor: colors.primary + '20',
+              fill: true,
+              tension: 0.3
+            },
+            {
+              label: 'Database Average Records Affected',
+              data: data.db_averages,
+              borderColor: colors.success,
+              backgroundColor: colors.success + '20',
+              fill: true,
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  let label = context.dataset.label || '';
+                  if (label) {
+                    label += ': ';
+                  }
+                  if (context.parsed.y !== null) {
+                    label += new Intl.NumberFormat('en-US').format(context.parsed.y);
+                  }
+                  return label;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              type: 'logarithmic',
+              title: {
+                display: true,
+                text: 'Number of Individuals (log scale)'
+              },
+              ticks: {
+                callback: function(value) {
+                  return new Intl.NumberFormat('en-US', { notation: 'compact' }).format(value);
+                }
+              }
+            }
+          }
+        }
+      });
+    })();
+
+    // 14) Event Type Correlation Matrix
     (function(){
       const corr = eventTypeCorrelation;
       if (!corr.labels || corr.labels.length === 0) {
@@ -1217,14 +2451,26 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             fill: false,
             tension: 0.4,
             pointRadius: 6,
-            pointHoverRadius: 8
+            pointHoverRadius: 8,
+            borderWidth: 3
+          }, {
+            label: 'Average Severity',
+            data: maxSeverityData.avg_severity_numeric,
+            borderColor: '#f59e0b',
+            backgroundColor: '#f59e0b20',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            borderWidth: 2,
+            borderDash: [5, 5]
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { display: false },
+            legend: { display: true, position: 'top' },
             tooltip: {
               callbacks: {
                 title: function(tooltipItems) {
@@ -1259,9 +2505,76 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       });
     })();
 
+    // 12) Maximum Records Affected Per Month
+    (function() {
+      const maxRecordsData = maxRecordsPerMonth;
+      new Chart(document.getElementById('maxRecordsChart').getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: maxRecordsData.months,
+          datasets: [{
+            label: 'Maximum Records Affected',
+            data: maxRecordsData.max_records,
+            borderColor: '#dc2626',
+            backgroundColor: '#dc262620',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 6,
+            pointHoverRadius: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: function(tooltipItems) {
+                  const index = tooltipItems[0].dataIndex;
+                  return maxRecordsData.titles[index] || 'Unknown Event';
+                },
+                label: function(tooltipItem) {
+                  const index = tooltipItem.dataIndex;
+                  const records = maxRecordsData.max_records[index];
+                  return [
+                    `Entity: ${maxRecordsData.entities[index]}`,
+                    `Records: ${records.toLocaleString()}`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              type: 'logarithmic',
+              beginAtZero: true,
+              title: { display: true, text: 'Records Affected (log scale)' }
+            },
+            x: {
+              title: { display: true, text: 'Month' }
+            }
+          }
+        }
+      });
+    })();
+
     // Severity by Industry Radar Chart
     (() => {
       const severityByIndustry = __SBI__;
+
+      // Check if there's no data (all Unknown industries)
+      if (severityByIndustry.no_data || !severityByIndustry.industries || severityByIndustry.industries.length === 0) {
+        const container = document.getElementById('severityByIndustryChart').parentElement;
+        container.innerHTML =
+          '<div class="chart-title">Average Severity by Industry</div>' +
+          '<div class="text-center text-muted mt-5">' +
+          '<p>No industry data available.</p>' +
+          '<p style="font-size: 0.9rem;">The enrichment process has not yet populated industry information for events.</p>' +
+          '</div>';
+        return;
+      }
+
       new Chart(document.getElementById('severityByIndustryChart').getContext('2d'), {
         type: 'radar',
         data: {
@@ -1332,6 +2645,55 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         }
       });
     })();
+
+    // 13) Average Records Affected by Attack Type
+    (function() {
+      const recordsData = recordsByAttackType;
+      new Chart(document.getElementById('recordsByAttackTypeChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: recordsData.attack_types,
+          datasets: [{
+            label: 'Average Records Affected',
+            data: recordsData.avg_records,
+            backgroundColor: '#7c3aed',
+            borderColor: '#7c3aed',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function(tooltipItem) {
+                  const value = tooltipItem.raw;
+                  return `Average: ${value.toLocaleString(undefined, {maximumFractionDigits: 0})} records`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'logarithmic',
+              beginAtZero: true,
+              title: { display: true, text: 'Average Records Affected (log scale)' },
+              ticks: {
+                callback: function(value) {
+                  return value.toLocaleString();
+                }
+              }
+            },
+            y: {
+              title: { display: true, text: 'Attack Type' }
+            }
+          }
+        }
+      });
+    })();
   </script>
 </body>
 </html>
@@ -1349,11 +2711,19 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__RH__', rh)
             .replace('__MSPM__', mspm)
             .replace('__MEDSPM__', medspm)
+            .replace('__MRP__', mrpm)
             .replace('__SBI__', sbi)
             .replace('__SBAT__', sbat)
+            .replace('__RBAT__', rbat)
             .replace('__MCS__', mcs)
             .replace('__ETC__', etc)
             .replace('__OAIC_COMP__', oaic_comp)
+            .replace('__OAIC_CI__', oaic_ci)
+            .replace('__OAIC_AT__', oaic_at)
+            .replace('__OAIC_SEC__', oaic_sec)
+            .replace('__OAIC_IND_AFF__', oaic_ind_aff)
+            .replace('__ASD_ALL__', asd_all)
+            .replace('__ASD_CURR__', asd_current)
            )
 
 
@@ -1365,6 +2735,7 @@ def main():
 
     start_date = '2020-01-01'
     end_date = date.today().strftime('%Y-%m-%d')
+    current_year = date.today().year
 
     if not os.path.exists(args.db_path):
         raise FileNotFoundError(f'Database not found: {args.db_path}')
@@ -1381,10 +2752,16 @@ def main():
 
         # Get half-yearly database counts for OAIC comparison
         database_half_yearly = get_half_yearly_database_counts(conn, start_date, end_date)
-        oaic_comparison = prepare_oaic_comparison_data(database_half_yearly, oaic_data)
+        oaic_comparison = prepare_oaic_comparison_data(database_half_yearly, oaic_data, end_date)
+
+        # Prepare additional OAIC data for new charts
+        oaic_cyber_incidents = prepare_oaic_cyber_incidents_data(oaic_data)
+        oaic_attack_types = prepare_oaic_attack_types_data(oaic_data)
+        oaic_sectors = prepare_oaic_sectors_data(oaic_data)
+        oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data)
 
         event_type_mix = get_monthly_event_type_mix(conn, start_date, end_date)
-        
+
         data = {
             'monthly_counts': monthly_counts,
             'severity_trends': get_monthly_severity_trends(conn, start_date, end_date),
@@ -1395,11 +2772,19 @@ def main():
             'records_histogram': get_records_affected_histogram(conn, start_date, end_date),
             'max_severity_per_month': get_maximum_severity_per_month(conn, start_date, end_date),
             'median_severity_per_month': get_median_severity_per_month(conn, start_date, end_date),
+            'max_records_per_month': get_maximum_records_affected_per_month(conn, start_date, end_date),
             'severity_by_industry': get_severity_by_industry(conn, start_date, end_date),
             'severity_by_attack_type': get_severity_by_attack_type(conn, start_date, end_date),
+            'records_by_attack_type': get_records_affected_by_attack_type(conn, start_date, end_date),
             'monthly_counts_stats': compute_monthly_counts_stats(monthly_counts),
             'event_type_correlation': compute_event_type_correlation_matrix(event_type_mix),
             'oaic_comparison': oaic_comparison,
+            'oaic_cyber_incidents': oaic_cyber_incidents,
+            'oaic_attack_types': oaic_attack_types,
+            'oaic_sectors': oaic_sectors,
+            'oaic_individuals_affected': oaic_individuals_affected,
+            'asd_risk_all': get_asd_risk_matrix(conn),
+            'asd_risk_current': get_asd_risk_matrix(conn, current_year),
         }
 
     html = build_html(data, start_date, end_date)
