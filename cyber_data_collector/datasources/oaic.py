@@ -57,13 +57,16 @@ class OAICDataSource(DataSource):
                 if pub_date_str:
                     try:
                         from dateutil.parser import parse as dateutil_parse
+                        from dateutil.relativedelta import relativedelta
                         pub_date = dateutil_parse(pub_date_str)
                         pub_date_only = pub_date.date()
-                        range_start = date_range.start_date.date() if hasattr(date_range.start_date, 'date') else date_range.start_date
+                        # Expand to 3-month window to catch late-reported events
+                        range_start_raw = date_range.start_date.date() if hasattr(date_range.start_date, 'date') else date_range.start_date
+                        range_start = range_start_raw - relativedelta(months=2)
                         range_end = date_range.end_date.date() if hasattr(date_range.end_date, 'date') else date_range.end_date
 
                         if not (range_start <= pub_date_only <= range_end):
-                            self.logger.debug(f"OAIC article outside date range ({pub_date_only}): {link_info['text'][:50]}...")
+                            self.logger.debug(f"OAIC article outside 3-month range ({pub_date_only}): {link_info['text'][:50]}...")
                             continue
                     except:
                         pass  # Fall back to scraping for date
@@ -85,21 +88,11 @@ class OAICDataSource(DataSource):
 
                 event = self._scrape_article_page(actual_url, link_info['text'], publication_date)
                 if event:
-                    # Double-check date range if we have an event date
-                    if event.event_date:
-                        event_date = event.event_date.date() if hasattr(event.event_date, 'date') else event.event_date
-                        range_start = date_range.start_date.date() if hasattr(date_range.start_date, 'date') else date_range.start_date
-                        range_end = date_range.end_date.date() if hasattr(date_range.end_date, 'date') else date_range.end_date
-
-                        if range_start <= event_date <= range_end:
-                            self.logger.info(f"OAIC event within date range: {event.title[:50]}...")
-                            all_events.append(event)
-                        else:
-                            self.logger.debug(f"OAIC event outside date range: {event.title[:50]}...")
-                    else:
-                        # If no date was found, include it anyway (let later processing decide)
-                        self.logger.info(f"OAIC event (no date): {event.title[:50]}...")
-                        all_events.append(event)
+                    # Include all events from articles published in the date range
+                    # Do NOT filter by event_date - late-reported incidents may have
+                    # event_date outside the processing month (e.g., incident in Sept, reported in Nov)
+                    self.logger.info(f"OAIC event: {event.title[:50]}...")
+                    all_events.append(event)
 
             self.logger.info(f"Collected {len(all_events)} OAIC events within the date range")
             return all_events

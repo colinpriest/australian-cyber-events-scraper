@@ -148,7 +148,19 @@ class HighQualityEnrichmentPipeline:
             self.logger.info("\nSTAGE 4: Validation & Sensibility Checks")
             self.logger.info("-" * 80)
 
-            validation_result = self.validator.validate(extraction_result, fact_check_result)
+            validation_result = self.validator.validate(
+                extraction_result,
+                fact_check_result,
+                event_title=event.get('title'),
+                event_url=event.get('url')
+            )
+
+            # Use modified extraction if validator applied specificity overrides
+            if validation_result.get('specificity_overrides'):
+                extraction_result = validation_result['modified_extraction']
+                self.logger.info(f"✓ Applied {len(validation_result['specificity_overrides'])} specificity override(s)")
+                for override in validation_result['specificity_overrides']:
+                    self.logger.info(f"  Override: {override['original']} -> {override['override']} ({override['reason']})")
 
             audit_trail['stages'].append({
                 'stage': 4,
@@ -156,7 +168,8 @@ class HighQualityEnrichmentPipeline:
                 'is_valid': validation_result['is_valid'],
                 'error_count': len(validation_result['errors']),
                 'warning_count': len(validation_result['warnings']),
-                'validation_confidence': validation_result['validation_confidence']
+                'validation_confidence': validation_result['validation_confidence'],
+                'specificity_overrides': validation_result.get('specificity_overrides', [])
             })
 
             self.logger.info(f"✓ Validation complete: {'VALID' if validation_result['is_valid'] else 'INVALID'}")
@@ -176,7 +189,7 @@ class HighQualityEnrichmentPipeline:
             self.logger.info("-" * 80)
 
             final_decision = self._aggregate_confidence(
-                extraction_result,
+                extraction_result,  # Now uses modified extraction if overrides were applied
                 fact_check_result,
                 validation_result,
                 content_result
@@ -248,11 +261,44 @@ class HighQualityEnrichmentPipeline:
         )
 
         # Apply penalties
+        penalties_applied = {}
+
         if validation['errors']:
             final_confidence *= 0.3  # Severe penalty for validation errors (70% reduction)
+            penalties_applied['validation_errors'] = 0.3
 
         if len(validation['warnings']) > 3:
             final_confidence *= 0.8  # Moderate penalty for multiple warnings
+            penalties_applied['many_warnings'] = 0.8
+
+        # NEW PENALTY 1: Non-specific incidents (analysis articles, general discussions)
+        is_specific = gpt_extraction.get('specificity', {}).get('is_specific_incident')
+        if is_specific == False:
+            final_confidence *= 0.8  # Moderate penalty - SOFTENED from 0.5 to reduce over-rejection
+            penalties_applied['non_specific_incident'] = 0.8
+
+        # NEW PENALTY 2: Very low Australian relevance (foreign events)
+        australian_relevance = gpt_extraction.get('australian_relevance', {}).get('relevance_score', 1.0)
+        if australian_relevance < 0.3:
+            final_confidence *= 0.4  # Heavy penalty for non-Australian events
+            penalties_applied['low_australian_relevance'] = 0.4
+
+        # NEW PENALTY 3: Low fact-check pass rate (unreliable data)
+        checks_performed = fact_check.get('checks_performed', 0)
+        checks_passed = fact_check.get('checks_passed', 0)
+        if checks_performed > 0:
+            fact_check_pass_rate = checks_passed / checks_performed
+            if fact_check_pass_rate < 0.5:
+                final_confidence *= 0.5  # Half confidence for <50% pass rate
+                penalties_applied['low_factcheck_pass_rate'] = 0.5
+
+        # NEW PENALTY 4: Geographic mismatch (title mentions Australian but victim is foreign)
+        # This catches cases like "Australian Government" in title but "DaVita Inc." extracted
+        if content.get('title'):
+            title_lower = content.get('title', '').lower()
+            if 'australian' in title_lower and australian_relevance < 0.3:
+                final_confidence *= 0.3  # Strong penalty for geographic mismatch
+                penalties_applied['geographic_mismatch'] = 0.3
 
         # Ensure within bounds
         final_confidence = max(0.0, min(1.0, final_confidence))
@@ -278,10 +324,7 @@ class HighQualityEnrichmentPipeline:
                 'validation': val_conf,
                 'source_reliability': source_conf
             },
-            'applied_penalties': {
-                'validation_errors': len(validation['errors']),
-                'validation_warnings': len(validation['warnings'])
-            },
+            'applied_penalties': penalties_applied,
             'fact_check_summary': {
                 'checks_performed': fact_check['checks_performed'],
                 'checks_passed': fact_check['checks_passed'],

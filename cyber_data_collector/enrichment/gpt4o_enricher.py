@@ -10,6 +10,7 @@ import json
 from typing import Dict, Any
 from datetime import datetime
 from openai import OpenAI
+from cyber_data_collector.utils.validation import validate_records_affected
 
 
 class GPT4oEnricher:
@@ -64,6 +65,109 @@ Extract the following information about this cyber security incident. Be EXTREME
 
 ═══════════════════════════════════════════════════════════════════════════════
 1. VICTIM ORGANIZATION EXTRACTION
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 IMPORTANT: Check the TITLE first to identify the primary victim organization! 🎯
+
+The article TITLE indicates which organization is the primary focus. Strongly prefer extracting
+organizations mentioned in the title, unless the title is clearly wrong/misleading.
+
+═══════════════════════════════════════════════════════════════════════════════
+FEW-SHOT EXAMPLES: Tricky Cases (Learn from these!)
+═══════════════════════════════════════════════════════════════════════════════
+
+🔸 EXAMPLE 1: Aggregate Blog Post with Specific Title
+
+URL: "https://fortian.com.au/blog/august-2025-cyber-update.html"
+Title: "iiNet Data Breach Exposes 280,000 Customers"
+Article: "iiNet, owned by TPG Telecom, confirmed a data breach affecting 280,000 customers...
+[Later in article]: Optus also faced legal action this month for its 2022 breach...
+[Later]: Dutch telecommunications companies were compromised by Salt Typhoon, a Chinese state-sponsored group...
+[Later]: University of Western Australia experienced a DDoS attack..."
+
+❌ WRONG extraction:
+{{
+  "victim": {{
+    "organization": "Dutch telecommunications companies",  // WRONG! Not in title, just mentioned in article body
+    "reasoning": "Article discusses Dutch telecoms breach by Salt Typhoon"
+  }}
+}}
+
+✅ CORRECT extraction:
+{{
+  "victim": {{
+    "organization": "iiNet",  // CORRECT! Matches title, even though article is aggregate blog
+    "reasoning": "Title specifically focuses on iiNet data breach, making it the primary subject despite article being a monthly roundup"
+  }},
+  "specificity": {{
+    "is_specific_incident": true,  // TRUE because title indicates specific incident focus
+    "reasoning": "Title focuses on specific iiNet breach despite being from aggregate blog post"
+  }}
+}}
+
+🔸 EXAMPLE 2: Aggregate Blog with Multiple Mentions
+
+URL: "https://cybersecurity-blog.com/weekly-roundup.html"
+Title: "Aussie ISP iiNet confirms data breach impacting more than 200k customers"
+Article: "Australian ISP iiNet has confirmed a data breach... This comes after similar incidents at Optus and Medibank...
+Salt Typhoon, a Chinese threat actor, has been targeting telecommunications companies globally, including Dutch firms KPN and VodafoneZiggo...
+Meanwhile, Qantas announced enhanced security measures..."
+
+❌ WRONG extraction:
+{{
+  "victim": {{
+    "organization": "Qantas",  // WRONG! Mentioned last, seems recent, but not in title
+    "reasoning": "Qantas mentioned in article"
+  }}
+}}
+
+❌ ALSO WRONG:
+{{
+  "victim": {{
+    "organization": "Dutch telecommunications companies",  // WRONG! Generic + not in title
+    "reasoning": "Article discusses Salt Typhoon attacks on Dutch telecoms"
+  }}
+}}
+
+✅ CORRECT extraction:
+{{
+  "victim": {{
+    "organization": "iiNet",  // CORRECT! In title and opening paragraph
+    "reasoning": "Title and article opening clearly identify iiNet as primary subject. Other organizations (Optus, Medibank, Qantas, Dutch telecoms) mentioned for context only"
+  }},
+  "specificity": {{
+    "is_specific_incident": true,
+    "reasoning": "Title indicates specific iiNet breach is the focus, despite article being a weekly roundup"
+  }}
+}}
+
+🔸 EXAMPLE 3: Parent Company vs Subsidiary
+
+URL: "https://news-site.com/cyber-incident"
+Title: "Australia's TPG Telecom flags cyber incident in its iiNet system"
+Article: "TPG Telecom has disclosed a cybersecurity incident affecting its subsidiary iiNet...
+The breach compromised iiNet customer data... TPG acquired iiNet in 2015..."
+
+✅ CORRECT extraction (Option A - Focus on subsidiary):
+{{
+  "victim": {{
+    "organization": "iiNet",  // CORRECT! The actual system breached
+    "reasoning": "Title mentions both TPG and iiNet, but iiNet system was specifically compromised"
+  }}
+}}
+
+✅ ALSO CORRECT (Option B - Focus on parent):
+{{
+  "victim": {{
+    "organization": "TPG Telecom",  // ALSO CORRECT! Parent company disclosing incident
+    "reasoning": "Title leads with TPG Telecom as the organization disclosing the incident"
+  }}
+}}
+
+Either is acceptable when both are mentioned in title. Key: Don't extract unrelated organizations mentioned later in the article.
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF FEW-SHOT EXAMPLES
 ═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL RULES:
@@ -173,7 +277,52 @@ EXTRACT:
 - discovery_date: "YYYY-MM-DD" OR null (when breach was discovered)
 - disclosure_date: "YYYY-MM-DD" OR null (when publicly announced)
 - severity: One of the levels above
-- records_affected: Integer (number of records/people) OR null
+- records_affected: Integer (number of PEOPLE/CUSTOMERS/USERS whose data was compromised) OR null
+
+  ⚠️ CRITICAL VALIDATION RULES FOR records_affected:
+
+  DEFINITION: Number of distinct individuals/customers/users whose personal data was compromised.
+  This is NOT: transaction count, database records, files, bytes, dollars, or financial figures.
+
+  WHAT TO EXTRACT (⚠️ ALWAYS INCLUDE UNITS - "million", "thousand", etc.):
+  ✓ "280,000 customers affected" → 280000
+  ✓ "280 thousand customers" → 280000 (NOT 280!)
+  ✓ "9.7 million people" → 9700000 (NOT 9 or 97!)
+  ✓ "500,000 individuals" → 500000
+  ✓ "500 thousand individuals" → 500000 (NOT 500!)
+  ✓ "1.5 million users" → 1500000 (NOT 15 or 1500!)
+  ✓ "50,000 patients" → 50000
+  ✓ "6 million records" → 6000000 (NOT 6!)
+
+  ⚠️ UNIT PARSING IS CRITICAL:
+  • "6 million" means 6,000,000 not 6
+  • "280 thousand" means 280,000 not 280
+  • "1.5 million" means 1,500,000 not 15 or 1500
+  • ALWAYS multiply by the stated unit (thousand = ×1,000, million = ×1,000,000)
+  • Minimum realistic value: 50 records (anything smaller likely indicates missed units)
+
+  WHAT NOT TO EXTRACT (use null instead):
+  ✗ "3 million transactions processed" → null (transactions ≠ customers)
+  ✗ "500 GB of data stolen" → null (bytes ≠ customers)
+  ✗ "$2.5 million fine" → null (dollars ≠ customers)
+  ✗ "100,000 database records" → null (ambiguous - might be transaction records)
+  ✗ Phone numbers, dates, reference numbers → null
+  ✗ Revenue or turnover figures → null
+
+  VALIDATION CONSTRAINTS:
+  • Maximum realistic value: 1,000,000,000 (1 billion customers)
+  • Minimum realistic value: 50 (smaller numbers indicate parsing error)
+  • If article doesn't specify number of PEOPLE affected, use null
+  • DO NOT concatenate or combine multiple numbers
+  • DO NOT extract numbers from unrelated context
+  • If unsure whether it's people or something else, use null
+  • ALWAYS apply unit multipliers (thousand, million, billion)
+
+  AMBIGUOUS CASES:
+  • "500,000 records" → Only extract if context clearly indicates these are customer/user records
+  • If article uses "records" ambiguously without saying "customer records", use null
+  • If you see a number with units like "6 million" but are unsure, extract null rather than risk missing the units
+
 - data_types_compromised: List of strings (e.g., ["personal_information", "financial_data", "health_records"])
 - extraction_confidence: Float 0.0-1.0
 - reasoning: String (explain severity assessment and what data supports your extraction)
@@ -198,20 +347,54 @@ EXTRACT:
 5. EVENT SPECIFICITY ASSESSMENT
 ═══════════════════════════════════════════════════════════════════════════════
 
+CRITICAL QUESTION: Does this article describe a SPECIFIC, CONCRETE cyber incident?
+
+⚠️ IMPORTANT: Focus on WHETHER an incident is described, NOT on the article's style or purpose
+
 SPECIFIC INCIDENT (is_specific_incident: true):
-✓ Article describes ONE specific cyber attack/breach with identified victim
-✓ Example: "Medibank confirms October 2022 data breach affecting 9.7M customers"
-✓ Example: "Toll Group hit by Mailto ransomware on May 1, 2020"
+
+The article must describe a CONCRETE cyber incident with:
+✓ An identified victim organization (who was attacked)
+✓ A specific type of attack (breach, ransomware, DDoS, etc.)
+✓ Concrete details about what happened
+
+THESE ARE ALL SPECIFIC INCIDENTS (even if not primary sources):
+✓ "Medibank confirms October 2022 data breach affecting 9.7M customers" (official announcement)
+✓ "Qantas cyber security breach: What personal details were exposed" (investigation/analysis)
+✓ "Timeline: How the Optus breach unfolded" (retrospective analysis)
+✓ "Experts analyze the iiNet credential stuffing attack" (expert commentary on specific incident)
+✓ "Lessons from the Toll Group ransomware attack" (using specific incident as case study)
 
 NOT SPECIFIC (is_specific_incident: false):
-✗ General cybersecurity news or analysis ("Ransomware threats increase in 2024")
-✗ Multiple separate incidents in one article ("5 major breaches this quarter")
-✗ Educational content ("How to protect your business from phishing")
-✗ Expert commentary without specific incident focus
+
+✗ General cybersecurity news without specific victim ("Ransomware threats increase in 2024")
+✗ Educational content without specific incident ("How to protect your business from phishing")
+✗ Industry trends without specific incident ("Healthcare sector faces growing cyber risks")
+✗ Opinion pieces about cybersecurity in general ("Why Australia needs better cyber laws")
+✗ Multiple separate incidents in one article ("5 major breaches this quarter" - UNLESS title focuses on one)
+✗ Aggregate blog/news roundups with generic titles ("Weekly Cyber News Roundup")
+
+KEY DECISION RULE:
+
+Ask yourself: "After reading this article, can I name:
+  1. Which specific organization was attacked?
+  2. What type of attack it was?
+  3. When it happened (approximately)?"
+
+If YES to all 3 → is_specific_incident: TRUE
+If NO to any → is_specific_incident: FALSE
+
+IMPORTANT CLARIFICATIONS:
+
+✓ Analysis, commentary, or investigation OF a specific incident = SPECIFIC
+✓ Follow-up reporting on a known incident = SPECIFIC
+✓ Lessons/implications from a specific incident = SPECIFIC
+✗ General advice not tied to a specific incident = NOT SPECIFIC
+✗ Multiple incidents without focus on one = NOT SPECIFIC
 
 EXTRACT:
 - is_specific_incident: Boolean
-- specificity_reasoning: String (explain decision)
+- specificity_reasoning: String (cite which details from the article confirm this is/isn't a specific incident)
 
 ═══════════════════════════════════════════════════════════════════════════════
 6. MULTI-VICTIM DETECTION
@@ -228,12 +411,52 @@ NOT MULTI-VICTIM (has_multiple_victims: false):
 ✗ One organization breached, affecting its clients (victim = the breached org, not the clients)
 ✗ Article mentions past breaches for context
 ✗ Article discusses industry trends affecting multiple companies separately
+✗ AGGREGATE NEWS/BLOG POSTS covering multiple separate incidents (see critical note below)
 
 CRITICAL EXAMPLE:
 "HWL Ebsworth data breach exposes client data from Department of Home Affairs, Department of Defence"
 → has_multiple_victims: FALSE
 → victim_organization: "HWL Ebsworth" ONLY
 → reasoning: "HWL Ebsworth is the organization that was breached. Government departments are clients whose data was exposed in HWL's systems, but they were not directly attacked."
+
+⚠️ CRITICAL: AGGREGATE BLOG POSTS & NEWS ROUNDUPS ⚠️
+
+URLs like "blog/monthly-cyber-update.html", "roundup", "weekly-news", or "digest" often contain MULTIPLE SEPARATE incidents.
+
+RULES FOR AGGREGATE ARTICLES:
+1. Check the URL - does it suggest an aggregate/roundup? (e.g., blog/august-2025-update, weekly-digest, etc.)
+2. Check the article content - does it discuss 5+ separate organizations or incidents?
+3. If YES to either: This is likely an AGGREGATE article, NOT a specific incident
+4. For aggregate articles:
+   ✓ If the TITLE mentions a SPECIFIC organization → extract ONLY that organization
+   ✓ If the TITLE is generic (e.g., "Weekly Cyber News") → mark as NOT a specific incident
+   ✗ DO NOT extract organizations from the article body if title doesn't mention them
+
+AGGREGATE ARTICLE EXAMPLES:
+
+Example 1: URL: "fortian.com.au/blog/august-2025-cyber-update.html"
+Title: "iiNet Data Breach Exposes 280,000 Customers"
+Article: Discusses iiNet breach, Optus legal action, Dutch telecoms attack, university incidents
+→ victim_organization: "iiNet" (matches title, even though article mentions others)
+→ is_specific_incident: TRUE
+→ specificity_reasoning: "Title specifically focuses on iiNet breach, though article is from a blog roundup"
+
+Example 2: URL: "cybersecurity-news.com/weekly-roundup-march-2025.html"
+Title: "Weekly Cybersecurity Roundup - March 2025"
+Article: Discusses 10 different breaches across various companies
+→ victim_organization: null
+→ is_specific_incident: FALSE
+→ specificity_reasoning: "Aggregate weekly news roundup covering multiple separate incidents"
+
+Example 3: URL: "news-site.com/blog/monthly-update"
+Title: "Optus Faces Record Fine for 2022 Data Breach"
+Article: Also mentions Medibank, Latitude, and industry trends
+→ victim_organization: "Optus" (matches title)
+→ is_specific_incident: TRUE
+→ specificity_reasoning: "Title focuses on specific Optus incident, despite being from monthly blog"
+
+TITLE PRIORITIZATION RULE:
+When in doubt, ALWAYS prioritize what the TITLE says over what's in the article body. The title indicates the primary focus of the article.
 
 EXTRACT:
 - has_multiple_victims: Boolean
@@ -326,6 +549,20 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
             # Parse JSON response
             result = json.loads(response.choices[0].message.content)
 
+            # Apply validation to records_affected
+            if 'incident' in result and 'records_affected' in result['incident']:
+                original_value = result['incident']['records_affected']
+                validated_value = validate_records_affected(
+                    original_value,
+                    content.get('title', 'Unknown Event')
+                )
+                if validated_value != original_value:
+                    self.logger.warning(
+                        f"Adjusted records_affected from {original_value:,} to "
+                        f"{validated_value:,} for event: {content.get('title', '')}"
+                    )
+                result['incident']['records_affected'] = validated_value
+
             # Add metadata
             result['extraction_metadata'] = {
                 'model': self.model,
@@ -351,7 +588,7 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
         """Return error result structure"""
         return {
             'victim': {
-                'organization': null,
+                'organization': None,
                 'industry': None,
                 'is_australian': False,
                 'confidence': 0.0,

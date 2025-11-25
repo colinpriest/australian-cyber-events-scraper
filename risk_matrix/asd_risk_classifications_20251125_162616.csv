@@ -1,0 +1,4 @@
+deduplicated_event_id,title,event_date,event_type,victim_organization_name,victim_organization_industry,records_affected,severity_category,primary_stakeholder_category,impact_type,confidence_score,model_used,created_at
+f698439d-bb11-4d81-9faa-221856c604ac,Tens of thousands locked out of ATO Online accounts after payroll hack,2021-11-13,CyberEventType.RANSOMWARE,,,80000,C3,Federal government,Extensive compromise,0.9,gpt-4o,2025-11-25T16:26:16.319107
+cc23c6bb-38dc-4809-8ab1-ad58d35206bf,Ransomware Attack on Melbourne Metropolitan Public Health Service,2021-03-16,CyberEventType.RANSOMWARE,,,31500,C3,Regulated critical infrastructure,Extensive compromise,0.9,gpt-4o,2025-11-25T16:26:16.319107
+c59f5256-49f6-4c0b-88f8-a7c91a87e619,BlueScope confirms a 'cyber incident' is disrupting its operations ...,2020-05-15,CyberEventType.OTHER,BlueScope Steel Limited,Manufacturing,,C6,Large organisation(s),Isolated compromise,0.7,gpt-4o,2025-11-25T16:26:16.319107

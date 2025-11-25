@@ -42,10 +42,9 @@ This pipeline automatically discovers cyber security incidents affecting Austral
 
 ```
 australian-cyber-events-scraper/
-├── run_full_pipeline.py               # 🆕 Unified pipeline script
-├── discover_enrich_events.py          # Original pipeline script
-├── generate_dashboard.py              # Flask dashboard server
-├── build_static_dashboard.py           # Static HTML dashboard
+├── run_full_pipeline.py               # 🆕 Unified pipeline script (SINGLE SOURCE OF TRUTH)
+├── discover_enrich_events.py          # Original pipeline script (deprecated)
+├── build_static_dashboard.py          # Static HTML dashboard generator
 ├── rf_event_filter.py                 # Random Forest filter implementation
 ├── train_rf_filter.py                 # ML model training script
 ├── cyber_data_collector/              # Core data collection framework
@@ -232,12 +231,7 @@ python build_static_dashboard.py --out-dir my_dashboard
 | `--source SOURCE` | Data sources to use | All |
 | `--max-events N` | Maximum events per source per month | 1000 |
 | `--days N` | Number of days to look back | 7 |
-| `--dashboard-type TYPE` | Dashboard type: static, flask, both | static |
 | `--out-dir DIR` | Output directory for static dashboard | dashboard |
-| `--launch-server` | Launch Flask server after generation | False |
-| `--port N` | Port for Flask server | 5000 |
-| `--host HOST` | Host for Flask server | 127.0.0.1 |
-| `--debug` | Run Flask server in debug mode | False |
 | `--db-path PATH` | Database file path | instance/cyber_events.db |
 
 #### Original Pipeline Options
@@ -277,11 +271,9 @@ The dashboard now includes advanced visualizations for deeper insights:
    - Numeric severity mapping (Critical=4, High=3, Medium=2, Low=1)
    - Consistent severity scoring across all visualizations
 
-#### Dashboard Types
+#### Static Dashboard
 
-- **Static HTML**: Self-contained dashboard with embedded data
-- **Flask Server**: Interactive web server with API endpoints
-- **Both**: Generate static file AND launch server
+The pipeline generates a self-contained HTML dashboard with embedded data and interactive Chart.js visualizations. Open `dashboard/index.html` in any modern web browser.
 
 ### Training ML Models
 
@@ -550,7 +542,7 @@ gcloud auth application-default login
 - **Flexible Execution**: Run discovery-only, dashboard-only, or full pipeline
 - **Enhanced CLI**: Comprehensive command-line options for all operations
 - **Error Handling**: Continue-on-error option for robust pipeline execution
-- **Dashboard Integration**: Built-in dashboard generation with static and Flask options
+- **Dashboard Integration**: Built-in static HTML dashboard generation
 
 ### 🆕 Enhanced Dashboard Visualizations
 - **Maximum Severity Per Month**: Line chart with entity details on hover

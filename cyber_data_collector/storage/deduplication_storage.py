@@ -19,6 +19,7 @@ import json
 from ..processing.deduplication_v2 import DeduplicationResult, MergeGroup, ValidationError
 # Import the simplified CyberEvent from deduplication_v2
 from ..processing.deduplication_v2 import CyberEvent
+from ..utils.validation import validate_records_affected
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,17 @@ class DeduplicationStorage:
             # Generate unique deduplicated event ID
             deduplicated_event_id = str(uuid.uuid4())
             
+            # Validate records_affected using reasonableness rules
+            validated_records = validate_records_affected(
+                event.records_affected,
+                event.title
+            )
+            if validated_records != event.records_affected and event.records_affected is not None:
+                self.logger.warning(
+                    f"records_affected adjusted from {event.records_affected:,} to "
+                    f"{validated_records if validated_records else 'NULL'} for: {event.title[:60]}"
+                )
+
             # Prepare event data (match DeduplicatedEvents schema)
             event_data = {
                 'deduplicated_event_id': deduplicated_event_id,
@@ -207,7 +219,9 @@ class DeduplicationStorage:
                 'event_date': event.event_date,
                 'event_type': event.event_type,
                 'severity': event.severity,
-                'records_affected': event.records_affected,
+                'records_affected': validated_records,  # Use validated value
+                'victim_organization_name': event.victim_organization_name if hasattr(event, 'victim_organization_name') else None,
+                'victim_organization_industry': event.victim_organization_industry if hasattr(event, 'victim_organization_industry') else None,
                 'is_australian_event': True,  # All events are Australian
                 'is_specific_event': True,  # Deduplicated events are specific
                 'confidence_score': event.confidence if hasattr(event, 'confidence') else 0.5,
@@ -221,9 +235,10 @@ class DeduplicationStorage:
                 INSERT INTO DeduplicatedEvents (
                     deduplicated_event_id, master_enriched_event_id, title, summary,
                     event_date, event_type, severity, records_affected,
+                    victim_organization_name, victim_organization_industry,
                     is_australian_event, is_specific_event, confidence_score,
                     status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 event_data['deduplicated_event_id'],
                 event_data['master_enriched_event_id'],
@@ -233,6 +248,8 @@ class DeduplicationStorage:
                 event_data['event_type'],
                 event_data['severity'],
                 event_data['records_affected'],
+                event_data['victim_organization_name'],
+                event_data['victim_organization_industry'],
                 event_data['is_australian_event'],
                 event_data['is_specific_event'],
                 event_data['confidence_score'],

@@ -120,3 +120,4 @@ if __name__ == "__main__":
         print("\n❌ Schema setup failed!")
         sys.exit(1)
 
+

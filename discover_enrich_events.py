@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
 """
+===========================================================================================
+⚠️ DEPRECATED: Use run_full_pipeline.py instead
+===========================================================================================
+
+This script is DEPRECATED and maintained only for backward compatibility.
+
+**DO NOT USE THIS SCRIPT DIRECTLY**
+
+Instead, use:
+    python run_full_pipeline.py
+
+The unified pipeline provides:
+✓ Consistent Perplexity AI enrichment (this script uses outdated GPT-4o-mini)
+✓ Advanced entity-based deduplication
+✓ Automatic dashboard generation
+✓ Single source of truth for all operations
+
+This legacy script uses the old GPT-4o-mini enrichment which has a 70% rejection rate
+compared to the modern Perplexity AI enrichment.
+
+===========================================================================================
+LEGACY DOCUMENTATION (for reference only):
+===========================================================================================
+
 Australian Cyber Events Discovery and Enrichment Pipeline
 
 This script combines event discovery from multiple sources with intelligent enrichment
@@ -202,20 +226,42 @@ class EventDiscoveryEnrichmentPipeline:
             end_year=current_year, end_month=current_month
         )
 
-        if not unprocessed_months:
+        # Always reprocess the last 3 calendar months (including current) to catch late-reported events
+        recent_months = []
+        temp_year, temp_month = current_year, current_month
+        for _ in range(3):
+            recent_months.append((temp_year, temp_month))
+            temp_month -= 1
+            if temp_month == 0:
+                temp_month = 12
+                temp_year -= 1
+        recent_months_set = set(recent_months)
+
+        months_to_process = []
+        for m in unprocessed_months:
+            if m not in months_to_process:
+                months_to_process.append(m)
+        for m in recent_months:
+            if m not in months_to_process:
+                months_to_process.append(m)
+
+        if not months_to_process:
             logger.info(f"[DISCOVERY] All months from Jan 2020 to {now.strftime('%b %Y')} have been processed!")
             return
 
         logger.info(f"[DISCOVERY] Found {len(unprocessed_months)} unprocessed months to process")
+        logger.info("[DISCOVERY] Adding rolling 3-month lookback (including current month) for late-reported events")
 
         total_events_discovered = 0
-        for year, month in unprocessed_months:
+        for year, month in months_to_process:
             logger.info(f"[DISCOVERY] Processing {year}-{month:02d}")
 
-            # Check if month was processed while we were running
-            if self.db.is_month_processed(year, month):
+            # Skip if already processed and not part of the rolling 3-month lookback
+            if self.db.is_month_processed(year, month) and (year, month) not in recent_months_set:
                 logger.info(f"[DISCOVERY] Month {year}-{month:02d} was already processed, skipping")
                 continue
+            elif self.db.is_month_processed(year, month):
+                logger.info(f"[DISCOVERY] Reprocessing {year}-{month:02d} (3-month late-reporting window)")
 
             month_events = await self._discover_events_for_month(
                 year, month, source_types, max_events
@@ -224,10 +270,15 @@ class EventDiscoveryEnrichmentPipeline:
 
         self.stats['events_discovered'] = total_events_discovered
         logger.info(f"[DISCOVERY] Completed processing all months. Total events discovered: {total_events_discovered}")
-        
+
         # Run global deduplication after all data collection is complete
-        if total_events_discovered > 0:
-            logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication process...")
+        # Also run if DeduplicatedEvents is empty (e.g., was cleared but needs repopulation)
+        dedup_count = self._get_deduplicated_event_count()
+        if total_events_discovered > 0 or dedup_count == 0:
+            if dedup_count == 0:
+                logger.info("[GLOBAL DEDUPLICATION] DeduplicatedEvents table is empty, running deduplication to repopulate...")
+            else:
+                logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication process...")
             await self.run_global_deduplication()
 
     async def _discover_events_for_month(self, year: int, month: int, source_types: List[str], max_events: int) -> int:
@@ -425,8 +476,9 @@ class EventDiscoveryEnrichmentPipeline:
         """Build collection configuration for specified sources"""
 
         # Configure individual sources based on what's requested
+        # GDELT disabled - BigQuery authentication issues
         gdelt_config = DataSourceConfig(
-            enabled='GDELT' in source_types,
+            enabled=False,  # GDELT disabled
             custom_config={
                 'max_records': max_events,
                 'access_method': 'bigquery'  # Use BigQuery for better results
@@ -1916,11 +1968,17 @@ class EventDiscoveryEnrichmentPipeline:
             storage.clear_existing_deduplications()
             logger.info("[GLOBAL DEDUPLICATION] Cleared existing deduplicated events")
             
+            # Load entity mappings from database
+            entity_mappings = self._load_entity_mappings()
+            if entity_mappings:
+                logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(entity_mappings)} entity mappings")
+
             # Run deduplication
             engine = DeduplicationEngine(
                 similarity_threshold=0.75,
                 llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
-                validators=[DeduplicationValidator()]
+                validators=[DeduplicationValidator()],
+                entity_mappings=entity_mappings
             )
             
             logger.info("[GLOBAL DEDUPLICATION] Running deduplication engine...")
@@ -1962,7 +2020,35 @@ class EventDiscoveryEnrichmentPipeline:
         except Exception as e:
             logger.error(f"[GLOBAL DEDUPLICATION] Failed: {e}")
             raise
-    
+
+    def _get_deduplicated_event_count(self) -> int:
+        """Get the count of active deduplicated events"""
+        try:
+            cursor = self.db._conn.execute("""
+                SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'
+            """)
+            return cursor.fetchone()[0]
+        except Exception as e:
+            logger.warning(f"[DEDUPLICATION] Could not count deduplicated events: {e}")
+            return 0
+
+    def _load_entity_mappings(self) -> Dict[str, str]:
+        """Load entity mappings from the EntityMappings table.
+
+        Returns a dict mapping source_entity -> canonical_entity.
+        Used to normalize entity names during deduplication (e.g., Ticketmaster -> Live Nation).
+        """
+        try:
+            cursor = self.db._conn.execute("""
+                SELECT source_entity, canonical_entity
+                FROM EntityMappings
+            """)
+            mappings = {row[0]: row[1] for row in cursor.fetchall()}
+            return mappings
+        except Exception as e:
+            logger.warning(f"[ENTITY MAPPINGS] Could not load entity mappings: {e}")
+            return {}
+
     async def _load_all_enriched_events(self):
         """Load all enriched events from the database for global deduplication"""
         try:
@@ -2040,7 +2126,7 @@ Examples:
                         help='Run scraping phase to get full content')
     parser.add_argument('--enrich', action='store_true',
                         help='Run enrichment phase using LLM analysis')
-    parser.add_argument('--source', choices=['GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC'],
+    parser.add_argument('--source', choices=['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC'],
                         help='Run only specific source (can be used multiple times)', action='append')
     parser.add_argument('--max-events', type=int, default=0,
                         help='Maximum events to process per phase (0 or negative for unlimited; default: unlimited for scraping/enrichment, 1000 for discovery)')
@@ -2079,26 +2165,7 @@ Examples:
         logger.error(f"Database check failed: {e}")
         return 1
 
-    # Check GDELT authentication before starting pipeline
-    if (args.source and 'GDELT' in args.source) or not args.source:  # If GDELT is included or no specific source specified
-        if not await check_gdelt_authentication():
-            print("\n[AUTHENTICATION ERROR] GDELT BigQuery authentication has expired!")
-            print("\nTo reauthenticate, please run ONE of the following commands:")
-            print("  1. gcloud auth application-default login")
-            print("  2. python setup_bigquery_auth.py")
-            print("\nAfter reauthentication, rerun this script.")
-
-            user_input = input("\nDo you want to stop the script and reauthenticate? (y/n): ").strip().lower()
-            if user_input in ['y', 'yes']:
-                print("Script stopped. Please reauthenticate and try again.")
-                return 1
-            else:
-                print("Continuing without GDELT authentication (GDELT events will be skipped)...")
-                # Remove GDELT from source types if user chooses to continue
-                if args.source and 'GDELT' in args.source:
-                    args.source.remove('GDELT')
-                    if not args.source:  # If GDELT was the only source
-                        args.source = ['PERPLEXITY', 'GOOGLE_SEARCH', 'WEBBER', 'OAIC']
+    # GDELT authentication check removed - GDELT disabled
 
     # Initialize pipeline
     pipeline = EventDiscoveryEnrichmentPipeline(args.db_path)

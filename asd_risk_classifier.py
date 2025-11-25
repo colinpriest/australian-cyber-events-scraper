@@ -20,11 +20,12 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Literal
 
 import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
+from pydantic import BaseModel, Field, field_validator
 from tqdm import tqdm
 
 # Load environment variables
@@ -99,6 +100,79 @@ VALID_IMPACT_TYPES = [
     "Unsuccessful low-level malicious attack"
 ]
 
+# Type aliases for strict validation
+SeverityCategory = Literal["C1", "C2", "C3", "C4", "C5", "C6"]
+StakeholderCategory = Literal[
+    "Member(s) of the public",
+    "Small organisation(s)",
+    "Sole traders",
+    "Medium-sized organisation(s)",
+    "Schools",
+    "Local government",
+    "State government",
+    "Academia/R&D",
+    "Large organisation(s)",
+    "Supply chain",
+    "Federal government",
+    "Government shared services",
+    "Regulated critical infrastructure",
+    "National security",
+    "Systems of National Significance"
+]
+ImpactType = Literal[
+    "Sustained disruption of essential systems and associated services",
+    "Extensive compromise",
+    "Isolated compromise",
+    "Coordinated low-level malicious attack",
+    "Low-level malicious attack",
+    "Unsuccessful low-level malicious attack"
+]
+
+
+class ClassificationReasoning(BaseModel):
+    """Reasoning for ASD risk classification."""
+    severity_reasoning: str = Field(..., min_length=10)
+    stakeholder_reasoning: str = Field(..., min_length=10)
+    impact_reasoning: str = Field(..., min_length=10)
+    information_quality: str = Field(..., min_length=10)
+
+
+class ASDRiskClassification(BaseModel):
+    """
+    Structured output model for ASD risk classification.
+    Uses strict typing to prevent LLM from returning invalid values.
+    """
+    severity_category: SeverityCategory = Field(
+        ...,
+        description="ASD severity category from C1 (most severe) to C6 (least severe)"
+    )
+    primary_stakeholder_category: StakeholderCategory = Field(
+        ...,
+        description="Primary stakeholder category affected by this incident"
+    )
+    impact_type: ImpactType = Field(
+        ...,
+        description="Type of impact according to ASD risk matrix"
+    )
+    reasoning: ClassificationReasoning = Field(
+        ...,
+        description="Detailed reasoning for each classification decision"
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score between 0 and 1"
+    )
+
+    @field_validator('confidence')
+    @classmethod
+    def validate_confidence(cls, v: float) -> float:
+        """Ensure confidence is between 0 and 1."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"Confidence must be between 0 and 1, got {v}")
+        return v
+
 
 class ASDRiskClassifier:
     """Classify cyber events using ASD risk matrix framework."""
@@ -128,36 +202,79 @@ class ASDRiskClassifier:
         if self.conn:
             self.conn.close()
     
-    def get_events(self, limit: int = 5) -> List[Dict[str, Any]]:
-        """Get active events from DeduplicatedEvents table."""
-        cursor = self.conn.cursor()
-        
-        query = """
-            SELECT 
-                deduplicated_event_id,
-                title,
-                description,
-                summary,
-                event_type,
-                severity,
-                event_date,
-                records_affected,
-                victim_organization_name,
-                victim_organization_industry,
-                attacking_entity_name,
-                attack_method,
-                is_australian_event,
-                australian_relevance_score,
-                created_at
-            FROM DeduplicatedEvents
-            WHERE status = 'Active'
-            ORDER BY event_date DESC, created_at DESC
-            LIMIT ?
+    def get_events(self, limit: int = 5, prioritize_unclassified: bool = True) -> List[Dict[str, Any]]:
         """
-        
+        Get active events from DeduplicatedEvents table.
+
+        Args:
+            limit: Maximum number of events to retrieve
+            prioritize_unclassified: If True, prioritize events without classifications
+
+        Returns:
+            List of event dictionaries
+        """
+        cursor = self.conn.cursor()
+
+        if prioritize_unclassified:
+            # Get unclassified events first, then classified ones
+            # This ensures we process new events before hitting the limit
+            query = """
+                SELECT
+                    de.deduplicated_event_id,
+                    de.title,
+                    de.description,
+                    de.summary,
+                    de.event_type,
+                    de.severity,
+                    de.event_date,
+                    de.records_affected,
+                    de.victim_organization_name,
+                    de.victim_organization_industry,
+                    de.attacking_entity_name,
+                    de.attack_method,
+                    de.is_australian_event,
+                    de.australian_relevance_score,
+                    de.created_at,
+                    CASE WHEN arc.deduplicated_event_id IS NULL THEN 0 ELSE 1 END as has_classification
+                FROM DeduplicatedEvents de
+                LEFT JOIN ASDRiskClassifications arc
+                    ON de.deduplicated_event_id = arc.deduplicated_event_id
+                WHERE de.status = 'Active'
+                ORDER BY has_classification ASC, de.event_date DESC, de.created_at DESC
+                LIMIT ?
+            """
+        else:
+            # Original query - just get events by date
+            query = """
+                SELECT
+                    deduplicated_event_id,
+                    title,
+                    description,
+                    summary,
+                    event_type,
+                    severity,
+                    event_date,
+                    records_affected,
+                    victim_organization_name,
+                    victim_organization_industry,
+                    attacking_entity_name,
+                    attack_method,
+                    is_australian_event,
+                    australian_relevance_score,
+                    created_at
+                FROM DeduplicatedEvents
+                WHERE status = 'Active'
+                ORDER BY event_date DESC, created_at DESC
+                LIMIT ?
+            """
+
         cursor.execute(query, (limit,))
         events = [dict(row) for row in cursor.fetchall()]
-        
+
+        # Remove the has_classification field if it exists
+        for event in events:
+            event.pop('has_classification', None)
+
         logger.debug(f"Retrieved {len(events)} active events")
         return events
     
@@ -285,52 +402,61 @@ Return your response as a JSON object with this exact structure:
         # Build prompt
         prompt = self.build_prompt(event)
         
-        # Call OpenAI API with retry logic
+        # Call OpenAI API with retry logic and structured outputs
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 logger.debug(f"Calling API for event {event_id} (attempt {attempt + 1})")
-                
-                response = self.client.chat.completions.create(
+
+                # Use structured outputs with Pydantic model
+                # This forces the LLM to return valid data matching our schema
+                response = self.client.beta.chat.completions.parse(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": "You are an expert cybersecurity analyst. Always respond with valid JSON."},
+                        {
+                            "role": "system",
+                            "content": "You are an expert cybersecurity analyst specializing in ASD risk classification. You must classify cyber incidents according to the Australian Signals Directorate risk matrix framework using ONLY the valid categories provided."
+                        },
                         {"role": "user", "content": prompt}
                     ],
-                    response_format={"type": "json_object"},
+                    response_format=ASDRiskClassification,
                     temperature=0.3
                 )
-                
-                # Parse response
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                
-                # Track API usage
-                self.api_calls += 1
-                if hasattr(response, 'usage'):
-                    self.total_tokens += response.usage.total_tokens
-                
-                # Validate response
-                if self.validate_classification(result):
-                    logger.debug(f"Successfully classified event {event_id}")
-                    return result
-                else:
-                    logger.warning(f"Invalid classification response for event {event_id}, retrying...")
+
+                # Parse structured response
+                parsed_classification = response.choices[0].message.parsed
+
+                if parsed_classification is None:
+                    logger.warning(f"Failed to parse classification for event {event_id}, retrying...")
                     if attempt < max_retries - 1:
                         time.sleep(2 ** attempt)  # Exponential backoff
                         continue
                     else:
                         logger.error(f"Failed to get valid classification after {max_retries} attempts")
                         return None
-                        
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error for event {event_id}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    return None
-                    
+
+                # Track API usage
+                self.api_calls += 1
+                if hasattr(response, 'usage'):
+                    self.total_tokens += response.usage.total_tokens
+
+                # Convert Pydantic model to dict for consistency with existing code
+                result = {
+                    'severity_category': parsed_classification.severity_category,
+                    'primary_stakeholder_category': parsed_classification.primary_stakeholder_category,
+                    'impact_type': parsed_classification.impact_type,
+                    'reasoning': {
+                        'severity_reasoning': parsed_classification.reasoning.severity_reasoning,
+                        'stakeholder_reasoning': parsed_classification.reasoning.stakeholder_reasoning,
+                        'impact_reasoning': parsed_classification.reasoning.impact_reasoning,
+                        'information_quality': parsed_classification.reasoning.information_quality
+                    },
+                    'confidence': parsed_classification.confidence
+                }
+
+                logger.debug(f"Successfully classified event {event_id}")
+                return result
+
             except Exception as e:
                 logger.error(f"API error for event {event_id} (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
@@ -338,7 +464,7 @@ Return your response as a JSON object with this exact structure:
                     continue
                 else:
                     return None
-        
+
         return None
     
     def validate_classification(self, classification: Dict[str, Any]) -> bool:
@@ -431,7 +557,8 @@ Return your response as a JSON object with this exact structure:
     
     def process_events(self, limit: int = 5, force_reclassify: bool = False) -> List[Dict[str, Any]]:
         """Process events and generate classifications."""
-        events = self.get_events(limit)
+        # Prioritize unclassified events to ensure they get processed first
+        events = self.get_events(limit, prioritize_unclassified=not force_reclassify)
         
         if not events:
             logger.warning("No events found to process")
@@ -794,7 +921,7 @@ def main():
             if results:
                 # Export results
                 csv_file, json_file, excel_files = classifier.export_results(results, args.output_dir)
-                print(f"\n✅ Classification complete!")
+                print(f"\n[SUCCESS] Classification complete!")
                 print(f"   Processed {len(results)} events")
                 print(f"   CSV exported to: {csv_file}")
                 print(f"   JSON exported to: {json_file}")
@@ -802,7 +929,7 @@ def main():
                 for excel_file in excel_files:
                     print(f"     - {excel_file}")
             else:
-                print("\n⚠️  No events were successfully classified")
+                print("\n[WARNING] No events were successfully classified")
                 # Still compile risk matrix from existing classifications
                 output_path = Path(args.output_dir)
                 output_path.mkdir(parents=True, exist_ok=True)
@@ -810,13 +937,13 @@ def main():
                 print(f"   Risk matrices compiled from existing classifications:")
                 for excel_file in excel_files:
                     print(f"     - {excel_file}")
-                
+
         finally:
             classifier.close()
-            
+
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        print(f"\n❌ Error: {e}")
+        print(f"\n[ERROR] {e}")
         sys.exit(1)
 
 

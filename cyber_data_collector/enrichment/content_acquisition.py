@@ -3,6 +3,13 @@ Content Acquisition Service - Fetch and clean full article text from URLs.
 
 This module uses multiple extraction methods to get complete article content
 instead of relying on title/summary only.
+
+Extraction cascade:
+1. PDF Extractor (for PDF files)
+2. newspaper3k (best for news articles)
+3. trafilatura (fallback for difficult sites)
+4. BeautifulSoup (basic HTML parsing)
+5. Playwright (JavaScript-heavy sites, ultimate fallback)
 """
 
 import logging
@@ -12,6 +19,17 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 import time
+import asyncio
+
+try:
+    from cyber_data_collector.utils.pdf_extractor import PDFExtractor
+except ImportError:
+    PDFExtractor = None
+
+try:
+    from entity_scraper import PlaywrightScraper
+except ImportError:
+    PlaywrightScraper = None
 
 
 class ContentAcquisitionService:
@@ -55,13 +73,15 @@ class ContentAcquisitionService:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+        self.pdf_extractor = PDFExtractor() if PDFExtractor else None
+        self.playwright_scraper = None  # Lazy initialization (async)
 
     def acquire_content(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
         Fetch full article text and extract clean content.
 
         Args:
-            event: Event dict with at minimum 'url' field
+            event: Event dict with at minimum 'url' field, optionally 'cached_content'
 
         Returns:
             {
@@ -80,6 +100,52 @@ class ContentAcquisitionService:
 
         if not url:
             return self._error_result("No URL provided")
+
+        # Check for cached content first (from RawEvents.raw_content)
+        cached_content = event.get('cached_content')
+        if cached_content and len(cached_content) > 200:
+            self.logger.info(f"Using cached content ({len(cached_content)} chars) for {url}")
+            domain = self._extract_domain(url)
+            return {
+                'title': event.get('title') or url,
+                'url': url,
+                'full_text': cached_content,
+                'clean_summary': cached_content[:500] + '...' if len(cached_content) > 500 else cached_content,
+                'publication_date': None,
+                'source_domain': domain,
+                'source_reliability': self.TRUSTED_SOURCES.get(domain, 0.7),
+                'content_length': len(cached_content.split()),
+                'extraction_method': 'cached',
+                'extraction_success': True,
+                'error': None
+            }
+
+        # Method 0: Check if URL is a PDF file
+        if self.pdf_extractor and self.pdf_extractor.is_pdf_url(url):
+            self.logger.info(f"Detected PDF URL: {url}")
+            try:
+                pdf_result = self.pdf_extractor.extract_from_url(url)
+                if pdf_result and pdf_result['success']:
+                    self.logger.info(f"Successfully extracted {len(pdf_result['text'])} chars from PDF")
+                    # Convert to standard format
+                    domain = self._extract_domain(url)
+                    return {
+                        'title': event.get('title') or url,
+                        'url': url,
+                        'full_text': pdf_result['text'],
+                        'clean_summary': pdf_result['text'][:500] + '...' if len(pdf_result['text']) > 500 else pdf_result['text'],
+                        'publication_date': None,
+                        'source_domain': domain,
+                        'source_reliability': self.TRUSTED_SOURCES.get(domain, 0.7),  # PDFs from gov sites get high trust
+                        'content_length': len(pdf_result['text'].split()),
+                        'extraction_method': f"pdf_{pdf_result['extraction_method']}",
+                        'extraction_success': True,
+                        'error': None
+                    }
+                else:
+                    self.logger.warning(f"PDF extraction failed: {pdf_result.get('error')}, trying HTML methods")
+            except Exception as e:
+                self.logger.warning(f"PDF extraction error: {e}, trying HTML methods")
 
         # Try extraction methods in order
         extraction_result = None
@@ -113,6 +179,23 @@ class ContentAcquisitionService:
             except Exception as e:
                 self.logger.warning(f"beautifulsoup failed for {url}: {e}")
 
+        # Method 4: Playwright (ultimate fallback for JavaScript-heavy sites)
+        if not extraction_result or len(extraction_result.get('full_text', '')) < 200:
+            if PlaywrightScraper:
+                try:
+                    self.logger.info(f"Trying Playwright fallback for {url}")
+                    playwright_text = self._extract_with_playwright(url)
+                    if playwright_text and len(playwright_text) > 200:
+                        extraction_result = {
+                            'full_text': playwright_text,
+                            'summary': None,
+                            'publication_date': None,
+                            'extraction_method': 'playwright'
+                        }
+                        self.logger.info(f"Extracted {len(playwright_text)} chars using Playwright")
+                except Exception as e:
+                    self.logger.warning(f"Playwright failed for {url}: {e}")
+
         if not extraction_result or len(extraction_result.get('full_text', '')) < 100:
             return self._error_result(f"Failed to extract sufficient content from {url}")
 
@@ -125,6 +208,8 @@ class ContentAcquisitionService:
         word_count = len(full_text.split())
 
         result = {
+            'title': event.get('title') or extraction_result.get('title') or url,  # Prefer event title
+            'url': url,
             'full_text': full_text,
             'clean_summary': extraction_result.get('summary') or event.get('summary') or self._generate_summary(full_text),
             'publication_date': extraction_result.get('publication_date'),
@@ -259,6 +344,32 @@ class ContentAcquisitionService:
             return domain
         except:
             return 'unknown'
+
+    def _extract_with_playwright(self, url: str) -> Optional[str]:
+        """Extract content using Playwright (for JavaScript-heavy sites)"""
+        if not PlaywrightScraper:
+            self.logger.debug("PlaywrightScraper not available, skipping")
+            return None
+
+        try:
+            # Run Playwright in async context
+            async def fetch():
+                async with PlaywrightScraper() as scraper:
+                    return await scraper.get_page_text(url, timeout=45)
+
+            # Run the async function
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            text = loop.run_until_complete(fetch())
+            return text
+
+        except Exception as e:
+            self.logger.warning(f"Playwright extraction failed: {e}")
+            return None
 
     def _error_result(self, error_message: str) -> Dict[str, Any]:
         """Return error result structure"""

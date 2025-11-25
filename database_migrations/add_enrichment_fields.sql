@@ -26,3 +26,11 @@ CREATE INDEX IF NOT EXISTS idx_threat_actor ON DeduplicatedEvents(threat_actor);
 
 -- Create index on regulatory_fine_amount for faster queries
 CREATE INDEX IF NOT EXISTS idx_regulatory_fine_amount ON DeduplicatedEvents(regulatory_fine_amount);
+
+
+
+
+
+
+
+

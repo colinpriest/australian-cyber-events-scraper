@@ -2,12 +2,46 @@
 Enhanced deduplication system with object-oriented design, comprehensive validation,
 and merge lineage tracking.
 
+===========================================================================================
+CRITICAL: EVENT DEFINITION AND DEDUPLICATION RULES
+===========================================================================================
+
+**AN EVENT REPRESENTS A SINGLE REAL-WORLD CYBER SECURITY INCIDENT.**
+
+Multiple news articles, blog posts, or reports about the SAME breach/incident MUST be
+MERGED into ONE event. We are tracking security INCIDENTS, not news ARTICLES.
+
+**DEDUPLICATION RULES (in order of priority):**
+
+1. **RULE 1: Same Entity + Same Date → MERGE**
+   - If victim_organization_name matches AND event_date matches → ALWAYS merge
+   - Different titles are OK (e.g., "Ticketmaster hacked" vs "Live Nation breach")
+
+2. **RULE 2: Same Entity + Similar Descriptions → MERGE**
+   - If victim_organization_name matches AND descriptions are similar → MERGE
+   - Even if dates differ (news articles report on different dates)
+   - Use the EARLIEST reliable date as the canonical incident date
+
+3. **RULE 3: Different dates mean different reporting, NOT different incidents**
+   - A breach disclosed on May 20 may have articles published April 15, May 20, May 21
+   - These are all reports about the SAME breach → 1 event with earliest date
+
+**Examples:**
+- ✓ CORRECT: "Ticketmaster hack" (Apr 15) + "Live Nation breach" (May 20) → 1 event dated Apr 15
+- ✗ WRONG: "Ticketmaster hack" (Apr 15) + "Live Nation breach" (May 20) → 2 separate events
+
+**The goal is: "How many distinct security incidents occurred at each organization?"**
+NOT "How many news articles were published?"
+
+===========================================================================================
+
 This module provides a complete deduplication solution that:
 - Uses clear separation of concerns
 - Provides comprehensive error checking and validation
 - Tracks merge lineage for transparency
 - Ensures idempotent operations
 - Supports both algorithmic and LLM-based similarity detection
+- **Prioritizes incident matching over text similarity**
 """
 
 import logging
@@ -28,14 +62,17 @@ class CyberEvent:
     event_id: str
     title: str
     summary: Optional[str] = None
+    description: Optional[str] = None  # Raw scraped text content for semantic matching
     event_date: Optional[date] = None
     event_type: Optional[str] = None
     severity: Optional[str] = None
     records_affected: Optional[int] = None
+    victim_organization_name: Optional[str] = None
+    victim_organization_industry: Optional[str] = None
     data_sources: List[str] = None
     urls: List[str] = None
     confidence: float = 0.5
-    
+
     def __post_init__(self):
         if self.data_sources is None:
             self.data_sources = []
@@ -43,6 +80,7 @@ class CyberEvent:
             self.urls = []
 
 from .entity_extractor import EntityExtractor
+from ..utils.validation import validate_records_affected
 
 logger = logging.getLogger(__name__)
 
@@ -590,12 +628,15 @@ class DeduplicationEngine:
     def __init__(self,
                  similarity_threshold: float = 0.75,
                  llm_arbiter: Optional[LLMArbiter] = None,
-                 validators: Optional[List[DeduplicationValidator]] = None):
+                 validators: Optional[List[DeduplicationValidator]] = None,
+                 entity_mappings: Optional[Dict[str, str]] = None):
         self.similarity_threshold = similarity_threshold
         self.llm_arbiter = llm_arbiter
         self.validators = validators or [DeduplicationValidator()]
         self.logger = logging.getLogger(f"{__name__}.DeduplicationEngine")
         self.similarity_calculator = SimilarityCalculator()  # Reuse calculator instance
+        # Entity mappings: source_entity (lowercase) -> canonical_entity
+        self.entity_mappings = {k.lower(): v for k, v in (entity_mappings or {}).items()}
     
     def deduplicate(self, events: List[CyberEvent]) -> DeduplicationResult:
         """Perform comprehensive deduplication with validation"""
@@ -688,15 +729,69 @@ class DeduplicationEngine:
                 if j in processed:
                     continue
 
-                # Check for exact duplicates first (same title and date - case insensitive)
+                # RULE 1: Same entity + same date → ALWAYS merge (regardless of title)
+                same_entity = self._same_entity(event1, event2)
+                same_date = event1.event_date and event2.event_date and event1.event_date == event2.event_date
+
+                if same_entity and same_date:
+                    group.append(event2)
+                    processed.add(j)
+                    self.logger.debug(f"RULE 1: Merged same entity+date: {event1.victim_organization_name} on {event1.event_date}")
+                    continue
+
+                # Check for exact duplicates (same title and date - case insensitive)
                 if (event1.title.lower().strip() == event2.title.lower().strip() and
                     event1.event_date == event2.event_date):
                     group.append(event2)
                     processed.add(j)
                     continue
 
+                # RULE 2: Same entity + similar descriptions → MERGE (even if dates differ)
+                if same_entity:
+                    # For same entity, be MORE aggressive about merging (lower threshold)
+                    # Check title/description similarity
+                    title_sim = self._quick_title_similarity(event1.title, event2.title)
+
+                    # If titles have any reasonable overlap for same entity, likely same incident
+                    # Use very low threshold (0.15) since we're already confident it's the same organization
+                    if title_sim >= 0.15:  # Very low threshold for same entity
+                        group.append(event2)
+                        processed.add(j)
+                        self.logger.debug(f"RULE 2: Merged same entity+similar desc: {event1.victim_organization_name or event2.victim_organization_name or 'via title'} (title_sim={title_sim:.2f})")
+                        continue
+
+                    # RULE 2b: Same entity + low title similarity but high description similarity → MERGE
+                    # This catches cases like Ticketmaster where titles are completely different
+                    # but the scraped text clearly describes the same incident
+                    if event1.description and event2.description:
+                        desc_sim = self._quick_title_similarity(event1.description, event2.description)
+                        # Use threshold of 0.20 for description similarity when same entity
+                        if desc_sim >= 0.20:
+                            group.append(event2)
+                            processed.add(j)
+                            self.logger.debug(f"RULE 2b: Merged same entity+similar content: {event1.victim_organization_name or event2.victim_organization_name or 'via title'} (title_sim={title_sim:.2f}, desc_sim={desc_sim:.2f})")
+                            continue
+
+                # RULE 3: Description-based similarity fallback (even when entity names missing/don't match)
+                # This catches cases where entity extraction failed but the actual scraped content
+                # clearly describes the same incident (e.g., one event has NULL organization name)
+                if event1.description and event2.description:
+                    desc_sim = self._quick_title_similarity(event1.description, event2.description)
+                    # Use HIGHER threshold (0.35) when entities don't match to avoid false positives
+                    # Also check that dates are reasonably close (within 90 days)
+                    if desc_sim >= 0.35:
+                        if event1.event_date and event2.event_date:
+                            date_diff = abs((event1.event_date - event2.event_date).days)
+                            if date_diff <= 90:  # Events within 3 months
+                                group.append(event2)
+                                processed.add(j)
+                                entity_info = event1.victim_organization_name or event2.victim_organization_name or "unknown entity"
+                                self.logger.debug(f"RULE 3: Merged via high description similarity: {entity_info} (desc_sim={desc_sim:.2f}, date_diff={date_diff}d)")
+                                continue
+
                 # Quick pre-filter: skip events with very different dates (>365 days apart)
-                if event1.event_date and event2.event_date:
+                # BUT only if they're different entities
+                if not same_entity and event1.event_date and event2.event_date:
                     date_diff = abs((event1.event_date - event2.event_date).days)
                     if date_diff > 365:
                         continue  # Skip detailed comparison
@@ -717,6 +812,113 @@ class DeduplicationEngine:
 
         self.logger.info(f"Grouping complete: {total_events} events -> {len(groups)} groups")
         return groups
+
+    def _normalize_entity_name(self, entity_name: Optional[str]) -> Optional[str]:
+        """
+        Normalize entity name using the entity mappings table.
+        Maps subsidiary/brand names to their canonical parent entity.
+        Returns the canonical name if a mapping exists, otherwise the original name.
+        """
+        if not entity_name:
+            return entity_name
+
+        name_lower = entity_name.lower().strip()
+
+        # Check for exact match in mappings
+        if name_lower in self.entity_mappings:
+            canonical = self.entity_mappings[name_lower]
+            self.logger.debug(f"Entity mapping applied: '{entity_name}' -> '{canonical}'")
+            return canonical
+
+        # Check for partial match (e.g., "Ticketmaster" matches "Ticketmaster LLC")
+        for source, canonical in self.entity_mappings.items():
+            if source in name_lower or name_lower in source:
+                self.logger.debug(f"Entity mapping (partial) applied: '{entity_name}' -> '{canonical}'")
+                return canonical
+
+        return entity_name
+
+    def _same_entity(self, event1: CyberEvent, event2: CyberEvent) -> bool:
+        """
+        Check if two events have the same victim organization.
+
+        IMPORTANT: This is a KEY method for deduplication - events with the same victim
+        organization are more likely to be the same incident (RULE 1 and RULE 2).
+
+        Returns True if:
+        - Both have victim_organization_name AND they match (case-insensitive)
+        - Handles variations like "Ticketmaster LLC" vs "Live Nation Entertainment, Inc."
+        - If organization names missing/don't match, checks if titles reference same company
+        """
+        # Normalize entity names using mappings (e.g., Ticketmaster -> Live Nation)
+        name1_raw = event1.victim_organization_name
+        name2_raw = event2.victim_organization_name
+        name1_normalized = self._normalize_entity_name(name1_raw)
+        name2_normalized = self._normalize_entity_name(name2_raw)
+
+        # Try organization name matching (only if both have organization names)
+        if name1_normalized and name2_normalized:
+            name1 = name1_normalized.lower().strip()
+            name2 = name2_normalized.lower().strip()
+
+            # Exact match
+            if name1 == name2:
+                return True
+
+            # Check if one name contains the other (e.g., "Ticketmaster LLC" vs "Ticketmaster")
+            # But avoid matching "Bank" with "Commonwealth Bank"
+            if len(name1) >= 5 and len(name2) >= 5:  # Avoid matching short generic words
+                if name1 in name2 or name2 in name1:
+                    return True
+
+            # Check for known parent-subsidiary/related company relationships
+            # E.g., Ticketmaster is owned by Live Nation
+            related_companies = [
+                {'ticketmaster', 'live nation'},
+                # Add more related companies as needed
+            ]
+
+            for related_set in related_companies:
+                # Check if both organizations match companies in the same related set
+                name1_matches = any(company in name1 for company in related_set)
+                name2_matches = any(company in name2 for company in related_set)
+                if name1_matches and name2_matches:
+                    self.logger.debug(
+                        f"Matched related companies: '{event1.victim_organization_name}' "
+                        f"and '{event2.victim_organization_name}'"
+                    )
+                    return True
+
+        # FALLBACK: If organization names are NULL or don't match, check if titles
+        # reference the same company (e.g., both mention "Ticketmaster")
+        # This handles cases where enrichment failed to extract organization correctly
+        # IMPORTANT: This runs even if one/both organization names are NULL
+        if event1.title and event2.title:
+            title1_lower = event1.title.lower()
+            title2_lower = event2.title.lower()
+
+            # Common company names to check for
+            # Add more as needed for better matching
+            # NOTE: Also add keywords from EntityMappings table (e.g., Nitro PDF -> Nitro Software)
+            company_keywords = [
+                'ticketmaster', 'live nation', 'medibank', 'optus', 'singtel',
+                'latitude', 'myob', 'canva', 'woolworths', 'coles',
+                'nitro', 'nitro pdf', 'nitro software',  # Nitro variants
+                'qantas', 'telstra', 'commonwealth bank', 'westpac', 'nab', 'anz',
+                'bunnings', 'kmart', 'target', 'myer', 'david jones',
+                'toyota', 'mazda', 'ford', 'holden',
+                'university', 'council', 'hospital', 'health',
+            ]
+
+            for keyword in company_keywords:
+                if keyword in title1_lower and keyword in title2_lower:
+                    self.logger.debug(
+                        f"Matched entities via title keyword '{keyword}': "
+                        f"'{event1.title}' and '{event2.title}'"
+                    )
+                    return True
+
+        return False
 
     def _quick_title_similarity(self, title1: str, title2: str) -> float:
         """Fast title similarity check for pre-filtering"""
@@ -844,44 +1046,85 @@ class DeduplicationEngine:
         return scored_events[0][1]
     
     def _merge_event_data(self, events: List[CyberEvent]) -> CyberEvent:
-        """Merge data from multiple events into one"""
+        """
+        Merge data from multiple events into one.
+
+        IMPORTANT: Uses EARLIEST date (RULE 2) - multiple news articles about the same
+        incident may be published on different dates, but we want the original incident date.
+        """
         master = events[0]  # Start with first event
-        
+
         # Merge all unique data sources
         all_sources = set()
         for event in events:
             if hasattr(event, 'data_sources') and event.data_sources:
                 all_sources.update(event.data_sources)
-        
+
         # Merge all unique URLs
         all_urls = set()
         for event in events:
             if hasattr(event, 'urls') and event.urls:
                 all_urls.update(event.urls)
-        
+
         # Use the most complete summary
         best_summary = master.summary
         for event in events:
             if event.summary and len(event.summary) > len(best_summary or ""):
                 best_summary = event.summary
-        
-        # Use the highest records affected
+
+        # Use the highest VALIDATED records affected
+        # Apply reasonableness validation to prevent clearly incorrect values
         max_records = master.records_affected or 0
         for event in events:
             if event.records_affected and event.records_affected > max_records:
                 max_records = event.records_affected
-        
+
+        # Validate the max_records value - use master title for context
+        if max_records > 0:
+            validated_records = validate_records_affected(max_records, master.title)
+            if validated_records != max_records:
+                self.logger.warning(
+                    f"Merge: records_affected {max_records:,} rejected for '{master.title[:50]}' - "
+                    f"using {validated_records if validated_records else 'NULL'}"
+                )
+                max_records = validated_records if validated_records else 0
+
+        # RULE 2: Use the EARLIEST date from all merged events
+        # This is the canonical incident date, not the news article publication date
+        all_dates = [e.event_date for e in events if e.event_date is not None]
+        if all_dates:
+            earliest_date = min(all_dates)
+            self.logger.debug(
+                f"Selected earliest date {earliest_date} from {len(all_dates)} events "
+                f"(dates: {sorted(all_dates)})"
+            )
+        else:
+            earliest_date = master.event_date
+            self.logger.debug("No dates available, using master event date")
+
+        # Preserve the best victim_organization_name (first non-null value)
+        # Normalize using entity mappings
+        best_org_name = None
+        best_org_industry = None
+        for event in events:
+            if event.victim_organization_name and not best_org_name:
+                best_org_name = self._normalize_entity_name(event.victim_organization_name) or event.victim_organization_name
+            if hasattr(event, 'victim_organization_industry') and event.victim_organization_industry and not best_org_industry:
+                best_org_industry = event.victim_organization_industry
+
         # Create merged event
         merged_event = CyberEvent(
             event_id=master.event_id,  # Keep original ID
             title=master.title,
             summary=best_summary,
-            event_date=master.event_date,
+            event_date=earliest_date,  # CHANGED: Use earliest date instead of master
             event_type=master.event_type,
             severity=master.severity,
-            records_affected=max_records,
+            records_affected=max_records if max_records > 0 else None,  # 0 becomes NULL
+            victim_organization_name=best_org_name,
+            victim_organization_industry=best_org_industry,
             data_sources=list(all_sources) if all_sources else master.data_sources,
             urls=list(all_urls) if all_urls else master.urls
         )
-        
+
         return merged_event

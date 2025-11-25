@@ -1,0 +1,254 @@
+[
+  {
+    "deduplicated_event_id": "a9e313e3-ac0a-4e04-8028-aae48c29c6f3",
+    "title": "Australian Internet Provider Cybersecurity Breach",
+    "event_date": "2025-10-17",
+    "event_type": "CyberEventType.DATA_BREACH",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 1600,
+    "severity_category": "C4",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The event affected 1,600 records, which falls into the 1,000-10,000 range, suggesting a C4-C5 severity. Given the 'HIGH' current severity and the fact that it is an Australian event, C4 is selected to reflect a moderate impact.",
+      "stakeholder_reasoning": "Without specific information on the victim organization or industry, and considering the nature of an internet provider breach, it is reasonable to assume that members of the public are primarily affected.",
+      "impact_reasoning": "The breach appears to involve a limited number of records and lacks details on broader systemic impacts, suggesting an 'Isolated compromise' rather than a widespread or coordinated attack.",
+      "information_quality": "The information provided is limited, with key details such as the victim organization and attack method missing. This affects the precision of the classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "3280e717-6656-4202-880d-f1ad41878b2d",
+    "title": "Aussie Fluid Power Ransomware Attack",
+    "event_date": "2025-10-16",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Aussie Fluid Power Pty Ltd",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Medium-sized organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity category is defaulted to C6 due to the lack of information on the number of records affected. Without specific data on the extent of the breach, it is not possible to accurately assess the severity beyond the default classification for unknown records.",
+      "stakeholder_reasoning": "Aussie Fluid Power Pty Ltd is likely a medium-sized organization within the manufacturing industry. This classification is based on the typical size and structure of companies in this sector.",
+      "impact_reasoning": "The impact type is classified as 'Isolated compromise' due to the nature of ransomware attacks, which typically affect the targeted organization without broader systemic implications unless specified otherwise.",
+      "information_quality": "The available information is limited, particularly regarding the number of records affected and the specific impact on the organization. This lack of detail necessitates a conservative approach to classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "59bc2d9f-e181-4412-996b-67fc9385d918",
+    "title": "Company Announcements // The Motley Fool Australia",
+    "event_date": "2025-10-16",
+    "event_type": "CyberEventType.OTHER",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 0,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of information on records affected, the absence of a victim organization, and no details on the attack method or impact. According to the guidelines, unknown or no data defaults to the least severe category.",
+      "stakeholder_reasoning": "Since there is no specific victim organization or industry mentioned, the most generic category, 'Member(s) of the public,' is selected to reflect the broadest potential impact.",
+      "impact_reasoning": "The impact type is classified as 'Unsuccessful low-level malicious attack' because there is no evidence of a successful attack or any significant impact described in the event details.",
+      "information_quality": "The available information is minimal and lacks critical details such as records affected, victim organization, and attack specifics, leading to a low confidence in the classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "ac03a879-1e42-4e9e-af9d-bb4119643863",
+    "title": "Exclusive: Tassie aged care NFP confirms Lynx ransomware breach",
+    "event_date": "2025-10-10",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Community Based Support Ltd",
+    "victim_organization_industry": "Healthcare",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Medium-sized organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity category is defaulted to C6 due to the lack of information on the number of records affected. Without specific data on the scale of the breach, the default classification is the least severe as per the guidelines.",
+      "stakeholder_reasoning": "Community Based Support Ltd operates in the healthcare sector and is likely a medium-sized organization given its classification as a not-for-profit aged care provider.",
+      "impact_reasoning": "The impact type is classified as 'Isolated compromise' because the event is described as a ransomware breach affecting a single organization, without indications of broader systemic impact or coordination.",
+      "information_quality": "The available information is limited, particularly regarding the number of records affected and the specific impact on services. This limitation necessitates defaulting to the least severe classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "bdf496d3-bc79-476f-a7fd-059bf9cde780",
+    "title": "Exclusive: Aussie firm Benedict listed by INC Ransom hacking group",
+    "event_date": "2025-10-09",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Benedict Industries Pty Ltd",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": 100,
+    "severity_category": "C5",
+    "primary_stakeholder_category": "Large organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.75,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The event affected 100 records, which falls under the <1,000 records category, suggesting a C5-C6 severity. Given the current severity is marked as HIGH, we consider C5 as a more appropriate classification.",
+      "stakeholder_reasoning": "Benedict Industries Pty Ltd is a manufacturing firm, which typically aligns with a large organisation due to the nature of the industry.",
+      "impact_reasoning": "The attack is a ransomware event with no reported disruption to essential services or extensive data compromise, indicating an isolated compromise.",
+      "information_quality": "The available information is limited, with no details on the attack method or specific impacts beyond the number of records affected. This limits the precision of the classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "f5de9688-2f71-4da2-a797-fd994089af83",
+    "title": "Asahi Ransomware Attack",
+    "event_date": "2025-09-29",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Asahi Group Holdings, Ltd.",
+    "victim_organization_industry": "Manufacturing",
+    "records_affected": 9323,
+    "severity_category": "C4",
+    "primary_stakeholder_category": "Large organisation(s)",
+    "impact_type": "Isolated compromise",
+    "confidence_score": 0.8,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The event affected 9,323 records, which falls into the 1,000-10,000 range. According to the ASD risk matrix framework, this suggests a C4-C5 severity. Given the critical severity of the ransomware attack on a large manufacturing company, C4 is appropriate.",
+      "stakeholder_reasoning": "Asahi Group Holdings, Ltd. is a large multinational corporation in the manufacturing industry, thus classifying it under 'Large organisation(s)'.",
+      "impact_reasoning": "The ransomware attack seems to have caused an isolated compromise, affecting a specific organization without broader systemic disruption.",
+      "information_quality": "The information provided is limited, lacking details on the attack method and broader impact. However, the number of records affected and the critical severity provide a basis for classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "a59d48da-1a2d-45d4-a165-f26bad93fa6d",
+    "title": "Cyber Daily",
+    "event_date": "2025-09-29",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 0,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The number of records affected is unknown, and there is no information on the victim organization, industry, or attack method. According to the guidelines, when records affected are unknown, we default to C6, which is the least severe category.",
+      "stakeholder_reasoning": "Since there is no specific victim organization or industry mentioned, the default assumption is that the impact is on the general public, hence 'Member(s) of the public' is chosen as the primary stakeholder category.",
+      "impact_reasoning": "Given the lack of detailed information about the attack method, victim, or impact, the event is classified as an 'Unsuccessful low-level malicious attack'. This reflects the minimal impact and lack of data on disruption or compromise.",
+      "information_quality": "The available information is very limited, with key details such as records affected, victim organization, and attack method missing. This significantly limits the ability to accurately assess the severity and impact."
+    }
+  },
+  {
+    "deduplicated_event_id": "db75f757-146a-42a6-b84e-c6881ca4ae80",
+    "title": "Exclusive: Qilin ransomware affiliate claims Asahi hack, Aussie data compromised",
+    "event_date": "2025-09-16",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 0,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The number of records affected is unknown, and there is no specific information about the impact on any organization or infrastructure. According to the guidelines, when the records affected are unknown, the default severity is C6, indicating the least severe category.",
+      "stakeholder_reasoning": "Since there is no specific victim organization or industry mentioned, and the event is noted as an 'Australian Event,' the most general stakeholder category applicable is 'Member(s) of the public.'",
+      "impact_reasoning": "Due to the lack of detailed information on the attack's success or specific impact, it is classified as an 'Unsuccessful low-level malicious attack.' This is because there is no evidence of a successful breach or disruption.",
+      "information_quality": "The available information is very limited, with key details such as records affected, victim organization, and attack method missing. This lack of information limits the ability to accurately assess the event's severity and impact."
+    }
+  },
+  {
+    "deduplicated_event_id": "1ef9d765-ca42-490d-b555-27bd62909ee7",
+    "title": "The followi",
+    "event_date": "2025-09-01",
+    "event_type": null,
+    "victim_organization_name": "Intellect Systems Pty Ltd",
+    "victim_organization_industry": "Technology",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Medium-sized organisation(s)",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of information on the number of records affected and the absence of any described impact or attack method. According to the framework, unknown or no data defaults to the least severe category.",
+      "stakeholder_reasoning": "Intellect Systems Pty Ltd is identified as a technology company, which typically falls under the category of medium-sized organisations in the absence of specific size data.",
+      "impact_reasoning": "Given the absence of any specific attack method, records affected, or described impact, the event is classified as an 'Unsuccessful low-level malicious attack' due to the lack of evidence of compromise or disruption.",
+      "information_quality": "The available information is minimal and lacks detail, particularly concerning the attack method, records affected, and impact description. This limits the ability to accurately assess the severity and impact."
+    }
+  },
+  {
+    "deduplicated_event_id": "08b7674c-b1c2-4f7b-b10c-2de87a58c609",
+    "title": "Betwee",
+    "event_date": "2025-09-01",
+    "event_type": null,
+    "victim_organization_name": "New South Wales Government",
+    "victim_organization_industry": "Government",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "State government",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of specific information on the number of records affected and the absence of details regarding the attack method or impact. The default to C6 is based on the 'Unknown' status of records affected, which suggests minimal to no impact.",
+      "stakeholder_reasoning": "The victim organization is the New South Wales Government, which falls under the 'State government' category. This classification is based on the nature of the organization involved.",
+      "impact_reasoning": "Given the absence of any described attack method, impact, or disruption, the event is classified as an 'Unsuccessful low-level malicious attack.' This reflects the lack of evidence for any significant compromise or disruption.",
+      "information_quality": "The available information is extremely limited, with no details on the attack method, severity, or records affected. This significantly limits the ability to accurately assess the event's impact, leading to a default classification of least severity."
+    }
+  },
+  {
+    "deduplicated_event_id": "ab44e0eb-eb90-4577-b0cd-ef13c5048e51",
+    "title": "Ransomware Hits New Peak: Data Theft Nearly Doubles to 238TB ...",
+    "event_date": "2025-09-01",
+    "event_type": "CyberEventType.RANSOMWARE",
+    "victim_organization_name": "Australian Signals Directorate",
+    "victim_organization_industry": "Government",
+    "records_affected": null,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Federal government",
+    "impact_type": "Extensive compromise",
+    "confidence_score": 0.7,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The number of records affected is unknown, which defaults the severity to C6 according to the guidelines. However, given the involvement of the Australian Signals Directorate, a critical government entity, the potential impact could be significant, but without specific data, we adhere to the default classification.",
+      "stakeholder_reasoning": "The victim organization is the Australian Signals Directorate, which is part of the federal government. This makes 'Federal government' the most appropriate stakeholder category.",
+      "impact_reasoning": "The attack is described as a ransomware event with significant data theft (238TB), indicating an 'Extensive compromise' of systems and data, despite the lack of specific details on records affected.",
+      "information_quality": "The available information is limited, particularly regarding the number of records affected and specific attack details. This lack of data impacts the ability to accurately assess the severity and impact, leading to a default severity classification."
+    }
+  },
+  {
+    "deduplicated_event_id": "5b2330f2-dae5-4c6e-8a06-6f4f7fe97c87",
+    "title": "Payment Calculator - SUV Offers & Deals | Land Rover® Australia",
+    "event_date": "2025-08-31",
+    "event_type": "CyberEventType.OTHER",
+    "victim_organization_name": null,
+    "victim_organization_industry": null,
+    "records_affected": 0,
+    "severity_category": "C6",
+    "primary_stakeholder_category": "Member(s) of the public",
+    "impact_type": "Unsuccessful low-level malicious attack",
+    "confidence_score": 0.6,
+    "model_used": "gpt-4o",
+    "created_at": "2025-11-18T15:31:49.693860",
+    "reasoning": {
+      "severity_reasoning": "The severity is classified as C6 due to the lack of information regarding records affected, the absence of a victim organization, and no specific attack method or impact described. According to the guidelines, unknown or no data defaults to C6.",
+      "stakeholder_reasoning": "Given the lack of a specific victim organization or industry, the most generic stakeholder category, 'Member(s) of the public,' is selected. This assumes that if there were any impact, it would be minimal and possibly affect individuals indirectly.",
+      "impact_reasoning": "The impact is classified as an 'Unsuccessful low-level malicious attack' due to the absence of any reported disruption, compromise, or specific attack method. The event appears to have minimal or no impact.",
+      "information_quality": "The available information is extremely limited, with many critical fields marked as 'Unknown' or 'None.' This significantly limits the ability to accurately assess the event, leading to a default classification of the lowest severity."
+    }
+  }
+]
