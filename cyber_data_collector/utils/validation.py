@@ -44,6 +44,30 @@ MAJOR_INTERNATIONAL_ORGANIZATIONS = {
     'dji'
 }
 
+# Major Australian organizations with large customer bases (up to 30M records)
+# These are major banks, telcos, healthcare providers that serve millions of Australians
+MAJOR_AUSTRALIAN_ORGANIZATIONS = {
+    # Major banks and financial institutions
+    'commonwealth bank', 'cba', 'commbank',
+    'westpac', 'nab', 'national australia bank',
+    'anz', 'australia and new zealand banking',
+    'suncorp', 'bendigo bank', 'macquarie',
+    'amp', 'qbe', 'iag',
+    # Major telcos
+    'telstra', 'optus', 'vodafone', 'tpg',
+    # Major healthcare
+    'medisecure', 'medibank', 'bupa', 'nib', 'hcf',
+    # Major retailers
+    'woolworths', 'coles', 'bunnings', 'jb hi-fi', 'harvey norman',
+    # Major utilities
+    'agl', 'origin energy', 'energyaustralia',
+    # Major insurers
+    'allianz', 'zurich', 'axa',
+    # Other large organizations
+    'qantas', 'virgin australia', 'australia post',
+    'latitude', 'latitude financial', 'genworth'
+}
+
 # Australian government organization identifiers
 # These may legitimately have up to 30M records affected (due to Australia's population ~26M)
 AUSTRALIAN_GOVERNMENT_IDENTIFIERS = {
@@ -52,7 +76,7 @@ AUSTRALIAN_GOVERNMENT_IDENTIFIERS = {
     'ministry of',
     'home affairs', 'foreign affairs', 'defence', 'defense',
     'ato', 'australian taxation office',
-    'medicare', 'medibank', 'centrelink',
+    'medicare', 'centrelink',
     'services australia',
     'treasury',
     'infrastructure', 'transport',
@@ -120,30 +144,32 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
     # Check if it's a major international organization (allows up to 1 billion)
     is_international = any(org in title_lower for org in MAJOR_INTERNATIONAL_ORGANIZATIONS)
 
+    # Check if it's a major Australian organization (allows up to 30 million)
+    is_major_au = any(org in title_lower for org in MAJOR_AUSTRALIAN_ORGANIZATIONS)
+
     # Check if it's an Australian government organization (allows up to 30 million)
     is_gov = any(identifier in title_lower for identifier in AUSTRALIAN_GOVERNMENT_IDENTIFIERS)
 
     # Apply tiered limits based on organization type
-    AUSTRALIAN_ORG_MAX = 20_000_000
-    AUSTRALIAN_GOV_MAX = 30_000_000
+    SMALL_ORG_MAX = 20_000_000
+    LARGE_AU_ORG_MAX = 30_000_000
 
-    if value > AUSTRALIAN_ORG_MAX and not (is_international or is_gov):
-        # Non-government, non-international organization exceeds 20M cap
+    if value > SMALL_ORG_MAX and not (is_international or is_major_au or is_gov):
+        # Small/unknown organization exceeds 20M cap
         logger.warning(
-            f"High records_affected ({value:,}) rejected for non-international, non-government organization. "
+            f"High records_affected ({value:,}) rejected for small/unknown organization. "
             f"Event: {event_title}. "
-            f"Record counts > {AUSTRALIAN_ORG_MAX:,} only accepted for major international companies "
-            f"(e.g., Facebook, Google) or Australian government organizations. "
-            f"Local/regional organizations capped at {AUSTRALIAN_ORG_MAX:,}."
+            f"Record counts > {SMALL_ORG_MAX:,} only accepted for major organizations. "
+            f"Local/regional organizations capped at {SMALL_ORG_MAX:,}."
         )
         return None
 
-    if value > AUSTRALIAN_GOV_MAX and is_gov and not is_international:
-        # Australian government organization exceeds 30M cap
+    if value > LARGE_AU_ORG_MAX and (is_major_au or is_gov) and not is_international:
+        # Major Australian organization exceeds 30M cap
         logger.warning(
-            f"High records_affected ({value:,}) rejected for Australian government organization. "
+            f"High records_affected ({value:,}) rejected for major Australian organization. "
             f"Event: {event_title}. "
-            f"Australian government organizations capped at {AUSTRALIAN_GOV_MAX:,} "
+            f"Major Australian organizations capped at {LARGE_AU_ORG_MAX:,} "
             f"(based on Australia's population of ~26M)."
         )
         return None

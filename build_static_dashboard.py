@@ -18,7 +18,7 @@ import json
 import glob
 from datetime import date
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -864,25 +864,108 @@ def get_records_affected_by_attack_type(conn: sqlite3.Connection, start_date: st
     }
 
 
+def _validate_oaic_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and clean OAIC record, nullifying obviously incorrect values.
+
+    Rules:
+    - Sector notification counts should not exceed total_notifications
+    - Attack type counts should not exceed total_notifications
+    - Percentages should be between 0 and 100
+    """
+    total = record.get('total_notifications') or 0
+
+    # Validate top_sectors - remove entries with counts > total_notifications
+    if record.get('top_sectors') and total > 0:
+        valid_sectors = []
+        for sector in record['top_sectors']:
+            count = sector.get('notifications') or 0
+            if count <= total * 1.1:  # Allow 10% margin for rounding
+                valid_sectors.append(sector)
+        record['top_sectors'] = valid_sectors if valid_sectors else None
+
+    # Validate attack type counts - should not exceed total_notifications
+    attack_fields = ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']
+    for field in attack_fields:
+        value = record.get(field)
+        if value is not None and total > 0 and value > total * 1.1:
+            record[field] = None  # Nullify impossible values
+
+    return record
+
+
 def load_oaic_data() -> List[Dict[str, Any]]:
-    """Load OAIC data from JSON files created by oaic_data_scraper.py"""
+    """Load OAIC data from JSON files, merging data from multiple sources.
+
+    Combines PDF-scraped data (has individuals_affected_average/median) with
+    dashboard-scraped data (has individuals_affected_distribution) to get the
+    most complete dataset. Validates data to filter out obviously incorrect values.
+    """
     oaic_files = glob.glob('oaic_cyber_statistics_*.json')
 
     if not oaic_files:
         print("Warning: No OAIC data files found. Run oaic_data_scraper.py first.")
         return []
 
-    # Get the most recent OAIC data file
-    latest_file = max(oaic_files, key=os.path.getctime)
+    # Load all OAIC files and merge by period
+    all_records: Dict[str, Dict[str, Any]] = {}  # key: "year period" -> record
 
-    try:
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            oaic_data = json.load(f)
-        print(f"Loaded OAIC data from: {latest_file}")
-        return oaic_data
-    except Exception as e:
-        print(f"Error loading OAIC data: {e}")
-        return []
+    for filepath in oaic_files:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                file_data = json.load(f)
+
+            for record in file_data:
+                year = record.get('year')
+                period = record.get('period')
+                if not year or not period:
+                    continue
+
+                # Validate the record
+                record = _validate_oaic_record(record)
+                period_key = f"{year} {period}"
+
+                if period_key not in all_records:
+                    all_records[period_key] = record
+                else:
+                    # Merge: keep fields with actual values
+                    existing = all_records[period_key]
+
+                    # Prefer records with individuals_affected_average/median (PDF-scraped)
+                    if record.get('individuals_affected_average') and not existing.get('individuals_affected_average'):
+                        existing['individuals_affected_average'] = record['individuals_affected_average']
+                    if record.get('individuals_affected_median') and not existing.get('individuals_affected_median'):
+                        existing['individuals_affected_median'] = record['individuals_affected_median']
+
+                    # Prefer records with individuals_affected_distribution (dashboard-scraped)
+                    if record.get('individuals_affected_distribution') and not existing.get('individuals_affected_distribution'):
+                        existing['individuals_affected_distribution'] = record['individuals_affected_distribution']
+
+                    # For top_sectors, prefer records with valid sectors over empty/null
+                    if record.get('top_sectors') and not existing.get('top_sectors'):
+                        existing['top_sectors'] = record['top_sectors']
+
+                    # For attack types, prefer valid (non-null) values
+                    for field in ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']:
+                        if record.get(field) is not None and existing.get(field) is None:
+                            existing[field] = record[field]
+
+                    # For other fields, prefer non-null values
+                    for key, value in record.items():
+                        if key not in existing or existing[key] is None:
+                            existing[key] = value
+
+        except Exception as e:
+            print(f"Warning: Could not load {filepath}: {e}")
+            continue
+
+    # Sort by year and period
+    merged_data = sorted(
+        all_records.values(),
+        key=lambda x: (x.get('year', 0), 0 if x.get('period') == 'H1' else 1)
+    )
+
+    print(f"Loaded and merged OAIC data from {len(oaic_files)} files, {len(merged_data)} periods")
+    return merged_data
 
 
 def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -1088,6 +1171,36 @@ def prepare_oaic_attack_types_data(oaic_data: List[Dict[str, Any]]) -> Dict[str,
     }
 
 
+def normalize_sector_name(sector: str) -> str:
+    """Normalize sector names to canonical form for consistent aggregation."""
+    if not sector:
+        return sector
+
+    # Mapping of variations to canonical names
+    sector_mappings = {
+        'Australian': 'Australian Government',
+        'Australian government': 'Australian Government',
+        'Government': 'Australian Government',
+        'Finance (incl. superannuation)': 'Finance',
+        'Finance (including superannuation)': 'Finance',
+        'Health service providers': 'Health',
+        'Health services': 'Health',
+        'Healthcare': 'Health',
+    }
+
+    # Check for exact match first
+    if sector in sector_mappings:
+        return sector_mappings[sector]
+
+    # Check for case-insensitive match
+    sector_lower = sector.lower()
+    for key, value in sector_mappings.items():
+        if key.lower() == sector_lower:
+            return value
+
+    return sector
+
+
 def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'instance/cyber_events.db') -> Dict[str, Any]:
     """Prepare OAIC top sectors affected with database comparison (aggregated 2019-2024)."""
     from collections import defaultdict
@@ -1096,12 +1209,14 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     sector_totals = defaultdict(int)
 
     for record in oaic_data:
-        top_sectors = record.get('top_sectors', [])
+        top_sectors = record.get('top_sectors') or []
         for sector_entry in top_sectors:
             sector = sector_entry.get('sector')
             notifications = sector_entry.get('notifications', 0)
             if sector and notifications:
-                sector_totals[sector] += notifications
+                # Normalize sector name before aggregating
+                normalized_sector = normalize_sector_name(sector)
+                sector_totals[normalized_sector] += notifications
 
     # Sort by total notifications
     sorted_sectors = sorted(sector_totals.items(), key=lambda x: x[1], reverse=True)
@@ -1128,10 +1243,10 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     except Exception as e:
         print(f"Warning: Could not query database for sector counts: {e}")
 
-    # Map database industry names to OAIC sector names
+    # Map database industry names to OAIC sector names (using normalized names)
     industry_mapping = {
         'Healthcare': 'Health',
-        'Government': 'Australian government',
+        'Government': 'Australian Government',
         'Finance': 'Finance',
         'Retail': 'Retail',
         'Education': 'Education'
@@ -1164,6 +1279,75 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     }
 
 
+def calculate_stats_from_distribution(distribution: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Calculate average and median from individuals_affected_distribution data.
+
+    Returns:
+        Tuple of (average, median) or (None, None) if calculation not possible
+    """
+    if not distribution:
+        return None, None
+
+    # Define midpoints for each range
+    range_midpoints = {
+        '1': 1,
+        '2-10': 6,
+        '11-100': 55,
+        '101-1,000': 550,
+        '101-1000': 550,
+        '1,001-5,000': 3000,
+        '1001-5000': 3000,
+        '5,001-10,000': 7500,
+        '5001-10000': 7500,
+        '10,001-50,000': 30000,
+        '10001-50000': 30000,
+        '50,001-100,000': 75000,
+        '50001-100000': 75000,
+        '100,001-250,000': 175000,
+        '100001-250000': 175000,
+        '250,001-500,000': 375000,
+        '250001-500000': 375000,
+        '500,001-1,000,000': 750000,
+        '500001-1000000': 750000,
+        '1,000,001-5,000,000': 3000000,
+        '1000001-5000000': 3000000,
+        '5,000,001+': 7500000,
+        '5000001+': 7500000,
+    }
+
+    # Build a list of estimated values
+    values = []
+    for item in distribution:
+        range_str = item.get('range', '')
+        count = item.get('count', 0)
+
+        if range_str.lower() == 'unknown' or count == 0:
+            continue
+
+        # Normalize range string (remove spaces, handle variations)
+        range_normalized = range_str.replace(' ', '').replace(',', '')
+
+        midpoint = range_midpoints.get(range_str) or range_midpoints.get(range_normalized)
+
+        if midpoint:
+            values.extend([midpoint] * count)
+
+    if not values:
+        return None, None
+
+    # Calculate average and median
+    avg = sum(values) / len(values)
+    sorted_values = sorted(values)
+    n = len(sorted_values)
+    if n % 2 == 0:
+        median = (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
+    else:
+        median = sorted_values[n//2]
+
+    return avg, median
+
+
 def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_path: str = 'instance/cyber_events.db') -> Dict[str, Any]:
     """Prepare OAIC individuals affected trends with database comparison."""
     import sqlite3
@@ -1184,7 +1368,7 @@ def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_p
                 CASE WHEN CAST(strftime('%m', event_date) AS INTEGER) <= 6 THEN 'H1' ELSE 'H2' END as half,
                 AVG(records_affected) as avg_records
             FROM DeduplicatedEvents
-            WHERE event_date >= '2019-01-01' AND event_date <= '2024-12-31'
+            WHERE event_date >= '2019-01-01' AND event_date <= '2025-12-31'
             AND records_affected IS NOT NULL
             GROUP BY year, half
             ORDER BY year, half
@@ -1204,8 +1388,20 @@ def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_p
             period_key = f"{year} {period}"
             periods.append(period_key)
 
-            averages.append(record.get('individuals_affected_average'))
-            medians.append(record.get('individuals_affected_median'))
+            # Get average and median, or calculate from distribution if not available
+            avg = record.get('individuals_affected_average')
+            med = record.get('individuals_affected_median')
+
+            # If missing, try to calculate from distribution data
+            if (avg is None or med is None) and record.get('individuals_affected_distribution'):
+                calc_avg, calc_med = calculate_stats_from_distribution(record.get('individuals_affected_distribution'))
+                if avg is None:
+                    avg = calc_avg
+                if med is None:
+                    med = calc_med
+
+            averages.append(avg)
+            medians.append(med)
 
             # Add database average for this period (or None if not available)
             db_averages.append(db_data.get(period_key))
@@ -1425,6 +1621,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     oaic_ind_aff = json.dumps(data.get('oaic_individuals_affected', {'periods': [], 'averages': [], 'medians': [], 'db_averages': []}))
     asd_all = json.dumps(data.get('asd_risk_all', {}))
     asd_current = json.dumps(data.get('asd_risk_current', {}))
+    asd_previous = json.dumps(data.get('asd_risk_previous', {}))
 
     template = """<!DOCTYPE html>
 <html lang="en">
@@ -1563,7 +1760,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title" id="oaicSectorsTitle">OAIC Top Affected Sectors (2019-2024)</div>
+          <div class="chart-title" id="oaicSectorsTitle">OAIC Top Affected Sectors (2020-2025)</div>
           <canvas id="oaicSectorsChart"></canvas>
         </div>
       </div>
@@ -1598,6 +1795,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
+        <div class="chart-container risk-matrix" style="height: auto;">
+          <div class="chart-title d-flex justify-content-between align-items-center">
+            <span>ASD Risk Matrix (Previous Year)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdPreviousTotal">0</span></span>
+          </div>
+          <div id="asdRiskMatrixPrevious"></div>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
         <div class="chart-container" style="height: 500px;">
           <div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>
           <canvas id="correlationMatrixChart"></canvas>
@@ -1627,6 +1833,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const oaicIndividualsAffected = __OAIC_IND_AFF__;
     const asdRiskAll = __ASD_ALL__;
     const asdRiskCurrent = __ASD_CURR__;
+    const asdRiskPrevious = __ASD_PREV__;
 
     const colors = {
       primary: '#2563eb',
@@ -1688,6 +1895,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
     renderRiskMatrix('asdRiskMatrixAll', asdRiskAll, 'asdAllTotal');
     renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
+    renderRiskMatrix('asdRiskMatrixPrevious', asdRiskPrevious, 'asdPreviousTotal');
 
     // 1) Monthly Trends (line) with trend line
     (function() {
@@ -2093,8 +2301,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               borderColor: colors.danger,
               backgroundColor: colors.danger + '20',
               fill: true,
-              tension: 0.3,
-              yAxisID: 'y'
+              tension: 0.3
             },
             {
               label: 'Total Notifications',
@@ -2102,8 +2309,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               borderColor: colors.primary,
               backgroundColor: colors.primary + '20',
               fill: true,
-              tension: 0.3,
-              yAxisID: 'y1'
+              tension: 0.3
             }
           ]
         },
@@ -2118,20 +2324,10 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             y: {
               type: 'linear',
               position: 'left',
+              beginAtZero: true,
               title: {
                 display: true,
-                text: 'Cyber Incidents'
-              }
-            },
-            y1: {
-              type: 'linear',
-              position: 'right',
-              title: {
-                display: true,
-                text: 'Total Notifications'
-              },
-              grid: {
-                drawOnChartArea: false
+                text: 'Count'
               }
             }
           }
@@ -2197,7 +2393,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicSectors;
       if (!data.sectors || data.sectors.length === 0) {
         document.getElementById('oaicSectorsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Top Affected Sectors (2019-2024)</div>' +
+          '<div class="chart-title">OAIC Top Affected Sectors (2020-2025)</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2205,7 +2401,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       // Update title based on actual sector count
       const sectorCount = data.sector_count || data.sectors.length;
       document.getElementById('oaicSectorsTitle').textContent =
-        `OAIC Top ${sectorCount} Affected Sectors (2019-2024)`;
+        `OAIC Top ${sectorCount} Affected Sectors (2020-2025)`;
 
       new Chart(document.getElementById('oaicSectorsChart').getContext('2d'), {
         type: 'bar',
@@ -2242,7 +2438,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             x: {
               title: {
                 display: true,
-                text: 'Total Notifications (2019-2024)'
+                text: 'Total Notifications (2020-2025)'
               }
             }
           }
@@ -2846,6 +3042,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__OAIC_IND_AFF__', oaic_ind_aff)
             .replace('__ASD_ALL__', asd_all)
             .replace('__ASD_CURR__', asd_current)
+            .replace('__ASD_PREV__', asd_previous)
            )
 
 
@@ -2907,6 +3104,7 @@ def main():
             'oaic_individuals_affected': oaic_individuals_affected,
             'asd_risk_all': get_asd_risk_matrix(conn),
             'asd_risk_current': get_asd_risk_matrix(conn, current_year),
+            'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),
         }
 
     html = build_html(data, start_date, end_date)

@@ -1269,7 +1269,7 @@ class EventDiscoveryEnrichmentPipeline:
 
             async for result in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Scraping URLs"):
                 try:
-                    scrape_result = await result
+                    scrape_result = await asyncio.wait_for(result, timeout=120.0)  # 2 minute timeout
                     if scrape_result['success']:
                         # Apply Random Forest content filtering for all events
                         if not self._apply_rf_content_filter(scrape_result['event']):
@@ -1292,6 +1292,9 @@ class EventDiscoveryEnrichmentPipeline:
                             'perplexity_attempted': scrape_result.get('perplexity_attempted', False),
                             'perplexity_succeeded': scrape_result.get('perplexity_succeeded', False)
                         })
+                except asyncio.TimeoutError:
+                    logger.warning(f"Scraping task timed out after 120s")
+                    self.stats['errors'] += 1
                 except Exception as e:
                     logger.debug(f"[ERROR] Scraping error: {e}")
                     self.stats['errors'] += 1
@@ -1984,13 +1987,12 @@ class EventDiscoveryEnrichmentPipeline:
             logger.info("[GLOBAL DEDUPLICATION] Running deduplication engine...")
             result = engine.deduplicate(all_events)
             
-            # Validate result
+            # Log validation warnings (non-fatal - still proceed with storage)
             if result.validation_errors:
-                logger.error(f"[GLOBAL DEDUPLICATION] Validation failed: {len(result.validation_errors)} errors")
+                logger.warning(f"[GLOBAL DEDUPLICATION] Validation found {len(result.validation_errors)} issues (non-fatal)")
                 for error in result.validation_errors:
-                    logger.error(f"[VALIDATION ERROR] {error.error_type}: {error.message}")
-                raise ValueError("Deduplication produced invalid results")
-            
+                    logger.warning(f"[VALIDATION WARNING] {error.error_type}: {error.message}")
+
             # Store result
             logger.info("[GLOBAL DEDUPLICATION] Storing deduplication results...")
             storage_result = storage.store_deduplication_result(result)

@@ -153,32 +153,38 @@ class CyberDataCollector:
             return []
 
     async def _process_events(self, events: List[CyberEvent]) -> List[CyberEvent]:
-        self.logger.info("Processing and enhancing events")
+        self.logger.info(f"Processing and enhancing {len(events)} events...")
 
         batch_size = self.config.batch_size
         processed_events: List[CyberEvent] = []
 
         total_batches = (len(events) + batch_size - 1) // batch_size
+        self.logger.info(f"Will process in {total_batches} batches of {batch_size} events each")
 
         # Progress bar for overall batch processing
         with tqdm(total=total_batches, desc="Processing batches", unit="batch") as pbar:
             for index in range(0, len(events), batch_size):
                 batch = events[index : index + batch_size]
+                batch_num = index // batch_size + 1
 
                 # Pre-process events to fix GDELT descriptions
+                self.logger.info(f"[Batch {batch_num}/{total_batches}] Pre-processing {len(batch)} events...")
                 batch = self._preprocess_events(batch)
 
                 # Entity extraction with progress
+                self.logger.info(f"[Batch {batch_num}/{total_batches}] Extracting entities...")
                 batch = await self.entity_extractor.extract_entities(batch)
 
                 # LLM classification with progress
+                self.logger.info(f"[Batch {batch_num}/{total_batches}] Running LLM classification...")
                 batch = await self.llm_classifier.classify_events(batch)
 
                 processed_events.extend(batch)
-                batch_num = index // batch_size + 1
+                self.logger.info(f"[Batch {batch_num}/{total_batches}] Complete. Total processed: {len(processed_events)}")
                 pbar.set_postfix({"batch": f"{batch_num}/{total_batches}", "events": len(batch)})
                 pbar.update(1)
 
+        self.logger.info(f"Processing complete: {len(processed_events)} events enhanced")
         return processed_events
 
     def _preprocess_events(self, events: List[CyberEvent]) -> List[CyberEvent]:

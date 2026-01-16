@@ -90,25 +90,32 @@ class EntityExtractor:
             existing_entities=[entity.name for entity in event.affected_entities],
         )
 
-        response = await asyncio.to_thread(
-            lambda: self.llm_classifier.client.chat.completions.create(
-                model="gpt-4o-mini",
-                response_model=ExtractedEntities,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Extract all entities mentioned in this cyber security event. Identify organizations, government agencies, "
-                            "companies, and individuals. Classify their type and determine if they are Australian entities with confidence scores."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Extract entities from: {request.model_dump_json()}",
-                    },
-                ],
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: self.llm_classifier.client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        response_model=ExtractedEntities,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Extract all entities mentioned in this cyber security event. Identify organizations, government agencies, "
+                                    "companies, and individuals. Classify their type and determine if they are Australian entities with confidence scores."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": f"Extract entities from: {request.model_dump_json()}",
+                            },
+                        ],
+                    )
+                ),
+                timeout=60  # 60 second timeout
             )
-        )
+        except asyncio.TimeoutError:
+            self.logger.warning(f"Entity extraction timed out for event: {event.title[:50]}...")
+            return event  # Return original event on timeout
 
         event_copy = event.copy(deep=True)
         enhanced_entities: List[AffectedEntity] = []
