@@ -34,7 +34,6 @@ class PlaywrightScraper:
 
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
-        # Use new headless mode and stealth launch arguments
         self.browser = await self.playwright.chromium.launch(
             headless=self.headless,
             args=[
@@ -326,11 +325,25 @@ class PlaywrightScraper:
         return "".join(char for char in text if char.isprintable() or char in '\n\t')
 
     async def close(self):
-        """Closes the browser."""
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
+        """Closes the browser with timeout to prevent hanging on Windows."""
+        try:
+            if self.browser:
+                try:
+                    await asyncio.wait_for(self.browser.close(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Browser close timed out after 10s, forcing cleanup")
+                except Exception as e:
+                    self.logger.debug(f"Browser close error (non-fatal): {e}")
+
+            if self.playwright:
+                try:
+                    await asyncio.wait_for(self.playwright.stop(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Playwright stop timed out after 10s")
+                except Exception as e:
+                    self.logger.debug(f"Playwright stop error (non-fatal): {e}")
+        except Exception as e:
+            self.logger.warning(f"Error during browser cleanup: {e}")
 
     def _is_australian_news_site(self, url: str) -> bool:
         """Check if the URL is from a known Australian news site."""

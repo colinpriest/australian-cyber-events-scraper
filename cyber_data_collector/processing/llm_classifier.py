@@ -129,7 +129,7 @@ class LLMClassifier:
         response = await self._invoke_llm(enhancement_request)
         return self._apply_enhancement_to_event(event, response)
 
-    async def _invoke_llm(self, request: EventEnhancementRequest) -> EventEnhancement:
+    async def _invoke_llm(self, request: EventEnhancementRequest, timeout_seconds: int = 60) -> EventEnhancement:
         if not self.client:
             raise RuntimeError("LLM client not configured")
 
@@ -195,32 +195,39 @@ CRITICAL REQUIREMENTS:
 - Always provide all fields even for rejected events (use defaults for rejected events).
 """
 
-        response = await asyncio.to_thread(
-            lambda: self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                response_model=EventEnhancement,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a cybersecurity incident analyst focused on identifying SPECIFIC cybersecurity incidents affecting Australian organizations. "
-                            "ACCEPT events that describe specific incidents affecting named organizations, even if details are limited. "
-                            "Examples to ACCEPT: 'Toll Group ransomware attack', 'Perth Mint data breach', 'ANU cyber attack', 'Canva security incident', 'Travelex ransomware'. "
-                            "Examples to REJECT: 'Multiple Cyber Incidents Reported', 'OAIC Notifiable Data Breaches Report', 'What is a cyber attack?', policy documents. "
-                            "REJECT obvious summaries, regulatory reports, and policy documents, but ACCEPT specific incidents. "
-                            "When in doubt about whether something is a specific incident affecting a named organization, ACCEPT it rather than reject it. "
-                            "Bias toward inclusion of potential incidents for further analysis."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": user_prompt,
-                    },
-                ],
-                max_retries=2,
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: self.client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        response_model=EventEnhancement,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a cybersecurity incident analyst focused on identifying SPECIFIC cybersecurity incidents affecting Australian organizations. "
+                                    "ACCEPT events that describe specific incidents affecting named organizations, even if details are limited. "
+                                    "Examples to ACCEPT: 'Toll Group ransomware attack', 'Perth Mint data breach', 'ANU cyber attack', 'Canva security incident', 'Travelex ransomware'. "
+                                    "Examples to REJECT: 'Multiple Cyber Incidents Reported', 'OAIC Notifiable Data Breaches Report', 'What is a cyber attack?', policy documents. "
+                                    "REJECT obvious summaries, regulatory reports, and policy documents, but ACCEPT specific incidents. "
+                                    "When in doubt about whether something is a specific incident affecting a named organization, ACCEPT it rather than reject it. "
+                                    "Bias toward inclusion of potential incidents for further analysis."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": user_prompt,
+                            },
+                        ],
+                        max_retries=2,
+                    )
+                ),
+                timeout=timeout_seconds
             )
-        )
-        return response
+            return response
+        except asyncio.TimeoutError:
+            self.logger.warning(f"LLM request timed out after {timeout_seconds}s for: {request.title[:50]}...")
+            raise
 
     def _apply_enhancement_to_event(self, event: CyberEvent, enhancement: EventEnhancement) -> Optional[CyberEvent]:
         """Apply LLM enhancement to the event record, or return None if rejected."""

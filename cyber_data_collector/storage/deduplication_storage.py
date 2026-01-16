@@ -127,21 +127,21 @@ class DeduplicationStorage:
             # Start transaction
             cursor = self.conn.cursor()
             
-            # Validate no duplicates before storing
-            pre_validation = self._validate_no_duplicates_before_store(result.unique_events)
-            if pre_validation:
-                validation_errors.extend(pre_validation)
-                return StorageResult(
-                    success=False,
-                    stored_events=0,
-                    merge_groups_created=0,
-                    validation_errors=validation_errors,
-                    processing_time_seconds=0.0,
-                    storage_timestamp=datetime.now()
-                )
-            
+            # Remove any duplicates before storing (keep first occurrence)
+            events_to_store, skipped_duplicates = self._remove_duplicate_events(result.unique_events)
+            if skipped_duplicates:
+                self.logger.warning(f"Removed {len(skipped_duplicates)} duplicate events before storage")
+                for dup in skipped_duplicates[:5]:  # Log first 5
+                    validation_errors.append(ValidationError(
+                        error_type="DUPLICATE_SKIPPED",
+                        message=f"Skipped duplicate: {dup['title'][:50]} on {dup['date']}",
+                        context=dup
+                    ))
+                if len(skipped_duplicates) > 5:
+                    self.logger.warning(f"  ... and {len(skipped_duplicates) - 5} more duplicates skipped")
+
             # Store unique events
-            stored_events = self._store_unique_events(cursor, result.unique_events)
+            stored_events = self._store_unique_events(cursor, events_to_store)
             
             # Store merge groups and lineage
             merge_groups_created = self._store_merge_groups(cursor, result.merge_groups)
@@ -173,23 +173,28 @@ class DeduplicationStorage:
             self.logger.error(f"Failed to store deduplication result: {e}")
             raise
     
-    def _validate_no_duplicates_before_store(self, events: List[CyberEvent]) -> List[ValidationError]:
-        """Validate that no duplicate title+date combinations exist before storing"""
-        errors = []
-        
-        # Check for duplicates in the input
+    def _remove_duplicate_events(self, events: List[CyberEvent]) -> tuple:
+        """Remove duplicate events (same title+date), keeping first occurrence.
+
+        Returns:
+            tuple: (unique_events, skipped_duplicates) where skipped_duplicates is a list of dicts
+        """
+        unique_events = []
+        skipped_duplicates = []
         seen_combinations = set()
+
         for event in events:
             key = (event.title.lower().strip(), event.event_date)
             if key in seen_combinations:
-                errors.append(ValidationError(
-                    error_type="DUPLICATE_INPUT",
-                    message=f"Duplicate event in input: {event.title} on {event.event_date}",
-                    context={"title": event.title, "date": event.event_date}
-                ))
-            seen_combinations.add(key)
-        
-        return errors
+                skipped_duplicates.append({
+                    "title": event.title,
+                    "date": str(event.event_date) if event.event_date else None
+                })
+            else:
+                seen_combinations.add(key)
+                unique_events.append(event)
+
+        return unique_events, skipped_duplicates
     
     def _store_unique_events(self, cursor: sqlite3.Cursor, events: List[CyberEvent]) -> int:
         """Store unique events in DeduplicatedEvents table"""
