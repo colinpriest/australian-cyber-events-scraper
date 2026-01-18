@@ -11,7 +11,7 @@ This script:
    - Event Date
    - Event Title
    - Event Description (LLM-summarized)
-   - Anonymised Description (entity names removed)
+   - Anonymised Description (entity names removed, no dates/years, no title)
    - Records Affected
    - Entity Type (industry category)
    - Attack Type
@@ -21,6 +21,7 @@ Usage:
     python export_events_excel.py --output events_export.xlsx
     python export_events_excel.py --limit 100  # Export only first 100 events
     python export_events_excel.py --no-llm     # Skip LLM summarization (use raw text)
+    python export_events_excel.py --exclude-unknown-records  # Exclude events with unknown records affected
 """
 
 import argparse
@@ -30,7 +31,8 @@ import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -183,12 +185,19 @@ Write up to {max_words} words. Be thorough and include all relevant details."""
         return text
 
 
-def anonymize_with_llm(client: OpenAI, text: str, industry: str = None) -> str:
-    """Use OpenAI to anonymize entity names in the description."""
+def anonymize_with_llm(client: OpenAI, text: str, industry: str = None, title: str = None, all_entity_names: List[str] = None) -> str:
+    """Use OpenAI to anonymize entity names in the description, removing dates and titles."""
     if not text or len(text.strip()) < 20:
         return text or ""
 
-    industry_hint = f"The organization operates in the {industry} sector." if industry else ""
+    industry_hint = f"The victim organization operates in the {industry} sector." if industry and industry != "Unknown" else ""
+
+    # Build list of known entities to help the LLM
+    entity_hint = ""
+    if all_entity_names and len(all_entity_names) > 0:
+        # Include up to 50 entity names as examples
+        sample_entities = all_entity_names[:50]
+        entity_hint = f"\n\nKnown entity names that MUST be anonymized if present: {', '.join(sample_entities)}"
 
     try:
         response = client.chat.completions.create(
@@ -196,23 +205,43 @@ def anonymize_with_llm(client: OpenAI, text: str, industry: str = None) -> str:
             messages=[
                 {
                     "role": "system",
-                    "content": f"""You are a cybersecurity analyst anonymizing incident reports.
-Replace all specific entity names with generic industry terms while preserving the incident details.
+                    "content": f"""You are a cybersecurity analyst creating a fully anonymized incident report.
+Your task is to remove ALL identifying information while preserving the incident details.
 
-Rules:
-- Replace company/organization names with generic descriptions based on their industry
-  (e.g., "Medibank" → "a major health insurer", "Optus" → "a telecommunications provider")
-- Replace person names with generic roles (e.g., "John Smith, CEO" → "the company's CEO")
-- Keep all technical details, dates, numbers, and incident specifics intact
-- Preserve the meaning and severity of the incident
-- Do not add any new information
-{industry_hint}
+CRITICAL RULES - You MUST follow ALL of these:
 
-Return ONLY the anonymized text, no explanations."""
+1. REMOVE ALL ENTITY NAMES:
+   - Replace ALL company/organization names with generic descriptions based on their industry
+     (e.g., "Medibank" → "a major health insurer", "Optus" → "a telecommunications provider",
+      "Commonwealth Bank" → "a major bank", "Woolworths" → "a major retailer")
+   - Replace ALL person names with generic roles (e.g., "John Smith, CEO" → "the CEO")
+   - Replace ALL threat actor/hacker group names with "threat actors" or "attackers"
+   - Be thorough - catch ALL organization names including subsidiaries, partners, vendors
+
+2. REMOVE ALL DATES AND TIME REFERENCES:
+   - Remove ALL specific dates (e.g., "January 15, 2024", "15/01/2024", "2024-01-15")
+   - Remove ALL year references (e.g., "in 2024", "during 2023", "since 2022")
+   - Remove ALL month references with years (e.g., "March 2024", "Q1 2024")
+   - Replace with generic terms if needed for context (e.g., "recently", "the incident")
+
+3. REMOVE ANY TITLE AT THE START:
+   - If the text begins with a title or headline, remove it completely
+   - Start directly with the incident description
+
+4. PRESERVE:
+   - Technical attack details and methods
+   - Types of data compromised
+   - Number of records/individuals affected (keep the numbers)
+   - Impact and consequences
+   - Response actions taken (anonymized)
+
+{industry_hint}{entity_hint}
+
+Return ONLY the fully anonymized text with no dates, no entity names, and no title. Do not include any explanations."""
                 },
                 {
                     "role": "user",
-                    "content": f"Anonymize this incident description:\n\n{text}"
+                    "content": f"Fully anonymize this incident description (remove all entity names, dates, years, and any title):\n\n{text}"
                 }
             ],
             max_tokens=2000,
@@ -239,23 +268,25 @@ def process_single_event(
     event_data: Dict,
     source_text: str,
     max_words: int,
-    use_llm: bool
+    use_llm: bool,
+    all_entity_names: List[str] = None
 ) -> Dict:
     """Process a single event with LLM summarization and anonymization."""
     industry = event_data['industry']
+    title = event_data['title']
 
     # Summarize or truncate
     if use_llm and client and len(source_text) > 100:
         description = summarize_with_llm(client, source_text, max_words)
-        # Create anonymized version
-        anonymized = anonymize_with_llm(client, description, industry)
+        # Create anonymized version (with title, entity names for thorough anonymization)
+        anonymized = anonymize_with_llm(client, description, industry, title, all_entity_names)
     else:
         description = truncate_text(source_text, max_words)
         anonymized = description
 
     return {
         'Event Date': event_data['event_date'],
-        'Event Title': event_data['title'] or 'Untitled Event',
+        'Event Title': title or 'Untitled Event',
         'Event Description': description,
         'Anonymised Description': anonymized,
         'Records Affected': event_data['records_affected'],
@@ -264,13 +295,49 @@ def process_single_event(
     }
 
 
+def get_all_entity_names(cursor: sqlite3.Cursor) -> List[str]:
+    """Get all entity names from the database for thorough anonymization."""
+    entity_names = set()
+
+    # Get entity names from EntitiesV2
+    try:
+        cursor.execute("SELECT DISTINCT entity_name FROM EntitiesV2 WHERE entity_name IS NOT NULL")
+        for row in cursor.fetchall():
+            if row[0]:
+                entity_names.add(row[0].strip())
+    except sqlite3.Error:
+        pass
+
+    # Get victim organization names from DeduplicatedEvents
+    try:
+        cursor.execute("SELECT DISTINCT victim_organization_name FROM DeduplicatedEvents WHERE victim_organization_name IS NOT NULL")
+        for row in cursor.fetchall():
+            if row[0]:
+                entity_names.add(row[0].strip())
+    except sqlite3.Error:
+        pass
+
+    # Get attacking entity names from DeduplicatedEvents
+    try:
+        cursor.execute("SELECT DISTINCT attacking_entity_name FROM DeduplicatedEvents WHERE attacking_entity_name IS NOT NULL")
+        for row in cursor.fetchall():
+            if row[0]:
+                entity_names.add(row[0].strip())
+    except sqlite3.Error:
+        pass
+
+    # Sort by length descending to replace longer names first
+    return sorted(list(entity_names), key=len, reverse=True)
+
+
 def export_events_to_excel(
     db_path: str = 'instance/cyber_events.db',
     output_path: str = None,
     limit: int = None,
     use_llm: bool = True,
     max_words: int = 500,
-    max_workers: int = 10
+    max_workers: int = 10,
+    exclude_unknown_records: bool = False
 ) -> str:
     """Export deduplicated events to Excel file with parallel LLM processing."""
 
@@ -291,7 +358,11 @@ def export_events_to_excel(
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # Get all active deduplicated events
+    # Get all entity names for thorough anonymization
+    all_entity_names = get_all_entity_names(cursor) if use_llm else []
+    print(f"Loaded {len(all_entity_names)} entity names for anonymization")
+
+    # Build query with optional filter for unknown records
     query = """
         SELECT
             deduplicated_event_id,
@@ -304,8 +375,13 @@ def export_events_to_excel(
             summary
         FROM DeduplicatedEvents
         WHERE status = 'Active'
-        ORDER BY event_date DESC
     """
+
+    if exclude_unknown_records:
+        query += " AND records_affected IS NOT NULL AND records_affected != '' AND CAST(records_affected AS TEXT) != 'Unknown'"
+
+    query += " ORDER BY event_date DESC"
+
     if limit:
         query += f" LIMIT {limit}"
 
@@ -321,10 +397,17 @@ def export_events_to_excel(
         event_id = event['deduplicated_event_id']
         event_title = event['title']
 
-        # Clean up event type
-        event_type = event['event_type'] or 'Unknown'
-        if '.' in event_type:
+        # Clean up event type - use "Unknown" for unknown/null values
+        event_type = event['event_type']
+        if not event_type or event_type.lower() in ('unknown', 'none', '', 'null'):
+            event_type = 'Unknown'
+        elif '.' in event_type:
             event_type = event_type.split('.')[-1].replace('_', ' ').title()
+
+        # Clean up industry - use "Unknown" for unknown/null values
+        industry = event['victim_organization_industry']
+        if not industry or industry.lower() in ('unknown', 'none', '', 'null'):
+            industry = 'Unknown'
 
         source_text = get_event_source_text(cursor, event_id, event_title)
 
@@ -333,7 +416,7 @@ def export_events_to_excel(
                 'event_date': event['event_date'],
                 'title': event['title'],
                 'records_affected': event['records_affected'],
-                'industry': event['victim_organization_industry'] or 'Unknown',
+                'industry': industry,
                 'event_type': event_type
             },
             'source_text': source_text
@@ -354,7 +437,8 @@ def export_events_to_excel(
                 item['event_data'],
                 item['source_text'],
                 max_words,
-                use_llm
+                use_llm,
+                all_entity_names
             ): idx
             for idx, item in enumerate(event_data_list)
         }
@@ -470,6 +554,11 @@ def main():
         default=10,
         help='Number of parallel workers for LLM processing (default: 10)'
     )
+    parser.add_argument(
+        '--exclude-unknown-records',
+        action='store_true',
+        help='Exclude events where the number of customer records affected is unknown'
+    )
 
     args = parser.parse_args()
 
@@ -481,14 +570,16 @@ def main():
         print("Install with: pip install openpyxl")
         sys.exit(1)
 
-    export_events_to_excel(
+    output_file = export_events_to_excel(
         db_path=args.db_path,
         output_path=args.output,
         limit=args.limit,
         use_llm=not args.no_llm,
         max_words=args.max_words,
-        max_workers=args.workers
+        max_workers=args.workers,
+        exclude_unknown_records=args.exclude_unknown_records
     )
+    print(f"\nOutput file: {Path(output_file).resolve()}")
 
 
 if __name__ == '__main__':
