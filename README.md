@@ -2,6 +2,8 @@
 
 A comprehensive system for discovering, scraping, filtering, and enriching Australian cyber security events from multiple data sources using machine learning and LLM-based analysis.
 
+![Australian Cyber Events Dashboard](cyber-events-scraper.png)
+
 ## Overview
 
 This pipeline automatically discovers cyber security incidents affecting Australian organizations by collecting data from multiple sources, scraping full content from URLs, and using both machine learning and LLM-based filtering to identify relevant events. The system creates a structured database of cyber events with detailed metadata, affected entities, and confidence scores.
@@ -100,6 +102,7 @@ australian-cyber-events-scraper/
 ├── OAIC_dashboard_scraper.py          # OAIC Power BI dashboard scraper (Playwright + Vision API)
 ├── cleanup_oaic_data.py               # OAIC data validation and cleanup
 ├── export_events_excel.py             # Export events to Excel with LLM summaries
+├── export_cyber_events.py             # Export deduplicated events to CSV/Excel with anonymization
 ├── perplexity_backfill_events.py      # Perplexity backfill for existing events
 ├── wipe_database.py                   # Database reset utility
 ├── database_migration_v2.py           # Database schema migration
@@ -637,7 +640,9 @@ python cleanup_oaic_data.py
 
 #### Export Events to Excel
 
-Export all deduplicated cyber events to an Excel file with LLM-summarized descriptions and anonymized versions.
+Export all deduplicated cyber events to an Excel file with LLM-summarized descriptions and fully anonymized versions.
+
+> **Note**: This script (`export_events_excel.py`) produces a clean 7-column Excel file suitable for sharing. For a full database export with all columns, use `export_cyber_events.py` instead.
 
 **Basic usage**:
 ```bash
@@ -650,10 +655,10 @@ python export_events_excel.py
 | Event Date | Date of the cyber incident |
 | Event Title | Title/headline of the event |
 | Event Description | LLM-summarized comprehensive description |
-| Anonymised Description | Same description with entity names replaced by generic industry terms (e.g., "Medibank" → "a major health insurer") |
+| Anonymised Description | Fully anonymized description with entity names replaced, dates/years removed, and title removed |
 | Records Affected | Number of customer/user records compromised |
-| Entity Type | Industry category of the victim organization |
-| Attack Type | Type of cyber attack (Data Breach, Ransomware, etc.) |
+| Entity Type | Industry category of the victim organization ("Unknown" if not available) |
+| Attack Type | Type of cyber attack ("Unknown" if not available) |
 
 **Available options**:
 | Option | Description | Default |
@@ -663,11 +668,16 @@ python export_events_excel.py
 | `--no-llm` | Skip LLM summarization (faster, uses raw text) | False |
 | `--max-words N` | Maximum words for description | 500 |
 | `--db-path PATH` | Path to SQLite database | `instance/cyber_events.db` |
+| `--exclude-unknown-records` | Exclude events where records_affected is unknown | False |
+| `--workers N` | Number of parallel workers for LLM processing | 10 |
 
 **Examples**:
 ```bash
 # Export all events with LLM summaries and anonymization
 python export_events_excel.py
+
+# Exclude events where records affected is unknown
+python export_events_excel.py --exclude-unknown-records
 
 # Quick export without LLM (faster, but no anonymization)
 python export_events_excel.py --no-llm
@@ -679,21 +689,105 @@ python export_events_excel.py --limit 100 --output recent_events.xlsx
 python export_events_excel.py --max-words 200
 ```
 
+**Anonymization features** (Anonymised Description column):
+- Replaces ALL organization names with generic industry descriptions (e.g., "Medibank" → "a major health insurer")
+- Replaces ALL person names with generic roles (e.g., "John Smith, CEO" → "the CEO")
+- Replaces ALL threat actor/hacker group names with "threat actors" or "attackers"
+- Removes ALL dates and years (specific dates, months with years, quarters, standalone years)
+- Removes title text from the beginning of descriptions
+- Uses all known entity names from the database to ensure thorough anonymization
+
+**Category normalization**:
+- Entity Type shows "Unknown" when industry is null/empty
+- Attack Type shows "Unknown" when event type is null/empty
+
 **How it works**:
 1. Reads all active deduplicated events from the database
-2. For each event, collects text from:
+2. Loads all known entity names from the database for thorough anonymization
+3. For each event, collects text from:
    - DeduplicatedEvents (title, description, summary)
    - EnrichedEvents (linked event descriptions)
-   - RawEvents (original scraped content, limited to 5000 chars per source)
-3. Sends combined text to GPT-4o-mini for summarization
-4. Creates anonymized version by replacing entity names with generic industry terms
-5. Exports to Excel with text wrapping and appropriate row heights for readability
+   - RawEvents (original scraped content, limited to 10000 chars per source)
+4. Sends combined text to GPT-4o-mini for summarization
+5. Creates fully anonymized version (removes entity names, dates, years, and titles)
+6. Exports to Excel with text wrapping and appropriate row heights for readability
 
 **Requirements**:
 - OpenAI API key (`OPENAI_API_KEY` in `.env`) - required for LLM summarization and anonymization
 - openpyxl (`pip install openpyxl`)
 
 **Cost estimate**: ~$0.02-0.10 per 100 events (2 LLM calls per event: summarization + anonymization)
+
+#### Export Cyber Events Database
+
+Export deduplicated events from the database to CSV or Excel format with support for filtering, anonymization, and data normalization.
+
+> **Note**: This script (`export_cyber_events.py`) exports all database columns. For a clean 7-column Excel file with LLM summaries suitable for sharing, use `export_events_excel.py` instead.
+
+**Basic usage**:
+```bash
+# Export all deduplicated events to CSV
+python export_cyber_events.py --format csv --output events.csv
+
+# Export to Excel with entity and source details
+python export_cyber_events.py --format excel --output events.xlsx --detailed
+```
+
+**Anonymization and filtering options**:
+```bash
+# Export with anonymized descriptions (removes entity names, dates, years, and titles)
+python export_cyber_events.py --format csv --output anon_events.csv --detailed --anonymize
+
+# Exclude events where records affected is unknown
+python export_cyber_events.py --format csv --output known_records.csv --detailed --exclude-unknown-records
+
+# Combine both options for clean, anonymized export
+python export_cyber_events.py --format csv --output clean_export.csv --detailed --anonymize --exclude-unknown-records
+```
+
+**Available options**:
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--format FORMAT` | Export format: `csv`, `excel`, or `both` | csv |
+| `--output FILE` | Output file path (omit extension for `both`) | Required |
+| `--table TABLE` | Table to export | DeduplicatedEvents |
+| `--date-range RANGE` | Filter by date range (format: `YYYY-MM-DD,YYYY-MM-DD`) | All dates |
+| `--detailed` | Include entity and source details (JSON) | False |
+| `--no-entities` | Exclude entity information from detailed export | False |
+| `--no-sources` | Exclude source information from detailed export | False |
+| `--exclude-unknown-records` | Exclude events where records_affected is unknown/null | False |
+| `--anonymize` | Anonymize descriptions by removing entity names, dates, and titles | False |
+| `--list-tables` | List available tables and exit | - |
+| `--summary` | Show database summary and exit | - |
+
+**Anonymization features** (when `--anonymize` is enabled):
+- Replaces victim organization names with `[Victim Organization]` or `[Victim Organization - Industry]`
+- Replaces threat actor names with `[Threat Actor]`
+- Replaces all other known entity names with `[Organization]`
+- Removes dates in various formats (2024-01-15, January 15 2024, Jan 2024, Q1 2024, etc.)
+- Removes standalone years (1990-2099)
+- Removes relative time expressions ("in 2024", "during 2024", etc.)
+- Removes title text from the beginning of descriptions
+- Handles entity name variations (with/without suffixes like Pty Ltd, Inc, etc.)
+
+**Category normalization**:
+- Entity types that are null/unknown/empty display as "Unknown"
+- Attack methods that are null/unknown/empty display as "Unknown"
+
+**Examples**:
+```bash
+# Show database summary
+python export_cyber_events.py --summary
+
+# Export events from 2024
+python export_cyber_events.py --format excel --output events_2024.xlsx --detailed --date-range 2024-01-01,2024-12-31
+
+# Export both CSV and Excel formats
+python export_cyber_events.py --format both --output cyber_events --detailed
+
+# Export anonymized data for external sharing
+python export_cyber_events.py --format csv --output share_events.csv --detailed --anonymize --exclude-unknown-records
+```
 
 #### Perplexity Backfill
 
