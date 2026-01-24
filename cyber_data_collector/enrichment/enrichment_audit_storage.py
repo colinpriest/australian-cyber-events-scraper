@@ -12,14 +12,28 @@ import uuid
 from typing import Dict, Any
 from datetime import datetime
 
+from cyber_data_collector.utils.validation import safe_json_dumps
+
 
 class EnrichmentAuditStorage:
     """Store and retrieve enrichment audit trails"""
 
     def __init__(self, db_path: str):
         """Initialize audit storage"""
+        if not isinstance(db_path, str):
+            raise TypeError("db_path must be a string")
+        if not db_path:
+            raise ValueError("db_path cannot be empty")
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _ensure_mapping(value: Any, name: str) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError(f"{name} must be a dictionary")
+        return value
 
     def save_audit_trail(self, pipeline_result: Dict[str, Any]) -> str:
         """
@@ -32,12 +46,15 @@ class EnrichmentAuditStorage:
             audit_id: UUID of created audit trail record
         """
 
-        audit_trail = pipeline_result.get('audit_trail', {})
-        enrichment_result = pipeline_result.get('enrichment_result', {})
-        content_acquisition = pipeline_result.get('content_acquisition', {})
-        fact_check_result = pipeline_result.get('fact_check_result', {})
-        validation_result = pipeline_result.get('validation_result', {})
-        final_decision = pipeline_result.get('final_decision', {})
+        if not isinstance(pipeline_result, dict):
+            raise TypeError("pipeline_result must be a dictionary")
+
+        audit_trail = self._ensure_mapping(pipeline_result.get('audit_trail'), "audit_trail")
+        enrichment_result = self._ensure_mapping(pipeline_result.get('enrichment_result'), "enrichment_result")
+        content_acquisition = self._ensure_mapping(pipeline_result.get('content_acquisition'), "content_acquisition")
+        fact_check_result = self._ensure_mapping(pipeline_result.get('fact_check_result'), "fact_check_result")
+        validation_result = self._ensure_mapping(pipeline_result.get('validation_result'), "validation_result")
+        final_decision = self._ensure_mapping(pipeline_result.get('final_decision'), "final_decision")
 
         # Generate audit ID
         audit_id = str(uuid.uuid4())
@@ -53,13 +70,13 @@ class EnrichmentAuditStorage:
         stage1_method = content_acquisition.get('extraction_method')
         stage1_content_length = content_acquisition.get('content_length', 0)
         stage1_source_reliability = content_acquisition.get('source_reliability', 0.0)
-        stage1_details = json.dumps({
+        stage1_details = safe_json_dumps({
             'title': content_acquisition.get('title'),
             'url': content_acquisition.get('url'),
             'source_domain': content_acquisition.get('source_domain'),
             'publication_date': content_acquisition.get('publication_date'),
             'error': content_acquisition.get('error')
-        })
+        }, "stage1_details")
 
         # Stage 2: GPT-4o Extraction
         stage2_success = enrichment_result.get('overall_confidence', 0) > 0
@@ -68,7 +85,7 @@ class EnrichmentAuditStorage:
         stage2_is_specific = enrichment_result.get('specificity', {}).get('is_specific_incident')
         stage2_australian_relevance = enrichment_result.get('australian_relevance', {}).get('relevance_score', 0.0)
         stage2_tokens = enrichment_result.get('extraction_metadata', {}).get('tokens_used', 0)
-        stage2_details = json.dumps({
+        stage2_details = safe_json_dumps({
             'victim': enrichment_result.get('victim', {}),
             'attacker': enrichment_result.get('attacker', {}),
             'incident': enrichment_result.get('incident', {}),
@@ -77,33 +94,39 @@ class EnrichmentAuditStorage:
             'multi_victim': enrichment_result.get('multi_victim', {}),
             'extraction_notes': enrichment_result.get('extraction_notes', ''),
             'extraction_metadata': enrichment_result.get('extraction_metadata', {})
-        })
+        }, "stage2_details")
 
         # Stage 3: Perplexity Fact-Checking
         stage3_checks_performed = fact_check_result.get('checks_performed', 0)
         stage3_checks_passed = fact_check_result.get('checks_passed', 0)
         stage3_checks_failed = fact_check_result.get('checks_failed', 0)
         stage3_verification_confidence = fact_check_result.get('overall_verification_confidence', 0.0)
-        stage3_details = json.dumps({
+        stage3_details = safe_json_dumps({
             'details': fact_check_result.get('details', []),
             'timestamp': fact_check_result.get('timestamp')
-        })
+        }, "stage3_details")
 
         # Stage 4: Validation
         stage4_is_valid = validation_result.get('is_valid', False)
         stage4_error_count = len(validation_result.get('errors', []))
         stage4_warning_count = len(validation_result.get('warnings', []))
         stage4_validation_confidence = validation_result.get('validation_confidence', 0.0)
-        stage4_details = json.dumps({
+        stage4_details = safe_json_dumps({
             'errors': validation_result.get('errors', []),
             'warnings': validation_result.get('warnings', [])
-        })
+        }, "stage4_details")
 
         # Stage 5: Final Decision
         decision = final_decision.get('decision')
         confidence = final_decision.get('final_confidence', 0.0)
-        stage5_confidences = json.dumps(final_decision.get('stage_confidences', {}))
-        stage5_penalties = json.dumps(final_decision.get('applied_penalties', {}))
+        stage5_confidences = safe_json_dumps(
+            final_decision.get('stage_confidences', {}),
+            "stage5_confidences",
+        )
+        stage5_penalties = safe_json_dumps(
+            final_decision.get('applied_penalties', {}),
+            "stage5_penalties",
+        )
 
         # Error handling
         error_message = audit_trail.get('error')
@@ -215,6 +238,10 @@ class EnrichmentAuditStorage:
 
     def get_audit_trail(self, audit_id: str) -> Dict[str, Any]:
         """Retrieve an audit trail by ID"""
+        if not isinstance(audit_id, str):
+            raise TypeError("audit_id must be a string")
+        if not audit_id:
+            raise ValueError("audit_id cannot be empty")
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -244,8 +271,13 @@ class EnrichmentAuditStorage:
                 if audit.get(field):
                     try:
                         audit[field] = json.loads(audit[field])
-                    except:
-                        pass
+                    except json.JSONDecodeError as exc:
+                        self.logger.warning(
+                            "Failed to parse audit JSON field %s for %s: %s",
+                            field,
+                            audit_id,
+                            exc,
+                        )
 
             return audit
 
@@ -254,6 +286,10 @@ class EnrichmentAuditStorage:
 
     def get_quality_report(self, pipeline_version: str = '1.0') -> Dict[str, Any]:
         """Get quality report for a pipeline version"""
+        if not isinstance(pipeline_version, str):
+            raise TypeError("pipeline_version must be a string")
+        if not pipeline_version:
+            raise ValueError("pipeline_version cannot be empty")
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -277,6 +313,10 @@ class EnrichmentAuditStorage:
 
     def get_recent_audits(self, limit: int = 10) -> list:
         """Get recent audit trails"""
+        if not isinstance(limit, int):
+            raise TypeError("limit must be an integer")
+        if limit <= 0:
+            raise ValueError("limit must be greater than 0")
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row

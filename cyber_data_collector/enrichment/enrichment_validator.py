@@ -287,8 +287,13 @@ class EnrichmentValidator:
                     errors.append(
                         f"Discovery date ({discovery}) before incident date ({incident_date}) - logically impossible"
                     )
-            except (ValueError, TypeError):
-                pass  # Already caught above
+            except (ValueError, TypeError) as exc:
+                self.logger.debug(
+                    "Skipping discovery date comparison for %s/%s: %s",
+                    incident_date,
+                    discovery,
+                    exc,
+                )
 
         if discovery and disclosure:
             try:
@@ -299,8 +304,13 @@ class EnrichmentValidator:
                     errors.append(
                         f"Disclosure date ({disclosure}) before discovery date ({discovery}) - unusual"
                     )
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                self.logger.debug(
+                    "Skipping disclosure date comparison for %s/%s: %s",
+                    discovery,
+                    disclosure,
+                    exc,
+                )
 
         return {
             'has_errors': len(errors) > 0,

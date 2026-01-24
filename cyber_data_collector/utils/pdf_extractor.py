@@ -76,8 +76,8 @@ class PDFExtractor:
                 # Clean up temporary file
                 try:
                     os.unlink(tmp_path)
-                except:
-                    pass
+                except Exception as exc:
+                    self.logger.warning("Failed to delete temporary PDF %s: %s", tmp_path, exc)
 
         except requests.RequestException as e:
             return self._error_result(f"Failed to download PDF: {e}")
