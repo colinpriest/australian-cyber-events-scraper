@@ -89,6 +89,8 @@ The unified pipeline (`run_full_pipeline.py`) executes five main phases:
 
 ```
 australian-cyber-events-scraper/
+├── pipeline.py                        # Simplified CLI (refresh/rebuild/status)
+├── project_status.py                  # Status reporter (last ingest + latest event)
 ├── run_full_pipeline.py               # Unified pipeline script (SINGLE SOURCE OF TRUTH)
 ├── discover_enrich_events.py          # Legacy CLI wrapper (uses shared pipeline module)
 ├── build_static_dashboard.py          # Static HTML dashboard generator
@@ -219,10 +221,13 @@ australian-cyber-events-scraper/
    # Edit .env with your API keys and configuration
    ```
 
-4. **Run the unified pipeline** (uses recommended sources by default)
+4. **Run the simplified CLI** (recommended for day-to-day use)
    ```bash
-   # Recommended: Use low-cost sources only (excludes expensive GDELT)
-   python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance
+   # Rolling refresh (last 90 days, prioritizes recent events)
+   python pipeline.py refresh
+
+   # Check pipeline status (last ingest + latest event)
+   python pipeline.py status
    ```
 
 5. **(Optional) Configure BigQuery for GDELT**
@@ -234,7 +239,7 @@ australian-cyber-events-scraper/
    python setup_bigquery_auth.py
    ```
 
-6. **Run the unified pipeline**
+6. **Run the unified pipeline** (advanced / full control)
    ```bash
    # Full pipeline (all phases: discovery, enrichment, deduplication, classification, dashboard)
    python run_full_pipeline.py
@@ -248,15 +253,13 @@ australian-cyber-events-scraper/
 
 ## Monthly Update Guide
 
-This section explains how to run monthly updates to keep your cyber events database current, including discovering events that may have occurred more than a month ago but were only recently reported.
+Most users should run a periodic refresh that focuses on newly reported events, prioritizing incidents from the past 3 months.
 
-### Standard Monthly Update
-
-Run the pipeline with recommended (low-cost) sources:
+### Standard Monthly Refresh (Recommended)
 
 ```bash
-# Recommended: Use low-cost sources only
-python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance
+# Rolling 90-day refresh using recommended sources
+python pipeline.py refresh
 ```
 
 This will:
@@ -265,6 +268,22 @@ This will:
 3. Deduplicate against existing events
 4. Classify with ASD risk matrix
 5. Regenerate the dashboard
+
+### Full Rebuild (Occasional)
+
+If you need to reconstruct the entire dataset from scratch, run a full rebuild (this wipes existing data):
+
+```bash
+python pipeline.py rebuild --force
+```
+
+### Project Status
+
+Use the status script to quickly confirm the last ingest and the latest event in the database:
+
+```bash
+python pipeline.py status
+```
 
 ### Comprehensive Monthly Update (Recommended)
 
