@@ -466,6 +466,28 @@ class SimilarityCalculator:
                 # Look for capitalized words that might be company names
                 title_words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', event.title)
                 entities.extend(title_words)
+
+                stopwords = {
+                    "Data",
+                    "Breach",
+                    "Incident",
+                    "Security",
+                    "Attack",
+                    "Cyber",
+                    "Cybersecurity",
+                    "Ransomware",
+                    "Malware",
+                    "Hack",
+                    "Hackers",
+                    "Outage",
+                    "Leak",
+                    "Exposure",
+                    "Network",
+                }
+                for phrase in title_words:
+                    for token in phrase.split():
+                        if token not in stopwords:
+                            entities.append(token)
         
         return list(set(entities))  # Remove duplicates
     
