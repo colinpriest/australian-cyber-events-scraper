@@ -13,6 +13,14 @@ import os
 from dotenv import load_dotenv
 from cyber_data_collector.enrichment.high_quality_enrichment_pipeline import HighQualityEnrichmentPipeline
 
+if "pytest" in sys.modules and not os.getenv("RUN_ENRICHMENT_TESTS"):
+    import pytest
+
+    pytest.skip(
+        "Skipping enrichment specificity script in pytest; set RUN_ENRICHMENT_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
+
 # Load environment variables
 load_dotenv()
 

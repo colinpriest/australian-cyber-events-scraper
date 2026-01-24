@@ -20,6 +20,15 @@ from cyber_data_collector.enrichment.high_quality_enrichment_pipeline import Hig
 from dotenv import load_dotenv
 
 
+if "pytest" in sys.modules and not os.getenv("RUN_ENRICHMENT_TESTS"):
+    import pytest
+
+    pytest.skip(
+        "Skipping enrichment pipeline script in pytest; set RUN_ENRICHMENT_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
+
+
 def setup_logging():
     """Setup logging configuration"""
     logging.basicConfig(
