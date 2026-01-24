@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -27,16 +28,24 @@ class CyberEventDataV2:
         self._db_path.parent.mkdir(exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
         self._lock = threading.Lock()
+        self._logger = logging.getLogger(self.__class__.__name__)
         self._connect()
         self._ensure_v2_schema()
 
     def _connect(self):
         try:
-            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn = sqlite3.connect(
+                self._db_path,
+                check_same_thread=False,
+                timeout=30,
+                detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            )
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys = ON;")
+            self._conn.execute("PRAGMA journal_mode = WAL;")
+            self._conn.execute("PRAGMA busy_timeout = 30000;")
         except sqlite3.Error as e:
-            print(f"Database connection error: {e}")
+            self._logger.error("Database connection error: %s", e)
             raise
 
     def _ensure_v2_schema(self):
@@ -46,7 +55,7 @@ class CyberEventDataV2:
             # Check if V2 tables exist
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='RawEvents'")
             if not cursor.fetchone():
-                print("⚠️ V2 schema not found. Please run database_migration_v2.py first.")
+                self._logger.error("V2 schema not found. Please run database_migration_v2.py first.")
                 raise RuntimeError("Database schema V2 not found. Run migration script first.")
 
     # =========================================================================
@@ -94,7 +103,7 @@ class CyberEventDataV2:
                 self._conn.commit()
                 return raw_event_id
             except sqlite3.Error as e:
-                print(f"Error adding raw event: {e}")
+                self._logger.error("Error adding raw event: %s", e)
                 self._conn.rollback()
                 raise
 
@@ -125,7 +134,7 @@ class CyberEventDataV2:
                 result = cursor.fetchone()
                 return result['raw_event_id'] if result else None
             except sqlite3.Error as e:
-                print(f"Error checking for existing raw event: {e}")
+                self._logger.error("Error checking for existing raw event: %s", e)
                 return None
 
     def get_unprocessed_raw_events(self, source_types: List[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -243,7 +252,7 @@ class CyberEventDataV2:
                 """, (datetime.now().isoformat(), error_message, raw_event_id))
                 self._conn.commit()
             except sqlite3.Error as e:
-                print(f"Error marking raw event as processed: {e}")
+                self._logger.error("Error marking raw event as processed: %s", e)
                 self._conn.rollback()
 
     # =========================================================================
@@ -302,7 +311,7 @@ class CyberEventDataV2:
                 self._conn.commit()
                 return enriched_event_id
             except sqlite3.Error as e:
-                print(f"Error creating enriched event: {e}")
+                self._logger.error("Error creating enriched event: %s", e)
                 self._conn.rollback()
                 raise
 
@@ -423,7 +432,7 @@ class CyberEventDataV2:
                 self._conn.commit()
                 return log_id
             except sqlite3.Error as e:
-                print(f"Error logging processing attempt: {e}")
+                self._logger.error("Error logging processing attempt: %s", e)
                 self._conn.rollback()
                 raise
 
@@ -590,7 +599,7 @@ class CyberEventDataV2:
                 self._conn.commit()
                 return True
             except sqlite3.Error as e:
-                print(f"Error marking month as processed: {e}")
+                self._logger.error("Error marking month as processed: %s", e)
                 self._conn.rollback()
                 return False
 

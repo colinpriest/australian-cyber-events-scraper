@@ -22,7 +22,7 @@ from cyber_data_collector.processing.deduplication import DeduplicationEngine
 from cyber_data_collector.processing.entity_extractor import EntityExtractor
 from cyber_data_collector.processing.llm_classifier import LLMClassifier
 from cyber_data_collector.storage import CacheManager, DatabaseManager
-from cyber_data_collector.utils import ConfigManager, RateLimiter, ThreadManager
+from cyber_data_collector.utils import ConfigManager, RateLimiter, ThreadManager, setup_logging
 
 
 class CyberDataCollector:
@@ -31,7 +31,8 @@ class CyberDataCollector:
     def __init__(self, config: CollectionConfig, env_path: str = ".env") -> None:
         self.config = config
         self.env_config = ConfigManager(env_path).load()
-        self.logger = self._setup_logging()
+        setup_logging("cyber_collector.log")
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         self.rate_limiter = RateLimiter()
         self.thread_manager = ThreadManager(max_threads=config.max_threads)
@@ -47,17 +48,6 @@ class CyberDataCollector:
 
         self.collected_events: List[CyberEvent] = []
         self._lock = threading.Lock()
-
-    def _setup_logging(self) -> logging.Logger:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[
-                logging.FileHandler("cyber_collector.log"),
-                logging.StreamHandler(),
-            ],
-        )
-        return logging.getLogger(self.__class__.__name__)
 
     def _initialize_data_sources(self) -> None:
         if self.config.gdelt_config.enabled:
