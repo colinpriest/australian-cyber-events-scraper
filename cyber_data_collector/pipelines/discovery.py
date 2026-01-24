@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -164,7 +164,7 @@ class EventDiscoveryEnrichmentPipeline:
 
         Args:
             source_types: List of sources to use ('GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance')
-            date_range_days: How many days back to search (ignored - now processes all months)
+            date_range_days: How many days back to search (limits the month range to process)
             max_events: Maximum events per source per month
         """
         # Default to all sources if none specified
@@ -177,17 +177,40 @@ class EventDiscoveryEnrichmentPipeline:
         current_year = now.year
         current_month = now.month
 
-        # Get list of unprocessed months from January 2020 to current month
+        # Determine date window based on lookback days
+        if date_range_days and date_range_days > 0:
+            start_date = now - timedelta(days=date_range_days)
+            start_year = start_date.year
+            start_month = start_date.month
+            logger.info(f"[DISCOVERY] Using {date_range_days}-day lookback from {start_date.date()} to {now.date()}")
+        else:
+            start_date = datetime(2020, 1, 1)
+            start_year = 2020
+            start_month = 1
+            logger.info("[DISCOVERY] No lookback specified; processing all months from Jan 2020")
+
+        # Get list of unprocessed months in the selected range
         unprocessed_months = self.db.get_unprocessed_months(
-            start_year=2020, start_month=1,
+            start_year=start_year, start_month=start_month,
             end_year=current_year, end_month=current_month
         )
+
+        # Build a list of all months in range to keep rolling window constrained
+        allowed_months = set()
+        temp_year, temp_month = start_year, start_month
+        while (temp_year < current_year) or (temp_year == current_year and temp_month <= current_month):
+            allowed_months.add((temp_year, temp_month))
+            temp_month += 1
+            if temp_month > 12:
+                temp_month = 1
+                temp_year += 1
 
         # Always reprocess the last 3 calendar months (including current) to catch late-reported events
         recent_months = []
         temp_year, temp_month = current_year, current_month
         for _ in range(3):
-            recent_months.append((temp_year, temp_month))
+            if (temp_year, temp_month) in allowed_months:
+                recent_months.append((temp_year, temp_month))
             temp_month -= 1
             if temp_month == 0:
                 temp_month = 12
@@ -203,7 +226,11 @@ class EventDiscoveryEnrichmentPipeline:
                 months_to_process.append(m)
 
         if not months_to_process:
-            logger.info(f"[DISCOVERY] All months from Jan 2020 to {now.strftime('%b %Y')} have been processed!")
+            logger.info(
+                "[DISCOVERY] All months from %s to %s have been processed!",
+                start_date.strftime('%b %Y'),
+                now.strftime('%b %Y'),
+            )
             return
 
         logger.info(f"[DISCOVERY] Found {len(unprocessed_months)} unprocessed months to process")
@@ -293,6 +320,7 @@ class EventDiscoveryEnrichmentPipeline:
                 if raw_event_id:
                     raw_events_stored += 1
                     raw_event_ids.append(raw_event_id)
+                    setattr(event, "raw_event_id", raw_event_id)
                     # Log successful raw event storage
                     await self._log_processing_success(raw_event_id, 'raw_event_storage', {
                         'source_type': self._determine_source_type(event.data_sources),
@@ -313,16 +341,25 @@ class EventDiscoveryEnrichmentPipeline:
             logger.info(f"[PIPELINE] Starting to store {len(processed_events)} enriched events for {year}-{month:02d}")
             enriched_events_stored = 0
             enriched_event_ids = []
+            enriched_event_map = {}
+            processed_raw_event_ids = set()
+            successful_raw_event_ids = set()
+            failed_raw_event_ids = set()
             failed_stores = 0
             
             for i, event in enumerate(processed_events):
                 if i % 10 == 0:  # Log every 10th event
                     logger.info(f"[PIPELINE] Storing enriched event {i+1}/{len(processed_events)} for {year}-{month:02d}")
-                raw_event_id = raw_event_ids[i] if i < len(raw_event_ids) else None
+                raw_event_id = getattr(event, "raw_event_id", None)
+                if raw_event_id:
+                    processed_raw_event_ids.add(raw_event_id)
                 enriched_event_id = await self._store_enriched_event(event, raw_event_id, year, month)
                 if enriched_event_id:
                     enriched_events_stored += 1
                     enriched_event_ids.append(enriched_event_id)
+                    enriched_event_map[enriched_event_id] = event
+                    if raw_event_id:
+                        successful_raw_event_ids.add(raw_event_id)
                     # Log successful enrichment
                     if raw_event_id:
                         await self._log_processing_success(raw_event_id, 'enrichment', {
@@ -331,6 +368,8 @@ class EventDiscoveryEnrichmentPipeline:
                         })
                 else:
                     failed_stores += 1
+                    if raw_event_id:
+                        failed_raw_event_ids.add(raw_event_id)
                     
             logger.info(f"[PIPELINE] Completed storing {enriched_events_stored} enriched events for {year}-{month:02d}")
             
@@ -342,13 +381,24 @@ class EventDiscoveryEnrichmentPipeline:
                     logger.error(f"[CRITICAL] High failure rate ({failure_rate:.1%}) - stopping pipeline")
                     raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%})")
 
-            # Mark all raw events as processed (regardless of whether they became enriched events)
-            logger.info(f"[PIPELINE] Marking {len(raw_event_ids)} raw events as processed for {year}-{month:02d}")
-            for i, raw_event_id in enumerate(raw_event_ids):
+            filtered_raw_event_ids = set(raw_event_ids) - processed_raw_event_ids
+            raw_events_to_mark = successful_raw_event_ids | filtered_raw_event_ids
+
+            logger.info(f"[PIPELINE] Marking {len(raw_events_to_mark)} raw events as processed for {year}-{month:02d}")
+            for i, raw_event_id in enumerate(sorted(raw_events_to_mark)):
                 if i % 20 == 0:  # Log every 20th event
-                    logger.info(f"[PIPELINE] Marking raw event {i+1}/{len(raw_event_ids)} as processed for {year}-{month:02d}")
-                self.db.mark_raw_event_processed(raw_event_id)
-            logger.info(f"[PIPELINE] Completed marking all raw events as processed for {year}-{month:02d}")
+                    logger.info(f"[PIPELINE] Marking raw event {i+1}/{len(raw_events_to_mark)} as processed for {year}-{month:02d}")
+                error_message = None
+                if raw_event_id in filtered_raw_event_ids:
+                    error_message = "Filtered out during processing"
+                self.db.mark_raw_event_processed(raw_event_id, error_message=error_message)
+            logger.info(f"[PIPELINE] Completed marking processed raw events for {year}-{month:02d}")
+
+            if failed_raw_event_ids:
+                logger.warning(
+                    "[WARNING] %d raw events failed to store enriched data and will remain unprocessed for retry",
+                    len(failed_raw_event_ids),
+                )
 
             # Step 6: Deduplicate events (within this month only)
             if collector.config.enable_deduplication:
@@ -379,11 +429,7 @@ class EventDiscoveryEnrichmentPipeline:
                 enriched_cyber_events = []
                 for db_event in enriched_events_from_db:
                     # Find corresponding processed event to get full object structure
-                    matching_event = None
-                    for proc_event in processed_events:
-                        if proc_event.title == db_event['title']:
-                            matching_event = proc_event
-                            break
+                    matching_event = enriched_event_map.get(db_event['enriched_event_id'])
 
                     if matching_event:
                         # Create a copy and update with database values
@@ -533,7 +579,7 @@ class EventDiscoveryEnrichmentPipeline:
             return None
 
     async def _store_enriched_event(self, event, raw_event_id: str, processing_year: int = None, processing_month: int = None) -> Optional[str]:
-        """Store a processed event as an enriched event with improved date fallback logic"""
+        """Store a processed event as an enriched event without fallback dates."""
         try:
             logger.debug(f"[ENRICHED] Starting to store event: {getattr(event, 'title', 'NO_TITLE')[:50]}...")
 
@@ -542,7 +588,7 @@ class EventDiscoveryEnrichmentPipeline:
                 return None
 
             logger.debug(f"[ENRICHED] Processing event data...")
-            # Handle event_date - required field with improved fallback logic
+            # Handle event_date without fallback dates
             event_date = None
 
             # Try event date first
@@ -558,18 +604,11 @@ class EventDiscoveryEnrichmentPipeline:
                         logger.debug(f"[ENRICHED] Using publication date from source: {event_date}")
                         break
 
-            # Use 1st day of processing month as final fallback
             if not event_date:
-                if processing_year and processing_month:
-                    event_date = date(processing_year, processing_month, 1)
-                    logger.debug(f"[ENRICHED] Using 1st day of processing month: {event_date}")
-                else:
-                    # Absolute fallback to current date (should rarely happen)
-                    event_date = date.today()
-                    logger.debug(f"[WARNING] No event date, publication date, or processing month for '{event.title[:50]}...', using current date")
+                logger.debug(f"[WARNING] No event date or publication date for '{event.title[:50]}...'")
 
-            # Convert date to ISO format string for SQLite (fixes Python 3.12 deprecation warning)
-            event_date_str = event_date.isoformat() if hasattr(event_date, 'isoformat') else str(event_date)
+            # Convert date to ISO format string for SQLite
+            event_date_str = event_date.isoformat() if hasattr(event_date, 'isoformat') else None
 
             # Ensure title is not empty (NOT NULL constraint)
             title = event.title if event.title and event.title.strip() else "Untitled Event"
@@ -599,7 +638,7 @@ class EventDiscoveryEnrichmentPipeline:
                 'summary': getattr(event, 'summary', None),
                 'event_type': str(event.event_type) if hasattr(event, 'event_type') else None,
                 'severity': str(event.severity) if hasattr(event, 'severity') else None,
-                'event_date': event_date_str,  # NOT NULL - ISO format string for SQLite
+                'event_date': event_date_str,
                 'records_affected': event.financial_impact.customers_affected if event.financial_impact else None,
                 'is_australian_event': is_australian,  # NOT NULL - guaranteed boolean
                 'is_specific_event': is_specific,  # NOT NULL - guaranteed boolean
@@ -1149,24 +1188,20 @@ class EventDiscoveryEnrichmentPipeline:
 
         return None
 
-    def _fallback_event_date(self, event, month_start: Optional[datetime]) -> datetime.date:
-        """Fallback to first day of the configured search window if event date unavailable"""
+    def _fallback_event_date(self, event, month_start: Optional[datetime]) -> Optional[datetime.date]:
+        """Return None when no event date is available."""
         if hasattr(event, 'data_sources') and event.data_sources:
             for source in event.data_sources:
                 fallback_date = getattr(source, 'search_start_date', None)
                 if fallback_date:
                     if isinstance(fallback_date, datetime):
-                        return fallback_date.date()
+                        return None
                     try:
-                        return datetime.fromisoformat(str(fallback_date)).date()
+                        return None
                     except Exception:
                         continue
 
-        if month_start:
-            return month_start.date()
-
-        # Default fallback: first day of fixed search month (June 2025)
-        return datetime(2025, 6, 1).date()
+        return None
 
     # =========================================================================
     # SCRAPING PHASE
@@ -1474,20 +1509,12 @@ class EventDiscoveryEnrichmentPipeline:
             elif 'publication_date' in event and event['publication_date']:
                 event_date = str(event['publication_date'])
 
-            # Track if we're about to attempt Perplexity fallback
-            original_url = url
-            content = await scraper.get_page_text(url, event_date=event_date)
+            content, scrape_meta = await scraper.get_page_text(url, event_date=event_date, return_metadata=True)
             processing_time_ms = int((time.time() - start_time) * 1000)
 
-            # Check if Perplexity fallback was used by comparing URLs
-            perplexity_attempted = False
-            perplexity_succeeded = False
+            perplexity_attempted = scrape_meta.get('perplexity_attempted', False)
+            perplexity_succeeded = scrape_meta.get('perplexity_succeeded', False)
             if content and len(content.strip()) > 50:
-                # Check if the URL changed (indicating Perplexity found an alternative)
-                if url != original_url:
-                    perplexity_attempted = True
-                    perplexity_succeeded = True
-                
                 self._update_raw_event_content(event['raw_event_id'], content, url)
                 self.db.log_processing_attempt(
                     event['raw_event_id'], 'url_scraping', 'success',
@@ -1502,11 +1529,13 @@ class EventDiscoveryEnrichmentPipeline:
                 }
             else:
                 # Content was retrieved but too short - try Perplexity fallback if not already attempted
-                if url == original_url:  # Perplexity hasn't been tried yet
+                if not perplexity_attempted:  # Perplexity hasn't been tried yet
                     logger.debug(f"[PERPLEXITY] Content too short ({len(content) if content else 0} chars), trying Perplexity fallback for: {url}")
+                    perplexity_attempted = True
                     perplexity_content = await scraper._perplexity_fallback(url, event_date)
                     if perplexity_content and len(perplexity_content.strip()) > 50:
                         # Perplexity found better content
+                        perplexity_succeeded = True
                         self._update_raw_event_content(event['raw_event_id'], perplexity_content, url)
                         self.db.log_processing_attempt(
                             event['raw_event_id'], 'url_scraping', 'success',
@@ -1521,7 +1550,8 @@ class EventDiscoveryEnrichmentPipeline:
                         }
                 
                 # Perplexity was attempted but failed, or already tried
-                perplexity_attempted = (url != original_url) or True  # We tried it above
+                if not perplexity_attempted:
+                    perplexity_attempted = True
                 perplexity_succeeded = False
                 
                 self.db.log_processing_attempt(
@@ -1537,8 +1567,7 @@ class EventDiscoveryEnrichmentPipeline:
                 }
         except Exception as e:
             processing_time_ms = int((time.time() - start_time) * 1000)
-            # Check if Perplexity was attempted based on URL change
-            perplexity_attempted = (url != original_url)
+            perplexity_attempted = False
             perplexity_succeeded = False
             
             self.db.log_processing_attempt(
@@ -1792,28 +1821,13 @@ class EventDiscoveryEnrichmentPipeline:
             # For GDELT events, create better title using primary entity
             title = f"Cyber incident affecting {llm_data.primary_entity}"
 
-        # Use LLM-extracted event date first, then fallback options
+        # Use LLM-extracted event date first, then raw event date (no fallback dates)
         event_date = llm_data.event_date if llm_data.event_date else raw_event.get('event_date')
-
-        if not event_date:
-            # Fallback 1: Use discovery date from raw event
-            discovered_at = raw_event.get('discovered_at')
-            if discovered_at:
-                try:
-                    if isinstance(discovered_at, str):
-                        event_date = datetime.fromisoformat(discovered_at.replace('Z', '+00:00')).date()
-                    else:
-                        event_date = discovered_at.date() if hasattr(discovered_at, 'date') else discovered_at
-                except:
-                    # Fallback 2: Use middle of our search range as reasonable fallback
-                    event_date = datetime(2025, 6, 4).date()  # Middle of June 1-7 range
-            else:
-                # Fallback 3: Use middle of our search range as reasonable fallback
-                event_date = datetime(2025, 6, 4).date()  # Middle of June 1-7 range
-
-            logger.debug(f"[ENRICHMENT] Using fallback event date: {event_date}")
-        else:
-            logger.debug(f"[ENRICHMENT] Using {'LLM-extracted' if llm_data.event_date else 'raw'} event date: {event_date}")
+        logger.debug(
+            "[ENRICHMENT] Using %s event date: %s",
+            "LLM-extracted" if llm_data.event_date else "raw",
+            event_date,
+        )
 
         enriched_data = {
             'title': title,
