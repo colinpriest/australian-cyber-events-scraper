@@ -104,6 +104,7 @@ from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnri
 from cyber_data_collector.utils import ConfigManager, setup_logging
 from perplexity_backfill_events import PerplexityBackfillProcessor
 from asd_risk_classifier import ASDRiskClassifier
+from run_global_deduplication import DeduplicationMigration
 
 # Configure logging
 setup_logging(log_file="unified_pipeline.log")
@@ -367,27 +368,13 @@ class UnifiedPipeline:
         try:
             logger.info("Running global deduplication...")
 
-            # Run the global deduplication script
-            import subprocess
-            result = subprocess.run(
-                ['python', 'run_global_deduplication.py', '--db-path', self.db_path],
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout
-            )
+            migration = DeduplicationMigration(self.db_path, dry_run=False)
+            if not migration.run_migration():
+                raise RuntimeError("Deduplication migration failed")
 
-            if result.returncode != 0:
-                raise RuntimeError(f"Deduplication failed with exit code {result.returncode}: {result.stderr}")
-
-            # Parse output for statistics
-            output = result.stdout
-            logger.info(output)
-
-            # Extract deduplicated count from output
-            import re
-            match = re.search(r'Created (\d+) deduplicated events', output)
-            if match:
-                dedup_count = int(match.group(1))
+            stats = migration.migration_report.get('statistics', {})
+            dedup_count = stats.get('output_events') or stats.get('final_active_events')
+            if dedup_count is not None:
                 self.results['deduplication']['events_deduplicated'] = dedup_count
 
             self.results['deduplication']['success'] = True
@@ -692,7 +679,7 @@ Examples:
   python run_full_pipeline.py --dashboard-only
 
   # Control discovery parameters
-  python run_full_pipeline.py --max-events 500 --source Perplexity OAIC
+    python run_full_pipeline.py --max-events 500 --source Perplexity OAIC
         """
     )
 
@@ -716,11 +703,11 @@ Examples:
 
     # Discovery parameters
     parser.add_argument('--source', choices=['GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC'],
-                        help='Data sources to use (can specify multiple)', action='append')
+                        help='Data sources to use (can specify multiple)', action='append', nargs='+')
     parser.add_argument('--max-events', type=int, default=1000,
                         help='Maximum events to process per source per month (default: 1000)')
-    parser.add_argument('--days', type=int, default=7,
-                        help='Number of days to look back for discovery (default: 7)')
+    parser.add_argument('--days', type=int, default=0,
+                        help='Number of days to look back for discovery (0 = full history)')
 
     # Dashboard parameters
     parser.add_argument('--out-dir', default='dashboard',
@@ -734,6 +721,8 @@ Examples:
     env_config = ConfigManager(".env").load()
     if not args.db_path:
         args.db_path = env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
+    if args.source:
+        args.source = [source for group in args.source for source in group]
 
     # Validate arguments
     if args.discover_only and args.dashboard_only:

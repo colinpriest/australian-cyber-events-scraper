@@ -86,7 +86,13 @@ class PlaywrightScraper:
         ]
         return random.choice(user_agents)
 
-    async def get_page_text(self, url: str, timeout: int = 30, event_date: str = None) -> Optional[str]:
+    async def get_page_text(
+        self,
+        url: str,
+        timeout: int = 30,
+        event_date: str = None,
+        return_metadata: bool = False,
+    ) -> Optional[str] | tuple[Optional[str], Dict[str, bool]]:
         """
         Visits a URL and extracts the primary text content from the page.
         Supports both HTML pages and PDF files.
@@ -97,7 +103,19 @@ class PlaywrightScraper:
 
         Returns:
             The extracted text content of the page, or None if scraping fails.
+            If return_metadata is True, returns (content, metadata) with Perplexity fallback flags.
         """
+        perplexity_attempted = False
+        perplexity_succeeded = False
+
+        def _format_return(text: Optional[str]):
+            if return_metadata:
+                return text, {
+                    "perplexity_attempted": perplexity_attempted,
+                    "perplexity_succeeded": perplexity_succeeded,
+                }
+            return text
+
         # Check if URL points to a PDF file
         if self.pdf_extractor and self.pdf_extractor.is_pdf_url(url):
             self.logger.info(f"Detected PDF URL, using PDF extractor: {url}")
@@ -105,21 +123,24 @@ class PlaywrightScraper:
                 result = self.pdf_extractor.extract_from_url(url, timeout=timeout)
                 if result and result['success']:
                     self.logger.info(f"Successfully extracted {len(result['text'])} chars from PDF using {result['extraction_method']}")
-                    return result['text']
+                    return _format_return(result['text'])
                 else:
                     self.logger.warning(f"PDF extraction failed: {result.get('error')}")
-                    return None
+                    return _format_return(None)
             except Exception as e:
                 self.logger.error(f"PDF extraction error: {e}")
-                return None
+                return _format_return(None)
 
         # For sites known to heavily block scrapers, try Perplexity first
         if self._is_stubborn_site(url):
             self.logger.info(f"Stubborn site detected, trying Perplexity first: {url}")
+            perplexity_attempted = True
             perplexity_content = await self._perplexity_fallback(url, event_date)
             if perplexity_content and len(perplexity_content) > 200:
-                return perplexity_content
+                perplexity_succeeded = True
+                return _format_return(perplexity_content)
             # If Perplexity fails, still try direct scraping
+            perplexity_succeeded = False
 
         # Enhanced context with more realistic browser fingerprint
         context = await self.browser.new_context(
@@ -295,16 +316,22 @@ class PlaywrightScraper:
                 text = await page.locator('body').inner_text()
 
             cleaned_text = self._clean_text(text)
-            return cleaned_text
+            return _format_return(cleaned_text)
 
         except PlaywrightTimeoutError:
             # Try Perplexity fallback for timeouts
-            return await self._perplexity_fallback(url, event_date)
+            perplexity_attempted = True
+            perplexity_content = await self._perplexity_fallback(url, event_date)
+            perplexity_succeeded = bool(perplexity_content)
+            return _format_return(perplexity_content)
         except Exception as e:
             # Check if it's a 403/404 error and try Perplexity fallback
             if "403" in str(e) or "404" in str(e) or "Forbidden" in str(e) or "Not Found" in str(e):
-                return await self._perplexity_fallback(url, event_date)
-            return None
+                perplexity_attempted = True
+                perplexity_content = await self._perplexity_fallback(url, event_date)
+                perplexity_succeeded = bool(perplexity_content)
+                return _format_return(perplexity_content)
+            return _format_return(None)
         finally:
             await page.close()
             await context.close()

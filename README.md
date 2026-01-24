@@ -43,7 +43,7 @@ The pipeline supports 5 data sources. **Recommended sources** are low-cost or fr
 |--------|-------------|------|------------------|
 | **GDELT** | Global news event database via BigQuery. | **WARNING: Can cost hundreds to thousands of dollars** in BigQuery fees | Yes (Google Cloud Project + BigQuery) |
 
-> **GDELT Cost Warning**: GDELT queries the public BigQuery dataset which charges per query based on data scanned. A single month of queries can easily cost $500-$2000+. **Do not use GDELT unless you have a BigQuery budget and understand the costs.** Use `--source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance` to exclude GDELT.
+> **GDELT Cost Warning**: GDELT queries the public BigQuery dataset which charges per query based on data scanned. A single month of queries can easily cost $500-$2000+. **Do not use GDELT unless you have a BigQuery budget and understand the costs.** Use `--source Perplexity OAIC GoogleSearch WebberInsurance` to exclude GDELT.
 
 ## Architecture
 
@@ -222,7 +222,7 @@ australian-cyber-events-scraper/
 4. **Run the unified pipeline** (uses recommended sources by default)
    ```bash
    # Recommended: Use low-cost sources only (excludes expensive GDELT)
-   python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance
+   python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance
    ```
 
 5. **(Optional) Configure BigQuery for GDELT**
@@ -256,7 +256,7 @@ Run the pipeline with recommended (low-cost) sources:
 
 ```bash
 # Recommended: Use low-cost sources only
-python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance
+python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance
 ```
 
 This will:
@@ -272,7 +272,7 @@ For a thorough monthly update that catches older events and events from multiple
 
 ```bash
 # Extended 30-day discovery with higher event limits (excludes expensive GDELT)
-python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance --days 30 --max-events 500
+python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance --days 30 --max-events 500
 ```
 
 ### Discovering Historical Events
@@ -284,7 +284,7 @@ Perplexity AI can discover events that occurred in the past but were only recent
 python run_full_pipeline.py --source Perplexity --days 60 --max-events 1000
 ```
 
-**Note**: The `--days` parameter controls how far back to search for *news articles*, not event dates. Perplexity AI and other sources may return articles about events that occurred weeks or months earlier.
+**Note**: The `--days` parameter limits which calendar months are processed (based on a lookback from today). The pipeline still reprocesses the most recent 3 months within that window to catch late-reported events.
 
 ### Multi-Source Update Strategy
 
@@ -310,7 +310,7 @@ python run_full_pipeline.py --dashboard-only
 Or run all recommended sources together:
 
 ```bash
-python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance --days 30 --max-events 500
+python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance --days 30 --max-events 500
 ```
 
 ### Backfilling Historical Data
@@ -335,7 +335,7 @@ python run_full_pipeline.py --re-enrich --re-enrich-limit 100
 
 2. **Run comprehensive discovery** (using recommended low-cost sources):
    ```bash
-   python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance --days 30 --max-events 500
+   python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance --days 30 --max-events 500
    ```
 
 3. **Verify results**:
@@ -354,12 +354,12 @@ For automated monthly updates, create a scheduled task or cron job:
 
 **Windows Task Scheduler**:
 ```bash
-python d:\dev\australian-cyber-events-scraper\run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance --days 30 --max-events 500
+python d:\dev\australian-cyber-events-scraper\run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance --days 30 --max-events 500
 ```
 
 **Linux/Mac Cron** (first Monday of each month at 2 AM):
 ```cron
-0 2 1-7 * 1 cd /path/to/australian-cyber-events-scraper && python run_full_pipeline.py --source Perplexity --source OAIC --source GoogleSearch --source WebberInsurance --days 30 --max-events 500
+0 2 1-7 * 1 cd /path/to/australian-cyber-events-scraper && python run_full_pipeline.py --source Perplexity OAIC GoogleSearch WebberInsurance --days 30 --max-events 500
 ```
 
 ## Configuration
@@ -432,9 +432,9 @@ python run_full_pipeline.py --classify-only
 python run_full_pipeline.py --dashboard-only
 
 # Use specific sources with limits
-python run_full_pipeline.py --source Perplexity --source OAIC --max-events 500
+python run_full_pipeline.py --source Perplexity OAIC --max-events 500
 
-# Extended date range
+# Extended date range (limits months processed in the lookback window)
 python run_full_pipeline.py --days 14 --max-events 500
 
 # Skip ASD classification (faster pipeline)
@@ -847,7 +847,7 @@ python build_static_dashboard.py --out-dir my_dashboard
 | `--continue-on-error` | Continue to next phase if previous fails | False |
 | `--source SOURCE` | Data sources to use (can specify multiple) | All |
 | `--max-events N` | Maximum events per source per month | 1000 |
-| `--days N` | Number of days to look back | 7 |
+| `--days N` | Lookback window (days) used to limit which months are processed (0 = full history) | 0 |
 | `--out-dir DIR` | Output directory for static dashboard | dashboard |
 | `--db-path PATH` | Database file path | instance/cyber_events.db |
 
