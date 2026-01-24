@@ -135,7 +135,7 @@ def main():
     # Test 3: Pipeline import test
     try:
         print("\n🧪 Testing pipeline imports...")
-        from discover_enrich_events import EventDiscoveryEnrichmentPipeline
+        from cyber_data_collector.pipelines.discovery import EventDiscoveryEnrichmentPipeline
         print("✅ Pipeline import successful")
         tests_passed += 1
     except Exception as e:

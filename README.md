@@ -90,10 +90,13 @@ The unified pipeline (`run_full_pipeline.py`) executes five main phases:
 ```
 australian-cyber-events-scraper/
 ├── run_full_pipeline.py               # Unified pipeline script (SINGLE SOURCE OF TRUTH)
-├── discover_enrich_events.py          # Original pipeline script (deprecated)
+├── discover_enrich_events.py          # Legacy CLI wrapper (uses shared pipeline module)
 ├── build_static_dashboard.py          # Static HTML dashboard generator
 ├── rf_event_filter.py                 # Random Forest filter implementation
 ├── train_rf_filter.py                 # ML model training script
+│
+├── cyber_data_collector/pipelines/    # Shared pipeline implementations
+│   └── discovery.py                   # Discovery/enrichment pipeline used by CLIs
 │
 ├── # Standalone Utility Scripts
 ├── asd_risk_classifier.py             # ASD risk classification (standalone)
