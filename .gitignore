@@ -6,6 +6,46 @@ client_secrets.json
 # Local tooling directories
 .conda/
 .claude/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Database and backups
+instance/
+*.db
+*.db.backup.*
+*.sql
+
+# Generated exports and reports
+*.xlsx
+*.csv
+PHASE1_TEST_REPORT_*.txt
+batch_enrichment_*.json
+migration_report_*.json
+oaic_cyber_statistics_*.json
+oaic_cyber_statistics_*.csv
+CORRECTED_VALUES.json
+
+# Downloaded data directories
+oaic_pdfs/
+oaic_screenshots/
+
+# Deprecated files
+*.deprecated
+
+# Misc
+nul
+failed_events_to_rerun.txt
+exported_data.md
+data_pipeline.md
+pdf_analysis_output.txt
+*_comparison.txt
 
 
 
