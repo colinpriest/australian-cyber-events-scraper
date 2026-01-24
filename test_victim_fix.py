@@ -16,6 +16,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from cyber_data_collector.enrichment.high_quality_enrichment_pipeline import HighQualityEnrichmentPipeline
 
+if "pytest" in sys.modules and not os.getenv("RUN_ENRICHMENT_TESTS"):
+    import pytest
+
+    pytest.skip(
+        "Skipping enrichment victim script in pytest; set RUN_ENRICHMENT_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
