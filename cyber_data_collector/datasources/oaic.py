@@ -68,8 +68,8 @@ class OAICDataSource(DataSource):
                         if not (range_start <= pub_date_only <= range_end):
                             self.logger.debug(f"OAIC article outside 3-month range ({pub_date_only}): {link_info['text'][:50]}...")
                             continue
-                    except:
-                        pass  # Fall back to scraping for date
+                    except Exception as exc:
+                        self.logger.debug("Failed to parse OAIC publication date '%s': %s", pub_date_str, exc)
 
                 await self.rate_limiter.wait("oaic_detail")
 
@@ -83,8 +83,8 @@ class OAICDataSource(DataSource):
                 if pub_date_str:
                     try:
                         publication_date = dateutil_parse(pub_date_str)
-                    except:
-                        pass
+                    except Exception as exc:
+                        self.logger.debug("Failed to parse OAIC publication date '%s': %s", pub_date_str, exc)
 
                 event = self._scrape_article_page(actual_url, link_info['text'], publication_date)
                 if event:
@@ -313,11 +313,13 @@ class OAICDataSource(DataSource):
                     for match in matches:
                         try:
                             return dateutil_parse(match)
-                        except:
+                        except Exception as exc:
+                            self.logger.debug("Failed to parse OAIC article date candidate '%s': %s", match, exc)
                             continue
 
             return None
-        except Exception:
+        except Exception as exc:
+            self.logger.debug("Failed to parse OAIC article date: %s", exc)
             return None
 
     def _extract_entity_name(self, title: str, description: str) -> str:

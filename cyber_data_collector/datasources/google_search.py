@@ -134,8 +134,8 @@ class GoogleSearchDataSource(DataSource):
                         if "quota" in error_reason.lower() or "quota" in error_message.lower() or "limit" in error_message.lower():
                             self._set_quota_exceeded()
                             return None
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as exc:
+                        self.logger.debug("Failed to parse Google API error response: %s", exc)
                     self.logger.error("Google API returned 403 Forbidden: %s", response.text[:200])
                     break
 
@@ -226,7 +226,6 @@ class GoogleSearchDataSource(DataSource):
             "coverage": "Global web content",
             "data_types": ["Web pages", "News articles", "Reports"],
         }
-
 
 
 
