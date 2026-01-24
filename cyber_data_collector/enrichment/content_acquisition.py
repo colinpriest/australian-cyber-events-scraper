@@ -342,7 +342,8 @@ class ContentAcquisitionService:
             if domain.startswith('www.'):
                 domain = domain[4:]
             return domain
-        except:
+        except Exception as exc:
+            self.logger.warning("Failed to extract domain from %s: %s", url, exc)
             return 'unknown'
 
     def _extract_with_playwright(self, url: str) -> Optional[str]:

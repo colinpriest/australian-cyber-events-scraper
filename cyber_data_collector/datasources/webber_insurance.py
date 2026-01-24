@@ -158,7 +158,8 @@ class WebberInsuranceDataSource(DataSource):
                     return datetime(year, month, 15)
 
             return None
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError) as exc:
+            self.logger.debug("Failed to parse section header date from '%s': %s", header_text, exc)
             return None
 
     def _parse_date(self, text: str, url: str = "") -> Optional[datetime]:
@@ -181,7 +182,8 @@ class WebberInsuranceDataSource(DataSource):
                             # Remove ordinal suffixes
                             cleaned = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', match)
                             return dateutil_parse(cleaned)
-                        except:
+                        except Exception as exc:
+                            self.logger.debug("Failed to parse date candidate '%s': %s", cleaned, exc)
                             continue
 
             # Try extracting date from URL if text parsing fails
@@ -192,8 +194,8 @@ class WebberInsuranceDataSource(DataSource):
                     day, month, year = url_date_match.groups()
                     try:
                         return datetime(int(year), int(month), int(day))
-                    except:
-                        pass
+                    except Exception as exc:
+                        self.logger.debug("Failed to parse URL date from %s: %s", url, exc)
 
                 # Look for "campaign=20_06_2025" style patterns
                 campaign_match = re.search(r'campaign=(\d{2}_\d{2}_\d{4})', url)
@@ -201,11 +203,12 @@ class WebberInsuranceDataSource(DataSource):
                     date_str = campaign_match.group(1).replace('_', '-')
                     try:
                         return dateutil_parse(date_str)
-                    except:
-                        pass
+                    except Exception as exc:
+                        self.logger.debug("Failed to parse campaign date from %s: %s", url, exc)
 
             return None
-        except (ValueError, TypeError, OverflowError):
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.logger.debug("Failed to parse Webber date from text '%s': %s", text, exc)
             return None
 
     def _scrape_detail_page(self, url: str, section_date: Optional[datetime] = None) -> Optional[CyberEvent]:
@@ -374,8 +377,6 @@ Return a comprehensive summary of the incident in paragraph form."""
             "coverage": "Australian entities",
             "data_types": ["Data breaches", "Privacy incidents"],
         }
-
-
 
 
 

@@ -4,8 +4,9 @@ Data validation utilities for cyber event enrichment.
 Provides common-sense validation rules for extracted data fields.
 """
 
-from typing import Optional
+from typing import Optional, Any
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
         - Values < 50 are rejected (likely missed "thousand" or "million" units)
         - Negative values are rejected
     """
+    if not isinstance(event_title, str):
+        raise TypeError("event_title must be a string")
+
     if value is None:
         return None
 
@@ -197,6 +201,11 @@ def validate_and_correct_enrichment_data(enrichment_data: dict, event_title: str
     Returns:
         Corrected enrichment data dictionary
     """
+    if not isinstance(enrichment_data, dict):
+        raise TypeError("enrichment_data must be a dictionary")
+    if not isinstance(event_title, str):
+        raise TypeError("event_title must be a string")
+
     corrected = enrichment_data.copy()
 
     # Validate records_affected
@@ -207,3 +216,24 @@ def validate_and_correct_enrichment_data(enrichment_data: dict, event_title: str
         )
 
     return corrected
+
+
+def safe_json_dumps(value: Any, context: str, **kwargs: Any) -> str:
+    """
+    Safely serialize data to JSON with type validation.
+
+    Args:
+        value: Data to serialize.
+        context: Description used in error messages.
+        **kwargs: Passed through to json.dumps.
+
+    Returns:
+        JSON string.
+    """
+    if not isinstance(context, str):
+        raise TypeError("context must be a string")
+
+    try:
+        return json.dumps(value, **kwargs)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{context} contains non-JSON-serializable data: {exc}") from exc
