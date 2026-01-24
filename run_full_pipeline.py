@@ -82,16 +82,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Add current directory to path for imports
 sys.path.append(str(Path(__file__).parent))
 
 # Import existing components
-from discover_enrich_events import EventDiscoveryEnrichmentPipeline
+from cyber_data_collector.pipelines.discovery import EventDiscoveryEnrichmentPipeline
 from build_static_dashboard import (
     build_html, get_connection, get_monthly_event_counts, get_monthly_severity_trends,
     get_monthly_records_affected, get_monthly_event_type_mix, get_overall_event_type_mix,
@@ -105,18 +101,12 @@ from build_static_dashboard import (
 )
 from cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
+from cyber_data_collector.utils import ConfigManager, setup_logging
 from perplexity_backfill_events import PerplexityBackfillProcessor
 from asd_risk_classifier import ASDRiskClassifier
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('unified_pipeline.log', encoding='utf-8')
-    ]
-)
+setup_logging(log_file="unified_pipeline.log")
 logger = logging.getLogger(__name__)
 
 
@@ -737,10 +727,13 @@ Examples:
                         help='Output directory for static dashboard (default: dashboard)')
 
     # Database
-    parser.add_argument('--db-path', default='instance/cyber_events.db',
-                        help='Path to SQLite database file')
+    parser.add_argument('--db-path', default=None,
+                        help='Path to SQLite database file (defaults to DATABASE_URL/.env setting)')
 
     args = parser.parse_args()
+    env_config = ConfigManager(".env").load()
+    if not args.db_path:
+        args.db_path = env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
 
     # Validate arguments
     if args.discover_only and args.dashboard_only:
