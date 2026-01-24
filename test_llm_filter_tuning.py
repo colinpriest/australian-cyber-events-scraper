@@ -26,8 +26,13 @@ from bs4 import BeautifulSoup
 
 # Import existing components
 from cyber_data_collector.processing.llm_classifier import LLMClassifier, EventEnhancement
-from cyber_data_collector.models.events import CyberEvent, CyberEventType, EventSeverity
-from cyber_data_collector.models.data_sources import DataSource
+from cyber_data_collector.models.events import (
+    ConfidenceScore,
+    CyberEvent,
+    CyberEventType,
+    EventSeverity,
+    EventSource,
+)
 
 @dataclass
 class TestResult:
@@ -212,10 +217,25 @@ class LLMFilterTester:
                 test_event = CyberEvent(
                     title=title,
                     description=row.get('raw_description', ''),
-                    data_sources=[DataSource(
-                        source_type="test",
-                        content_snippet=content[:2000]  # Limit content
-                    )]
+                    event_type=CyberEventType.OTHER,
+                    severity=EventSeverity.UNKNOWN,
+                    australian_relevance=True,
+                    confidence=ConfidenceScore(
+                        overall=0.5,
+                        source_reliability=0.5,
+                        data_completeness=0.5,
+                        temporal_accuracy=0.5,
+                        geographic_accuracy=0.5,
+                    ),
+                    data_sources=[
+                        EventSource(
+                            source_id=f"test-{event_id}",
+                            source_type="test",
+                            content_snippet=content[:2000],  # Limit content
+                            credibility_score=0.5,
+                            relevance_score=0.5,
+                        )
+                    ],
                 )
 
                 # Apply LLM classification
