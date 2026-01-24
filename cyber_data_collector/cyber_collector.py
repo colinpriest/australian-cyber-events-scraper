@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 from typing import Any, Dict, List, Optional
@@ -23,6 +22,7 @@ from cyber_data_collector.processing.entity_extractor import EntityExtractor
 from cyber_data_collector.processing.llm_classifier import LLMClassifier
 from cyber_data_collector.storage import CacheManager, DatabaseManager
 from cyber_data_collector.utils import ConfigManager, RateLimiter, ThreadManager, setup_logging
+from cyber_data_collector.utils.validation import safe_json_dumps
 
 
 class CyberDataCollector:
@@ -219,8 +219,14 @@ class CyberDataCollector:
     def export_events(self, filename: str, format: str = "json") -> bool:
         try:
             if format.lower() == "json":
+                serialized_events = safe_json_dumps(
+                    [event.model_dump() for event in self.collected_events],
+                    "exported cyber events",
+                    indent=2,
+                    default=str,
+                )
                 with open(filename, "w", encoding="utf-8") as file:
-                    json.dump([event.model_dump() for event in self.collected_events], file, indent=2, default=str)
+                    file.write(serialized_events)
             elif format.lower() == "csv":
                 import pandas as pd
 

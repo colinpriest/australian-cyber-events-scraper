@@ -367,8 +367,8 @@ class GDELTDataSource(DataSource):
                 return datetime.strptime(value, "%Y%m%d%H%M%S")
             elif isinstance(value, int):
                 return datetime.strptime(str(value), "%Y%m%d%H%M%S")
-        except ValueError:
-            pass
+        except ValueError as exc:
+            self.logger.debug("Failed to parse BigQuery date %s: %s", value, exc)
         return None
 
     def _parse_coordinates_bigquery(self, row: Dict[str, Any]) -> Optional[tuple[float, float]]:
@@ -378,7 +378,8 @@ class GDELTDataSource(DataSource):
         try:
             if lat is not None and lng is not None:
                 return float(lat), float(lng)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            self.logger.debug("Failed to parse BigQuery coordinates %s/%s: %s", lat, lng, exc)
             return None
         return None
 
@@ -396,7 +397,8 @@ class GDELTDataSource(DataSource):
         """Calculate credibility score from number of sources."""
         try:
             count = float(sources) if sources else 0.0
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            self.logger.debug("Failed to parse credibility sources %s: %s", sources, exc)
             count = 0.0
         return max(0.3, min(count * 0.2, 1.0))
 

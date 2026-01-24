@@ -32,6 +32,7 @@ from llm_extractor import extract_event_details_with_llm
 from cyber_data_collector import CyberDataCollector, CollectionConfig, DateRange
 from cyber_data_collector.models.config import DataSourceConfig
 from cyber_data_collector.utils import ConfigManager, setup_logging
+from cyber_data_collector.utils.validation import safe_json_dumps
 from rf_event_filter import RfEventFilter
 
 
@@ -922,7 +923,8 @@ class EventDiscoveryEnrichmentPipeline:
                     else:
                         event_date = event['event_date']
                     dates.append(event_date)
-                except:
+                except Exception as exc:
+                    logger.debug("Skipping invalid event_date value %s: %s", event.get('event_date'), exc)
                     continue
 
         if len(dates) < 2:
@@ -1387,7 +1389,7 @@ class EventDiscoveryEnrichmentPipeline:
                 # Update the metadata
                 cursor.execute("""
                     UPDATE RawEvents SET source_metadata = ? WHERE raw_event_id = ?
-                """, (json.dumps(existing_metadata), raw_event_id))
+                """, (safe_json_dumps(existing_metadata, "existing metadata payload"), raw_event_id))
 
                 self.db._conn.commit()
 
@@ -1711,7 +1713,10 @@ class EventDiscoveryEnrichmentPipeline:
                 enriched_event_data = self._prepare_enriched_event_data(raw_event, enriched_data)
                 # Add final filtering confidence to the enriched event data
                 enriched_event_data['final_filter_confidence'] = final_filter_result.confidence_score
-                enriched_event_data['final_filter_reasoning'] = json.dumps(final_filter_result.reasoning)
+                enriched_event_data['final_filter_reasoning'] = safe_json_dumps(
+                    final_filter_result.reasoning,
+                    "final filter reasoning",
+                )
 
                 enriched_event_id = self.db.create_enriched_event(raw_event_id, enriched_event_data)
 
@@ -1787,9 +1792,11 @@ class EventDiscoveryEnrichmentPipeline:
             try:
                 metadata = json.loads(raw_event['source_metadata'])
                 if metadata:
-                    content_parts.append(f"Source Information: {json.dumps(metadata, indent=2)}")
-            except (json.JSONDecodeError, TypeError):
-                pass
+                    content_parts.append(
+                        f"Source Information: {safe_json_dumps(metadata, 'source metadata', indent=2)}"
+                    )
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.debug("Failed to parse source metadata for content assembly: %s", exc)
 
         combined_content = "\n\n".join(content_parts)
 
@@ -1812,8 +1819,8 @@ class EventDiscoveryEnrichmentPipeline:
         if raw_event.get('source_metadata'):
             try:
                 source_metadata = json.loads(raw_event['source_metadata'])
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.debug("Failed to parse source metadata for enriched event: %s", exc)
 
         # Determine title (prefer enriched, fall back to raw)
         title = raw_event.get('raw_title', 'Untitled Event')
