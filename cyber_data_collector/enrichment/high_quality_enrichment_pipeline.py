@@ -223,9 +223,7 @@ class HighQualityEnrichmentPipeline:
             }
 
         except Exception as e:
-            self.logger.error(f"Pipeline failed with exception: {e}")
-            import traceback
-            traceback.print_exc()
+            self.logger.exception("Pipeline failed with exception: %s", e)
 
             audit_trail['completed_at'] = datetime.now().isoformat()
             audit_trail['error'] = str(e)
