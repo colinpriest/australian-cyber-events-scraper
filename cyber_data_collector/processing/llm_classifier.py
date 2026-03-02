@@ -242,7 +242,7 @@ CRITICAL REQUIREMENTS:
             self.logger.debug(f"LLM rejected event as not Australian relevant '{event.title[:50]}...': {enhancement.rejection_reason}")
             return None
 
-        event_copy = event.copy(deep=True)
+        event_copy = event.model_copy(deep=True)
         event_copy.event_type = enhancement.event_type
         event_copy.secondary_types = enhancement.secondary_types
         event_copy.severity = enhancement.severity

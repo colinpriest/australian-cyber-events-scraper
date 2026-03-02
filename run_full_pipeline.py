@@ -73,6 +73,8 @@ USAGE:
 ===========================================================================================
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
@@ -217,7 +219,12 @@ class UnifiedPipeline:
             if not perplexity_success:
                 logger.warning("Perplexity enrichment had errors, but continuing with pipeline...")
 
-            # Step 3: Run global deduplication
+            # Step 3: Run global deduplication (cross-month, entity-based).
+            # NOTE: The discovery pipeline (EventDiscoveryEnrichmentPipeline) already runs a
+            # within-month deduplication pass during event storage.  This global pass is
+            # intentionally separate: it performs cross-month entity-based merging (0.15
+            # similarity threshold) across the entire database, which the per-month pass
+            # cannot do.  Both passes serve distinct purposes and are not redundant.
             logger.info("\nStep 3/3: Running global deduplication...")
             dedup_success = self.run_deduplication_phase(args)
 
@@ -238,6 +245,7 @@ class UnifiedPipeline:
         Automatically run Perplexity enrichment on events discovered in this session.
         This upgrades the initial GPT-4o-mini enrichment to high-quality Perplexity AI.
         """
+        db = None
         try:
             # Load Perplexity API key
             perplexity_api_key = os.getenv('PERPLEXITY_API_KEY')
@@ -289,11 +297,18 @@ class UnifiedPipeline:
         except Exception as e:
             logger.error(f"Automatic Perplexity enrichment failed: {e}")
             return False
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     async def run_reenrichment_phase(self, args) -> bool:
         """Run re-enrichment on existing events with updated Perplexity prompt."""
         self.print_header("PHASE: RE-ENRICHMENT OF EXISTING EVENTS")
 
+        db = None
         try:
             # Load Perplexity API key from environment
             perplexity_api_key = os.getenv('PERPLEXITY_API_KEY')
@@ -360,6 +375,12 @@ class UnifiedPipeline:
             logger.error(f"Re-enrichment phase failed: {e}")
             self.results['reenrichment']['errors'].append(str(e))
             return False
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def run_deduplication_phase(self, args) -> bool:
         """Run global deduplication on all enriched events."""
@@ -414,23 +435,22 @@ class UnifiedPipeline:
             try:
                 # Get count of unclassified events
                 import sqlite3
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
 
-                # Count total active events
-                cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'")
-                total_events = cursor.fetchone()[0]
+                    # Count total active events
+                    cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'")
+                    total_events = cursor.fetchone()[0]
 
-                # Count events already classified
-                cursor.execute("""
-                    SELECT COUNT(DISTINCT de.deduplicated_event_id)
-                    FROM DeduplicatedEvents de
-                    INNER JOIN ASDRiskClassifications arc
-                        ON de.deduplicated_event_id = arc.deduplicated_event_id
-                    WHERE de.status = 'Active'
-                """)
-                classified_events = cursor.fetchone()[0]
-                conn.close()
+                    # Count events already classified
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT de.deduplicated_event_id)
+                        FROM DeduplicatedEvents de
+                        INNER JOIN ASDRiskClassifications arc
+                            ON de.deduplicated_event_id = arc.deduplicated_event_id
+                        WHERE de.status = 'Active'
+                    """)
+                    classified_events = cursor.fetchone()[0]
 
                 unclassified_count = total_events - classified_events
 

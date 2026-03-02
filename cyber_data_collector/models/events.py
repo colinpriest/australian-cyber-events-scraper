@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CyberEventType(str, Enum):
@@ -80,12 +80,12 @@ class AffectedEntity(BaseModel):
 class FinancialImpact(BaseModel):
     """Financial impact information."""
 
-    estimated_cost: Optional[float] = Field(None, description="Estimated financial cost in AUD")
-    regulatory_fine: Optional[float] = Field(None, description="Regulatory fine amount in AUD")
+    estimated_cost: Optional[float] = Field(None, ge=0, description="Estimated financial cost in AUD")
+    regulatory_fine: Optional[float] = Field(None, ge=0, description="Regulatory fine amount in AUD")
     regulatory_fine_currency: Optional[str] = Field("AUD", description="Currency of regulatory fine")
     regulatory_undertaking: Optional[str] = Field(None, description="Description of regulatory undertaking")
-    customers_affected: Optional[int] = Field(None, description="Number of customers/records affected")
-    revenue_impact: Optional[float] = Field(None, description="Revenue impact in AUD")
+    customers_affected: Optional[int] = Field(None, ge=0, description="Number of customers/records affected")
+    revenue_impact: Optional[float] = Field(None, ge=0, description="Revenue impact in AUD")
 
 
 class EventSource(BaseModel):
@@ -107,6 +107,7 @@ class CyberEvent(BaseModel):
     """Comprehensive cyber event model."""
 
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique event identifier")
+    raw_event_id: Optional[str] = Field(None, description="Database raw event ID")
     enriched_event_id: Optional[str] = Field(None, description="Database enriched event ID")
     external_ids: Dict[str, str] = Field(default_factory=dict, description="External system IDs")
     title: str = Field(..., description="Event title/headline")
@@ -119,7 +120,7 @@ class CyberEvent(BaseModel):
     event_date: Optional[datetime] = Field(None, description="When the event occurred")
     discovery_date: Optional[datetime] = Field(None, description="When the event was discovered")
     publication_date: Optional[datetime] = Field(None, description="When the event was first reported")
-    last_updated: datetime = Field(default_factory=datetime.now, description="Last update timestamp")
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp")
     primary_entity: Optional[AffectedEntity] = Field(None, description="Primary affected entity")
     affected_entities: List[AffectedEntity] = Field(default_factory=list, description="All affected entities")
     location: Optional[str] = Field(None, description="Primary event location")
@@ -131,11 +132,10 @@ class CyberEvent(BaseModel):
     attribution: Optional[str] = Field(None, description="Attack attribution if known")
     data_sources: List[EventSource] = Field(default_factory=list, description="All data sources for this event")
     confidence: ConfidenceScore = Field(..., description="Data quality confidence scores")
-    created_at: datetime = Field(default_factory=datetime.now, description="Record creation timestamp")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Record creation timestamp")
     processed_at: Optional[datetime] = Field(None, description="Processing completion timestamp")
     duplicate_of: Optional[str] = Field(None, description="ID of master event if duplicate")
     merged_events: List[str] = Field(default_factory=list, description="IDs of events merged into this one")
 
-    class Config:
-        json_encoders = {datetime: lambda value: value.isoformat()}
+    model_config = ConfigDict(json_encoders={datetime: lambda value: value.isoformat()})
 

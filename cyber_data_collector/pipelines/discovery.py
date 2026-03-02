@@ -4,6 +4,7 @@ Discovery and enrichment pipeline shared across entry points.
 This module contains the canonical discovery/enrichment implementation used by the unified
 pipeline as well as the legacy CLI entry point.
 """
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -402,6 +403,11 @@ class EventDiscoveryEnrichmentPipeline:
                 )
 
             # Step 6: Deduplicate events (within this month only)
+            # Initialize defaults so these variables are always defined even when
+            # deduplication is disabled (avoids NameError on the confidence filter below).
+            deduplicated_events = processed_events  # Default: all processed events pass through
+            deduplicated_events_stored = 0
+
             if collector.config.enable_deduplication:
                 logger.info(f"[PIPELINE] Loading enriched events from database for deduplication for {year}-{month:02d}")
                 # Load enriched events from database for this month to ensure we have the proper dates
@@ -451,6 +457,11 @@ class EventDiscoveryEnrichmentPipeline:
                 event for event in deduplicated_events
                 if event.confidence.overall >= collector.config.confidence_threshold
             ]
+            if len(high_confidence_events) < len(deduplicated_events):
+                logger.info(
+                    f"Confidence filter: {len(deduplicated_events)} -> {len(high_confidence_events)} events "
+                    f"(threshold: {collector.config.confidence_threshold})"
+                )
 
             events_for_month = len(all_raw_events)  # Count original raw events for the month tracking
 
@@ -1000,7 +1011,10 @@ class EventDiscoveryEnrichmentPipeline:
             logger.info(f"[CROSS-MONTH] Updating database to reflect cross-month merges...")
             # For now, just log the results - implementing the database updates would require more complex logic
             # to track which enriched events were merged and update the deduplicated events table accordingly
-            logger.info(f"[CROSS-MONTH] Cross-month merges detected but database updates not yet implemented")
+            logger.warning(
+                f"[CROSS-MONTH] {merges_performed} cross-month merges detected but "
+                f"database updates are not yet implemented. Duplicates may remain."
+            )
 
         return merges_performed
 
@@ -1190,16 +1204,16 @@ class EventDiscoveryEnrichmentPipeline:
 
         return None
 
-    def _fallback_event_date(self, event, month_start: Optional[datetime]) -> Optional[datetime.date]:
-        """Return None when no event date is available."""
+    def _fallback_event_date(self, event, month_start: Optional[datetime] = None) -> Optional[datetime.date]:
+        """Return a fallback event date when no event date is available."""
         if hasattr(event, 'data_sources') and event.data_sources:
             for source in event.data_sources:
                 fallback_date = getattr(source, 'search_start_date', None)
                 if fallback_date:
                     if isinstance(fallback_date, datetime):
-                        return None
+                        return fallback_date.date()
                     try:
-                        return None
+                        return datetime.strptime(str(fallback_date), '%Y-%m-%d').date()
                     except Exception:
                         continue
 

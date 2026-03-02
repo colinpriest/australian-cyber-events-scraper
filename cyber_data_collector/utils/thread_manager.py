@@ -2,6 +2,8 @@
 Thread management utilities for cyber data collection.
 """
 
+from __future__ import annotations
+
 import concurrent.futures
 import logging
 from typing import Any, Callable, List, Optional
@@ -22,12 +24,12 @@ class ThreadManager:
         self.max_threads = max_threads
         self._executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
 
-    def __enter__(self):
+    def __enter__(self) -> ThreadManager:
         """Enter context manager."""
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         """Exit context manager."""
         if self._executor:
             self._executor.shutdown(wait=True)
@@ -72,9 +74,9 @@ class ThreadManager:
             future = self._executor.submit(func, *args, **kwargs)
             futures.append(future)
 
-        # Collect results
+        # Collect results in submission order
         results = []
-        for future in concurrent.futures.as_completed(futures):
+        for future in futures:
             try:
                 result = future.result()
                 results.append(result)

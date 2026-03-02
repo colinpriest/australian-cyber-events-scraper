@@ -117,7 +117,7 @@ class EntityExtractor:
             self.logger.warning(f"Entity extraction timed out for event: {event.title[:50]}...")
             return event  # Return original event on timeout
 
-        event_copy = event.copy(deep=True)
+        event_copy = event.model_copy(deep=True)
         enhanced_entities: List[AffectedEntity] = []
         for extracted in response.entities:
             entity = AffectedEntity(

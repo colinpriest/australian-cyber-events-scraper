@@ -6,6 +6,8 @@ This module provides a Random Forest-based filter for cyber events that replaces
 the existing 3-stage progressive filtering system with a machine learning approach.
 """
 
+from __future__ import annotations
+
 import pickle
 import logging
 import re

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional
-
+from typing import Dict, Optional, Union
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
     """Utility class for loading environment configuration."""
 
-    def __init__(self, env_path: str | os.PathLike[str] = ".env") -> None:
+    def __init__(self, env_path: Union[str, os.PathLike] = ".env") -> None:
         self.env_path = Path(env_path)
         self._config: Dict[str, Optional[str]] = {}
 
@@ -32,6 +34,12 @@ class ConfigManager:
             "DATABASE_URL": database_url,
             "DATABASE_PATH": self._resolve_database_path(database_url),
         }
+
+        if not self._config.get("OPENAI_API_KEY"):
+            logger.warning("Required configuration key OPENAI_API_KEY is not set")
+        if not self._config.get("PERPLEXITY_API_KEY"):
+            logger.info("Recommended configuration key PERPLEXITY_API_KEY is not set")
+
         return self._config.copy()
 
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:

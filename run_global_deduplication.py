@@ -17,6 +17,8 @@ Usage:
     python run_global_deduplication.py [--db-path PATH] [--backup-path PATH] [--dry-run]
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -129,37 +131,43 @@ class DeduplicationMigration:
             self.migration_report['errors'].append(f"Backup failed: {e}")
             return False
     
-    def _create_sql_backup(self, sql_backup_path: str):
+    def _format_sql_value(self, val: object) -> str:
+        """Format a Python value as a safe SQL literal."""
+        if val is None:
+            return "NULL"
+        elif isinstance(val, (int, float)):
+            return str(val)
+        else:
+            return "'" + str(val).replace("'", "''") + "'"
+
+    def _write_table_backup(self, f, cursor: sqlite3.Cursor, table_name: str) -> None:
+        """Write INSERT statements for a single table to the backup file."""
+        try:
+            cursor.execute(f"SELECT * FROM {table_name}")
+            rows = cursor.fetchall()
+            for row in rows:
+                values = ", ".join(self._format_sql_value(v) for v in row)
+                f.write(f"INSERT INTO {table_name} VALUES ({values});\n")
+        except sqlite3.OperationalError as e:
+            f.write(f"-- Skipped {table_name}: {e}\n")
+
+    def _create_sql_backup(self, sql_backup_path: str) -> None:
         """Create SQL backup of deduplication tables"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        with open(sql_backup_path, 'w', encoding='utf-8') as f:
-            f.write(f"-- Deduplication Migration Backup\n")
-            f.write(f"-- Created: {datetime.now()}\n\n")
-            
-            # Export DeduplicatedEvents
-            f.write("-- DeduplicatedEvents\n")
-            cursor.execute("SELECT * FROM DeduplicatedEvents")
-            rows = cursor.fetchall()
-            for row in rows:
-                f.write(f"INSERT INTO DeduplicatedEvents VALUES {row};\n")
-            
-            # Export EventDeduplicationMap
-            f.write("\n-- EventDeduplicationMap\n")
-            cursor.execute("SELECT * FROM EventDeduplicationMap")
-            rows = cursor.fetchall()
-            for row in rows:
-                f.write(f"INSERT INTO EventDeduplicationMap VALUES {row};\n")
-            
-            # Export DeduplicationClusters
-            f.write("\n-- DeduplicationClusters\n")
-            cursor.execute("SELECT * FROM DeduplicationClusters")
-            rows = cursor.fetchall()
-            for row in rows:
-                f.write(f"INSERT INTO DeduplicationClusters VALUES {row};\n")
-        
-        conn.close()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            with open(sql_backup_path, 'w', encoding='utf-8') as f:
+                f.write("-- Deduplication Migration Backup\n")
+                f.write(f"-- Created: {datetime.now()}\n\n")
+
+                f.write("-- DeduplicatedEvents\n")
+                self._write_table_backup(f, cursor, "DeduplicatedEvents")
+
+                f.write("\n-- EventDeduplicationMap\n")
+                self._write_table_backup(f, cursor, "EventDeduplicationMap")
+
+                f.write("\n-- DeduplicationClusters\n")
+                self._write_table_backup(f, cursor, "DeduplicationClusters")
     
     def _apply_database_constraints(self) -> bool:
         """Apply database constraints to prevent duplicates"""
@@ -171,37 +179,36 @@ class DeduplicationMigration:
             return True
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # First, clear existing deduplicated events to avoid constraint conflicts
-            # IMPORTANT: Also clear ASDRiskClassifications since it has FK to DeduplicatedEvents
-            # The classifications will be regenerated in the next pipeline run
-            logger.info("🧹 Clearing existing deduplicated events and related tables...")
-            cursor.execute("DELETE FROM ASDRiskClassifications")  # Must delete first (FK constraint)
-            cursor.execute("DELETE FROM DeduplicatedEvents")
-            cursor.execute("DELETE FROM EventDeduplicationMap")
-            cursor.execute("DELETE FROM DeduplicationClusters")
-            conn.commit()
-            logger.info("✅ Cleared existing deduplicated events and ASD classifications")
-            
-            # Read and execute the migration SQL
-            migration_sql_path = "database_migrations/add_deduplication_constraints.sql"
-            if os.path.exists(migration_sql_path):
-                with open(migration_sql_path, 'r') as f:
-                    sql_content = f.read()
-                
-                # Execute the migration
-                cursor.executescript(sql_content)
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+
+                # First, clear existing deduplicated events to avoid constraint conflicts
+                # IMPORTANT: Also clear ASDRiskClassifications since it has FK to DeduplicatedEvents
+                # The classifications will be regenerated in the next pipeline run
+                logger.info("🧹 Clearing existing deduplicated events and related tables...")
+                cursor.execute("DELETE FROM ASDRiskClassifications")  # Must delete first (FK constraint)
+                cursor.execute("DELETE FROM DeduplicatedEvents")
+                cursor.execute("DELETE FROM EventDeduplicationMap")
+                cursor.execute("DELETE FROM DeduplicationClusters")
                 conn.commit()
-                logger.info("✅ Database constraints applied successfully")
-            else:
-                logger.warning("⚠️ Migration SQL file not found, skipping constraints")
-            
-            conn.close()
+                logger.info("✅ Cleared existing deduplicated events and ASD classifications")
+
+                # Read and execute the migration SQL
+                migration_sql_path = "database_migrations/add_deduplication_constraints.sql"
+                if os.path.exists(migration_sql_path):
+                    with open(migration_sql_path, 'r') as f:
+                        sql_content = f.read()
+
+                    # Execute the migration
+                    cursor.executescript(sql_content)
+                    conn.commit()
+                    logger.info("✅ Database constraints applied successfully")
+                else:
+                    logger.warning("⚠️ Migration SQL file not found, skipping constraints")
+
             self.migration_report['steps_completed'].append('constraints_applied')
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to apply constraints: {e}")
             self.migration_report['errors'].append(f"Constraints failed: {e}")
@@ -212,22 +219,23 @@ class DeduplicationMigration:
         logger.info("📥 Loading enriched events from database...")
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
 
-            # Query all enriched events including perplexity enrichment data and raw description
-            cursor.execute("""
-                SELECT e.enriched_event_id, e.title, e.summary, e.event_date, e.event_type, e.severity,
-                       e.records_affected, e.confidence_score, e.perplexity_enrichment_data,
-                       r.raw_description
-                FROM EnrichedEvents e
-                LEFT JOIN RawEvents r ON e.raw_event_id = r.raw_event_id
-                WHERE e.status = 'Active'
-                ORDER BY e.event_date DESC
-            """)
+                # Query all enriched events including perplexity enrichment data and raw description
+                cursor.execute("""
+                    SELECT e.enriched_event_id, e.title, e.summary, e.event_date, e.event_type, e.severity,
+                           e.records_affected, e.confidence_score, e.perplexity_enrichment_data,
+                           r.raw_description
+                    FROM EnrichedEvents e
+                    LEFT JOIN RawEvents r ON e.raw_event_id = r.raw_event_id
+                    WHERE e.status = 'Active'
+                    ORDER BY e.event_date DESC
+                """)
+                raw_rows = cursor.fetchall()
 
             enriched_events = []
-            for row in cursor.fetchall():
+            for row in raw_rows:
                 # Parse event date safely
                 event_date = None
                 if row[3]:
@@ -276,8 +284,6 @@ class DeduplicationMigration:
                 )
                 enriched_events.append(event)
 
-            conn.close()
-
             logger.info(f"✅ Loaded {len(enriched_events)} enriched events")
             self.migration_report['statistics']['enriched_events_loaded'] = len(enriched_events)
             return enriched_events
@@ -304,58 +310,57 @@ class DeduplicationMigration:
             return True
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            storage = DeduplicationStorage(conn)
+            with sqlite3.connect(self.db_path) as conn:
+                storage = DeduplicationStorage(conn)
 
-            # Create deduplication engine
-            logger.info("🔧 Initializing deduplication engine...")
-            engine = DeduplicationEngine(
-                similarity_threshold=0.75,
-                llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
-                validators=[DeduplicationValidator()]
-            )
+                # Create deduplication engine
+                logger.info("🔧 Initializing deduplication engine...")
+                engine = DeduplicationEngine(
+                    similarity_threshold=0.75,
+                    llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
+                    validators=[DeduplicationValidator()]
+                )
 
-            # Run deduplication
-            logger.info(f"🔄 Processing {len(enriched_events)} events...")
-            logger.info(f"⏱️ This may take several minutes for large datasets...")
-            logger.info(f"📊 Estimated comparisons: ~{len(enriched_events) * (len(enriched_events) - 1) // 2:,}")
-            result = engine.deduplicate(enriched_events)
-            
-            # Log validation warnings (non-fatal - still proceed with storage)
-            if result.validation_errors:
-                logger.warning(f"⚠️ Deduplication validation found {len(result.validation_errors)} issues (non-fatal)")
-                for error in result.validation_errors:
-                    logger.warning(f"  - {error.error_type}: {error.message}")
+                # Run deduplication
+                logger.info(f"🔄 Processing {len(enriched_events)} events...")
+                logger.info(f"⏱️ This may take several minutes for large datasets...")
+                logger.info(f"📊 Estimated comparisons: ~{len(enriched_events) * (len(enriched_events) - 1) // 2:,}")
+                result = engine.deduplicate(enriched_events)
 
-            # Store result
-            logger.info("💾 Storing deduplication results...")
-            storage_result = storage.store_deduplication_result(result)
-            
-            if not storage_result.success:
-                logger.error(f"❌ Storage failed: {len(storage_result.validation_errors)} errors")
-                return False
-            
-            # Log statistics
-            stats = result.statistics
-            logger.info(f"✅ Deduplication complete: {stats.input_events} -> {stats.output_events} events")
-            logger.info(f"📊 Merge groups: {stats.merge_groups}, Total merges: {stats.total_merges}")
-            logger.info(f"📊 Average confidence: {stats.avg_confidence:.2f}")
-            logger.info(f"⏱️ Processing time: {stats.processing_time_seconds:.1f}s")
-            
-            # Store statistics
-            self.migration_report['statistics'].update({
-                'input_events': stats.input_events,
-                'output_events': stats.output_events,
-                'merge_groups': stats.merge_groups,
-                'total_merges': stats.total_merges,
-                'avg_confidence': stats.avg_confidence,
-                'processing_time_seconds': stats.processing_time_seconds
-            })
-            
-            conn.close()
+                # Log validation warnings (non-fatal - still proceed with storage)
+                if result.validation_errors:
+                    logger.warning(f"⚠️ Deduplication validation found {len(result.validation_errors)} issues (non-fatal)")
+                    for error in result.validation_errors:
+                        logger.warning(f"  - {error.error_type}: {error.message}")
+
+                # Store result
+                logger.info("💾 Storing deduplication results...")
+                storage_result = storage.store_deduplication_result(result)
+
+                if not storage_result.success:
+                    logger.error(f"❌ Storage failed: {len(storage_result.validation_errors)} errors")
+                    return False
+
+                # Log statistics
+                stats = result.statistics
+                logger.info(f"✅ Deduplication complete: {stats.input_events} -> {stats.output_events} events")
+                logger.info(f"📊 Merge groups: {stats.merge_groups}, Total merges: {stats.total_merges}")
+                logger.info(f"📊 Average confidence: {stats.avg_confidence:.2f}")
+                logger.info(f"⏱️ Processing time: {stats.processing_time_seconds:.1f}s")
+
+                # Store statistics
+                self.migration_report['statistics'].update({
+                    'input_events': stats.input_events,
+                    'output_events': stats.output_events,
+                    'merge_groups': stats.merge_groups,
+                    'total_merges': stats.total_merges,
+                    'avg_confidence': stats.avg_confidence,
+                    'processing_time_seconds': stats.processing_time_seconds
+                })
+
             self.migration_report['steps_completed'].append('deduplication_completed')
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Global deduplication failed: {e}")
             self.migration_report['errors'].append(f"Deduplication failed: {e}")
@@ -366,35 +371,34 @@ class DeduplicationMigration:
         logger.info("🔍 Validating migration results...")
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            storage = DeduplicationStorage(conn)
-            
-            # Check for integrity issues
-            integrity_errors = storage.validate_storage_integrity()
-            if integrity_errors:
-                logger.error(f"❌ Storage integrity check failed: {len(integrity_errors)} issues")
-                for error in integrity_errors:
-                    logger.error(f"  - {error.error_type}: {error.message}")
-                return False
-            
-            # Get final statistics
-            stats = storage.get_deduplication_statistics()
-            logger.info(f"📊 Final statistics:")
-            logger.info(f"  - Active events: {stats['active_events']}")
-            logger.info(f"  - Merge groups: {stats['merge_groups']}")
-            logger.info(f"  - Total merges: {stats['total_merges']}")
-            
-            # Store final statistics
-            self.migration_report['statistics'].update({
-                'final_active_events': stats['active_events'],
-                'final_merge_groups': stats['merge_groups'],
-                'final_total_merges': stats['total_merges']
-            })
-            
-            conn.close()
+            with sqlite3.connect(self.db_path) as conn:
+                storage = DeduplicationStorage(conn)
+
+                # Check for integrity issues
+                integrity_errors = storage.validate_storage_integrity()
+                if integrity_errors:
+                    logger.error(f"❌ Storage integrity check failed: {len(integrity_errors)} issues")
+                    for error in integrity_errors:
+                        logger.error(f"  - {error.error_type}: {error.message}")
+                    return False
+
+                # Get final statistics
+                stats = storage.get_deduplication_statistics()
+                logger.info(f"📊 Final statistics:")
+                logger.info(f"  - Active events: {stats['active_events']}")
+                logger.info(f"  - Merge groups: {stats['merge_groups']}")
+                logger.info(f"  - Total merges: {stats['total_merges']}")
+
+                # Store final statistics
+                self.migration_report['statistics'].update({
+                    'final_active_events': stats['active_events'],
+                    'final_merge_groups': stats['merge_groups'],
+                    'final_total_merges': stats['total_merges']
+                })
+
             self.migration_report['steps_completed'].append('validation_completed')
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Validation failed: {e}")
             self.migration_report['errors'].append(f"Validation failed: {e}")

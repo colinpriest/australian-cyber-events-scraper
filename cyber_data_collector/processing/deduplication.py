@@ -580,19 +580,23 @@ class DeduplicationEngine:
             if self.perplexity_arbiter:
                 try:
                     import asyncio
-                    loop = asyncio.get_event_loop()
-                    perplexity_check = loop.run_until_complete(
-                        self.perplexity_arbiter.check_duplicate(
-                            event1.title,
-                            event1.description,
-                            str(event1.event_date) if event1.event_date else None,
-                            event1.primary_entity.name if event1.primary_entity else None,
-                            event2.title,
-                            event2.description,
-                            str(event2.event_date) if event2.event_date else None,
-                            event2.primary_entity.name if event2.primary_entity else None
+                    try:
+                        perplexity_check = asyncio.run(
+                            self.perplexity_arbiter.check_duplicate(
+                                event1.title,
+                                event1.description,
+                                str(event1.event_date) if event1.event_date else None,
+                                event1.primary_entity.name if event1.primary_entity else None,
+                                event2.title,
+                                event2.description,
+                                str(event2.event_date) if event2.event_date else None,
+                                event2.primary_entity.name if event2.primary_entity else None
+                            )
                         )
-                    )
+                    except RuntimeError:
+                        # Already in an event loop - skip perplexity check
+                        self.logger.warning("Cannot run Perplexity arbiter inside existing event loop; skipping")
+                        perplexity_check = None
 
                     if perplexity_check and perplexity_check.confidence >= 0.7:
                         decision = perplexity_check.are_same_incident
@@ -753,7 +757,7 @@ class DeduplicationEngine:
 
     def _merge_event_group(self, events: List[CyberEvent]) -> CyberEvent:
         base_event = max(events, key=lambda event: event.confidence.overall)
-        merged_event = base_event.copy(deep=True)
+        merged_event = base_event.model_copy(deep=True)
 
         # Track how many events were merged
         merged_event.contributing_raw_events = len(events)
@@ -824,7 +828,7 @@ class DeduplicationEngine:
         # Use the most complete description (longest)
         best_description = merged_event.description
         for event in events:
-            if event.description and len(event.description) > len(best_description):
+            if event.description and len(event.description) > len(best_description or ""):
                 best_description = event.description
         merged_event.description = best_description
 

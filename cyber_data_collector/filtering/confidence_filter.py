@@ -2,10 +2,12 @@
 Confidence-based filtering system that assigns scores instead of binary accept/reject.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +116,48 @@ class ConfidenceBasedFilter:
             'ato', 'centrelink', 'medicare', 'acsc', 'asd', 'asio'
         ]
 
+        # Precompiled regex patterns for performance
+        self._narrative_pattern = re.compile(
+            '|'.join([
+                r'(attacked|breached|compromised|hacked|infiltrated)',
+                r'(stolen|leaked|exposed|accessed)\s+(data|information|records)',
+                r'(security\s+(incident|breach|alert|warning))',
+                r'(cyber\s+(attack|threat|incident))',
+                r'(personal\s+information|customer\s+data|sensitive\s+data)',
+                r'(unauthorized\s+(access|use|disclosure))',
+                r'(malware|ransomware|virus)\s+(detected|found|discovered)',
+                r'(systems?\s+(down|offline|compromised|affected))',
+            ]),
+            re.IGNORECASE,
+        )
+        self._technical_pattern = re.compile(
+            '|'.join([
+                r'(ip\s+address|network|server|database|firewall)',
+                r'(vulnerability|exploit|patch|update|cve-\d+)',
+                r'(encryption|decryption|certificate|ssl|tls)',
+                r'(authentication|authorization|credential|password)',
+                r'(endpoint|api|application|software|system)',
+                r'(log|alert|detection|monitoring|forensic)',
+                r'(backup|restore|recovery|business\s+continuity)',
+            ]),
+            re.IGNORECASE,
+        )
+        self._incident_pattern = re.compile(
+            '|'.join([
+                r'(incident\s+(response|team|management))',
+                r'(investigation|forensic\s+analysis)',
+                r'(containment|mitigation|remediation)',
+                r'(affected\s+(customers|users|individuals))',
+                r'(notification|disclosure|reporting)',
+                r'(law\s+enforcement|authorities|police)',
+                r'(privacy\s+(commissioner|office|authority))',
+                r'(compliance|regulatory|audit|assessment)',
+            ]),
+            re.IGNORECASE,
+        )
+
     def evaluate_discovery_stage(self, title: str, description: str = "",
-                                url: str = "", metadata: Dict = None) -> FilterResult:
+                                url: str = "", metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 1: Broad inclusion filter for discovery phase.
 
@@ -190,7 +232,7 @@ class ConfidenceBasedFilter:
         )
 
     def evaluate_content_stage(self, title: str, content: str, url: str = "",
-                             metadata: Dict = None) -> FilterResult:
+                             metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 2: Content-based refinement after scraping.
 
@@ -284,7 +326,8 @@ class ConfidenceBasedFilter:
         )
 
     def evaluate_final_stage(self, title: str, content: str, url: str = "",
-                           llm_analysis: Dict = None, metadata: Dict = None) -> FilterResult:
+                           llm_analysis: Optional[Dict[str, Any]] = None,
+                           metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 3: Final classification based directly on LLM analysis.
         """
@@ -318,67 +361,21 @@ class ConfidenceBasedFilter:
     def _count_term_matches(self, text: str, terms: List[str]) -> int:
         """Count how many terms from the list appear in the text."""
         count = 0
+        text_lower = text.lower()
         for term in terms:
-            if len(term) <= 4:
-                # Use word boundaries for short terms to avoid false positives
-                pattern = r'\b' + re.escape(term) + r'\b'
-                if re.search(pattern, text):
-                    count += 1
-            else:
-                # Simple substring matching for longer terms
-                if term in text:
-                    count += 1
+            pattern = r'\b' + re.escape(term) + r'\b'
+            if re.search(pattern, text_lower):
+                count += 1
         return count
 
     def _has_cyber_narrative(self, content: str) -> bool:
         """Check if content has a cyber security incident narrative."""
-        narrative_patterns = [
-            r'(attacked|breached|compromised|hacked|infiltrated)',
-            r'(stolen|leaked|exposed|accessed)\s+(data|information|records)',
-            r'(security\s+(incident|breach|alert|warning))',
-            r'(cyber\s+(attack|threat|incident))',
-            r'(personal\s+information|customer\s+data|sensitive\s+data)',
-            r'(unauthorized\s+(access|use|disclosure))',
-            r'(malware|ransomware|virus)\s+(detected|found|discovered)',
-            r'(systems?\s+(down|offline|compromised|affected))'
-        ]
-
-        for pattern in narrative_patterns:
-            if re.search(pattern, content):
-                return True
-        return False
+        return bool(self._narrative_pattern.search(content))
 
     def _has_technical_indicators(self, content: str) -> bool:
         """Check for technical security indicators in content."""
-        technical_patterns = [
-            r'(ip\s+address|network|server|database|firewall)',
-            r'(vulnerability|exploit|patch|update|cve-\d+)',
-            r'(encryption|decryption|certificate|ssl|tls)',
-            r'(authentication|authorization|credential|password)',
-            r'(endpoint|api|application|software|system)',
-            r'(log|alert|detection|monitoring|forensic)',
-            r'(backup|restore|recovery|business\s+continuity)'
-        ]
-
-        for pattern in technical_patterns:
-            if re.search(pattern, content):
-                return True
-        return False
+        return bool(self._technical_pattern.search(content))
 
     def _has_incident_language(self, content: str) -> bool:
         """Check for incident reporting and response language."""
-        incident_patterns = [
-            r'(incident\s+(response|team|management))',
-            r'(investigation|forensic\s+analysis)',
-            r'(containment|mitigation|remediation)',
-            r'(affected\s+(customers|users|individuals))',
-            r'(notification|disclosure|reporting)',
-            r'(law\s+enforcement|authorities|police)',
-            r'(privacy\s+(commissioner|office|authority))',
-            r'(compliance|regulatory|audit|assessment)'
-        ]
-
-        for pattern in incident_patterns:
-            if re.search(pattern, content):
-                return True
-        return False
+        return bool(self._incident_pattern.search(content))

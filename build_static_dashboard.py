@@ -11,7 +11,10 @@ Usage:
     python build_static_dashboard.py --db-path instance/cyber_events.db --out-dir dashboard
 """
 
+from __future__ import annotations
+
 import argparse
+import logging
 import os
 import sqlite3
 import json
@@ -22,6 +25,8 @@ from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from scipy import stats
+
+logger = logging.getLogger(__name__)
 
 ASD_VALID_STAKEHOLDER_CATEGORIES = [
     "Member(s) of the public",
@@ -352,7 +357,11 @@ def get_entity_type_distribution(conn: sqlite3.Connection, start_date: str, end_
         WHERE group_name != 'Others'
         ORDER BY display_order
     """
-    groupings = conn.execute(groupings_query).fetchall()
+    try:
+        groupings = conn.execute(groupings_query).fetchall()
+    except sqlite3.OperationalError:
+        logger.warning("IndustryGroupings table not found, using empty groupings")
+        groupings = []
 
     # Parse keywords from JSON and create mapping
     category_mapping = {}
@@ -689,7 +698,11 @@ def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date
         WHERE group_name != 'Others'
         ORDER BY display_order
     """
-    groupings = conn.execute(groupings_query).fetchall()
+    try:
+        groupings = conn.execute(groupings_query).fetchall()
+    except sqlite3.OperationalError:
+        logger.warning("IndustryGroupings table not found, using empty groupings")
+        groupings = []
 
     # Parse keywords from JSON and create mapping
     category_mapping = {}
@@ -903,7 +916,7 @@ def load_oaic_data() -> List[Dict[str, Any]]:
     oaic_files = glob.glob('oaic_cyber_statistics_*.json')
 
     if not oaic_files:
-        print("Warning: No OAIC data files found. Run oaic_data_scraper.py first.")
+        logger.warning("No OAIC data files found. Run oaic_data_scraper.py first.")
         return []
 
     # Load all OAIC files and merge by period
@@ -955,7 +968,7 @@ def load_oaic_data() -> List[Dict[str, Any]]:
                             existing[key] = value
 
         except Exception as e:
-            print(f"Warning: Could not load {filepath}: {e}")
+            logger.warning("Could not load %s: %s", filepath, e)
             continue
 
     # Sort by year and period
@@ -964,7 +977,7 @@ def load_oaic_data() -> List[Dict[str, Any]]:
         key=lambda x: (x.get('year', 0), 0 if x.get('period') == 'H1' else 1)
     )
 
-    print(f"Loaded and merged OAIC data from {len(oaic_files)} files, {len(merged_data)} periods")
+    logger.info("Loaded and merged OAIC data from %d files, %d periods", len(oaic_files), len(merged_data))
     return merged_data
 
 
@@ -1241,7 +1254,7 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
             db_counts[row[0]] = row[1]
         conn.close()
     except Exception as e:
-        print(f"Warning: Could not query database for sector counts: {e}")
+        logger.warning("Could not query database for sector counts: %s", e)
 
     # Map database industry names to OAIC sector names (using normalized names)
     industry_mapping = {
@@ -1378,7 +1391,7 @@ def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_p
             db_data[period_key] = row[2]
         conn.close()
     except Exception as e:
-        print(f"Warning: Could not query database for records affected: {e}")
+        logger.warning("Could not query database for records affected: %s", e)
 
     for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
         year = record.get('year')
@@ -1558,7 +1571,7 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
         query = f"{base_sql} {where_sql} GROUP BY arc.impact_type, arc.primary_stakeholder_category"
         rows = cursor.execute(query, params).fetchall()
     except Exception as e:
-        print(f"ERROR in get_asd_risk_matrix: {e}")
+        logger.error("Error in get_asd_risk_matrix: %s", e)
         return empty_matrix()
 
     if not rows:

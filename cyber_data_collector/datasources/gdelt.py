@@ -120,11 +120,11 @@ class GDELTDataSource(DataSource):
         if not self.bigquery_client:
             raise RuntimeError("BigQuery client not available")
 
-        # Build BigQuery query for Australian cyber events
-        start_date = date_range.start_date.strftime("%Y%m%d")
-        end_date = (date_range.end_date or datetime.utcnow()).strftime("%Y%m%d")
+        # Build BigQuery query for Australian cyber events using parameterized queries
+        start_date = date_range.start_date.strftime("%Y%m%d") + "000000"
+        end_date = (date_range.end_date or datetime.utcnow()).strftime("%Y%m%d") + "235959"
 
-        query = f"""
+        query = """
         SELECT
             GLOBALEVENTID,
             DATEADDED,
@@ -142,8 +142,8 @@ class GDELTDataSource(DataSource):
             ActionGeo_Lat,
             ActionGeo_Long
         FROM `gdelt-bq.gdeltv2.events`
-        WHERE CAST(DATEADDED AS STRING) >= '{start_date}000000'
-          AND CAST(DATEADDED AS STRING) <= '{end_date}235959'
+        WHERE CAST(DATEADDED AS STRING) >= @start_date
+          AND CAST(DATEADDED AS STRING) <= @end_date
           AND (
             ActionGeo_CountryCode = 'AS' OR
             Actor1CountryCode = 'AS' OR
@@ -180,11 +180,19 @@ class GDELTDataSource(DataSource):
           )
           AND NumSources >= 2  -- At least 2 sources for credibility
         ORDER BY DATEADDED DESC
-        LIMIT {self.max_records}
+        LIMIT @max_records
         """
 
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("start_date", "STRING", start_date),
+                bigquery.ScalarQueryParameter("end_date", "STRING", end_date),
+                bigquery.ScalarQueryParameter("max_records", "INT64", self.max_records),
+            ]
+        )
+
         # Execute query
-        query_job = self.bigquery_client.query(query)
+        query_job = self.bigquery_client.query(query, job_config=job_config)
         results = query_job.result()
 
         events: List[CyberEvent] = []
@@ -425,11 +433,11 @@ class GDELTDataSource(DataSource):
         elif any(word in title_lower for word in ["data breach", "breach", "leaked"]):
             return CyberEventType.DATA_BREACH
         elif any(word in title_lower for word in ["ddos", "denial of service"]):
-            return CyberEventType.DDOS_ATTACK
+            return CyberEventType.DENIAL_OF_SERVICE
         elif any(word in title_lower for word in ["phishing", "email scam"]):
-            return CyberEventType.PHISHING_CAMPAIGN
+            return CyberEventType.PHISHING
         elif any(word in title_lower for word in ["malware", "virus", "trojan"]):
-            return CyberEventType.MALWARE_ATTACK
+            return CyberEventType.MALWARE
         elif any(word in title_lower for word in ["infrastructure", "critical"]):
             return CyberEventType.INFRASTRUCTURE_ATTACK
         elif any(word in title_lower for word in ["state", "nation", "government"]):
@@ -451,13 +459,7 @@ class GDELTDataSource(DataSource):
             return EventSeverity.MEDIUM
 
     def get_source_info(self) -> Dict[str, Any]:
-        access_methods = []
-        if self.bigquery_client:
-            access_methods.append("BigQuery")
-        if self.access_method in ["direct_files", "auto"]:
-            access_methods.append("Direct Files")
-        if self.access_method in ["api", "auto"]:
-            access_methods.append("DOC 2.0 API")
+        access_methods = ["BigQuery"] if self.bigquery_client else []
 
         return {
             "name": "GDELT Project Multi-Access",

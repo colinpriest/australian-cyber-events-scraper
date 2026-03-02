@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .cyber_collector import CyberDataCollector
 from .models.config import CollectionConfig, DataSourceConfig, DateRange
 from .models.events import (

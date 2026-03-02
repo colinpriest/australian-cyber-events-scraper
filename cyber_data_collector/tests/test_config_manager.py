@@ -16,8 +16,11 @@ class ConfigManagerTests(unittest.TestCase):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = self._original_db_url
-        if self.env_path.exists():
-            self.env_path.unlink()
+        try:
+            if self.env_path.exists():
+                self.env_path.unlink()
+        except PermissionError:
+            pass  # On Windows, python-dotenv may still hold the file open
 
     def test_defaults_use_instance_db(self):
         manager = ConfigManager(self.env_path)

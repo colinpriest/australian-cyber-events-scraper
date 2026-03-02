@@ -9,6 +9,8 @@ This module coordinates:
 5. Confidence Aggregation (final decision)
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Dict, Any
 from datetime import datetime

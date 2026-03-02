@@ -5,6 +5,9 @@ This module validates extracted data for logical consistency, plausibility,
 and common errors before storing in database.
 """
 
+from __future__ import annotations
+
+import copy
 import logging
 import re
 import sqlite3
@@ -19,8 +22,6 @@ class EnrichmentValidator:
         """Initialize validator with database path for duplicate checking"""
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
-        self.event_title = None  # Will be set during validation
-        self.event_url = None  # Will be set during validation
 
     def validate(self, extraction: Dict[str, Any], fact_check: Dict[str, Any],
                  event_title: str = None, event_url: str = None) -> Dict[str, Any]:
@@ -44,10 +45,6 @@ class EnrichmentValidator:
 
         warnings = []
         errors = []
-
-        # Store for use in other validation methods
-        self.event_title = event_title
-        self.event_url = event_url
 
         self.logger.info("Running validation checks...")
 
@@ -385,21 +382,17 @@ class EnrichmentValidator:
             return {'likely_duplicate': False}
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-
-            # Query for events with same victim and date
-            cursor.execute("""
-                SELECT enriched_event_id, title
-                FROM EnrichedEvents
-                WHERE victim_organization = ?
-                  AND event_date = ?
-                  AND status = 'Active'
-                LIMIT 5
-            """, (org, event_date))
-
-            existing = cursor.fetchall()
-            conn.close()
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT enriched_event_id, title
+                    FROM EnrichedEvents
+                    WHERE title LIKE ?
+                      AND event_date = ?
+                      AND status = 'Active'
+                    LIMIT 5
+                """, (f"%{org}%", event_date))
+                existing = cursor.fetchall()
 
             if existing:
                 return {
@@ -511,7 +504,7 @@ class EnrichmentValidator:
                 )
 
         # Apply overrides to extraction if any
-        modified_extraction = extraction.copy()
+        modified_extraction = copy.deepcopy(extraction)
         if overrides:
             for override in overrides:
                 if 'specificity' not in modified_extraction:

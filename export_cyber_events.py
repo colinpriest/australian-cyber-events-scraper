@@ -2,6 +2,7 @@
 """
 Cyber Events Database Export Script
 
+
 This script exports cyber events data from the SQLite database to CSV and Excel formats
 for sharing and analysis. It supports multiple export options and filtering.
 
@@ -16,6 +17,8 @@ Usage:
     # Exclude events where records affected is unknown
     python export_cyber_events.py --format csv --output known_records.csv --detailed --exclude-unknown-records
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -321,6 +324,11 @@ class CyberEventsExporter:
             True if successful, False otherwise
         """
         try:
+            # Validate table name against available tables to prevent SQL injection
+            available_tables = self.get_available_tables()
+            if table_name not in available_tables:
+                raise ValueError(f"Table '{table_name}' not found in database")
+
             # Build query
             query = f"SELECT * FROM {table_name}"
             params = []

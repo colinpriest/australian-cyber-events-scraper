@@ -12,14 +12,17 @@ Extraction cascade:
 5. Playwright (JavaScript-heavy sites, ultimate fallback)
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
-from typing import Dict, Any, Optional
+import time
 from datetime import datetime
+from typing import Dict, Any, Optional
 from urllib.parse import urlparse
+
 import requests
 from bs4 import BeautifulSoup
-import time
-import asyncio
 
 try:
     from cyber_data_collector.utils.pdf_extractor import PDFExtractor
@@ -69,10 +72,6 @@ class ContentAcquisitionService:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
         self.pdf_extractor = PDFExtractor() if PDFExtractor else None
         self.playwright_scraper = None  # Lazy initialization (async)
 
@@ -273,7 +272,11 @@ class ContentAcquisitionService:
     def _extract_with_beautifulsoup(self, url: str) -> Optional[Dict[str, Any]]:
         """Extract content using BeautifulSoup (last resort)"""
 
-        response = self.session.get(url, timeout=30)
+        response = requests.get(
+            url,
+            timeout=30,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
@@ -358,14 +361,14 @@ class ContentAcquisitionService:
                 async with PlaywrightScraper() as scraper:
                     return await scraper.get_page_text(url, timeout=45)
 
-            # Run the async function
             try:
-                loop = asyncio.get_event_loop()
+                text = asyncio.run(fetch())
             except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            text = loop.run_until_complete(fetch())
+                # Already inside a running event loop; schedule on the existing loop
+                import concurrent.futures
+                loop = asyncio.get_running_loop()
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    text = pool.submit(asyncio.run, fetch()).result()
             return text
 
         except Exception as e:

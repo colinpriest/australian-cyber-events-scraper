@@ -5,6 +5,8 @@ This module handles persisting enrichment audit trails to the database for
 tracking, monitoring, and quality analysis.
 """
 
+from __future__ import annotations
+
 import sqlite3
 import json
 import logging

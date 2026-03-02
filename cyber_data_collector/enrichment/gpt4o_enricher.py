@@ -5,6 +5,8 @@ This module extracts structured cybersecurity incident data from full article te
 using GPT-4o's superior reasoning capabilities.
 """
 
+from __future__ import annotations
+
 import logging
 import json
 from typing import Dict, Any
@@ -47,6 +49,14 @@ class GPT4oEnricher:
 
         categories_list = ', '.join(self.NIST_CATEGORIES)
 
+        full_text = content.get('full_text', '')
+        if len(full_text) > 8000:
+            self.logger.info(
+                f"Article content truncated from {len(full_text)} to 8000 chars for: "
+                f"{content.get('title', '')[:50]}"
+            )
+            full_text = full_text[:8000]
+
         return f"""You are a cybersecurity incident analyst extracting structured data from news articles about cyber attacks.
 
 ARTICLE CONTENT:
@@ -57,7 +67,7 @@ Publication Date: {content.get('publication_date', 'N/A')}
 Source Reliability: {content.get('source_reliability', 0.6)}
 
 Full Article Text:
-{content.get('full_text', '')[:8000]}
+{full_text}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 EXTRACTION TASK:
@@ -556,7 +566,7 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
                     original_value,
                     content.get('title', 'Unknown Event')
                 )
-                if validated_value != original_value:
+                if validated_value != original_value and original_value is not None:
                     self.logger.warning(
                         f"Adjusted records_affected from {original_value:,} to "
                         f"{validated_value:,} for event: {content.get('title', '')}"

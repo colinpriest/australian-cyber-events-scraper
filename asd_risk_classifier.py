@@ -10,6 +10,8 @@ Usage:
     python asd_risk_classifier.py [--limit 5] [--force-reclassify] [--output-dir .]
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -824,7 +826,7 @@ Return your response as a JSON object with this exact structure:
                             else:
                                 if len(str(cell.value)) > max_length:
                                     max_length = len(str(cell.value))
-                        except:
+                        except Exception:
                             pass
                     # First column (Impact Type) can be wider, others narrower
                     if column_letter == 'A':

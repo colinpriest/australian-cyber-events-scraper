@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Perplexity AI-based event detail enrichment.
 
@@ -348,15 +350,17 @@ class PerplexityEventEnricher:
                 amount_str = match.group(1).replace('$', '').replace(',', '')
                 try:
                     amount = float(amount_str)
-                    
-                    # Check for multipliers
-                    if 'million' in response.lower():
+
+                    # Check for multipliers only in the vicinity of the matched number
+                    match_end = match.end()
+                    context = response[match.start():min(match_end + 50, len(response))].lower()
+                    if 'million' in context:
                         amount *= 1000000
-                    elif 'billion' in response.lower():
+                    elif 'billion' in context:
                         amount *= 1000000000
-                    elif 'thousand' in response.lower():
+                    elif 'thousand' in context:
                         amount *= 1000
-                    
+
                     # Determine currency
                     currency = 'USD'
                     if 'aud' in response.lower() or 'australian' in response.lower():
@@ -420,15 +424,17 @@ class PerplexityEventEnricher:
                 number_str = match.group(1).replace(',', '')
                 try:
                     number = int(number_str)
-                    
-                    # Check for multipliers
-                    if 'million' in response.lower():
+
+                    # Check for multipliers only in the vicinity of the matched number
+                    match_end = match.end()
+                    context = response[match.start():min(match_end + 50, len(response))].lower()
+                    if 'million' in context:
                         number *= 1000000
-                    elif 'billion' in response.lower():
+                    elif 'billion' in context:
                         number *= 1000000000
-                    elif 'thousand' in response.lower():
+                    elif 'thousand' in context:
                         number *= 1000
-                    
+
                     return number
                 except ValueError:
                     continue
