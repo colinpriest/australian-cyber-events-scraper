@@ -36,7 +36,7 @@ def sample_events() -> list[CyberEvent]:
         severity=EventSeverity.MEDIUM,
         event_date=datetime(2024, 1, 16),
         australian_relevance=True,
-        confidence=confidence.copy(deep=True),
+        confidence=confidence.model_copy(deep=True),
     )
 
     event3 = CyberEvent(
@@ -46,7 +46,7 @@ def sample_events() -> list[CyberEvent]:
         severity=EventSeverity.MEDIUM,
         event_date=datetime(2024, 2, 1),
         australian_relevance=True,
-        confidence=confidence.copy(deep=True),
+        confidence=confidence.model_copy(deep=True),
     )
 
     return [event1, event2, event3]

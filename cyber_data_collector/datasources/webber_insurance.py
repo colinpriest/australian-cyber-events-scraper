@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -27,8 +29,9 @@ from cyber_data_collector.utils import RateLimiter
 class WebberInsuranceDataSource(DataSource):
     """Webber Insurance data breaches list scraper."""
 
-    def __init__(self, config: DataSourceConfig, rate_limiter: RateLimiter, env_config: Dict[str, str | None]):
+    def __init__(self, config: DataSourceConfig, rate_limiter: RateLimiter, env_config: Dict[str, Optional[str]]):
         super().__init__(config, rate_limiter)
+        self.env_config = env_config
         self.base_url = "https://www.webberinsurance.com.au/data-breaches-list"
 
     def validate_config(self) -> bool:
@@ -42,7 +45,11 @@ class WebberInsuranceDataSource(DataSource):
         try:
             await self.rate_limiter.wait("webber_list")
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            response = requests.get(self.base_url, headers=headers, timeout=self.config.timeout)
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.get(self.base_url, headers=headers, timeout=self.config.timeout),
+            )
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
@@ -259,11 +266,10 @@ class WebberInsuranceDataSource(DataSource):
     def _perplexity_fallback(self, failed_url: str, section_date: Optional[datetime] = None) -> Optional[str]:
         """Use Perplexity to find alternative content when original URL fails."""
         try:
-            import os
             import openai
 
-            # Get Perplexity API key from environment
-            api_key = os.environ.get('PERPLEXITY_API_KEY')
+            # Get Perplexity API key from env_config (stored at init time)
+            api_key = self.env_config.get('PERPLEXITY_API_KEY') if self.env_config else None
             if not api_key:
                 self.logger.debug("Perplexity API key not found, skipping fallback")
                 return None
@@ -340,7 +346,7 @@ Return a comprehensive summary of the incident in paragraph form."""
         )
 
         data_source = EventSource(
-            source_id=f"webber_{hash(url)}",
+            source_id=f"webber_{hashlib.md5(url.encode()).hexdigest()[:16]}",
             source_type="Webber Insurance",
             url=url,
             title=title,

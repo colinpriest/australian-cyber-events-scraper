@@ -674,6 +674,11 @@ class CyberEventDataV2:
     # UTILITY METHODS
     # =========================================================================
 
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return the underlying database connection."""
+        return self._conn
+
     def close(self):
         """Close database connection"""
         if self._conn:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -226,14 +227,19 @@ class PerplexityDataSource(DataSource):
         Only include real cyber security incidents related to Australia. If no relevant incidents are found, return {"events": []}.
         """
 
-        response = self.openai_client.chat.completions.create(
-            model="sonar-pro",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
-            temperature=0.1,
-            max_tokens=2000,
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self.openai_client.chat.completions.create(
+                model="sonar-pro",
+                messages=messages,
+                temperature=0.1,
+                max_tokens=2000,
+            )
         )
 
         # Parse the JSON response manually
@@ -257,7 +263,12 @@ class PerplexityDataSource(DataSource):
             ]
             return PerplexitySearchResults(events=events)
         except (json.JSONDecodeError, KeyError) as exc:
-            self.logger.warning("Failed to parse Perplexity response: %s", exc)
+            raw_preview = (content or "")[:500]
+            self.logger.warning(
+                "Failed to parse Perplexity response: %s. Raw content (first 500 chars): %s",
+                exc,
+                raw_preview,
+            )
             return PerplexitySearchResults(events=[])
 
     def _convert_results_to_events(self, results: PerplexitySearchResults) -> List[CyberEvent]:
@@ -266,7 +277,7 @@ class PerplexityDataSource(DataSource):
             try:
                 data_sources = [
                     EventSource(
-                        source_id=f"perplexity_{hash(url)}",
+                        source_id=f"perplexity_{hashlib.md5(url.encode()).hexdigest()[:16]}",
                         source_type="Perplexity Result",
                         url=url,
                         credibility_score=0.6,

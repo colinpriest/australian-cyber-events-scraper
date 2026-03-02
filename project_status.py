@@ -41,15 +41,26 @@ def _fetch_last_ingest(conn: sqlite3.Connection) -> Optional[str]:
 def _fetch_latest_event(conn: sqlite3.Connection) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
     if not _table_exists(conn, "EnrichedEvents"):
         return None
-    cursor = conn.execute(
-        """
-        SELECT title, event_date, created_at
-        FROM EnrichedEvents
-        WHERE status = 'Active'
-        ORDER BY event_date IS NULL, event_date DESC, created_at DESC
-        LIMIT 1
-        """
-    )
+    try:
+        cursor = conn.execute(
+            """
+            SELECT title, event_date, created_at
+            FROM EnrichedEvents
+            WHERE status = 'Active'
+            ORDER BY event_date IS NULL, event_date DESC, created_at DESC
+            LIMIT 1
+            """
+        )
+    except sqlite3.OperationalError:
+        # Fallback query without the status column if the column does not exist
+        cursor = conn.execute(
+            """
+            SELECT title, event_date, created_at
+            FROM EnrichedEvents
+            ORDER BY event_date IS NULL, event_date DESC, created_at DESC
+            LIMIT 1
+            """
+        )
     row = cursor.fetchone()
     if not row:
         return None

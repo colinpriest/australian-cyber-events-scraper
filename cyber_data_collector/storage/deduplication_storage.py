@@ -8,8 +8,11 @@ This module handles all database operations for the new deduplication system:
 - Idempotent operations
 """
 
+from __future__ import annotations
+
 import logging
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple, Any
@@ -39,8 +42,11 @@ class DeduplicationStorage:
     """Handles all database operations for deduplication with lineage tracking"""
     
     def __init__(self, db_connection: sqlite3.Connection):
+        if db_connection is None:
+            raise ValueError("db_connection cannot be None")
         self.conn = db_connection
         self.logger = logging.getLogger(f"{__name__}.DeduplicationStorage")
+        self._lock = threading.RLock()
         self._validate_schema()
     
     def _validate_schema(self) -> None:
@@ -75,54 +81,72 @@ class DeduplicationStorage:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS DeduplicationClusters (
                     cluster_id TEXT PRIMARY KEY,
-                    master_event_id TEXT NOT NULL,
-                    merge_timestamp DATETIME NOT NULL,
-                    merge_reason TEXT,
-                    confidence REAL,
-                    similarity_scores TEXT,  -- JSON
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    deduplicated_event_id TEXT NOT NULL,
+                    cluster_size INTEGER NOT NULL,
+                    average_similarity REAL,
+                    deduplication_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    algorithm_version VARCHAR(20),
+                    FOREIGN KEY (deduplicated_event_id) REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
                 )
             """)
-        
+
         if 'EventDeduplicationMap' in missing_tables:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS EventDeduplicationMap (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    map_id TEXT PRIMARY KEY,
+                    raw_event_id TEXT NOT NULL,
+                    enriched_event_id TEXT,
                     deduplicated_event_id TEXT NOT NULL,
-                    source_event_id TEXT NOT NULL,
+                    contribution_type VARCHAR(50),
                     similarity_score REAL,
-                    merge_reason TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (deduplicated_event_id) REFERENCES DeduplicatedEvents(deduplicated_event_id)
+                    data_source_weight REAL DEFAULT 1.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(raw_event_id, deduplicated_event_id),
+                    FOREIGN KEY (deduplicated_event_id) REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
                 )
             """)
-        
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dedup_events_date ON DeduplicatedEvents(event_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dedup_events_type ON DeduplicatedEvents(event_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dedup_map_raw_event ON EventDeduplicationMap(raw_event_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_dedup_map_dedup_event ON EventDeduplicationMap(deduplicated_event_id)")
+
         self.conn.commit()
         self.logger.info(f"Created missing tables: {missing_tables}")
     
     def clear_existing_deduplications(self) -> None:
         """Remove all existing deduplicated events (idempotent)"""
-        cursor = self.conn.cursor()
-        
-        try:
-            # Delete in correct order to respect foreign keys
-            cursor.execute("DELETE FROM EventDeduplicationMap")
-            cursor.execute("DELETE FROM DeduplicationClusters")
-            cursor.execute("DELETE FROM DeduplicatedEvents")
-            
-            self.conn.commit()
-            self.logger.info("Cleared existing deduplications")
-            
-        except Exception as e:
-            self.conn.rollback()
-            self.logger.error(f"Failed to clear existing deduplications: {e}")
-            raise
+        with self._lock:
+            cursor = self.conn.cursor()
+
+            try:
+                # Delete in correct order to respect foreign keys
+                try:
+                    cursor.execute("DELETE FROM ASDRiskClassifications")
+                except Exception:
+                    pass  # Table may not exist in test or fresh databases
+                cursor.execute("DELETE FROM EventDeduplicationMap")
+                cursor.execute("DELETE FROM DeduplicationClusters")
+                cursor.execute("DELETE FROM DeduplicatedEvents")
+
+                self.conn.commit()
+                self.logger.info("Cleared existing deduplications")
+
+            except Exception as e:
+                self.conn.rollback()
+                self.logger.error(f"Failed to clear existing deduplications: {e}")
+                raise
     
     def store_deduplication_result(self, result: DeduplicationResult) -> StorageResult:
         """Store complete deduplication result with lineage tracking"""
+        with self._lock:
+            return self._store_deduplication_result_locked(result)
+
+    def _store_deduplication_result_locked(self, result: DeduplicationResult) -> StorageResult:
+        """Internal implementation of store_deduplication_result (must be called with _lock held)."""
         start_time = datetime.now()
         validation_errors = []
-        
+
         try:
             # Start transaction
             cursor = self.conn.cursor()
@@ -150,7 +174,7 @@ class DeduplicationStorage:
             self.conn.commit()
             
             # Post-storage validation
-            post_validation = self.validate_storage_integrity()
+            post_validation = self._validate_storage_integrity_locked()
             if post_validation:
                 validation_errors.extend(post_validation)
                 self.logger.warning(f"Post-storage validation found issues: {len(post_validation)}")
@@ -321,6 +345,11 @@ class DeduplicationStorage:
     
     def validate_storage_integrity(self) -> List[ValidationError]:
         """Check database for duplicate deduplicated_event_ids and other integrity issues"""
+        with self._lock:
+            return self._validate_storage_integrity_locked()
+
+    def _validate_storage_integrity_locked(self) -> List[ValidationError]:
+        """Internal implementation of validate_storage_integrity (lock-safe)."""
         errors = []
         cursor = self.conn.cursor()
         
@@ -405,78 +434,78 @@ class DeduplicationStorage:
     
     def get_deduplication_statistics(self) -> Dict[str, Any]:
         """Get comprehensive statistics about the deduplication system"""
-        cursor = self.conn.cursor()
-        
-        stats = {}
-        
-        # Check if tables exist first
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name IN ('DeduplicatedEvents', 'EventDeduplicationMap', 'DeduplicationClusters')
-        """)
-        existing_tables = [row[0] for row in cursor.fetchall()]
-        
-        # Basic counts (only if tables exist)
-        if 'DeduplicatedEvents' in existing_tables:
-            cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'")
-            stats['active_events'] = cursor.fetchone()[0]
-        else:
-            stats['active_events'] = 0
-        
-        if 'DeduplicationClusters' in existing_tables:
-            cursor.execute("SELECT COUNT(*) FROM DeduplicationClusters")
-            stats['merge_groups'] = cursor.fetchone()[0]
-        else:
-            stats['merge_groups'] = 0
-        
-        if 'EventDeduplicationMap' in existing_tables:
-            cursor.execute("SELECT COUNT(*) FROM EventDeduplicationMap")
-            stats['total_merges'] = cursor.fetchone()[0]
-        else:
-            stats['total_merges'] = 0
-        
-        # Date range (only if DeduplicatedEvents exists)
-        if 'DeduplicatedEvents' in existing_tables:
+        with self._lock:
+            cursor = self.conn.cursor()
+            stats = {}
+
+            # Check if tables exist first
             cursor.execute("""
-                SELECT MIN(event_date), MAX(event_date)
-                FROM DeduplicatedEvents
-                WHERE status = 'Active'
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name IN ('DeduplicatedEvents', 'EventDeduplicationMap', 'DeduplicationClusters')
             """)
-            date_range = cursor.fetchone()
-            stats['date_range'] = {
-                'earliest': date_range[0],
-                'latest': date_range[1]
-            }
-        else:
-            stats['date_range'] = {'earliest': None, 'latest': None}
-        
-        # Event types (only if DeduplicatedEvents exists)
-        if 'DeduplicatedEvents' in existing_tables:
-            cursor.execute("""
-                SELECT event_type, COUNT(*) as count
-                FROM DeduplicatedEvents
-                WHERE status = 'Active' AND event_type IS NOT NULL
-                GROUP BY event_type
-                ORDER BY count DESC
-            """)
-            stats['event_types'] = dict(cursor.fetchall())
-        else:
-            stats['event_types'] = {}
-        
-        # Severity distribution (only if DeduplicatedEvents exists)
-        if 'DeduplicatedEvents' in existing_tables:
-            cursor.execute("""
-                SELECT severity, COUNT(*) as count
-                FROM DeduplicatedEvents
-                WHERE status = 'Active' AND severity IS NOT NULL
-                GROUP BY severity
-                ORDER BY count DESC
-            """)
-            stats['severity_distribution'] = dict(cursor.fetchall())
-        else:
-            stats['severity_distribution'] = {}
-        
-        return stats
+            existing_tables = [row[0] for row in cursor.fetchall()]
+
+            # Basic counts (only if tables exist)
+            if 'DeduplicatedEvents' in existing_tables:
+                cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'")
+                stats['active_events'] = cursor.fetchone()[0]
+            else:
+                stats['active_events'] = 0
+
+            if 'DeduplicationClusters' in existing_tables:
+                cursor.execute("SELECT COUNT(*) FROM DeduplicationClusters")
+                stats['merge_groups'] = cursor.fetchone()[0]
+            else:
+                stats['merge_groups'] = 0
+
+            if 'EventDeduplicationMap' in existing_tables:
+                cursor.execute("SELECT COUNT(*) FROM EventDeduplicationMap")
+                stats['total_merges'] = cursor.fetchone()[0]
+            else:
+                stats['total_merges'] = 0
+
+            # Date range (only if DeduplicatedEvents exists)
+            if 'DeduplicatedEvents' in existing_tables:
+                cursor.execute("""
+                    SELECT MIN(event_date), MAX(event_date)
+                    FROM DeduplicatedEvents
+                    WHERE status = 'Active'
+                """)
+                date_range = cursor.fetchone()
+                stats['date_range'] = {
+                    'earliest': date_range[0],
+                    'latest': date_range[1]
+                }
+            else:
+                stats['date_range'] = {'earliest': None, 'latest': None}
+
+            # Event types (only if DeduplicatedEvents exists)
+            if 'DeduplicatedEvents' in existing_tables:
+                cursor.execute("""
+                    SELECT event_type, COUNT(*) as count
+                    FROM DeduplicatedEvents
+                    WHERE status = 'Active' AND event_type IS NOT NULL
+                    GROUP BY event_type
+                    ORDER BY count DESC
+                """)
+                stats['event_types'] = dict(cursor.fetchall())
+            else:
+                stats['event_types'] = {}
+
+            # Severity distribution (only if DeduplicatedEvents exists)
+            if 'DeduplicatedEvents' in existing_tables:
+                cursor.execute("""
+                    SELECT severity, COUNT(*) as count
+                    FROM DeduplicatedEvents
+                    WHERE status = 'Active' AND severity IS NOT NULL
+                    GROUP BY severity
+                    ORDER BY count DESC
+                """)
+                stats['severity_distribution'] = dict(cursor.fetchall())
+            else:
+                stats['severity_distribution'] = {}
+
+            return stats
     
     def get_merge_lineage(self, deduplicated_event_id: str) -> Optional[Dict[str, Any]]:
         """Get complete merge lineage for a deduplicated event"""
@@ -532,40 +561,53 @@ class DeduplicationStorage:
             ]
         }
     
+    def _format_sql_value(self, val: object) -> str:
+        """Format a Python value as a safe SQL literal for backup output."""
+        if val is None:
+            return "NULL"
+        elif isinstance(val, (int, float)):
+            return str(val)
+        else:
+            return "'" + str(val).replace("'", "''") + "'"
+
     def backup_deduplication_data(self, backup_path: str) -> bool:
         """Create a backup of all deduplication data"""
-        try:
-            cursor = self.conn.cursor()
-            
-            # Export to SQL file
-            with open(backup_path, 'w') as f:
-                f.write("-- Deduplication Data Backup\n")
-                f.write(f"-- Created: {datetime.now()}\n\n")
-                
-                # Export DeduplicatedEvents
-                f.write("-- DeduplicatedEvents\n")
-                cursor.execute("SELECT * FROM DeduplicatedEvents")
-                rows = cursor.fetchall()
-                for row in rows:
-                    f.write(f"INSERT INTO DeduplicatedEvents VALUES {row};\n")
-                
-                # Export DeduplicationClusters
-                f.write("\n-- DeduplicationClusters\n")
-                cursor.execute("SELECT * FROM DeduplicationClusters")
-                rows = cursor.fetchall()
-                for row in rows:
-                    f.write(f"INSERT INTO DeduplicationClusters VALUES {row};\n")
-                
-                # Export EventDeduplicationMap
-                f.write("\n-- EventDeduplicationMap\n")
-                cursor.execute("SELECT * FROM EventDeduplicationMap")
-                rows = cursor.fetchall()
-                for row in rows:
-                    f.write(f"INSERT INTO EventDeduplicationMap VALUES {row};\n")
-            
-            self.logger.info(f"Deduplication data backed up to {backup_path}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to backup deduplication data: {e}")
-            return False
+        with self._lock:
+            try:
+                cursor = self.conn.cursor()
+
+                # Export to SQL file
+                with open(backup_path, 'w') as f:
+                    f.write("-- Deduplication Data Backup\n")
+                    f.write(f"-- Created: {datetime.now()}\n\n")
+
+                    # Export DeduplicatedEvents
+                    f.write("-- DeduplicatedEvents\n")
+                    cursor.execute("SELECT * FROM DeduplicatedEvents")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        values = ", ".join(self._format_sql_value(v) for v in row)
+                        f.write(f"INSERT INTO DeduplicatedEvents VALUES ({values});\n")
+
+                    # Export DeduplicationClusters
+                    f.write("\n-- DeduplicationClusters\n")
+                    cursor.execute("SELECT * FROM DeduplicationClusters")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        values = ", ".join(self._format_sql_value(v) for v in row)
+                        f.write(f"INSERT INTO DeduplicationClusters VALUES ({values});\n")
+
+                    # Export EventDeduplicationMap
+                    f.write("\n-- EventDeduplicationMap\n")
+                    cursor.execute("SELECT * FROM EventDeduplicationMap")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        values = ", ".join(self._format_sql_value(v) for v in row)
+                        f.write(f"INSERT INTO EventDeduplicationMap VALUES ({values});\n")
+
+                self.logger.info(f"Deduplication data backed up to {backup_path}")
+                return True
+
+            except Exception as e:
+                self.logger.error(f"Failed to backup deduplication data: {e}")
+                return False

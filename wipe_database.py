@@ -14,6 +14,8 @@ Arguments:
     --tables        Comma-separated list of specific tables to wipe (default: all)
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sqlite3
@@ -40,6 +42,17 @@ class DatabaseRecordWiper:
 
     # Project-specific database configuration
     SQLITE_DB_PATH = "instance/cyber_events.db"
+
+    # Allowlist of permitted table names to prevent SQL injection
+    ALLOWED_TABLES = {
+        'RawEvents', 'EnrichedEvents', 'DeduplicatedEvents', 'ProcessingLog',
+        'ASDRiskClassifications', 'EntitiesV2', 'EventEntitiesV2',
+        'DeduplicationClusters', 'EventDeduplicationMap', 'EnrichmentAuditTrail',
+        'IndustryGroupings', 'AuditLog', 'DeduplicatedEventEntities',
+        'DeduplicatedEventSources', 'EnrichedEventEntities', 'DataSourcesV2',
+        'MonthProcessed', 'EventAttributeHistory', 'EventSources', 'EventEntities',
+        'UniqueEvents', 'Entities', 'DataSources',
+    }
 
     # V1 project tables (legacy - kept for backward compatibility)
     V1_PROJECT_TABLES = [
@@ -101,24 +114,21 @@ class DatabaseRecordWiper:
             return "none"
 
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # Check for V2 tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='RawEvents'")
-            if cursor.fetchone():
-                self.schema_version = "v2"
-                conn.close()
-                return "v2"
+                # Check for V2 tables
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='RawEvents'")
+                if cursor.fetchone():
+                    self.schema_version = "v2"
+                    return "v2"
 
-            # Check for V1 tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='UniqueEvents'")
-            if cursor.fetchone():
-                self.schema_version = "v1"
-                conn.close()
-                return "v1"
+                # Check for V1 tables
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='UniqueEvents'")
+                if cursor.fetchone():
+                    self.schema_version = "v1"
+                    return "v1"
 
-            conn.close()
             return "unknown"
 
         except Exception as e:
@@ -146,22 +156,22 @@ class DatabaseRecordWiper:
 
         table_counts = {}
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # Get relevant tables for the detected schema
-            tables_to_check = self.get_relevant_tables()
+                # Get relevant tables for the detected schema
+                tables_to_check = self.get_relevant_tables()
 
-            for table in tables_to_check:
-                try:
-                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                    count = cursor.fetchone()[0]
-                    table_counts[table] = count
-                except sqlite3.OperationalError:
-                    # Table doesn't exist
-                    pass
-
-            conn.close()
+                for table in tables_to_check:
+                    if table not in self.ALLOWED_TABLES:
+                        continue
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                        count = cursor.fetchone()[0]
+                        table_counts[table] = count
+                    except sqlite3.OperationalError:
+                        # Table doesn't exist
+                        pass
         except Exception as e:
             self.log(f"Error getting table info: {e}", "ERROR")
 
@@ -201,6 +211,19 @@ class DatabaseRecordWiper:
             self.log("No tables with records found")
             return True
 
+        # Validate each table against the allowlist to prevent SQL injection
+        validated_tables = []
+        for table in tables_to_process:
+            if table not in self.ALLOWED_TABLES:
+                self.log(f"Skipping unknown table: {table}", "WARNING")
+            else:
+                validated_tables.append(table)
+        tables_to_process = validated_tables
+
+        if not tables_to_process:
+            self.log("No valid tables to process after allowlist check")
+            return True
+
         # Show what will be deleted
         total_records = sum(table_counts[t] for t in tables_to_process)
         self.log(f"Tables to wipe:")
@@ -220,29 +243,26 @@ class DatabaseRecordWiper:
 
         # Perform the deletion
         try:
-            conn = sqlite3.connect(self.SQLITE_DB_PATH)
-            cursor = conn.cursor()
+            with sqlite3.connect(self.SQLITE_DB_PATH) as conn:
+                cursor = conn.cursor()
 
-            # Disable foreign key constraints temporarily
-            cursor.execute("PRAGMA foreign_keys = OFF")
+                # Disable foreign key constraints temporarily
+                cursor.execute("PRAGMA foreign_keys = OFF")
 
-            # Delete records from each table
-            for table in tables_to_process:
-                cursor.execute(f"DELETE FROM {table}")
-                deleted_rows = cursor.rowcount
-                self.log(f"Deleted {deleted_rows:,} records from {table}")
-                self.deleted_count += deleted_rows
+                # Delete records from each table
+                for table in tables_to_process:
+                    cursor.execute(f"DELETE FROM {table}")
+                    deleted_rows = cursor.rowcount
+                    self.log(f"Deleted {deleted_rows:,} records from {table}")
+                    self.deleted_count += deleted_rows
 
-            # Reset auto-increment counters
-            cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ({})".format(
-                ','.join('?' * len(tables_to_process))
-            ), tables_to_process)
+                # Reset auto-increment counters
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ({})".format(
+                    ','.join('?' * len(tables_to_process))
+                ), tables_to_process)
 
-            # Re-enable foreign key constraints
-            cursor.execute("PRAGMA foreign_keys = ON")
-
-            conn.commit()
-            conn.close()
+                # Re-enable foreign key constraints
+                cursor.execute("PRAGMA foreign_keys = ON")
 
             self.log(f"Successfully deleted {self.deleted_count:,} total records")
             return True

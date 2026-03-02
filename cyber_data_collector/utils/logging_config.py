@@ -13,6 +13,7 @@ def setup_logging(
 
     root_logger = logging.getLogger()
     if root_logger.handlers:
+        logging.debug("Logging already configured, skipping setup_logging")
         return
 
     handlers = [stream_handler or logging.StreamHandler()]

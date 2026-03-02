@@ -24,6 +24,8 @@ Usage:
     python export_events_excel.py --exclude-unknown-records  # Exclude events with unknown records affected
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -353,76 +355,83 @@ def export_events_to_excel(
             print("Falling back to simple text truncation (no LLM).")
             use_llm = False
 
-    # Connect to database
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
+    # Check database exists before connecting
+    if not Path(db_path).exists():
+        print(f"Error: Database not found at {db_path}")
+        return output_path
 
-    # Get all entity names for thorough anonymization
-    all_entity_names = get_all_entity_names(cursor) if use_llm else []
-    print(f"Loaded {len(all_entity_names)} entity names for anonymization")
+    # Connect to database using context manager to ensure the connection is always closed
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
 
-    # Build query with optional filter for unknown records
-    query = """
-        SELECT
-            deduplicated_event_id,
-            title,
-            event_date,
-            event_type,
-            victim_organization_industry,
-            records_affected,
-            description,
-            summary
-        FROM DeduplicatedEvents
-        WHERE status = 'Active'
-    """
+        # Get all entity names for thorough anonymization
+        all_entity_names = get_all_entity_names(cursor) if use_llm else []
+        print(f"Loaded {len(all_entity_names)} entity names for anonymization")
 
-    if exclude_unknown_records:
-        query += " AND records_affected IS NOT NULL AND records_affected != '' AND CAST(records_affected AS TEXT) != 'Unknown'"
+        # Build query with optional filter for unknown records
+        query = """
+            SELECT
+                deduplicated_event_id,
+                title,
+                event_date,
+                event_type,
+                victim_organization_industry,
+                records_affected,
+                description,
+                summary
+            FROM DeduplicatedEvents
+            WHERE status = 'Active'
+        """
 
-    query += " ORDER BY event_date DESC"
+        if exclude_unknown_records:
+            query += " AND records_affected IS NOT NULL AND records_affected != '' AND CAST(records_affected AS TEXT) != 'Unknown'"
 
-    if limit:
-        query += f" LIMIT {limit}"
+        query += " ORDER BY event_date DESC"
 
-    cursor.execute(query)
-    events = cursor.fetchall()
+        params: tuple
+        if limit:
+            query += " LIMIT ?"
+            params = (limit,)
+        else:
+            params = ()
 
-    print(f"Processing {len(events)} events...")
+        cursor.execute(query, params)
+        events = cursor.fetchall()
 
-    # Phase 1: Collect all source texts (sequential - uses DB)
-    print("Phase 1: Gathering source texts from database...")
-    event_data_list = []
-    for event in tqdm(events, desc="Reading events"):
-        event_id = event['deduplicated_event_id']
-        event_title = event['title']
+        print(f"Processing {len(events)} events...")
 
-        # Clean up event type - use "Unknown" for unknown/null values
-        event_type = event['event_type']
-        if not event_type or event_type.lower() in ('unknown', 'none', '', 'null'):
-            event_type = 'Unknown'
-        elif '.' in event_type:
-            event_type = event_type.split('.')[-1].replace('_', ' ').title()
+        # Phase 1: Collect all source texts (sequential - uses DB)
+        print("Phase 1: Gathering source texts from database...")
+        event_data_list = []
+        for event in tqdm(events, desc="Reading events"):
+            event_id = event['deduplicated_event_id']
+            event_title = event['title']
 
-        # Clean up industry - use "Unknown" for unknown/null values
-        industry = event['victim_organization_industry']
-        if not industry or industry.lower() in ('unknown', 'none', '', 'null'):
-            industry = 'Unknown'
+            # Clean up event type - use "Unknown" for unknown/null values
+            event_type = event['event_type']
+            if not event_type or event_type.lower() in ('unknown', 'none', '', 'null'):
+                event_type = 'Unknown'
+            elif '.' in event_type:
+                event_type = event_type.split('.')[-1].replace('_', ' ').title()
 
-        source_text = get_event_source_text(cursor, event_id, event_title)
+            # Clean up industry - use "Unknown" for unknown/null values
+            industry = event['victim_organization_industry']
+            if not industry or industry.lower() in ('unknown', 'none', '', 'null'):
+                industry = 'Unknown'
 
-        event_data_list.append({
-            'event_data': {
-                'event_date': event['event_date'],
-                'title': event['title'],
-                'records_affected': event['records_affected'],
-                'industry': industry,
-                'event_type': event_type
-            },
-            'source_text': source_text
-        })
+            source_text = get_event_source_text(cursor, event_id, event_title)
 
-    conn.close()
+            event_data_list.append({
+                'event_data': {
+                    'event_date': event['event_date'],
+                    'title': event['title'],
+                    'records_affected': event['records_affected'],
+                    'industry': industry,
+                    'event_type': event_type
+                },
+                'source_text': source_text
+            })
 
     # Phase 2: Process with LLM in parallel
     print(f"Phase 2: Processing with LLM ({max_workers} parallel workers)...")

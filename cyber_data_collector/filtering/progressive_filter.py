@@ -2,8 +2,11 @@
 Progressive filtering system that applies different filtering strategies at different stages.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional, Any
+import threading
+from typing import Any, Dict, List, Optional
 
 from .confidence_filter import ConfidenceBasedFilter, FilterResult
 
@@ -27,6 +30,7 @@ class ProgressiveFilterSystem:
 
     def __init__(self):
         self.confidence_filter = ConfidenceBasedFilter()
+        self._stats_lock = threading.Lock()
         self.stats = {
             'discovery_processed': 0,
             'discovery_passed': 0,
@@ -40,7 +44,7 @@ class ProgressiveFilterSystem:
         }
 
     def should_discover_event(self, title: str, description: str = "",
-                            url: str = "", metadata: Dict = None) -> FilterResult:
+                            url: str = "", metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 1: Discovery filter - very permissive to minimize false negatives.
 
@@ -61,9 +65,10 @@ class ProgressiveFilterSystem:
                 metadata=metadata
             )
 
-            self.stats['discovery_processed'] += 1
-            if result.is_cyber_relevant:
-                self.stats['discovery_passed'] += 1
+            with self._stats_lock:
+                self.stats['discovery_processed'] += 1
+                if result.is_cyber_relevant:
+                    self.stats['discovery_passed'] += 1
 
             logger.debug(f"[DISCOVERY] {title[:50]}... -> {result.confidence_score:.2f} "
                         f"({result.risk_level}) - {'PASS' if result.is_cyber_relevant else 'REJECT'}")
@@ -81,7 +86,7 @@ class ProgressiveFilterSystem:
             )
 
     def should_process_content(self, title: str, content: str, url: str = "",
-                             metadata: Dict = None) -> FilterResult:
+                             metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 2: Content filter - balanced approach after scraping.
 
@@ -102,9 +107,10 @@ class ProgressiveFilterSystem:
                 metadata=metadata
             )
 
-            self.stats['content_processed'] += 1
-            if result.is_cyber_relevant:
-                self.stats['content_passed'] += 1
+            with self._stats_lock:
+                self.stats['content_processed'] += 1
+                if result.is_cyber_relevant:
+                    self.stats['content_passed'] += 1
 
             # Update confidence level stats
             self._update_confidence_stats(result)
@@ -125,7 +131,8 @@ class ProgressiveFilterSystem:
             )
 
     def should_enrich_event(self, title: str, content: str, url: str = "",
-                          llm_analysis: Dict = None, metadata: Dict = None) -> FilterResult:
+                          llm_analysis: Optional[Dict[str, Any]] = None,
+                          metadata: Optional[Dict[str, Any]] = None) -> FilterResult:
         """
         Stage 3: Final filter - high precision with LLM analysis.
 
@@ -148,9 +155,10 @@ class ProgressiveFilterSystem:
                 metadata=metadata
             )
 
-            self.stats['final_processed'] += 1
-            if result.is_cyber_relevant:
-                self.stats['final_passed'] += 1
+            with self._stats_lock:
+                self.stats['final_processed'] += 1
+                if result.is_cyber_relevant:
+                    self.stats['final_passed'] += 1
 
             # Update confidence level stats
             self._update_confidence_stats(result)
@@ -172,30 +180,33 @@ class ProgressiveFilterSystem:
 
     def get_filtering_statistics(self) -> Dict[str, Any]:
         """Get comprehensive filtering statistics."""
-        total_processed = self.stats['discovery_processed']
+        with self._stats_lock:
+            stats_snapshot = dict(self.stats)
+
+        total_processed = stats_snapshot['discovery_processed']
         if total_processed == 0:
-            return self.stats
+            return stats_snapshot
 
         # Calculate pass rates
-        discovery_rate = (self.stats['discovery_passed'] / self.stats['discovery_processed']) * 100 if self.stats['discovery_processed'] > 0 else 0
-        content_rate = (self.stats['content_passed'] / self.stats['content_processed']) * 100 if self.stats['content_processed'] > 0 else 0
-        final_rate = (self.stats['final_passed'] / self.stats['final_processed']) * 100 if self.stats['final_processed'] > 0 else 0
+        discovery_rate = (stats_snapshot['discovery_passed'] / stats_snapshot['discovery_processed']) * 100 if stats_snapshot['discovery_processed'] > 0 else 0
+        content_rate = (stats_snapshot['content_passed'] / stats_snapshot['content_processed']) * 100 if stats_snapshot['content_processed'] > 0 else 0
+        final_rate = (stats_snapshot['final_passed'] / stats_snapshot['final_processed']) * 100 if stats_snapshot['final_processed'] > 0 else 0
 
         # Calculate confidence distribution
-        total_confidence_events = self.stats['high_confidence'] + self.stats['medium_confidence'] + self.stats['low_confidence']
-        high_pct = (self.stats['high_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
-        medium_pct = (self.stats['medium_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
-        low_pct = (self.stats['low_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
+        total_confidence_events = stats_snapshot['high_confidence'] + stats_snapshot['medium_confidence'] + stats_snapshot['low_confidence']
+        high_pct = (stats_snapshot['high_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
+        medium_pct = (stats_snapshot['medium_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
+        low_pct = (stats_snapshot['low_confidence'] / total_confidence_events) * 100 if total_confidence_events > 0 else 0
 
         return {
-            **self.stats,
+            **stats_snapshot,
             'discovery_pass_rate': discovery_rate,
             'content_pass_rate': content_rate,
             'final_pass_rate': final_rate,
             'high_confidence_pct': high_pct,
             'medium_confidence_pct': medium_pct,
             'low_confidence_pct': low_pct,
-            'overall_efficiency': (self.stats['final_passed'] / total_processed) * 100 if total_processed > 0 else 0
+            'overall_efficiency': (stats_snapshot['final_passed'] / total_processed) * 100 if total_processed > 0 else 0
         }
 
     def reset_statistics(self):
@@ -227,14 +238,15 @@ class ProgressiveFilterSystem:
         if stats['discovery_processed'] > 0:
             logger.info(f"[EFFICIENCY] Overall pass rate: {stats['overall_efficiency']:.1f}%")
 
-    def _update_confidence_stats(self, result: FilterResult):
+    def _update_confidence_stats(self, result: FilterResult) -> None:
         """Update confidence level statistics."""
-        if result.confidence_score >= 0.8:
-            self.stats['high_confidence'] += 1
-        elif result.confidence_score >= 0.4:
-            self.stats['medium_confidence'] += 1
-        else:
-            self.stats['low_confidence'] += 1
+        with self._stats_lock:
+            if result.confidence_score >= 0.8:
+                self.stats['high_confidence'] += 1
+            elif result.confidence_score >= 0.4:
+                self.stats['medium_confidence'] += 1
+            else:
+                self.stats['low_confidence'] += 1
 
     def get_stage_thresholds(self) -> Dict[str, float]:
         """Get the confidence thresholds for each stage."""

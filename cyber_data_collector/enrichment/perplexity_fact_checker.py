@@ -5,8 +5,11 @@ This module cross-validates information extracted by GPT-4o by querying
 Perplexity API for verification.
 """
 
+from __future__ import annotations
+
 import logging
 import json
+import time
 import requests
 from typing import Dict, Any, List
 from datetime import datetime
@@ -247,7 +250,7 @@ CRITICAL RULES:
         # Check if within acceptable range (±20%)
         verified = response.get('count_confirmed', False)
 
-        if response.get('actual_count'):
+        if response.get('actual_count') and records_count > 0:
             variance = abs(records_count - response['actual_count']) / records_count
             verified = variance <= 0.20
 
@@ -299,16 +302,22 @@ CRITICAL RULES:
                     except json.JSONDecodeError as e:
                         self.logger.warning(f"Attempt {attempt + 1}: Failed to parse Perplexity JSON: {e}")
                         if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt  # 1s, 2s, 4s
+                            time.sleep(wait_time)
                             continue
                         return None
                 else:
                     self.logger.warning(f"Attempt {attempt + 1}: Perplexity API returned status {response.status_code}")
                     if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt  # 1s, 2s, 4s
+                        time.sleep(wait_time)
                         continue
 
             except Exception as e:
                 self.logger.warning(f"Attempt {attempt + 1}: Perplexity request failed: {e}")
                 if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    time.sleep(wait_time)
                     continue
 
         self.logger.error("All Perplexity API attempts failed")

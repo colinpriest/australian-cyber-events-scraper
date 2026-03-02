@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -127,15 +128,15 @@ class PerplexityEnrichmentEngine:
                     env_config = config_manager.load()
                     self.api_key = env_config.get("PERPLEXITY_API_KEY")
                 except Exception as e:
-                    # ConfigManager might not be available, continue with None
-                    pass
-        
+                    logging.getLogger(__name__).debug(f"ConfigManager unavailable: {e}")
+
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.client: Optional[openai.OpenAI] = None
 
         # Rate limiting
         self.min_request_interval = 2.0  # seconds between requests
         self.last_request_time = 0.0
+        self._rate_lock = asyncio.Lock()
 
         # Retry configuration
         self.max_retries = 3
@@ -191,8 +192,8 @@ class PerplexityEnrichmentEngine:
 
             self.logger.info(
                 f"Enriched event '{title[:50]}...' - "
-                f"Date: {enrichment.earliest_event_date} ({enrichment.date_confidence:.2f}), "
-                f"Entity: {enrichment.formal_entity_name} ({enrichment.entity_confidence:.2f})"
+                f"Date: {enrichment.earliest_event_date} ({(enrichment.date_confidence or 0.0):.2f}), "
+                f"Entity: {enrichment.formal_entity_name} ({(enrichment.entity_confidence or 0.0):.2f})"
             )
 
             return enrichment
@@ -379,20 +380,24 @@ Be conservative: if uncertain, answer false.
                     self.logger.info(f"Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})")
                     await asyncio.sleep(delay)
 
-                response = self.client.chat.completions.create(
-                    model="sonar-pro",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are a precise cybersecurity analyst. Provide accurate, well-researched information in JSON format."
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=max_tokens
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.client.chat.completions.create(
+                        model="sonar-pro",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a precise cybersecurity analyst. Provide accurate, well-researched information in JSON format."
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        temperature=0.1,
+                        max_tokens=max_tokens
+                    )
                 )
 
                 content = response.choices[0].message.content
@@ -418,13 +423,17 @@ Be conservative: if uncertain, answer false.
 
     def _parse_enrichment_response(self, response: str) -> PerplexityEventEnrichment:
         """Parse Perplexity's JSON response into structured enrichment data."""
+        import re as _re
         try:
             # Extract JSON from response (handle markdown code blocks)
             json_str = response.strip()
             if json_str.startswith("```"):
-                # Remove markdown code block
-                lines = json_str.split("\n")
-                json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
+                match = _re.search(r'```(?:json)?\s*\n?(.*?)\n?```', json_str, _re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                else:
+                    lines = json_str.split("\n")
+                    json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
 
             data = json.loads(json_str)
             return PerplexityEventEnrichment(**data)
@@ -436,11 +445,16 @@ Be conservative: if uncertain, answer false.
 
     def _parse_duplicate_check_response(self, response: str) -> PerplexityDuplicateCheck:
         """Parse duplicate check response."""
+        import re as _re
         try:
             json_str = response.strip()
             if json_str.startswith("```"):
-                lines = json_str.split("\n")
-                json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
+                match = _re.search(r'```(?:json)?\s*\n?(.*?)\n?```', json_str, _re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                else:
+                    lines = json_str.split("\n")
+                    json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
 
             data = json.loads(json_str)
             return PerplexityDuplicateCheck(**data)
@@ -456,12 +470,12 @@ Be conservative: if uncertain, answer false.
 
     async def _rate_limit(self):
         """Ensure minimum time between requests."""
-        import time
-        current_time = time.time()
-        time_since_last = current_time - self.last_request_time
+        async with self._rate_lock:
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
 
-        if time_since_last < self.min_request_interval:
-            wait_time = self.min_request_interval - time_since_last
-            await asyncio.sleep(wait_time)
+            if time_since_last < self.min_request_interval:
+                wait_time = self.min_request_interval - time_since_last
+                await asyncio.sleep(wait_time)
 
-        self.last_request_time = time.time()
+            self.last_request_time = time.time()

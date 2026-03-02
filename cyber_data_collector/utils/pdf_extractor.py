@@ -6,23 +6,36 @@ Supports multiple extraction methods with automatic fallback:
 2. PyPDF2 (fallback) - Lightweight alternative for simple PDFs
 """
 
+from __future__ import annotations
+
 import logging
-import requests
-import tempfile
 import os
-from typing import Optional, Dict, Any
+import tempfile
+from typing import Any, Dict, Optional
 from pathlib import Path
+
+import requests
 
 
 class PDFExtractor:
     """Extract text content from PDF files and URLs"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(__name__)
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+
+    def close(self) -> None:
+        """Close the HTTP session."""
+        self.session.close()
+
+    def __enter__(self) -> PDFExtractor:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
     def is_pdf_url(self, url: str) -> bool:
         """Check if URL points to a PDF file"""
@@ -212,7 +225,7 @@ def test_pdf_extractor():
     print("PDF URL Detection:")
     for url in test_urls:
         is_pdf = extractor.is_pdf_url(url)
-        print(f"  {url}: {'✓ PDF' if is_pdf else '✗ Not PDF'}")
+        print(f"  {url}: {'PDF' if is_pdf else 'Not PDF'}")
 
     # Test actual extraction (would need a real PDF URL)
     print("\nTo test extraction, provide a PDF URL:")

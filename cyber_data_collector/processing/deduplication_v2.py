@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Enhanced deduplication system with object-oriented design, comprehensive validation,
 and merge lineage tracking.
@@ -47,14 +49,10 @@ This module provides a complete deduplication solution that:
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 import difflib
 import hashlib
-
-# Use a simpler event model for deduplication
-from dataclasses import dataclass
-from datetime import date, datetime
 
 @dataclass
 class CyberEvent:
@@ -445,49 +443,48 @@ class SimilarityCalculator:
             return 0.0
     
     def _extract_entities(self, event: CyberEvent) -> List[str]:
-        """Extract entities from event"""
-        entities = []
-        
-        if self.entity_extractor:
-            # Extract from title
-            if event.title:
-                title_entities = self.entity_extractor.extract_entities(event.title)
-                entities.extend(title_entities)
-            
-            # Extract from summary
-            if event.summary:
-                summary_entities = self.entity_extractor.extract_entities(event.summary)
-                entities.extend(summary_entities)
-        else:
-            # Simple entity extraction without LLM
-            if event.title:
-                # Extract potential company names (simple heuristic)
-                import re
-                # Look for capitalized words that might be company names
-                title_words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', event.title)
-                entities.extend(title_words)
+        """Extract entities from event using regex-based heuristics.
 
-                stopwords = {
-                    "Data",
-                    "Breach",
-                    "Incident",
-                    "Security",
-                    "Attack",
-                    "Cyber",
-                    "Cybersecurity",
-                    "Ransomware",
-                    "Malware",
-                    "Hack",
-                    "Hackers",
-                    "Outage",
-                    "Leak",
-                    "Exposure",
-                    "Network",
-                }
-                for phrase in title_words:
-                    for token in phrase.split():
-                        if token not in stopwords:
-                            entities.append(token)
+        Note: EntityExtractor.extract_entities expects List[CyberEvent] and is async,
+        so external entity_extractor instances are not supported here.  The regex
+        fallback is always used instead.
+        """
+        entities = []
+
+        if self.entity_extractor is not None:
+            self.logger.warning(
+                "External entity_extractor is not supported in SimilarityCalculator; "
+                "using regex fallback"
+            )
+
+        # Always use the regex fallback
+        if event.title:
+            # Extract potential company names (simple heuristic)
+            # Look for capitalized words that might be company names
+            title_words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', event.title)
+            entities.extend(title_words)
+
+            stopwords = {
+                "Data",
+                "Breach",
+                "Incident",
+                "Security",
+                "Attack",
+                "Cyber",
+                "Cybersecurity",
+                "Ransomware",
+                "Malware",
+                "Hack",
+                "Hackers",
+                "Outage",
+                "Leak",
+                "Exposure",
+                "Network",
+            }
+            for phrase in title_words:
+                for token in phrase.split():
+                    if token not in stopwords:
+                        entities.append(token)
         
         return list(set(entities))  # Remove duplicates
     
@@ -614,14 +611,11 @@ Respond with JSON:
 """
     
     def _call_llm(self, prompt: str) -> str:
-        """Call LLM API (placeholder - implement with actual API)"""
-        # This is a placeholder - in real implementation, you would:
-        # 1. Import openai or your preferred LLM library
-        # 2. Make actual API call
-        # 3. Handle rate limiting, errors, etc.
-        
-        # For now, return a mock response
-        return '{"is_similar": false, "confidence": 0.6, "reasoning": "Mock LLM response"}'
+        """Call LLM API - not yet implemented."""
+        raise NotImplementedError(
+            "LLMArbiter._call_llm is not implemented. "
+            "Set api_key=None to use rule-based deduplication only."
+        )
     
     def _parse_llm_response(self, response: str, original_score: float) -> ArbiterDecision:
         """Parse LLM response into ArbiterDecision"""

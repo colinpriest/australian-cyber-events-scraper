@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from urllib.parse import urljoin, urlparse, parse_qs
+from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urljoin, urlparse, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,8 +29,9 @@ from cyber_data_collector.utils import RateLimiter
 class OAICDataSource(DataSource):
     """Australian Information Commissioner's Office (OAIC) media centre scraper for cyber-related regulatory actions."""
 
-    def __init__(self, config: DataSourceConfig, rate_limiter: RateLimiter, env_config: Dict[str, str | None]):
+    def __init__(self, config: DataSourceConfig, rate_limiter: RateLimiter, env_config: Dict[str, Optional[str]]):
         super().__init__(config, rate_limiter)
+        self.env_config = env_config
         self.base_url = "https://www.oaic.gov.au/news/media-centre"
         self.search_url = "https://www.oaic.gov.au/news/media-centre?query=&sort=dmetapublishedDateISO&num_ranks=1000"
 
@@ -42,7 +45,11 @@ class OAICDataSource(DataSource):
         try:
             await self.rate_limiter.wait("oaic_search")
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            response = requests.get(self.search_url, headers=headers, timeout=self.config.timeout)
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.get(self.search_url, headers=headers, timeout=self.config.timeout),
+            )
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
@@ -56,7 +63,6 @@ class OAICDataSource(DataSource):
                 pub_date_str = link_info.get('publication_date')
                 if pub_date_str:
                     try:
-                        from dateutil.parser import parse as dateutil_parse
                         from dateutil.relativedelta import relativedelta
                         pub_date = dateutil_parse(pub_date_str)
                         pub_date_only = pub_date.date()
@@ -159,8 +165,7 @@ class OAICDataSource(DataSource):
             text_content = container.get_text()
 
             # Look for date patterns in this container
-            import re
-            date_matches = re.findall(r'\\b\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\s+\\d{4}\\b', text_content, re.IGNORECASE)
+            date_matches = re.findall(r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b', text_content, re.IGNORECASE)
 
             if links and date_matches:
                 for link in links:
@@ -190,8 +195,6 @@ class OAICDataSource(DataSource):
 
     def _find_publication_date_near_link(self, link) -> Optional[str]:
         """Find publication date near a link element."""
-        import re
-
         # Check the link itself and nearby elements for dates
         elements_to_check = [link]
 
@@ -214,7 +217,7 @@ class OAICDataSource(DataSource):
         for elem in elements_to_check:
             if elem and hasattr(elem, 'get_text'):
                 text = elem.get_text()
-                date_matches = re.findall(r'\\b\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\s+\\d{4}\\b', text, re.IGNORECASE)
+                date_matches = re.findall(r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b', text, re.IGNORECASE)
                 if date_matches:
                     return date_matches[0]
 
@@ -236,8 +239,7 @@ class OAICDataSource(DataSource):
                     actual_url = query_params.get('url', [None])[0]
                     if actual_url:
                         # URL decode
-                        import urllib.parse
-                        return urllib.parse.unquote(actual_url)
+                        return unquote(actual_url)
 
             # Already a direct URL
             if url.startswith('https://www.oaic.gov.au/news/'):
@@ -342,7 +344,7 @@ class OAICDataSource(DataSource):
         # Fallback: extract first capitalized word/phrase
         words = title.split()
         for i, word in enumerate(words):
-            if word[0].isupper() and len(word) > 2:
+            if word and word[0].isupper() and len(word) > 2:
                 # Try to get a reasonable entity name
                 entity_words = [word]
                 for j in range(i+1, min(i+3, len(words))):
@@ -364,7 +366,7 @@ class OAICDataSource(DataSource):
         )
 
         data_source = EventSource(
-            source_id=f"oaic_{hash(url)}",
+            source_id=f"oaic_{hashlib.md5(url.encode()).hexdigest()[:16]}",
             source_type="OAIC",
             url=url,
             title=title,
