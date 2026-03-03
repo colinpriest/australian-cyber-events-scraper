@@ -35,19 +35,37 @@ def setup_logging(
     level: int = logging.INFO,
     stream_handler: Optional[logging.Handler] = None,
 ) -> None:
-    """Configure logging with consistent handlers and formatting."""
+    """Configure logging with consistent handlers and formatting.
 
+    Safe to call after third-party imports that may have already attached a
+    StreamHandler via ``logging.basicConfig()``.  Rather than bailing out when
+    handlers are already present, this function checks for each handler type
+    individually so the FileHandler is always registered when requested.
+    """
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     root_logger = logging.getLogger()
-    if root_logger.handlers:
-        logging.debug("Logging already configured, skipping setup_logging")
-        return
+    root_logger.setLevel(level)
 
-    handlers = [stream_handler or TqdmStreamHandler(sys.stderr)]
-    if log_file:
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
-
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=handlers,
+    # Add a stream handler only when none exists yet (avoids duplicate console output).
+    has_stream = any(
+        isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+        for h in root_logger.handlers
     )
+    if not has_stream:
+        sh = stream_handler or TqdmStreamHandler(sys.stderr)
+        sh.setFormatter(formatter)
+        root_logger.addHandler(sh)
+
+    # Always add the file handler when requested, unless one for the same path
+    # is already registered (guards against being called twice with the same file).
+    if log_file:
+        target = str(Path(log_file).resolve())
+        has_file = any(
+            isinstance(h, logging.FileHandler)
+            and str(Path(h.baseFilename).resolve()) == target
+            for h in root_logger.handlers
+        )
+        if not has_file:
+            fh = logging.FileHandler(log_file, encoding="utf-8")
+            fh.setFormatter(formatter)
+            root_logger.addHandler(fh)
