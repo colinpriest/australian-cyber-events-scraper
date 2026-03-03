@@ -13,13 +13,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
 import sqlite3
 import sys
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Literal
@@ -191,13 +194,23 @@ class ASDRiskClassifier:
             raise ValueError("OPENAI_API_KEY not found in environment variables or .env file")
         
         self.client = OpenAI(api_key=self.api_key)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        
+
         # Track API usage
         self.total_tokens = 0
         self.api_calls = 0
         self.cache_hits = 0
+
+        # Thread-safety
+        self._db_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+        self._semaphore = threading.Semaphore(10)
+
+        # Prompt-level cache: hash(prompt+model+temperature) -> classification result
+        # Ensures identical reruns skip the API call entirely
+        self._prompt_cache: Dict[str, Dict[str, Any]] = {}
+        self._temperature = 0.3  # Default temperature for cache key
     
     def close(self):
         """Close database connection."""
@@ -388,84 +401,105 @@ Return your response as a JSON object with this exact structure:
         
         return prompt
     
+    def _prompt_cache_key(self, prompt: str) -> str:
+        """Generate a cache key from prompt + model + temperature."""
+        raw = f"{self.model}|{self._temperature}|{prompt}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
     def classify_event(self, event: Dict[str, Any], force_reclassify: bool = False) -> Optional[Dict[str, Any]]:
-        """Classify a single event using ChatGPT."""
-        
+        """Classify a single event using ChatGPT. Thread-safe."""
+
         event_id = event['deduplicated_event_id']
-        
-        # Check cache first
+
+        # Check DB cache first (already-classified events)
         if not force_reclassify:
-            cached = self.get_cached_classification(event_id)
+            with self._db_lock:
+                cached = self.get_cached_classification(event_id)
             if cached:
-                self.cache_hits += 1
+                with self._stats_lock:
+                    self.cache_hits += 1
                 logger.debug(f"Using cached classification for event {event_id}")
                 return cached
-        
-        # Build prompt
+
+        # Build prompt and check prompt-level cache
         prompt = self.build_prompt(event)
-        
-        # Call OpenAI API with retry logic and structured outputs
+        cache_key = self._prompt_cache_key(prompt)
+
+        if cache_key in self._prompt_cache:
+            logger.debug(f"Prompt cache hit for event {event_id}")
+            with self._stats_lock:
+                self.cache_hits += 1
+            return self._prompt_cache[cache_key]
+
+        # Call OpenAI API with retry logic, semaphore, and structured outputs
         max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                logger.debug(f"Calling API for event {event_id} (attempt {attempt + 1})")
+        with self._semaphore:
+            for attempt in range(max_retries):
+                try:
+                    logger.debug(f"Calling API for event {event_id} (attempt {attempt + 1})")
 
-                # Use structured outputs with Pydantic model
-                # This forces the LLM to return valid data matching our schema
-                response = self.client.beta.chat.completions.parse(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an expert cybersecurity analyst specializing in ASD risk classification. You must classify cyber incidents according to the Australian Signals Directorate risk matrix framework using ONLY the valid categories provided."
+                    response = self.client.beta.chat.completions.parse(
+                        model=self.model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are an expert cybersecurity analyst specializing in ASD risk classification. You must classify cyber incidents according to the Australian Signals Directorate risk matrix framework using ONLY the valid categories provided."
+                            },
+                            {"role": "user", "content": prompt}
+                        ],
+                        response_format=ASDRiskClassification,
+                        temperature=self._temperature
+                    )
+
+                    parsed_classification = response.choices[0].message.parsed
+
+                    if parsed_classification is None:
+                        logger.warning(f"Failed to parse classification for event {event_id}, retrying...")
+                        if attempt < max_retries - 1:
+                            time.sleep(2 ** attempt)
+                            continue
+                        else:
+                            logger.error(f"Failed to get valid classification after {max_retries} attempts")
+                            return None
+
+                    # Track API usage (thread-safe)
+                    with self._stats_lock:
+                        self.api_calls += 1
+                        if hasattr(response, 'usage') and response.usage:
+                            self.total_tokens += response.usage.total_tokens
+                    if hasattr(response, 'usage') and response.usage:
+                        from cyber_data_collector.utils.token_tracker import tracker
+                        tracker.record(
+                            self.model, response.usage.prompt_tokens,
+                            response.usage.completion_tokens, context="asd_classification",
+                        )
+
+                    result = {
+                        'severity_category': parsed_classification.severity_category,
+                        'primary_stakeholder_category': parsed_classification.primary_stakeholder_category,
+                        'impact_type': parsed_classification.impact_type,
+                        'reasoning': {
+                            'severity_reasoning': parsed_classification.reasoning.severity_reasoning,
+                            'stakeholder_reasoning': parsed_classification.reasoning.stakeholder_reasoning,
+                            'impact_reasoning': parsed_classification.reasoning.impact_reasoning,
+                            'information_quality': parsed_classification.reasoning.information_quality
                         },
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format=ASDRiskClassification,
-                    temperature=0.3
-                )
+                        'confidence': parsed_classification.confidence
+                    }
 
-                # Parse structured response
-                parsed_classification = response.choices[0].message.parsed
+                    # Store in prompt-level cache
+                    self._prompt_cache[cache_key] = result
 
-                if parsed_classification is None:
-                    logger.warning(f"Failed to parse classification for event {event_id}, retrying...")
+                    logger.debug(f"Successfully classified event {event_id}")
+                    return result
+
+                except Exception as e:
+                    logger.error(f"API error for event {event_id} (attempt {attempt + 1}): {e}")
                     if attempt < max_retries - 1:
-                        time.sleep(2 ** attempt)  # Exponential backoff
+                        time.sleep(2 ** attempt)
                         continue
                     else:
-                        logger.error(f"Failed to get valid classification after {max_retries} attempts")
                         return None
-
-                # Track API usage
-                self.api_calls += 1
-                if hasattr(response, 'usage'):
-                    self.total_tokens += response.usage.total_tokens
-
-                # Convert Pydantic model to dict for consistency with existing code
-                result = {
-                    'severity_category': parsed_classification.severity_category,
-                    'primary_stakeholder_category': parsed_classification.primary_stakeholder_category,
-                    'impact_type': parsed_classification.impact_type,
-                    'reasoning': {
-                        'severity_reasoning': parsed_classification.reasoning.severity_reasoning,
-                        'stakeholder_reasoning': parsed_classification.reasoning.stakeholder_reasoning,
-                        'impact_reasoning': parsed_classification.reasoning.impact_reasoning,
-                        'information_quality': parsed_classification.reasoning.information_quality
-                    },
-                    'confidence': parsed_classification.confidence
-                }
-
-                logger.debug(f"Successfully classified event {event_id}")
-                return result
-
-            except Exception as e:
-                logger.error(f"API error for event {event_id} (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                    continue
-                else:
-                    return None
 
         return None
     
@@ -515,101 +549,115 @@ Return your response as a JSON object with this exact structure:
         return True
     
     def save_classification(self, event_id: str, classification: Dict[str, Any]) -> bool:
-        """Save classification to database."""
+        """Save classification to database. Thread-safe."""
         try:
-            cursor = self.conn.cursor()
-            
-            classification_id = str(uuid.uuid4())
-            reasoning_json = json.dumps(classification['reasoning'], ensure_ascii=False)
-            
-            query = """
-                INSERT OR REPLACE INTO ASDRiskClassifications (
+            with self._db_lock:
+                cursor = self.conn.cursor()
+
+                classification_id = str(uuid.uuid4())
+                reasoning_json = json.dumps(classification['reasoning'], ensure_ascii=False)
+
+                query = """
+                    INSERT OR REPLACE INTO ASDRiskClassifications (
+                        classification_id,
+                        deduplicated_event_id,
+                        severity_category,
+                        primary_stakeholder_category,
+                        impact_type,
+                        reasoning_json,
+                        confidence_score,
+                        model_used,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+
+                cursor.execute(query, (
                     classification_id,
-                    deduplicated_event_id,
-                    severity_category,
-                    primary_stakeholder_category,
-                    impact_type,
+                    event_id,
+                    classification['severity_category'],
+                    classification['primary_stakeholder_category'],
+                    classification['impact_type'],
                     reasoning_json,
-                    confidence_score,
-                    model_used,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            
-            cursor.execute(query, (
-                classification_id,
-                event_id,
-                classification['severity_category'],
-                classification['primary_stakeholder_category'],
-                classification['impact_type'],
-                reasoning_json,
-                classification['confidence'],
-                self.model,
-                datetime.now().isoformat()
-            ))
-            
-            self.conn.commit()
+                    classification['confidence'],
+                    self.model,
+                    datetime.now().isoformat()
+                ))
+
+                self.conn.commit()
             logger.debug(f"Saved classification for event {event_id}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error saving classification for event {event_id}: {e}")
-            self.conn.rollback()
+            with self._db_lock:
+                self.conn.rollback()
             return False
     
+    def _classify_and_save(self, event: Dict[str, Any], force_reclassify: bool) -> Optional[Dict[str, Any]]:
+        """Classify a single event and save the result. Used by thread pool."""
+        event_id = event['deduplicated_event_id']
+
+        # Check DB cache (thread-safe inside classify_event)
+        with self._db_lock:
+            cached_classification = None if force_reclassify else self.get_cached_classification(event_id)
+
+        if cached_classification is not None and not force_reclassify:
+            with self._stats_lock:
+                self.cache_hits += 1
+            return {'event': event, 'classification': cached_classification}
+
+        classification = self.classify_event(event, force_reclassify)
+
+        if classification:
+            if not self.save_classification(event_id, classification):
+                logger.warning(f"Failed to save classification for event {event_id}")
+                return None
+            return {'event': event, 'classification': classification}
+        else:
+            logger.warning(f"Failed to classify event {event_id}")
+            return None
+
     def process_events(self, limit: int = 5, force_reclassify: bool = False) -> List[Dict[str, Any]]:
-        """Process events and generate classifications."""
+        """Process events and generate classifications using concurrent threads."""
         # Prioritize unclassified events to ensure they get processed first
         events = self.get_events(limit, prioritize_unclassified=not force_reclassify)
-        
+
         if not events:
             logger.warning("No events found to process")
             return []
-        
+
         results = []
-        last_was_api_call = False
-        
-        for event in tqdm(events, desc="Classifying events"):
-            event_id = event['deduplicated_event_id']
-            
-            # Check if classification is already cached
-            cached_classification = None if force_reclassify else self.get_cached_classification(event_id)
-            needs_api_call = force_reclassify or cached_classification is None
-            
-            # Classify event (will use cache if available)
-            classification = self.classify_event(event, force_reclassify)
-            
-            if classification:
-                # Only save if it's a new classification (not from cache)
-                if cached_classification is None:
-                    # Save new classification to database
-                    if not self.save_classification(event_id, classification):
-                        logger.warning(f"Failed to save classification for event {event_id}")
-                        continue
-                
-                # Combine event data with classification
-                result = {
-                    'event': event,
-                    'classification': classification
-                }
-                results.append(result)
-                
-                # Rate limiting: wait 1 second after API calls (not cache hits)
-                if needs_api_call and last_was_api_call:
-                    time.sleep(1)
-                
-                last_was_api_call = needs_api_call
-            else:
-                logger.warning(f"Failed to classify event {event_id}")
-                last_was_api_call = False
-        
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {
+                executor.submit(self._classify_and_save, event, force_reclassify): event
+                for event in events
+            }
+
+            with tqdm(total=len(events), desc="Classifying events", unit="event") as pbar:
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result is not None:
+                            results.append(result)
+                            pbar.set_postfix({
+                                "classified": len(results),
+                                "api_calls": self.api_calls,
+                                "cache": self.cache_hits,
+                            })
+                    except Exception as exc:
+                        event = futures[future]
+                        logger.error(f"Classification failed for {event.get('deduplicated_event_id', '?')}: {exc}")
+                    pbar.update(1)
+
         # Log summary
         logger.info(f"\nProcessing Summary:")
         logger.info(f"  Events processed: {len(results)}")
         logger.info(f"  API calls made: {self.api_calls}")
         logger.info(f"  Cache hits: {self.cache_hits}")
+        logger.info(f"  Prompt cache entries: {len(self._prompt_cache)}")
         logger.info(f"  Total tokens used: {self.total_tokens}")
-        
+
         return results
     
     def export_results(self, results: List[Dict[str, Any]], output_dir: str = "risk_matrix") -> Tuple[str, str, List[str]]:

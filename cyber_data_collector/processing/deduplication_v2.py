@@ -78,7 +78,7 @@ class CyberEvent:
             self.urls = []
 
 from .entity_extractor import EntityExtractor
-from ..utils.validation import validate_records_affected
+from ..utils.validation import llm_validate_records_affected, validate_records_affected
 
 logger = logging.getLogger(__name__)
 
@@ -535,7 +535,7 @@ class SimilarityCalculator:
 class LLMArbiter:
     """LLM-based decision maker for uncertain similarity cases"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
         self.api_key = api_key
         self.model = model
         self.logger = logging.getLogger(f"{__name__}.LLMArbiter")
@@ -564,7 +564,7 @@ class LLMArbiter:
             response = self._call_llm(prompt)
             return self._parse_llm_response(response, algo_score)
         except Exception as e:
-            self.logger.warning(f"LLM arbiter failed: {e}, falling back to algorithmic score")
+            self.logger.error(f"LLM arbiter failed: {e}, falling back to algorithmic score")
             return ArbiterDecision(
                 is_similar=algo_score > 0.5,
                 confidence=0.5,
@@ -611,11 +611,27 @@ Respond with JSON:
 """
     
     def _call_llm(self, prompt: str) -> str:
-        """Call LLM API - not yet implemented."""
-        raise NotImplementedError(
-            "LLMArbiter._call_llm is not implemented. "
-            "Set api_key=None to use rule-based deduplication only."
+        """Call OpenAI API to evaluate event similarity."""
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are a cybersecurity analyst comparing breach reports. Respond only with valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=200,
         )
+        # Track token usage
+        from ..utils.token_tracker import tracker
+        if response.usage:
+            tracker.record(
+                self.model, response.usage.prompt_tokens,
+                response.usage.completion_tokens, context="dedup_arbiter",
+            )
+        return response.choices[0].message.content
     
     def _parse_llm_response(self, response: str, original_score: float) -> ArbiterDecision:
         """Parse LLM response into ArbiterDecision"""
@@ -1095,9 +1111,15 @@ class DeduplicationEngine:
             if event.records_affected and event.records_affected > max_records:
                 max_records = event.records_affected
 
-        # Validate the max_records value - use master title for context
+        # Validate the max_records value - use LLM fallback for uncertain cases
         if max_records > 0:
-            validated_records = validate_records_affected(max_records, master.title)
+            import os
+            validated_records = llm_validate_records_affected(
+                max_records, master.title,
+                org_name=master.victim_organization_name,
+                description=master.description or master.summary,
+                perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
+            )
             if validated_records != max_records:
                 self.logger.warning(
                     f"Merge: records_affected {max_records:,} rejected for '{master.title[:50]}' - "

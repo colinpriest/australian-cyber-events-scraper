@@ -6,6 +6,8 @@ client_secrets.json
 # Local tooling directories
 .conda/
 .claude/
+.codex/
+.cursor/
 .vscode/
 
 # Python cache

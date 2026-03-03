@@ -113,6 +113,14 @@ class EntityExtractor:
                 ),
                 timeout=60  # 60 second timeout
             )
+            # Track token usage from instructor-wrapped response
+            from cyber_data_collector.utils.token_tracker import tracker
+            raw = getattr(response, '_raw_response', None)
+            if raw and hasattr(raw, 'usage') and raw.usage:
+                tracker.record(
+                    "gpt-4o-mini", raw.usage.prompt_tokens,
+                    raw.usage.completion_tokens, context="entity_extraction",
+                )
         except asyncio.TimeoutError:
             self.logger.warning(f"Entity extraction timed out for event: {event.title[:50]}...")
             return event  # Return original event on timeout

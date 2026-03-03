@@ -224,6 +224,14 @@ CRITICAL REQUIREMENTS:
                 ),
                 timeout=timeout_seconds
             )
+            # Track token usage from instructor-wrapped response
+            from cyber_data_collector.utils.token_tracker import tracker
+            raw = getattr(response, '_raw_response', None)
+            if raw and hasattr(raw, 'usage') and raw.usage:
+                tracker.record(
+                    "gpt-4o-mini", raw.usage.prompt_tokens,
+                    raw.usage.completion_tokens, context="llm_classifier",
+                )
             return response
         except asyncio.TimeoutError:
             self.logger.warning(f"LLM request timed out after {timeout_seconds}s for: {request.title[:50]}...")

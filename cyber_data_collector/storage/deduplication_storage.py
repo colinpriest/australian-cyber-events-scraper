@@ -22,7 +22,7 @@ import json
 from ..processing.deduplication_v2 import DeduplicationResult, MergeGroup, ValidationError
 # Import the simplified CyberEvent from deduplication_v2
 from ..processing.deduplication_v2 import CyberEvent
-from ..utils.validation import validate_records_affected
+from ..utils.validation import llm_validate_records_affected
 
 logger = logging.getLogger(__name__)
 
@@ -50,28 +50,59 @@ class DeduplicationStorage:
         self._validate_schema()
     
     def _validate_schema(self) -> None:
-        """Validate that required tables exist and have correct schema"""
+        """Validate that required tables exist and have correct column schemas"""
         cursor = self.conn.cursor()
-        
+
         # Check for required tables
         required_tables = [
             'DeduplicatedEvents',
-            'EventDeduplicationMap', 
+            'EventDeduplicationMap',
             'DeduplicationClusters'
         ]
-        
+
         cursor.execute("""
-            SELECT name FROM sqlite_master 
+            SELECT name FROM sqlite_master
             WHERE type='table' AND name IN ({})
         """.format(','.join('?' * len(required_tables))), required_tables)
-        
+
         existing_tables = [row[0] for row in cursor.fetchall()]
         missing_tables = [t for t in required_tables if t not in existing_tables]
-        
+
         if missing_tables:
             self.logger.warning(f"Missing tables: {missing_tables}")
             # Create missing tables if needed
             self._create_missing_tables(missing_tables)
+
+        # Validate column schemas for existing tables (detect old/wrong schemas)
+        tables_to_recreate = []
+        expected_columns = {
+            'DeduplicationClusters': {
+                'cluster_id', 'deduplicated_event_id', 'cluster_size',
+                'average_similarity', 'deduplication_timestamp', 'algorithm_version',
+            },
+            'EventDeduplicationMap': {
+                'map_id', 'raw_event_id', 'enriched_event_id',
+                'deduplicated_event_id', 'contribution_type', 'similarity_score',
+                'data_source_weight', 'created_at',
+            },
+        }
+
+        for table_name, required_cols in expected_columns.items():
+            if table_name in existing_tables and table_name not in missing_tables:
+                cursor.execute(f"PRAGMA table_info({table_name})")
+                actual_cols = {row[1] for row in cursor.fetchall()}
+                missing_cols = required_cols - actual_cols
+                if missing_cols:
+                    self.logger.warning(
+                        f"Table {table_name} has wrong schema (missing columns: {missing_cols}). "
+                        f"Dropping and recreating."
+                    )
+                    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
+                    self.conn.commit()
+                    tables_to_recreate.append(table_name)
+
+        if tables_to_recreate:
+            self._create_missing_tables(tables_to_recreate)
     
     def _create_missing_tables(self, missing_tables: List[str]) -> None:
         """Create missing tables with proper schema"""
@@ -228,10 +259,14 @@ class DeduplicationStorage:
             # Generate unique deduplicated event ID
             deduplicated_event_id = str(uuid.uuid4())
             
-            # Validate records_affected using reasonableness rules
-            validated_records = validate_records_affected(
+            # Validate records_affected with LLM fallback for uncertain cases
+            import os
+            validated_records = llm_validate_records_affected(
                 event.records_affected,
-                event.title
+                event.title,
+                org_name=event.victim_organization_name,
+                description=event.description or event.summary,
+                perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
             )
             if validated_records != event.records_affected and event.records_affected is not None:
                 self.logger.warning(

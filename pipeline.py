@@ -57,6 +57,11 @@ def _build_pipeline_args(
 def _run_pipeline(args: SimpleNamespace) -> int:
     pipeline = UnifiedPipeline(args.db_path)
     success = asyncio.run(pipeline.run_pipeline(args))
+
+    # Print API token usage and cost report
+    from cyber_data_collector.utils.token_tracker import tracker
+    tracker.log_report()
+
     return 0 if success else 1
 
 

@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,19 +34,33 @@ from llm_extractor import extract_event_details_with_llm
 from cyber_data_collector import CyberDataCollector, CollectionConfig, DateRange
 from cyber_data_collector.models.config import DataSourceConfig
 from cyber_data_collector.utils import ConfigManager, setup_logging
-from cyber_data_collector.utils.validation import safe_json_dumps
+from cyber_data_collector.utils.validation import (
+    safe_bool,
+    safe_date,
+    safe_float,
+    safe_int,
+    safe_json_dumps,
+    safe_str,
+    validate_enriched_event_row,
+    validate_enrichment_data_for_storage,
+)
 from rf_event_filter import RfEventFilter
 
 
-# Configure logging with Unicode support
+# Configure logging with Unicode support + tqdm-safe output
 class UnicodeStreamHandler(logging.StreamHandler):
     def emit(self, record):
         try:
             msg = self.format(record)
             # Remove Unicode characters that cause issues on Windows
             msg = msg.encode('ascii', errors='replace').decode('ascii')
-            self.stream.write(msg + self.terminator)
-            self.flush()
+            # Use tqdm.write() so log lines don't corrupt active progress bars
+            try:
+                from tqdm import tqdm as _tqdm
+                _tqdm.write(msg, file=self.stream)
+            except ImportError:
+                self.stream.write(msg + self.terminator)
+                self.flush()
         except Exception:
             self.handleError(record)
 
@@ -431,18 +446,29 @@ class EventDiscoveryEnrichmentPipeline:
                         logger.warning(f"[WARNING] Failed to load enriched event {enriched_event_id}: {e}")
 
                 logger.info(f"[PIPELINE] Loaded {len(enriched_events_from_db)} enriched events for deduplication for {year}-{month:02d}")
-                # Convert database records back to CyberEvent objects for deduplication
 
+                # Validate all database rows before processing
+                enriched_events_from_db = [
+                    validate_enriched_event_row(row) for row in enriched_events_from_db
+                ]
+
+                # Convert database records back to CyberEvent objects for deduplication
                 enriched_cyber_events = []
                 for db_event in enriched_events_from_db:
                     # Find corresponding processed event to get full object structure
-                    matching_event = enriched_event_map.get(db_event['enriched_event_id'])
+                    event_id = safe_str(db_event.get('enriched_event_id'))
+                    if not event_id:
+                        logger.warning("[DEDUP] Skipping db_event with missing enriched_event_id")
+                        continue
+
+                    matching_event = enriched_event_map.get(event_id)
 
                     if matching_event:
                         # Create a copy and update with database values
                         event_copy = matching_event.model_copy(deep=True)
-                        if db_event['event_date']:
-                            event_copy.event_date = datetime.fromisoformat(db_event['event_date'].replace('Z', '+00:00')).date()
+                        parsed_date = safe_date(db_event.get('event_date'), field_name='event_date')
+                        if parsed_date:
+                            event_copy.event_date = parsed_date
                         enriched_cyber_events.append(event_copy)
 
                 # Step 7: Store enriched events (no deduplication yet)
@@ -481,6 +507,7 @@ class EventDiscoveryEnrichmentPipeline:
 
         except Exception as e:
             logger.error(f"[ERROR] Discovery failed for {year}-{month:02d}: {e}")
+            logger.error(f"[TRACEBACK] {traceback.format_exc()}")
             self.stats['errors'] += 1
             # Don't mark as processed if there was an error
             raise
@@ -660,6 +687,17 @@ class EventDiscoveryEnrichmentPipeline:
                 'entities': entities  # Pass entities to be created in one transaction
             }
 
+            # Validate and coerce all data types before database insertion
+            entities_backup = enriched_data.pop('entities', [])
+            primary_org = getattr(event, 'primary_entity', None)
+            primary_org_name = getattr(primary_org, 'name', None) if primary_org else None
+            enriched_data = validate_enrichment_data_for_storage(
+                enriched_data, event_title=title,
+                org_name=primary_org_name,
+                perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
+            )
+            enriched_data['entities'] = entities_backup
+
             logger.debug(f"[ENRICHED] Calling create_enriched_event with {len(entities)} entities...")
             # Store in database using the correct method
             enriched_event_id = self.db.create_enriched_event(raw_event_id, enriched_data)
@@ -712,6 +750,58 @@ class EventDiscoveryEnrichmentPipeline:
                     else:
                         logger.warning(f"[WARNING] Event '{event.title[:30]}...' missing event_date - will be NULL in database")
 
+                    # Validate all values before INSERT to prevent type errors
+                    title_val = safe_str(event.title, default='Untitled Event', field_name='title')
+                    desc_val = safe_str(event.description, field_name='description')
+                    summary_val = safe_str(getattr(event, 'summary', None), field_name='summary')
+                    event_type_val = safe_str(event.event_type, field_name='event_type') if hasattr(event, 'event_type') else None
+                    severity_val = safe_str(event.severity, field_name='severity') if hasattr(event, 'severity') else None
+
+                    records_affected_val = None
+                    if event.financial_impact:
+                        records_affected_val = safe_int(
+                            event.financial_impact.customers_affected,
+                            field_name='records_affected'
+                        )
+
+                    is_australian_val = safe_bool(
+                        getattr(event, 'australian_relevance', False),
+                        field_name='is_australian_event'
+                    )
+
+                    confidence_val = 0.7
+                    if hasattr(event, 'confidence') and event.confidence:
+                        confidence_val = safe_float(
+                            event.confidence.overall, default=0.7,
+                            field_name='confidence_score'
+                        )
+                    confidence_val = max(0.0, min(1.0, confidence_val or 0.7))
+
+                    aus_relevance_raw = getattr(event, 'australian_relevance', None)
+                    if isinstance(aus_relevance_raw, (int, float)):
+                        aus_relevance_val = safe_float(aus_relevance_raw, default=0.0, field_name='australian_relevance_score')
+                    else:
+                        aus_relevance_val = 1.0 if safe_bool(aus_relevance_raw, field_name='australian_relevance') else 0.0
+                    aus_relevance_val = max(0.0, min(1.0, aus_relevance_val or 0.0))
+
+                    total_sources_val = safe_int(
+                        len(event.data_sources) if hasattr(event, 'data_sources') and event.data_sources else 1,
+                        default=1, field_name='total_data_sources'
+                    )
+                    contributing_raw_val = safe_int(
+                        event.contributing_raw_events, default=1,
+                        field_name='contributing_raw_events'
+                    )
+                    contributing_enriched_val = safe_int(
+                        event.contributing_enriched_events, default=1,
+                        field_name='contributing_enriched_events'
+                    )
+                    similarity_val = safe_float(
+                        getattr(event, 'similarity_score', 1.0), default=1.0,
+                        field_name='similarity_score'
+                    )
+                    similarity_val = max(0.0, min(1.0, similarity_val or 1.0))
+
                     cursor.execute("""
                         INSERT INTO DeduplicatedEvents (
                             deduplicated_event_id, master_enriched_event_id, title, description,
@@ -724,21 +814,21 @@ class EventDiscoveryEnrichmentPipeline:
                     """, (
                         deduplicated_event_id,
                         master_enriched_event_id,
-                        event.title,
-                        event.description,
-                        getattr(event, 'summary', None),
-                        str(event.event_type) if hasattr(event, 'event_type') else None,
-                        str(event.severity) if hasattr(event, 'severity') else None,
+                        title_val,
+                        desc_val,
+                        summary_val,
+                        event_type_val,
+                        severity_val,
                         event_date_value,
-                        event.financial_impact.customers_affected if event.financial_impact else None,
-                        getattr(event, 'australian_relevance', False),
+                        records_affected_val,
+                        is_australian_val,
                         True,
-                        event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
-                        getattr(event, 'australian_relevance', 0.0) if isinstance(getattr(event, 'australian_relevance', None), (int, float)) else (1.0 if getattr(event, 'australian_relevance', False) else 0.0),
-                        len(event.data_sources) if hasattr(event, 'data_sources') and event.data_sources else 1,
-                        event.contributing_raw_events,
-                        event.contributing_enriched_events,
-                        getattr(event, 'similarity_score', 1.0),
+                        confidence_val,
+                        aus_relevance_val,
+                        total_sources_val,
+                        contributing_raw_val,
+                        contributing_enriched_val,
+                        similarity_val,
                         'LLM_Enhanced',
                         'Active',
                         datetime.now().isoformat(),
@@ -771,6 +861,7 @@ class EventDiscoveryEnrichmentPipeline:
 
         except Exception as e:
             logger.warning(f"[WARNING] Failed to store deduplicated events: {e}")
+            logger.warning(f"[TRACEBACK] {traceback.format_exc()}")
 
         return stored_count, deduplicated_event_ids
 

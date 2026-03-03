@@ -12,7 +12,7 @@ import json
 from typing import Dict, Any
 from datetime import datetime
 from openai import OpenAI
-from cyber_data_collector.utils.validation import validate_records_affected
+from cyber_data_collector.utils.validation import llm_validate_records_affected
 
 
 class GPT4oEnricher:
@@ -556,15 +556,28 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
                 response_format={"type": "json_object"}  # Force JSON output
             )
 
+            # Track token usage
+            from cyber_data_collector.utils.token_tracker import tracker
+            if response.usage:
+                tracker.record(
+                    self.model, response.usage.prompt_tokens,
+                    response.usage.completion_tokens, context="gpt4o_enrichment",
+                )
+
             # Parse JSON response
             result = json.loads(response.choices[0].message.content)
 
-            # Apply validation to records_affected
+            # Apply validation to records_affected with LLM fallback
             if 'incident' in result and 'records_affected' in result['incident']:
+                import os
                 original_value = result['incident']['records_affected']
-                validated_value = validate_records_affected(
+                victim_org = result.get('victim', {}).get('organization')
+                validated_value = llm_validate_records_affected(
                     original_value,
-                    content.get('title', 'Unknown Event')
+                    content.get('title', 'Unknown Event'),
+                    org_name=victim_org,
+                    description=content.get('clean_summary') or content.get('full_text', '')[:500],
+                    perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
                 )
                 if validated_value != original_value and original_value is not None:
                     self.logger.warning(

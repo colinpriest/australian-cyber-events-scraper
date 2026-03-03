@@ -288,7 +288,18 @@ CRITICAL RULES:
                 )
 
                 if response.status_code == 200:
-                    content = response.json()['choices'][0]['message']['content']
+                    resp_json = response.json()
+                    # Track token usage
+                    from cyber_data_collector.utils.token_tracker import tracker
+                    usage = resp_json.get('usage', {})
+                    if usage:
+                        tracker.record(
+                            "sonar-pro",
+                            usage.get('prompt_tokens', 0),
+                            usage.get('completion_tokens', 0),
+                            context="perplexity_fact_check",
+                        )
+                    content = resp_json['choices'][0]['message']['content']
 
                     # Clean markdown formatting
                     if content.startswith('```json'):
