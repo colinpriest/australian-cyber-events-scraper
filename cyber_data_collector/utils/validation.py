@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import json
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -253,12 +253,21 @@ def validate_enrichment_data_for_storage(
         validated.get("records_affected"), field_name="records_affected"
     )
     # Apply domain-level validation with optional LLM fallback
-    validated["records_affected"] = llm_validate_records_affected(
+    records_value, is_cyber_incident = llm_validate_records_affected(
         validated["records_affected"], event_title,
         org_name=org_name,
         description=validated.get("description"),
         perplexity_api_key=perplexity_api_key,
     )
+    validated["records_affected"] = records_value
+    # If Perplexity explicitly confirmed this is not a cyber incident, reject the event
+    if not is_cyber_incident:
+        logger.warning(
+            "Perplexity confirmed '%s' is not a cyber incident — marking event as rejected.",
+            event_title[:80],
+        )
+        validated["is_australian_event"] = False
+        validated["is_specific_event"] = False
 
     # Ensure boolean fields
     validated["is_australian_event"] = safe_bool(validated.get("is_australian_event"), default=False)
@@ -495,7 +504,7 @@ def llm_validate_records_affected(
     org_name: Optional[str] = None,
     description: Optional[str] = None,
     perplexity_api_key: Optional[str] = None,
-) -> Optional[int]:
+) -> Tuple[Optional[int], bool]:
     """Validate records_affected with an LLM fallback via Perplexity.
 
     First runs the rule-based ``validate_records_affected``.  If the value is
@@ -512,17 +521,23 @@ def llm_validate_records_affected(
 
     Graceful degradation: no API key → identical behaviour to
     ``validate_records_affected``.
+
+    Returns:
+        A ``(records_affected, is_cyber_incident)`` tuple.  ``is_cyber_incident``
+        is ``False`` only when Perplexity explicitly determines the event is not
+        a cyber security incident; it defaults to ``True`` in all other cases so
+        that the caller does not reject events on uncertainty alone.
     """
     # 1. Run rule-based validation first
     rule_result = validate_records_affected(value, event_title)
 
     if rule_result is not None:
         # Rule-based validation accepted the value – nothing more to do
-        return rule_result
+        return rule_result, True
 
     # value was rejected.  If we have no LLM key, return the rejection.
     if value is None or not perplexity_api_key:
-        return None
+        return None, True
 
     # 2. Call Perplexity to verify
     try:
@@ -585,7 +600,7 @@ def llm_validate_records_affected(
                 "Perplexity records_affected validation failed (HTTP %s): %s",
                 resp.status_code, resp.text[:200],
             )
-            return None
+            return None, True
 
         # Track token usage
         from cyber_data_collector.utils.token_tracker import tracker
@@ -621,14 +636,14 @@ def llm_validate_records_affected(
             event_title[:60], is_cyber, is_plausible, org_category, reasoning,
         )
 
-        # If the event is not a cyber incident, reject records_affected entirely
+        # If the event is not a cyber incident, reject the event entirely
         if not is_cyber:
             logger.warning(
                 "Perplexity determined '%s' is NOT a cyber security incident: %s. "
-                "Setting records_affected to NULL.",
+                "Event will be rejected.",
                 event_title[:60], reasoning,
             )
-            return None
+            return None, False
 
         # 3. Dynamically update org lists based on Perplexity's assessment
         org_key = (org_name or event_title or "").lower().strip()
@@ -651,24 +666,24 @@ def llm_validate_records_affected(
                     "Perplexity corrected records_affected from %s to %s for '%s'",
                     value, corrected_int, event_title[:60],
                 )
-                return corrected_int
+                return corrected_int, True
 
         if is_plausible:
             logger.info(
                 "Perplexity accepted records_affected=%s for '%s' (rule-based had rejected)",
                 f"{value:,}", event_title[:60],
             )
-            return value
+            return value, True
 
         logger.info(
             "Perplexity also rejected records_affected=%s for '%s': %s",
             f"{value:,}", event_title[:60], reasoning,
         )
-        return None
+        return None, True
 
     except Exception as e:
         logger.error("Perplexity records_affected validation error: %s", e)
-        return None
+        return None, True
 
 
 def safe_json_dumps(value: Any, context: str, **kwargs: Any) -> str:

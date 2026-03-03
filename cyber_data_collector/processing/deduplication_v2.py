@@ -1114,7 +1114,7 @@ class DeduplicationEngine:
         # Validate the max_records value - use LLM fallback for uncertain cases
         if max_records > 0:
             import os
-            validated_records = llm_validate_records_affected(
+            validated_records, _ = llm_validate_records_affected(
                 max_records, master.title,
                 org_name=master.victim_organization_name,
                 description=master.description or master.summary,

@@ -261,7 +261,7 @@ class DeduplicationStorage:
             
             # Validate records_affected with LLM fallback for uncertain cases
             import os
-            validated_records = llm_validate_records_affected(
+            validated_records, _ = llm_validate_records_affected(
                 event.records_affected,
                 event.title,
                 org_name=event.victim_organization_name,
