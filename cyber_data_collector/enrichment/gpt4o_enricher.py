@@ -572,7 +572,7 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
                 import os
                 original_value = result['incident']['records_affected']
                 victim_org = result.get('victim', {}).get('organization')
-                validated_value = llm_validate_records_affected(
+                validated_value, _ = llm_validate_records_affected(
                     original_value,
                     content.get('title', 'Unknown Event'),
                     org_name=victim_org,
@@ -582,7 +582,8 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
                 if validated_value != original_value and original_value is not None:
                     self.logger.warning(
                         f"Adjusted records_affected from {original_value:,} to "
-                        f"{validated_value:,} for event: {content.get('title', '')}"
+                        f"{validated_value if validated_value is not None else 'NULL'} "
+                        f"for event: {content.get('title', '')}"
                     )
                 result['incident']['records_affected'] = validated_value
 
