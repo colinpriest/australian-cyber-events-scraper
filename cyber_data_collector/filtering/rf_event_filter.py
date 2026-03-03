@@ -11,10 +11,11 @@ from __future__ import annotations
 import pickle
 import logging
 import re
+import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -61,30 +62,86 @@ class RfEventFilter:
         # Load models
         self._load_models()
     
+    # Validation callables keyed by filename.  Each receives the unpickled
+    # object and returns True when the object looks usable.
+    _VALIDATORS: Dict[str, Any] = {
+        'random_forest_filter.pkl': lambda obj: (
+            callable(getattr(obj, 'predict', None))
+            and callable(getattr(obj, 'predict_proba', None))
+            and hasattr(obj, 'estimators_')
+        ),
+        'source_type_encoder.pkl': lambda obj: (
+            callable(getattr(obj, 'transform', None))
+            and hasattr(obj, 'classes_')
+        ),
+        'text_vectorizer.pkl': lambda obj: (
+            callable(getattr(obj, 'transform', None))
+            and hasattr(obj, 'vocabulary_')
+        ),
+    }
+
+    def _load_pickle(self, path: Path) -> Any:
+        """Load a pickle file, re-pickling it when a sklearn version mismatch is detected.
+
+        If the warning fires the loaded object is validated via ``_VALIDATORS``.
+        A valid object is re-pickled to silence the warning on future runs.
+        An invalid object raises ``RuntimeError`` and stops the script.
+        """
+        from sklearn.exceptions import InconsistentVersionWarning
+
+        caught_version_warnings: list = []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", InconsistentVersionWarning)
+            with open(path, 'rb') as f:
+                obj = pickle.load(f)
+            caught_version_warnings = [
+                w for w in caught
+                if issubclass(w.category, InconsistentVersionWarning)
+            ]
+
+        if not caught_version_warnings:
+            return obj
+
+        # Version mismatch detected — validate before trusting the object.
+        validator = self._VALIDATORS.get(path.name)
+        is_valid = validator(obj) if validator is not None else True
+
+        if not is_valid:
+            raise RuntimeError(
+                f"Model file '{path}' failed validation after a sklearn version mismatch. "
+                f"The loaded object appears corrupt or incompatible. "
+                f"Re-train the model and re-save it with the current sklearn version. "
+                f"Original warning: {caught_version_warnings[0].message}"
+            )
+
+        # Valid — re-pickle to silence the warning on future runs.
+        with open(path, 'wb') as f:
+            pickle.dump(obj, f)
+        logger.info(
+            "Re-pickled '%s' to the current sklearn version (mismatch: %s)",
+            path.name, caught_version_warnings[0].message,
+        )
+        return obj
+
     def _load_models(self):
         """Load the trained Random Forest model and preprocessing components."""
         try:
             model_path = self.model_dir / 'random_forest_filter.pkl'
             encoder_path = self.model_dir / 'source_type_encoder.pkl'
             vectorizer_path = self.model_dir / 'text_vectorizer.pkl'
-            
+
             if not all(path.exists() for path in [model_path, encoder_path, vectorizer_path]):
                 raise FileNotFoundError(f"Model files not found in {self.model_dir}")
-            
+
             logger.info("Loading Random Forest filter models...")
-            
-            with open(model_path, 'rb') as f:
-                self.model = pickle.load(f)
-            
-            with open(encoder_path, 'rb') as f:
-                self.source_type_encoder = pickle.load(f)
-            
-            with open(vectorizer_path, 'rb') as f:
-                self.text_vectorizer = pickle.load(f)
-            
+
+            self.model = self._load_pickle(model_path)
+            self.source_type_encoder = self._load_pickle(encoder_path)
+            self.text_vectorizer = self._load_pickle(vectorizer_path)
+
             self.is_loaded = True
             logger.info("Random Forest filter models loaded successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to load Random Forest models: {e}")
             self.is_loaded = False
