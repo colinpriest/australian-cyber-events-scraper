@@ -193,19 +193,6 @@ class DeduplicationMigration:
                 conn.commit()
                 logger.info("✅ Cleared existing deduplicated events and ASD classifications")
 
-                # Read and execute the migration SQL
-                migration_sql_path = "database_migrations/add_deduplication_constraints.sql"
-                if os.path.exists(migration_sql_path):
-                    with open(migration_sql_path, 'r') as f:
-                        sql_content = f.read()
-
-                    # Execute the migration
-                    cursor.executescript(sql_content)
-                    conn.commit()
-                    logger.info("✅ Database constraints applied successfully")
-                else:
-                    logger.warning("⚠️ Migration SQL file not found, skipping constraints")
-
             self.migration_report['steps_completed'].append('constraints_applied')
             return True
 
