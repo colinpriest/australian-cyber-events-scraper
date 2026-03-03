@@ -14,7 +14,7 @@ This script:
 6. Validates the results and generates a report
 
 Usage:
-    python run_global_deduplication.py [--db-path PATH] [--backup-path PATH] [--dry-run]
+    python scripts/run_global_deduplication.py [--db-path PATH] [--backup-path PATH] [--dry-run]
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.processing.deduplication_v2 import DeduplicationEngine, LLMArbiter, DeduplicationValidator
 from cyber_data_collector.storage.deduplication_storage import DeduplicationStorage

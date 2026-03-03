@@ -26,9 +26,9 @@ if sys.platform == "win32" and sys.stdout.encoding != "utf-8":
     import codecs
     sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer)
 
-from cyber_event_data_v2 import CyberEventDataV2
-from entity_scraper import PlaywrightScraper
-from llm_extractor import extract_event_details_with_llm
+from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.utils.entity_scraper import PlaywrightScraper
+from cyber_data_collector.utils.llm_extractor import extract_event_details_with_llm
 
 # Data collection imports
 from cyber_data_collector import CyberDataCollector, CollectionConfig, DateRange
@@ -44,7 +44,7 @@ from cyber_data_collector.utils.validation import (
     validate_enriched_event_row,
     validate_enrichment_data_for_storage,
 )
-from rf_event_filter import RfEventFilter
+from cyber_data_collector.filtering.rf_event_filter import RfEventFilter
 
 
 # Configure logging with Unicode support + tqdm-safe output
@@ -682,7 +682,7 @@ class EventDiscoveryEnrichmentPipeline:
                 'is_australian_event': is_australian,  # NOT NULL - guaranteed boolean
                 'is_specific_event': is_specific,  # NOT NULL - guaranteed boolean
                 'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
-                'australian_relevance_score': getattr(event, 'australian_relevance', 0.0) if hasattr(getattr(event, 'australian_relevance', None), '__float__') else (1.0 if getattr(event, 'australian_relevance', False) else 0.0),
+                'australian_relevance_score': float(getattr(event, 'australian_relevance', 0.0)) if isinstance(getattr(event, 'australian_relevance', None), (int, float)) and not isinstance(getattr(event, 'australian_relevance', None), bool) else (1.0 if getattr(event, 'australian_relevance', False) else 0.0),
                 'status': 'Active',
                 'entities': entities  # Pass entities to be created in one transaction
             }

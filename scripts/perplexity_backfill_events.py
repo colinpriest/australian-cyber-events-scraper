@@ -10,7 +10,7 @@ This script:
 5. Triggers re-deduplication after enrichment
 
 Usage:
-    python perplexity_backfill_events.py [--limit N] [--priority-only] [--dry-run]
+    python scripts/perplexity_backfill_events.py [--limit N] [--priority-only] [--dry-run]
 """
 
 import argparse
@@ -23,10 +23,7 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent))
-
-from cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.utils import ConfigManager
 

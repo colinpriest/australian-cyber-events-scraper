@@ -76,95 +76,66 @@ python run_full_pipeline.py --dashboard-only
 | `python run_full_pipeline.py` | Full pipeline with all 5 phases |
 | `python run_full_pipeline.py --discover-only` | Discovery phase only (auto-enriches with Perplexity) |
 | `python run_full_pipeline.py --dashboard-only` | Generate dashboard from existing data |
-| `python asd_risk_classifier.py` | Classify events with ASD risk matrix |
-| `python build_static_dashboard.py` | Generate interactive HTML dashboard |
+| `python scripts/asd_risk_classifier.py` | Classify events with ASD risk matrix |
+| `python scripts/build_static_dashboard.py` | Generate interactive HTML dashboard |
 | `pytest` | Run test suite |
 
 ## Project Structure
 
 ```
 australian-cyber-events-scraper/
-├── run_full_pipeline.py           # MAIN ENTRY POINT: unified pipeline (all phases)
-├── pipeline.py                     # Simplified CLI wrapper (refresh/status/rebuild)
-├── project_status.py               # Status reporter utility
-├── asd_risk_classifier.py          # ASD risk classification standalone
-├── build_static_dashboard.py       # Dashboard HTML generation
-├── wipe_database.py                # Database reset utility
-├── requirements.txt                # Python dependencies
+├── pipeline.py                    # Simplified CLI entry point (refresh/status/rebuild)
+├── run_full_pipeline.py           # Advanced 5-phase pipeline entry point
+├── requirements.txt
 │
-├── cyber_data_collector/           # MAIN MODULE: core collection and processing framework
-│   ├── __init__.py
-│   ├── datasources/                # Data source implementations
-│   │   ├── base.py                 # Base DataSource class
-│   │   ├── perplexity.py           # Perplexity AI integration
-│   │   ├── oaic.py                 # OAIC (Office of Australian Info Commissioner)
-│   │   ├── google_search.py        # Google Custom Search API
-│   │   ├── webber_insurance.py     # Webber Insurance scraper
-│   │   └── gdelt.py                # GDELT BigQuery integration (expensive)
-│   │
-│   ├── enrichment/                 # High-quality enrichment pipeline (5-stage process)
-│   │   ├── high_quality_enrichment_pipeline.py  # Main orchestrator
-│   │   ├── content_acquisition.py  # Multi-tier content scraping (newspaper3k → trafilatura → BeautifulSoup)
-│   │   ├── gpt4o_enricher.py       # Stage 2: GPT-4o primary extraction
-│   │   ├── perplexity_fact_checker.py # Stage 3: Perplexity fact-checking
-│   │   ├── enrichment_validator.py # Stage 4: Validation and confidence scoring
-│   │   └── enrichment_audit_storage.py # Audit trail for all enrichment stages
-│   │
-│   ├── processing/                 # Event processing and enrichment components
-│   │   ├── entity_extractor.py     # Entity (victim, threat actor) extraction
-│   │   ├── llm_classifier.py       # Event type and severity classification
-│   │   ├── deduplication.py        # V1 deduplication algorithm
-│   │   ├── deduplication_v2.py     # V2 entity-based deduplication (current)
-│   │   ├── perplexity_enrichment.py # Perplexity enrichment module
-│   │   └── perplexity_enricher.py  # Alternative enricher implementation
-│   │
-│   ├── filtering/                  # Event quality filtering
-│   │   ├── progressive_filter.py   # Multi-stage filtering logic
-│   │   └── confidence_filter.py    # Confidence-based filtering
-│   │
-│   ├── storage/                    # Data persistence layer
-│   │   ├── database.py             # SQLite database operations
-│   │   ├── deduplication_storage.py # Deduplication tracking
-│   │   └── cache.py                # Caching layer
-│   │
-│   ├── models/                     # Data models and schemas
-│   │   ├── config.py               # Configuration models
-│   │   ├── events.py               # CyberEvent, EventSeverity, CyberEventType enums
-│   │   └── vulnerability_taxonomy.py # Attack type taxonomy
-│   │
-│   ├── pipelines/                  # High-level pipeline implementations
-│   │   └── discovery.py            # Discovery and initial processing pipeline
-│   │
-│   ├── utils/                      # Utility and helper modules
-│   │   ├── config_manager.py       # Environment and config management
-│   │   ├── rate_limiter.py         # API rate limiting
-│   │   ├── thread_manager.py       # Concurrent processing management
-│   │   ├── validation.py           # Data validation utilities
-│   │   ├── pdf_extractor.py        # PDF content extraction
-│   │   └── logging_config.py       # Logging configuration
-│   │
-│   └── tests/                      # Test suite
-│       ├── test_deduplication.py
-│       ├── test_deduplication_v2.py
-│       ├── test_enrichment_audit_storage_validation.py
-│       └── test_validation_utils.py
+├── cyber_data_collector/          # Core package
+│   ├── datasources/               # Perplexity, OAIC, Google Search, Webber, GDELT
+│   ├── enrichment/                # High-quality 5-stage enrichment pipeline
+│   │   ├── high_quality_enrichment_pipeline.py
+│   │   ├── content_acquisition.py
+│   │   ├── gpt4o_enricher.py
+│   │   ├── perplexity_fact_checker.py
+│   │   ├── enrichment_validator.py
+│   │   └── enrichment_audit_storage.py
+│   ├── filtering/
+│   │   ├── rf_event_filter.py     # Random Forest ML filter
+│   │   ├── progressive_filter.py
+│   │   └── confidence_filter.py
+│   ├── models/                    # CyberEvent, EventSeverity, CyberEventType
+│   ├── pipelines/
+│   │   └── discovery.py           # Discovery and initial processing pipeline
+│   ├── processing/                # LLM classification, deduplication, enrichment
+│   ├── storage/
+│   │   ├── cyber_event_data_v2.py # Thread-safe SQLite database operations
+│   │   ├── database.py
+│   │   └── deduplication_storage.py
+│   ├── utils/
+│   │   ├── entity_scraper.py      # Playwright-based web scraping
+│   │   ├── llm_extractor.py       # GPT-4o-mini event extraction
+│   │   └── ...
+│   └── tests/
 │
-├── machine_learning_filter/        # ML model artifacts
-│   ├── random_forest_filter.pkl    # Trained Random Forest model
-│   ├── source_type_encoder.pkl     # Feature encoder
-│   ├── text_vectorizer.pkl         # TF-IDF vectorizer
-│   └── event_training_data.xlsx    # Training dataset
+├── scripts/                       # Utility scripts (run from project root)
+│   ├── asd_risk_classifier.py     # Standalone ASD risk classification
+│   ├── build_static_dashboard.py  # HTML dashboard generation
+│   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
+│   ├── project_status.py          # Pipeline status reporter
+│   ├── run_global_deduplication.py    # Standalone deduplication runner
+│   ├── wipe_database.py           # Database reset utility
+│   ├── oaic/
+│   │   ├── oaic_data_scraper.py       # OAIC PDF report scraper
+│   │   ├── OAIC_dashboard_scraper.py  # OAIC Power BI dashboard scraper
+│   │   └── cleanup_oaic_data.py       # OAIC data validation
+│   ├── export/
+│   │   ├── export_events_excel.py     # Export to Excel with LLM summaries
+│   │   └── export_cyber_events.py     # Full database export (CSV/Excel)
+│   └── setup/
+│       └── setup_bigquery_auth.py     # BigQuery authentication setup
 │
-├── instance/                       # Database and runtime files
-│   └── cyber_events.db             # SQLite database
-│
-├── dashboard/                      # Generated dashboard
-│   └── index.html                  # Static HTML dashboard
-│
-├── .claude/                        # Claude Code configuration
-│   └── settings.local.json         # Local Claude settings
-│
-└── documentation/                  # Additional documentation
+├── machine_learning_filter/       # Trained Random Forest model artifacts
+├── instance/                      # SQLite database (gitignored)
+├── dashboard/                     # Generated HTML dashboard (gitignored)
+└── risk_matrix/                   # Generated ASD risk matrix Excel files
 ```
 
 ## Architecture Overview
@@ -222,7 +193,10 @@ The pipeline executes five distinct phases:
 | DiscoveryPipeline | cyber_data_collector/pipelines/discovery.py | Data discovery and initial processing | Collecting new events |
 | HighQualityEnrichmentPipeline | cyber_data_collector/enrichment/high_quality_enrichment_pipeline.py | 5-stage enrichment orchestrator | Enriching events with LLMs |
 | DeduplicationV2 | cyber_data_collector/processing/deduplication_v2.py | Entity-based deduplication | Merging duplicate events |
-| DatabaseManager | cyber_data_collector/storage/database.py | SQLite operations | Persisting/querying events |
+| CyberEventDataV2 | cyber_data_collector/storage/cyber_event_data_v2.py | Thread-safe SQLite operations | Persisting/querying events |
+| DatabaseManager | cyber_data_collector/storage/database.py | Event persistence layer | Saving enriched events |
+| RfEventFilter | cyber_data_collector/filtering/rf_event_filter.py | Random Forest ML pre-filter | Filtering non-cyber events |
+| PlaywrightScraper | cyber_data_collector/utils/entity_scraper.py | Browser-based content scraping | Scraping JS-heavy sites |
 | ConfigManager | cyber_data_collector/utils/config_manager.py | Environment config loading | Accessing API keys and settings |
 
 ## Development Guidelines
@@ -428,9 +402,9 @@ python run_full_pipeline.py --skip-classification
 
 ---
 
-**Last Updated:** January 2025
+**Last Updated:** March 2026
 **Python Version:** 3.8+
-**Main Entry Points:** `run_full_pipeline.py`, `pipeline.py`
+**Main Entry Points:** `pipeline.py`, `run_full_pipeline.py`
 
 
 ## Skill Usage Guide

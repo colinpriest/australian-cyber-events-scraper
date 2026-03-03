@@ -5,7 +5,7 @@ from typing import Iterable, List, Optional
 from urllib.parse import urlparse
 
 from cyber_data_collector.models.events import CyberEvent
-from cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 
 
 class DatabaseManager:

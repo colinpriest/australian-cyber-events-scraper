@@ -34,13 +34,16 @@ class RfEventFilter:
     whether raw events should be kept for enrichment.
     """
     
-    def __init__(self, model_dir: str = "machine_learning_filter"):
+    def __init__(self, model_dir: Optional[str] = None):
         """
         Initialize the Random Forest filter.
-        
+
         Args:
-            model_dir: Directory containing the trained models
+            model_dir: Directory containing the trained models. Defaults to the
+                ``machine_learning_filter`` directory at the project root.
         """
+        if model_dir is None:
+            model_dir = str(Path(__file__).resolve().parent.parent.parent / "machine_learning_filter")
         self.model_dir = Path(model_dir)
         self.model = None
         self.source_type_encoder = None
