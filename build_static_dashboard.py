@@ -1801,19 +1801,19 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>ASD Risk Matrix (Current Year)</span>
-            <span class="badge bg-secondary">Classifications: <span id="asdCurrentTotal">0</span></span>
+            <span>ASD Risk Matrix (Last Year)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdPreviousTotal">0</span></span>
           </div>
-          <div id="asdRiskMatrixCurrent"></div>
+          <div id="asdRiskMatrixPrevious"></div>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>ASD Risk Matrix (Previous Year)</span>
-            <span class="badge bg-secondary">Classifications: <span id="asdPreviousTotal">0</span></span>
+            <span>ASD Risk Matrix (Current Year)</span>
+            <span class="badge bg-secondary">Classifications: <span id="asdCurrentTotal">0</span></span>
           </div>
-          <div id="asdRiskMatrixPrevious"></div>
+          <div id="asdRiskMatrixCurrent"></div>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
@@ -1907,8 +1907,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     }
 
     renderRiskMatrix('asdRiskMatrixAll', asdRiskAll, 'asdAllTotal');
-    renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
     renderRiskMatrix('asdRiskMatrixPrevious', asdRiskPrevious, 'asdPreviousTotal');
+    renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
 
     // 1) Monthly Trends (line) with trend line
     (function() {

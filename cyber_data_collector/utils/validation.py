@@ -1,14 +1,285 @@
 """
 Data validation utilities for cyber event enrichment.
 
-Provides common-sense validation rules for extracted data fields.
+Provides common-sense validation rules for extracted data fields,
+type coercion helpers for database values, and validation for LLM outputs.
 """
+from __future__ import annotations
 
-from typing import Optional, Any
 import logging
 import json
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Type coercion helpers – safely convert untrusted values to expected types.
+# These should be used at EVERY system boundary: database reads, LLM outputs,
+# API responses, and user inputs.
+# ---------------------------------------------------------------------------
+
+
+def safe_int(value: Any, default: Optional[int] = None, field_name: str = "") -> Optional[int]:
+    """Safely convert a value to int, returning *default* on failure.
+
+    Handles: None, int, float (truncated), str (parsed), bool, and garbage.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        # bool is subclass of int in Python – treat True/False as 1/0
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        # Handle strings like "1,234" or "1 234"
+        cleaned = str(value).replace(",", "").replace(" ", "").strip()
+        if not cleaned:
+            return default
+        return int(float(cleaned))  # int(float(...)) handles "1.0"
+    except (ValueError, TypeError, OverflowError):
+        if field_name:
+            logger.warning("Cannot convert %r to int for field '%s', using default %s", value, field_name, default)
+        return default
+
+
+def safe_float(value: Any, default: Optional[float] = None, field_name: str = "") -> Optional[float]:
+    """Safely convert a value to float, returning *default* on failure."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        cleaned = str(value).replace(",", "").strip()
+        if not cleaned:
+            return default
+        return float(cleaned)
+    except (ValueError, TypeError, OverflowError):
+        if field_name:
+            logger.warning("Cannot convert %r to float for field '%s', using default %s", value, field_name, default)
+        return default
+
+
+def safe_str(value: Any, default: Optional[str] = None, max_length: int = 0) -> Optional[str]:
+    """Safely convert a value to str, returning *default* on failure.
+
+    If *max_length* > 0 the result is truncated.
+    """
+    if value is None:
+        return default
+    result = str(value).strip()
+    if not result:
+        return default
+    if max_length > 0:
+        result = result[:max_length]
+    return result
+
+
+def safe_bool(value: Any, default: bool = False) -> bool:
+    """Safely convert a value to bool."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return default
+
+
+def safe_date(value: Any, field_name: str = "") -> Optional[date]:
+    """Safely parse a value to a ``datetime.date``, returning None on failure.
+
+    Accepts: date, datetime, ISO-format strings, None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            # Handle ISO format with optional timezone
+            cleaned = cleaned.replace("Z", "+00:00")
+            return datetime.fromisoformat(cleaned).date()
+        except (ValueError, TypeError):
+            if field_name:
+                logger.warning("Cannot parse %r as date for field '%s'", value, field_name)
+            return None
+    if field_name:
+        logger.warning("Unexpected type %s for date field '%s'", type(value).__name__, field_name)
+    return None
+
+
+def safe_datetime(value: Any, field_name: str = "") -> Optional[datetime]:
+    """Safely parse a value to a ``datetime``, returning None on failure."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            cleaned = cleaned.replace("Z", "+00:00")
+            return datetime.fromisoformat(cleaned)
+        except (ValueError, TypeError):
+            if field_name:
+                logger.warning("Cannot parse %r as datetime for field '%s'", value, field_name)
+            return None
+    if field_name:
+        logger.warning("Unexpected type %s for datetime field '%s'", type(value).__name__, field_name)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Database row validation – validate and coerce a dict of database values.
+# ---------------------------------------------------------------------------
+
+# Expected types for EnrichedEvents columns
+ENRICHED_EVENT_SCHEMA: Dict[str, str] = {
+    "enriched_event_id": "str",
+    "title": "str",
+    "description": "str",
+    "summary": "str",
+    "event_type": "str",
+    "severity": "str",
+    "event_date": "date",
+    "records_affected": "int",
+    "is_australian_event": "bool",
+    "is_specific_event": "bool",
+    "confidence_score": "float",
+    "australian_relevance_score": "float",
+}
+
+
+def validate_db_row(row: Dict[str, Any], schema: Dict[str, str], context: str = "") -> Dict[str, Any]:
+    """Validate and coerce a database row dict against an expected schema.
+
+    Args:
+        row: Dictionary from ``dict(cursor.fetchone())``.
+        schema: Mapping of column names to expected type names
+                 (``"str"``, ``"int"``, ``"float"``, ``"bool"``, ``"date"``, ``"datetime"``).
+        context: Description for log messages.
+
+    Returns:
+        A new dict with coerced values.  Unknown columns are passed through.
+    """
+    coerced: Dict[str, Any] = {}
+    prefix = f"[{context}] " if context else ""
+
+    for key, value in row.items():
+        expected = schema.get(key)
+        if expected is None:
+            # Column not in schema – pass through
+            coerced[key] = value
+            continue
+
+        if expected == "str":
+            coerced[key] = safe_str(value)
+        elif expected == "int":
+            coerced[key] = safe_int(value, field_name=f"{prefix}{key}")
+        elif expected == "float":
+            coerced[key] = safe_float(value, field_name=f"{prefix}{key}")
+        elif expected == "bool":
+            coerced[key] = safe_bool(value)
+        elif expected == "date":
+            coerced[key] = safe_date(value, field_name=f"{prefix}{key}")
+        elif expected == "datetime":
+            coerced[key] = safe_datetime(value, field_name=f"{prefix}{key}")
+        else:
+            coerced[key] = value
+
+    return coerced
+
+
+def validate_enriched_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and coerce an EnrichedEvents database row."""
+    return validate_db_row(row, ENRICHED_EVENT_SCHEMA, context="EnrichedEvent")
+
+
+# ---------------------------------------------------------------------------
+# Enrichment data validation – validate data before writing to the database.
+# ---------------------------------------------------------------------------
+
+
+def validate_enrichment_data_for_storage(
+    data: Dict[str, Any],
+    event_title: str = "",
+    org_name: Optional[str] = None,
+    perplexity_api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate and coerce enrichment data before storing in the database.
+
+    Ensures all values have the correct types for SQLite insertion.
+    When *perplexity_api_key* is provided, uncertain records_affected
+    rejections are verified via a Perplexity LLM call before being discarded.
+    """
+    validated = data.copy()
+
+    # Ensure title is a non-empty string
+    validated["title"] = safe_str(validated.get("title"), default="Untitled Event", max_length=500)
+
+    # Ensure description and summary are strings or None
+    validated["description"] = safe_str(validated.get("description"))
+    validated["summary"] = safe_str(validated.get("summary"))
+
+    # Ensure event_type and severity are strings or None
+    validated["event_type"] = safe_str(validated.get("event_type"), max_length=50)
+    validated["severity"] = safe_str(validated.get("severity"), max_length=20)
+
+    # Validate event_date – must be ISO format string or None
+    raw_date = validated.get("event_date")
+    if raw_date is not None:
+        parsed = safe_date(raw_date, field_name="event_date")
+        validated["event_date"] = parsed.isoformat() if parsed else None
+    else:
+        validated["event_date"] = None
+
+    # Validate records_affected – must be int or None
+    validated["records_affected"] = safe_int(
+        validated.get("records_affected"), field_name="records_affected"
+    )
+    # Apply domain-level validation with optional LLM fallback
+    validated["records_affected"] = llm_validate_records_affected(
+        validated["records_affected"], event_title,
+        org_name=org_name,
+        description=validated.get("description"),
+        perplexity_api_key=perplexity_api_key,
+    )
+
+    # Ensure boolean fields
+    validated["is_australian_event"] = safe_bool(validated.get("is_australian_event"), default=False)
+    validated["is_specific_event"] = safe_bool(validated.get("is_specific_event"), default=False)
+
+    # Ensure confidence_score is a float in [0, 1]
+    score = safe_float(validated.get("confidence_score"), default=0.0, field_name="confidence_score")
+    if score is not None:
+        score = max(0.0, min(1.0, score))
+    validated["confidence_score"] = score or 0.0
+
+    # Ensure australian_relevance_score is a float
+    aus_score = safe_float(validated.get("australian_relevance_score"), default=0.0, field_name="australian_relevance_score")
+    if aus_score is not None:
+        aus_score = max(0.0, min(1.0, aus_score))
+    validated["australian_relevance_score"] = aus_score or 0.0
+
+    # Ensure status is a valid string
+    validated["status"] = safe_str(validated.get("status"), default="Active")
+
+    return validated
 
 # Major international companies that may legitimately have >20M records affected
 # These are global tech/financial giants with billions of users worldwide
@@ -216,6 +487,188 @@ def validate_and_correct_enrichment_data(enrichment_data: dict, event_title: str
         )
 
     return corrected
+
+
+def llm_validate_records_affected(
+    value: Optional[int],
+    event_title: str = "",
+    org_name: Optional[str] = None,
+    description: Optional[str] = None,
+    perplexity_api_key: Optional[str] = None,
+) -> Optional[int]:
+    """Validate records_affected with an LLM fallback via Perplexity.
+
+    First runs the rule-based ``validate_records_affected``.  If the value is
+    rejected **and** a Perplexity API key is available, a targeted prompt asks
+    Perplexity whether the number is plausible for the organisation.
+
+    When Perplexity confirms the org is large, it is dynamically added to the
+    module-level ``MAJOR_AUSTRALIAN_ORGANIZATIONS`` or
+    ``MAJOR_INTERNATIONAL_ORGANIZATIONS`` sets so that future rule-based checks
+    pass without an API call.
+
+    If Perplexity returns a ``corrected_value`` (e.g. "20" was actually
+    "20,000"), that corrected value is returned instead.
+
+    Graceful degradation: no API key → identical behaviour to
+    ``validate_records_affected``.
+    """
+    # 1. Run rule-based validation first
+    rule_result = validate_records_affected(value, event_title)
+
+    if rule_result is not None:
+        # Rule-based validation accepted the value – nothing more to do
+        return rule_result
+
+    # value was rejected.  If we have no LLM key, return the rejection.
+    if value is None or not perplexity_api_key:
+        return None
+
+    # 2. Call Perplexity to verify
+    try:
+        import requests as _requests
+
+        org_display = org_name or event_title or "unknown"
+        context_text = ""
+        if description:
+            context_text = description[:500]
+
+        prompt = (
+            "You are verifying a data point from a cyber security breach report.\n\n"
+            f'Event: "{event_title}"\n'
+            f'Organization: "{org_display}"\n'
+            f"Claimed records affected: {value:,}\n"
+        )
+        if context_text:
+            prompt += f'Context: "{context_text}"\n'
+        prompt += (
+            "\nQuestions:\n"
+            "1. Is this event genuinely about a CYBER SECURITY incident "
+            "(data breach, ransomware, hacking, phishing, etc.)? "
+            "Or is it about physical security, airline safety, border security, "
+            "workplace safety, or some other non-cyber topic? "
+            "The word 'security' alone does NOT make it a cyber incident.\n"
+            f'2. Is "{org_display}" a major organization? Estimate their customer/user base size.\n'
+            f"3. Is {value:,} records affected plausible for this organization and this incident?\n"
+            "4. Could this number be a parsing error (e.g. '20' when the article said "
+            "'20,000' or '20 million')?\n\n"
+            "Respond with JSON only:\n"
+            "{\n"
+            '  "is_cyber_incident": true or false,\n'
+            '  "is_plausible": true or false,\n'
+            '  "corrected_value": null or integer (if the number was likely misread),\n'
+            '  "org_size_category": "major_international" | "major_australian" | "small_regional" | "unknown",\n'
+            '  "estimated_customer_base": integer or null,\n'
+            '  "reasoning": "brief explanation"\n'
+            "}\n"
+        )
+
+        payload = {
+            "model": "sonar-pro",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 500,
+            "temperature": 0.1,
+        }
+
+        resp = _requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={
+                "Authorization": f"Bearer {perplexity_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30,
+        )
+
+        if resp.status_code != 200:
+            logger.error(
+                "Perplexity records_affected validation failed (HTTP %s): %s",
+                resp.status_code, resp.text[:200],
+            )
+            return None
+
+        # Track token usage
+        from cyber_data_collector.utils.token_tracker import tracker
+        usage = resp.json().get("usage", {})
+        if usage:
+            tracker.record(
+                "sonar-pro",
+                usage.get("prompt_tokens", 0),
+                usage.get("completion_tokens", 0),
+                context="records_affected_validation",
+            )
+
+        content = resp.json()["choices"][0]["message"]["content"]
+        # Strip markdown fences if present
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+
+        result = json.loads(content.strip())
+
+        is_cyber = result.get("is_cyber_incident", True)  # default True for backwards compat
+        is_plausible = result.get("is_plausible", False)
+        corrected_value = result.get("corrected_value")
+        org_category = result.get("org_size_category", "unknown")
+        reasoning = result.get("reasoning", "no reasoning provided")
+
+        logger.info(
+            "Perplexity records_affected check for '%s': is_cyber=%s, plausible=%s, "
+            "category=%s, reasoning=%s",
+            event_title[:60], is_cyber, is_plausible, org_category, reasoning,
+        )
+
+        # If the event is not a cyber incident, reject records_affected entirely
+        if not is_cyber:
+            logger.warning(
+                "Perplexity determined '%s' is NOT a cyber security incident: %s. "
+                "Setting records_affected to NULL.",
+                event_title[:60], reasoning,
+            )
+            return None
+
+        # 3. Dynamically update org lists based on Perplexity's assessment
+        org_key = (org_name or event_title or "").lower().strip()
+        if org_key and org_category == "major_australian":
+            MAJOR_AUSTRALIAN_ORGANIZATIONS.add(org_key)
+            logger.info(
+                "Dynamically added '%s' to MAJOR_AUSTRALIAN_ORGANIZATIONS", org_key,
+            )
+        elif org_key and org_category == "major_international":
+            MAJOR_INTERNATIONAL_ORGANIZATIONS.add(org_key)
+            logger.info(
+                "Dynamically added '%s' to MAJOR_INTERNATIONAL_ORGANIZATIONS", org_key,
+            )
+
+        # 4. Return decision
+        if corrected_value is not None:
+            corrected_int = safe_int(corrected_value, field_name="corrected_value")
+            if corrected_int and corrected_int > 0:
+                logger.info(
+                    "Perplexity corrected records_affected from %s to %s for '%s'",
+                    value, corrected_int, event_title[:60],
+                )
+                return corrected_int
+
+        if is_plausible:
+            logger.info(
+                "Perplexity accepted records_affected=%s for '%s' (rule-based had rejected)",
+                f"{value:,}", event_title[:60],
+            )
+            return value
+
+        logger.info(
+            "Perplexity also rejected records_affected=%s for '%s': %s",
+            f"{value:,}", event_title[:60], reasoning,
+        )
+        return None
+
+    except Exception as e:
+        logger.error("Perplexity records_affected validation error: %s", e)
+        return None
 
 
 def safe_json_dumps(value: Any, context: str, **kwargs: Any) -> str:

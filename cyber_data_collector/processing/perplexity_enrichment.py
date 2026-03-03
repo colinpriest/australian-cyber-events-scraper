@@ -400,6 +400,14 @@ Be conservative: if uncertain, answer false.
                     )
                 )
 
+                # Track token usage
+                from cyber_data_collector.utils.token_tracker import tracker
+                if hasattr(response, 'usage') and response.usage:
+                    tracker.record(
+                        "sonar-pro", response.usage.prompt_tokens,
+                        response.usage.completion_tokens, context="perplexity_enrichment",
+                    )
+
                 content = response.choices[0].message.content
                 if not content:
                     raise ValueError("Empty response from Perplexity")

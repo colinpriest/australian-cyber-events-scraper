@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -242,34 +243,323 @@ class PerplexityDataSource(DataSource):
             )
         )
 
-        # Parse the JSON response manually
+        # Track token usage
+        from cyber_data_collector.utils.token_tracker import tracker
+        if response.usage:
+            tracker.record(
+                "sonar-pro", response.usage.prompt_tokens,
+                response.usage.completion_tokens, context="perplexity_discovery",
+            )
+
+        content = response.choices[0].message.content
+        if not content:
+            return PerplexitySearchResults(events=[])
+
+        # Tier 1: Strip markdown code blocks (```json ... ```) and parse
+        cleaned = self._strip_markdown_json(content)
+        parsed = self._try_parse_json(cleaned)
+        if parsed is not None:
+            return self._dict_to_search_results(parsed)
+
+        # Tier 2: Try to fix truncated JSON (missing closing brackets)
+        self.logger.warning(
+            "Failed to parse Perplexity response, attempting JSON repair. "
+            "Raw content (first 500 chars): %s",
+            content[:500],
+        )
+        fixed = self._try_fix_truncated_json(cleaned)
+        if fixed is not None:
+            self.logger.info("Successfully repaired truncated JSON")
+            return self._dict_to_search_results(fixed)
+
+        # Tier 3: Retry the query with strict no-markdown JSON instruction
+        self.logger.info("Retrying Perplexity query with strict JSON-only instruction")
+        await self.rate_limiter.wait("perplexity")
+        retry_result = await self._retry_strict_json(query, date_range)
+        if retry_result is not None:
+            self.logger.info("Strict JSON retry succeeded")
+            return retry_result
+
+        # Tier 4: Extract partial events and ask Perplexity to complete them
+        partial = self._extract_partial_events(content)
+        if partial:
+            self.logger.info(
+                "Extracted %d partial events from malformed JSON, "
+                "asking Perplexity to complete them",
+                len(partial),
+            )
+            await self.rate_limiter.wait("perplexity")
+            completion_result = await self._complete_partial_events(partial, date_range)
+            if completion_result is not None:
+                self.logger.info(
+                    "Partial event completion succeeded with %d events",
+                    len(completion_result.events),
+                )
+                return completion_result
+
+        self.logger.warning(
+            "All JSON recovery attempts failed for Perplexity response. "
+            "Raw content (first 500 chars): %s",
+            content[:500],
+        )
+        return PerplexitySearchResults(events=[])
+
+    def _strip_markdown_json(self, content: str) -> str:
+        """Strip markdown code block wrappers (```json ... ```) from content."""
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            # Try regex for properly closed code blocks
+            match = re.search(r'```(?:json)?\s*\n?(.*?)```', stripped, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+            # No closing ``` (truncated response) — strip the opening line only
+            lines = stripped.split("\n", 1)
+            return lines[1].strip() if len(lines) > 1 else stripped
+        return stripped
+
+    def _try_parse_json(self, content: str) -> Optional[Dict[str, Any]]:
+        """Try to parse JSON string, return None on failure."""
         try:
+            data = json.loads(content)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, ValueError):
+            pass
+        return None
+
+    def _try_fix_truncated_json(self, json_str: str) -> Optional[Dict[str, Any]]:
+        """Attempt to fix truncated JSON by closing open structures.
+
+        This handles cases where max_tokens cuts off the response mid-JSON,
+        leaving unclosed brackets/braces.
+        """
+        # Strategy 1: Find last complete event object boundary and close
+        last_event_end = json_str.rfind('},')
+        if last_event_end > 0:
+            truncated = json_str[:last_event_end + 1]
+            for suffix in [']}', '\n]\n}']:
+                result = self._try_parse_json(truncated + suffix)
+                if result is not None and 'events' in result:
+                    return result
+
+        # Strategy 2: Find last } and try closing the outer structure
+        last_brace = json_str.rfind('}')
+        if last_brace > 0:
+            truncated = json_str[:last_brace + 1]
+            for suffix in [']}', '']:
+                result = self._try_parse_json(truncated + suffix)
+                if result is not None and 'events' in result:
+                    return result
+
+        # Strategy 3: Simple bracket counting — close all open brackets/braces
+        cleaned = json_str.rstrip().rstrip(',')
+        open_braces = cleaned.count('{') - cleaned.count('}')
+        open_brackets = cleaned.count('[') - cleaned.count(']')
+        if open_braces >= 0 and open_brackets >= 0:
+            suffix = ']' * open_brackets + '}' * open_braces
+            result = self._try_parse_json(cleaned + suffix)
+            if result is not None:
+                return result
+
+        return None
+
+    def _dict_to_search_results(self, data: Dict[str, Any]) -> PerplexitySearchResults:
+        """Convert a parsed JSON dict to PerplexitySearchResults."""
+        events = [
+            PerplexityEvent(
+                title=event.get("title", ""),
+                description=event.get("description", ""),
+                event_date=event.get("event_date"),
+                entity_name=event.get("entity_name"),
+                event_type=event.get("event_type"),
+                impact_description=event.get("impact_description"),
+                source_urls=event.get("source_urls", []),
+            )
+            for event in data.get("events", [])
+            if event.get("title")  # skip entries without a title
+        ]
+        return PerplexitySearchResults(events=events)
+
+    async def _retry_strict_json(
+        self, query: str, date_range: DateRange
+    ) -> Optional[PerplexitySearchResults]:
+        """Retry the query with explicit instruction to return raw JSON only."""
+        if not self.openai_client:
+            return None
+
+        system_prompt = (
+            "You are a cybersecurity analyst. Extract detailed information about "
+            "Australian cyber security incidents from search results.\n\n"
+            "CRITICAL: Return ONLY raw JSON. Do NOT wrap it in markdown code blocks. "
+            "Do NOT use ```json or ``` delimiters. Return the JSON object directly.\n\n"
+            "Return this exact JSON structure:\n"
+            '{"events": [{"title": "...", "description": "...", '
+            '"event_date": "YYYY-MM-DD or null", "entity_name": "... or null", '
+            '"event_type": "... or null", "impact_description": "... or null", '
+            '"source_urls": ["url1"]}]}\n\n'
+            "Only include real cyber security incidents related to Australia. "
+            'If no relevant incidents are found, return: {"events": []}'
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.openai_client.chat.completions.create(
+                    model="sonar-pro",
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=2000,
+                ),
+            )
+            # Track token usage
+            if response.usage:
+                tracker.record(
+                    "sonar-pro", response.usage.prompt_tokens,
+                    response.usage.completion_tokens, context="perplexity_strict_json",
+                )
             content = response.choices[0].message.content
             if not content:
-                return PerplexitySearchResults(events=[])
+                return None
 
-            data = json.loads(content)
-            events = [
-                PerplexityEvent(
-                    title=event.get("title", ""),
-                    description=event.get("description", ""),
-                    event_date=event.get("event_date"),
-                    entity_name=event.get("entity_name"),
-                    event_type=event.get("event_type"),
-                    impact_description=event.get("impact_description"),
-                    source_urls=event.get("source_urls", [])
-                )
-                for event in data.get("events", [])
-            ]
-            return PerplexitySearchResults(events=events)
-        except (json.JSONDecodeError, KeyError) as exc:
-            raw_preview = (content or "")[:500]
-            self.logger.warning(
-                "Failed to parse Perplexity response: %s. Raw content (first 500 chars): %s",
-                exc,
-                raw_preview,
+            # Still strip markdown in case the model ignores the instruction
+            cleaned = self._strip_markdown_json(content)
+            parsed = self._try_parse_json(cleaned)
+            if parsed is not None:
+                return self._dict_to_search_results(parsed)
+
+            # Try fixing truncated JSON from the retry too
+            fixed = self._try_fix_truncated_json(cleaned)
+            if fixed is not None:
+                return self._dict_to_search_results(fixed)
+
+        except Exception as exc:
+            self.logger.warning("Strict JSON retry failed with error: %s", exc)
+
+        return None
+
+    def _extract_partial_events(self, content: str) -> List[Dict[str, str]]:
+        """Extract whatever event data is recoverable from malformed JSON.
+
+        Uses regex to find "title", "description", etc. field values even when
+        the overall JSON structure is broken.
+        """
+        partial_events: List[Dict[str, str]] = []
+
+        # Regex patterns for individual field values
+        title_matches = re.findall(
+            r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', content
+        )
+        desc_matches = re.findall(
+            r'"description"\s*:\s*"((?:[^"\\]|\\.)*)"', content
+        )
+        entity_matches = re.findall(
+            r'"entity_name"\s*:\s*"((?:[^"\\]|\\.)*)"', content
+        )
+        date_matches = re.findall(
+            r'"event_date"\s*:\s*"((?:[^"\\]|\\.)*)"', content
+        )
+
+        for i, title in enumerate(title_matches):
+            if not title.strip():
+                continue
+            event: Dict[str, str] = {"title": title}
+            if i < len(desc_matches):
+                event["description"] = desc_matches[i]
+            if i < len(entity_matches):
+                event["entity_name"] = entity_matches[i]
+            if i < len(date_matches):
+                event["event_date"] = date_matches[i]
+            partial_events.append(event)
+
+        return partial_events
+
+    async def _complete_partial_events(
+        self,
+        partial_events: List[Dict[str, str]],
+        date_range: DateRange,
+    ) -> Optional[PerplexitySearchResults]:
+        """Send partial event data to Perplexity and ask it to complete the details."""
+        if not self.openai_client or not partial_events:
+            return None
+
+        # Build a summary of the partial events we extracted
+        event_summaries = []
+        for i, event in enumerate(partial_events[:10], 1):  # cap at 10
+            parts = [f"{i}. Title: {event.get('title', 'Unknown')}"]
+            if event.get("description"):
+                parts.append(f"   Description: {event['description'][:200]}")
+            if event.get("entity_name"):
+                parts.append(f"   Entity: {event['entity_name']}")
+            if event.get("event_date"):
+                parts.append(f"   Date: {event['event_date']}")
+            event_summaries.append("\n".join(parts))
+
+        events_text = "\n\n".join(event_summaries)
+
+        system_prompt = (
+            "You are a cybersecurity analyst. I have partial data about Australian "
+            "cyber security incidents that needs to be completed.\n\n"
+            "CRITICAL: Return ONLY raw JSON. Do NOT wrap it in markdown code blocks. "
+            "Do NOT use ```json or ``` delimiters. Return the JSON object directly.\n\n"
+            "Return this exact JSON structure:\n"
+            '{"events": [{"title": "...", "description": "...", '
+            '"event_date": "YYYY-MM-DD or null", "entity_name": "... or null", '
+            '"event_type": "... or null", "impact_description": "... or null", '
+            '"source_urls": ["url1"]}]}\n\n'
+            "For each event below, verify the details and fill in any missing fields "
+            "(event_type, impact_description, source_urls). "
+            "Correct any obviously wrong information."
+        )
+
+        user_prompt = (
+            f"Complete and verify these Australian cyber incidents:\n\n{events_text}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.openai_client.chat.completions.create(
+                    model="sonar-pro",
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=2000,
+                ),
             )
-            return PerplexitySearchResults(events=[])
+            # Track token usage
+            if response.usage:
+                tracker.record(
+                    "sonar-pro", response.usage.prompt_tokens,
+                    response.usage.completion_tokens, context="perplexity_partial_complete",
+                )
+            content = response.choices[0].message.content
+            if not content:
+                return None
+
+            cleaned = self._strip_markdown_json(content)
+            parsed = self._try_parse_json(cleaned)
+            if parsed is not None:
+                return self._dict_to_search_results(parsed)
+
+            fixed = self._try_fix_truncated_json(cleaned)
+            if fixed is not None:
+                return self._dict_to_search_results(fixed)
+
+        except Exception as exc:
+            self.logger.warning("Partial event completion failed: %s", exc)
+
+        return None
 
     def _convert_results_to_events(self, results: PerplexitySearchResults) -> List[CyberEvent]:
         events: List[CyberEvent] = []

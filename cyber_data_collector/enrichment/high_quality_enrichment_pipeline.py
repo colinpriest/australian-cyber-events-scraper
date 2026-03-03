@@ -83,24 +83,29 @@ class HighQualityEnrichmentPipeline:
 
             content_result = self.content_service.acquire_content(event)
 
+            extraction_success = content_result.get('extraction_success', False)
+            content_length = content_result.get('content_length', 0) or 0
+            extraction_method = content_result.get('extraction_method', 'unknown')
+            source_reliability = content_result.get('source_reliability', 0.0) or 0.0
+
             audit_trail['stages'].append({
                 'stage': 1,
                 'name': 'content_acquisition',
-                'success': content_result['extraction_success'],
-                'method': content_result.get('extraction_method'),
-                'content_length': content_result.get('content_length'),
-                'source_reliability': content_result.get('source_reliability')
+                'success': extraction_success,
+                'method': extraction_method,
+                'content_length': content_length,
+                'source_reliability': source_reliability
             })
 
-            if not content_result['extraction_success']:
+            if not extraction_success:
                 return self._error_result(
                     event_id,
-                    f"Content acquisition failed: {content_result['error']}",
+                    f"Content acquisition failed: {content_result.get('error', 'unknown error')}",
                     audit_trail
                 )
 
-            self.logger.info(f"✓ Acquired {content_result['content_length']} words using {content_result['extraction_method']}")
-            self.logger.info(f"  Source reliability: {content_result['source_reliability']:.2f}")
+            self.logger.info(f"✓ Acquired {content_length} words using {extraction_method}")
+            self.logger.info(f"  Source reliability: {source_reliability:.2f}")
 
             # STAGE 2: GPT-4o Primary Extraction
             self.logger.info("\nSTAGE 2: GPT-4o Primary Extraction")

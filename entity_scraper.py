@@ -261,11 +261,14 @@ class PlaywrightScraper:
                             await asyncio.sleep(random.uniform(8, 15))
                             # Try again with different headers or user agent
                             await context.close()
-                            return await self._retry_with_different_approach(url, timeout, event_date)
+                            perplexity_attempted = True
+                            retry_content = await self._retry_with_different_approach(url, timeout, event_date)
+                            perplexity_succeeded = bool(retry_content)
+                            return _format_return(retry_content)
                         else:
-                            return None
+                            return _format_return(None)
                     elif response and response.status >= 400:
-                        return None
+                        return _format_return(None)
                     else:
                         break  # Success
 
@@ -274,7 +277,7 @@ class PlaywrightScraper:
                         await asyncio.sleep(random.uniform(3, 8))
                         continue
                     else:
-                        return None
+                        return _format_return(None)
 
             # Random delay to appear more human
             await asyncio.sleep(random.uniform(3, 7))
@@ -333,8 +336,14 @@ class PlaywrightScraper:
                 return _format_return(perplexity_content)
             return _format_return(None)
         finally:
-            await page.close()
-            await context.close()
+            try:
+                await page.close()
+            except Exception:
+                pass
+            try:
+                await context.close()
+            except Exception:
+                pass
 
     async def _human_like_scroll(self, page):
         """Simulates human-like scrolling."""
@@ -464,8 +473,14 @@ class PlaywrightScraper:
         except Exception:
             return None
         finally:
-            await page.close()
-            await context.close()
+            try:
+                await page.close()
+            except Exception:
+                pass
+            try:
+                await context.close()
+            except Exception:
+                pass
 
     async def _perplexity_fallback(self, failed_url: str, event_date: str = None) -> Optional[str]:
         """Use Perplexity to find alternative URLs when original URL fails."""

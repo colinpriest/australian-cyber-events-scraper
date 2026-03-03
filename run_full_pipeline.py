@@ -681,6 +681,11 @@ class UnifiedPipeline:
 
         # Print final summary
         self.print_summary()
+
+        # Print API token usage and cost report
+        from cyber_data_collector.utils.token_tracker import tracker
+        tracker.log_report()
+
         return True
 
 
