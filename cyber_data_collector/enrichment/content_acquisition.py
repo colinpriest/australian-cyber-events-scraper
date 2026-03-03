@@ -30,7 +30,7 @@ except ImportError:
     PDFExtractor = None
 
 try:
-    from entity_scraper import PlaywrightScraper
+    from cyber_data_collector.utils.entity_scraper import PlaywrightScraper
 except ImportError:
     PlaywrightScraper = None
 

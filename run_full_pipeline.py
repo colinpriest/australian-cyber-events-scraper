@@ -85,12 +85,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-# Add current directory to path for imports
-sys.path.append(str(Path(__file__).parent))
-
 # Import existing components
 from cyber_data_collector.pipelines.discovery import EventDiscoveryEnrichmentPipeline
-from build_static_dashboard import (
+from scripts.build_static_dashboard import (
     build_html, get_connection, get_monthly_event_counts, get_monthly_severity_trends,
     get_monthly_records_affected, get_monthly_event_type_mix, get_overall_event_type_mix,
     get_entity_type_distribution, get_records_affected_histogram, get_half_yearly_database_counts,
@@ -101,12 +98,12 @@ from build_static_dashboard import (
     get_asd_risk_matrix, prepare_oaic_cyber_incidents_data, prepare_oaic_attack_types_data,
     prepare_oaic_sectors_data, prepare_oaic_individuals_affected_data
 )
-from cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.utils import ConfigManager, setup_logging
-from perplexity_backfill_events import PerplexityBackfillProcessor
-from asd_risk_classifier import ASDRiskClassifier
-from run_global_deduplication import DeduplicationMigration
+from scripts.perplexity_backfill_events import PerplexityBackfillProcessor
+from scripts.asd_risk_classifier import ASDRiskClassifier
+from scripts.run_global_deduplication import DeduplicationMigration
 
 # Configure logging
 setup_logging(log_file="unified_pipeline.log")

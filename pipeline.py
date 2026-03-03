@@ -16,9 +16,9 @@ from types import SimpleNamespace
 from typing import List, Optional
 
 from cyber_data_collector.utils import ConfigManager
-from project_status import report_status
+from scripts.project_status import report_status
 from run_full_pipeline import UnifiedPipeline
-from wipe_database import DatabaseRecordWiper
+from scripts.wipe_database import DatabaseRecordWiper
 
 
 DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance"]
