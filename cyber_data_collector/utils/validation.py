@@ -622,7 +622,8 @@ def llm_validate_records_affected(
         if content.endswith("```"):
             content = content[:-3]
 
-        result = json.loads(content.strip())
+        decoder = json.JSONDecoder()
+        result, _ = decoder.raw_decode(content.strip())
 
         is_cyber = result.get("is_cyber_incident", True)  # default True for backwards compat
         is_plausible = result.get("is_plausible", False)
@@ -662,11 +663,21 @@ def llm_validate_records_affected(
         if corrected_value is not None:
             corrected_int = safe_int(corrected_value, field_name="corrected_value")
             if corrected_int and corrected_int > 0:
-                logger.info(
-                    "Perplexity corrected records_affected from %s to %s for '%s'",
-                    value, corrected_int, event_title[:60],
-                )
-                return corrected_int, True
+                # Re-validate the corrected value through the same rules — Perplexity
+                # can return impossible numbers (e.g. 148 billion) when misled by the
+                # org's total customer-lifetime exposure rather than breach scope.
+                validated_corrected = validate_records_affected(corrected_int, event_title)
+                if validated_corrected is not None:
+                    logger.info(
+                        "Perplexity corrected records_affected from %s to %s for '%s'",
+                        value, validated_corrected, event_title[:60],
+                    )
+                    return validated_corrected, True
+                else:
+                    logger.warning(
+                        "Perplexity's corrected_value %s for '%s' failed validation — ignoring",
+                        corrected_int, event_title[:60],
+                    )
 
         if is_plausible:
             logger.info(
