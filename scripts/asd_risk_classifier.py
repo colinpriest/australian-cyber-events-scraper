@@ -629,7 +629,7 @@ Return your response as a JSON object with this exact structure:
                 for event in events
             }
 
-            with tqdm(total=len(events), desc="Classifying events", unit="event") as pbar:
+            with tqdm(total=len(events), desc="Classifying events", unit="event", smoothing=0) as pbar:
                 for future in as_completed(futures):
                     try:
                         result = future.result()

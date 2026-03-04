@@ -152,7 +152,7 @@ class CyberDataCollector:
         self.logger.info(f"Will process in {total_batches} batches of {batch_size} events each")
 
         # Progress bar for overall batch processing
-        with tqdm(total=total_batches, desc="Processing batches", unit="batch") as pbar:
+        with tqdm(total=total_batches, desc="Processing batches", unit="batch", smoothing=0) as pbar:
             for index in range(0, len(events), batch_size):
                 batch = events[index : index + batch_size]
                 batch_num = index // batch_size + 1

@@ -404,7 +404,7 @@ def export_events_to_excel(
         # Phase 1: Collect all source texts (sequential - uses DB)
         print("Phase 1: Gathering source texts from database...")
         event_data_list = []
-        for event in tqdm(events, desc="Reading events"):
+        for event in tqdm(events, desc="Reading events", smoothing=0):
             event_id = event['deduplicated_event_id']
             event_title = event['title']
 
@@ -453,7 +453,7 @@ def export_events_to_excel(
         }
 
         # Collect results with progress bar
-        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="LLM processing"):
+        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="LLM processing", smoothing=0):
             idx = future_to_idx[future]
             try:
                 rows[idx] = future.result()

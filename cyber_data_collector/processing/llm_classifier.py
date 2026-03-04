@@ -84,7 +84,7 @@ class LLMClassifier:
         tasks = [process_event_with_semaphore(event) for event in events]
         
         # Process events concurrently with progress bar
-        with tqdm(total=len(events), desc="LLM Classification", unit="event", leave=False) as pbar:
+        with tqdm(total=len(events), desc="LLM Classification", unit="event", leave=False, smoothing=0) as pbar:
             for task in asyncio.as_completed(tasks):
                 try:
                     enhanced_event = await task
