@@ -30,15 +30,10 @@ from openai import OpenAI
 from playwright.async_api import async_playwright, Page, Frame
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from cyber_data_collector.utils import setup_logging
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('oaic_dashboard_scraper.log')
-    ]
-)
+setup_logging(log_file="logs/oaic_dashboard_scraper.log")
 logger = logging.getLogger(__name__)
 
 
