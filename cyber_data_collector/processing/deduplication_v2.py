@@ -54,6 +54,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import difflib
 import hashlib
 
+from tqdm import tqdm
+
 @dataclass
 class CyberEvent:
     """Simplified cyber event model for deduplication"""
@@ -744,13 +746,10 @@ class DeduplicationEngine:
 
         self.logger.info(f"Grouping {total_events} events by similarity...")
 
-        for i, event1 in enumerate(events):
+        for i, event1 in tqdm(enumerate(events), total=total_events,
+                              desc="Deduplicating events", unit="event", smoothing=0):
             if i in processed:
                 continue
-
-            # Log progress every 100 events
-            if i % 100 == 0:
-                self.logger.info(f"Progress: {i}/{total_events} events processed ({i*100//total_events}%)")
 
             # Start a new group with this event
             group = [event1]

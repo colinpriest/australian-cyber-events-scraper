@@ -386,7 +386,8 @@ class UnifiedPipeline:
         try:
             logger.info("Running global deduplication...")
 
-            migration = DeduplicationMigration(self.db_path, dry_run=False)
+            force_rebuild = getattr(args, 'force_dedup', False)
+            migration = DeduplicationMigration(self.db_path, dry_run=False, force=force_rebuild)
             if not migration.run_migration():
                 raise RuntimeError("Deduplication migration failed")
 
@@ -602,6 +603,7 @@ class UnifiedPipeline:
                     'oaic_individuals_affected': oaic_individuals_affected,
                     'asd_risk_all': get_asd_risk_matrix(conn),
                     'asd_risk_current': get_asd_risk_matrix(conn, current_year),
+                    'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),
                 }
             
             # Generate HTML
@@ -720,6 +722,8 @@ Examples:
                         help='Skip ASD risk classification phase (faster pipeline)')
     parser.add_argument('--classify-limit', type=int,
                         help='Limit number of events to classify (default: all unclassified events)')
+    parser.add_argument('--force-dedup', action='store_true',
+                        help='Force full deduplication rebuild (skip incremental mode)')
     parser.add_argument('--continue-on-error', action='store_true',
                         help='Continue to next phase even if previous phase fails')
 
