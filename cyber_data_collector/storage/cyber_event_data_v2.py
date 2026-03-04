@@ -290,6 +290,25 @@ class CyberEventDataV2:
         if not self._conn:
             raise ConnectionError("Database not connected")
 
+        with self._lock:
+            cursor = self._conn.cursor()
+
+            # Return existing enriched event if one already exists for this raw event
+            try:
+                cursor.execute(
+                    "SELECT enriched_event_id FROM EnrichedEvents "
+                    "WHERE raw_event_id = ? AND status = 'Active' LIMIT 1",
+                    (raw_event_id,),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    self._logger.debug(
+                        "Enriched event already exists for raw_event_id %s", raw_event_id
+                    )
+                    return existing["enriched_event_id"]
+            except sqlite3.Error:
+                pass  # Fall through to insert
+
         enriched_event_id = str(uuid.uuid4())
 
         with self._lock:
