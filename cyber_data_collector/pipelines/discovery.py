@@ -307,6 +307,13 @@ class EventDiscoveryEnrichmentPipeline:
             # Create collector and capture ALL stages of processing
             collector = CyberDataCollector(collection_config, ".env")
 
+            # Inject known URLs so OAIC source can skip already-stored articles
+            if 'oaic' in collector.data_sources:
+                known = self.db.get_known_source_urls('OAIC')
+                collector.data_sources['oaic'].known_urls = known
+                if known:
+                    logger.info(f"[OAIC] {len(known)} already-known URLs will be skipped")
+
             # We need to hack into the collector to get all stages
             # Let's manually run the collection pipeline to capture each stage
 
@@ -1366,7 +1373,7 @@ class EventDiscoveryEnrichmentPipeline:
                 task = asyncio.create_task(self._scrape_single_event_with_info(event, scraper))
                 tasks.append(task)
 
-            async for result in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Scraping URLs"):
+            async for result in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Scraping URLs", smoothing=0):
                 try:
                     scrape_result = await asyncio.wait_for(result, timeout=120.0)  # 2 minute timeout
                     if scrape_result['success']:
@@ -1532,7 +1539,7 @@ class EventDiscoveryEnrichmentPipeline:
                 task = asyncio.create_task(self._scrape_single_event_with_info(event, scraper))
                 tasks.append(task)
             
-            with tqdm(total=len(tasks), desc="Web Scraping URLs", unit="URL") as pbar:
+            with tqdm(total=len(tasks), desc="Web Scraping URLs", unit="URL", smoothing=0) as pbar:
                 for future in asyncio.as_completed(tasks):
                     try:
                         result = await future
@@ -1732,7 +1739,7 @@ class EventDiscoveryEnrichmentPipeline:
 
         # Process events with progress bar
         enriched_count = 0
-        with tqdm(total=len(events_to_process), desc="LLM Analysis", unit="event") as pbar:
+        with tqdm(total=len(events_to_process), desc="LLM Analysis", unit="event", smoothing=0) as pbar:
             for event in events_to_process:
                 try:
                     success = await self._enrich_single_event(event)

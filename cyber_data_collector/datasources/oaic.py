@@ -5,7 +5,7 @@ import hashlib
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urljoin, urlparse, parse_qs
 
 import requests
@@ -34,6 +34,7 @@ class OAICDataSource(DataSource):
         self.env_config = env_config
         self.base_url = "https://www.oaic.gov.au/news/media-centre"
         self.search_url = "https://www.oaic.gov.au/news/media-centre?query=&sort=dmetapublishedDateISO&num_ranks=1000"
+        self.known_urls: Set[str] = set()
 
     def validate_config(self) -> bool:
         return True
@@ -82,6 +83,11 @@ class OAICDataSource(DataSource):
                 # Get the actual article URL (may need to resolve redirects)
                 actual_url = self._resolve_article_url(link_info['url'])
                 if not actual_url:
+                    continue
+
+                # Skip articles already in the database
+                if actual_url in self.known_urls:
+                    self.logger.debug(f"Skipping known OAIC article: {link_info['text'][:50]}...")
                     continue
 
                 # Pass the publication date if we found one

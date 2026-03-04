@@ -15,7 +15,7 @@ import threading
 import uuid
 from datetime import datetime, date
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 class CyberEventDataV2:
@@ -136,6 +136,23 @@ class CyberEventDataV2:
             except sqlite3.Error as e:
                 self._logger.error("Error checking for existing raw event: %s", e)
                 return None
+
+    def get_known_source_urls(self, source_type: str) -> Set[str]:
+        """Return all source_url values already stored for a given source type."""
+        if not self._conn:
+            raise ConnectionError("Database not connected")
+
+        with self._lock:
+            cursor = self._conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT source_url FROM RawEvents WHERE source_type = ? AND source_url IS NOT NULL",
+                    (source_type,),
+                )
+                return {row["source_url"] for row in cursor.fetchall()}
+            except sqlite3.Error as e:
+                self._logger.error("Error fetching known source URLs: %s", e)
+                return set()
 
     def get_unprocessed_raw_events(self, source_types: List[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
