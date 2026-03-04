@@ -106,7 +106,7 @@ from scripts.asd_risk_classifier import ASDRiskClassifier
 from scripts.run_global_deduplication import DeduplicationMigration
 
 # Configure logging
-setup_logging(log_file="unified_pipeline.log")
+setup_logging(log_file="logs/unified_pipeline.log")
 logger = logging.getLogger(__name__)
 
 

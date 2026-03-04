@@ -31,7 +31,7 @@ class CyberDataCollector:
     def __init__(self, config: CollectionConfig, env_path: str = ".env") -> None:
         self.config = config
         self.env_config = ConfigManager(env_path).load()
-        setup_logging("cyber_collector.log")
+        setup_logging("logs/cyber_collector.log")
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.rate_limiter = RateLimiter()
