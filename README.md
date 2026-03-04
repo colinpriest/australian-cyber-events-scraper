@@ -120,6 +120,7 @@ python run_full_pipeline.py --skip-classification
 | `--re-enrich-limit N` | Limit re-enrichment count | No limit |
 | `--skip-classification` | Skip ASD classification | False |
 | `--classify-limit N` | Limit classification count | No limit |
+| `--force-dedup` | Force full deduplication rebuild (skip incremental mode) | False |
 | `--continue-on-error` | Continue if a phase fails | False |
 | `--source SOURCE [SOURCE ...]` | Data sources to use | All |
 | `--max-events N` | Max events per source per month | 1000 |
@@ -211,8 +212,10 @@ australian-cyber-events-scraper/
 │   └── setup/
 │       └── setup_bigquery_auth.py     # BigQuery authentication setup
 │
+├── docs/                          # Detailed pipeline stage documentation
 ├── machine_learning_filter/       # Trained Random Forest model artifacts
 ├── instance/                      # SQLite database (gitignored)
+├── logs/                          # Log files (unified_pipeline.log, etc.)
 ├── dashboard/                     # Generated HTML dashboard (gitignored)
 └── risk_matrix/                   # Generated ASD risk matrix Excel files
 ```
@@ -235,8 +238,10 @@ python scripts/asd_risk_classifier.py --output-dir my_matrices
 ### Global Deduplication
 
 ```bash
-python scripts/run_global_deduplication.py             # Standard deduplication
+python scripts/run_global_deduplication.py             # Incremental deduplication (new events only)
+python scripts/run_global_deduplication.py --force      # Full rebuild (reprocess all events)
 python scripts/run_global_deduplication.py --dry-run   # Preview without changes
+python scripts/run_global_deduplication.py --verbose    # Enable verbose logging
 ```
 
 ### Dashboard
@@ -357,7 +362,27 @@ pytest --cov=cyber_data_collector   # With coverage report
 | BigQuery auth errors | Run `python scripts/setup/setup_bigquery_auth.py` |
 | Memory issues | Reduce `BATCH_SIZE` in `.env` or process smaller date ranges |
 
-Check `unified_pipeline.log` for detailed processing information.
+Check `logs/unified_pipeline.log` for detailed processing information.
+
+---
+
+## Documentation
+
+Detailed specifications for each pipeline stage are in the `docs/` directory:
+
+| Document | Description |
+|----------|-------------|
+| [01-data-sources.md](docs/01-data-sources.md) | Data source descriptions, API configurations, and justifications |
+| [02-discovery-collection.md](docs/02-discovery-collection.md) | Discovery pipeline, search queries, and LLM prompts |
+| [03-content-scraping.md](docs/03-content-scraping.md) | Playwright scraping, content extraction, and fallback strategies |
+| [04-event-filtering.md](docs/04-event-filtering.md) | Random Forest ML filter, confidence scoring, and LLM classification |
+| [05-event-enrichment.md](docs/05-event-enrichment.md) | 5-stage enrichment pipeline with Perplexity and GPT-4o |
+| [06-deduplication.md](docs/06-deduplication.md) | Entity-based deduplication, similarity matching, and merge logic |
+| [07-ASD-risk-classification.md](docs/07-ASD-risk-classification.md) | ASD risk matrix framework and GPT-4o classification |
+| [08-dashboard-generation.md](docs/08-dashboard-generation.md) | Dashboard SQL queries, Chart.js charts, and OAIC comparison |
+| [data-dictionary.md](docs/data-dictionary.md) | Complete database schema, table definitions, and field descriptions |
+
+These documents contain sufficient detail for independent review and replication of each pipeline stage.
 
 ---
 
