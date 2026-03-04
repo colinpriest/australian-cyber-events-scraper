@@ -36,15 +36,10 @@ from tqdm import tqdm
 # Load environment variables
 load_dotenv()
 
+from cyber_data_collector.utils import setup_logging
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('asd_risk_classifier.log', encoding='utf-8')
-    ]
-)
+setup_logging(log_file="logs/asd_risk_classifier.log")
 logger = logging.getLogger(__name__)
 
 # Valid stakeholder categories (from ASD risk matrix)
