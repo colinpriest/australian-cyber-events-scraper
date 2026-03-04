@@ -65,7 +65,7 @@ class UnicodeStreamHandler(logging.StreamHandler):
             self.handleError(record)
 
 setup_logging(
-    log_file="discover_enrich_events.log",
+    log_file="logs/discover_enrich_events.log",
     stream_handler=UnicodeStreamHandler(),
 )
 logger = logging.getLogger(__name__)

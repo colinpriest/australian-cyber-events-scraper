@@ -59,6 +59,7 @@ def setup_logging(
     # Always add the file handler when requested, unless one for the same path
     # is already registered (guards against being called twice with the same file).
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         target = str(Path(log_file).resolve())
         has_file = any(
             isinstance(h, logging.FileHandler)
