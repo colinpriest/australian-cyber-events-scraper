@@ -16,9 +16,19 @@ from types import SimpleNamespace
 from typing import List, Optional
 
 from cyber_data_collector.utils import ConfigManager
+from cyber_data_collector.utils.run_summary import (
+    install_run_summary,
+    print_run_summary,
+)
 from scripts.project_status import report_status
 from run_full_pipeline import UnifiedPipeline
 from scripts.wipe_database import DatabaseRecordWiper
+
+# Install end-of-run summary handler + demote noisy third-party loggers.
+# Idempotent - run_full_pipeline.py also installs but the second call is
+# a no-op. Calling here ensures the collector is active even when this
+# wrapper short-circuits before delegating (e.g. status / dry-run paths).
+install_run_summary()
 
 
 DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance"]
@@ -55,7 +65,13 @@ def _build_pipeline_args(
 
 
 def _run_pipeline(args: SimpleNamespace) -> int:
+    """Run the unified pipeline. Stashes ``pipeline.results`` on the args
+    namespace so the outermost ``__main__`` summary can include phase
+    results. The summary itself is printed by ``__main__``, not here, to
+    avoid double-printing.
+    """
     pipeline = UnifiedPipeline(args.db_path)
+    args._pipeline_results = pipeline.results  # picked up by main()
     success = asyncio.run(pipeline.run_pipeline(args))
 
     # Print API token usage and cost report
@@ -157,8 +173,45 @@ def _normalize_sources(sources: Optional[List[List[str]]]) -> Optional[List[str]
 def main() -> int:
     parser = build_parser()
     parsed = parser.parse_args()
-    return parsed.func(parsed)
+    try:
+        return parsed.func(parsed)
+    except KeyboardInterrupt:
+        import logging
+        logging.getLogger(__name__).warning(
+            "pipeline.py interrupted by user (Ctrl+C)"
+        )
+        return 130
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    rc = 1
+    parsed_args = None
+    try:
+        parser = build_parser()
+        parsed_args = parser.parse_args()
+        try:
+            rc = parsed_args.func(parsed_args)
+        except KeyboardInterrupt:
+            import logging
+            logging.getLogger(__name__).warning(
+                "pipeline.py interrupted by user (Ctrl+C)"
+            )
+            rc = 130
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                f"pipeline.py unhandled exception: {exc}"
+            )
+            rc = 1
+    finally:
+        # Always print the end-of-run summary - including the
+        # status / rebuild / refresh paths. Phase results are stashed on
+        # the args namespace by _run_pipeline; status / rebuild --dry-run
+        # paths leave it unset, in which case we just print the
+        # warning/error log without a phases section.
+        phase_results = getattr(parsed_args, "_pipeline_results", None) if parsed_args else None
+        try:
+            print_run_summary(phase_results=phase_results)
+        except Exception:
+            pass
+    raise SystemExit(rc)

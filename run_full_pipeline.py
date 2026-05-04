@@ -101,12 +101,19 @@ from scripts.build_static_dashboard import (
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.utils import ConfigManager, setup_logging
+from cyber_data_collector.utils.run_summary import (
+    install_run_summary,
+    print_run_summary,
+)
 from scripts.perplexity_backfill_events import PerplexityBackfillProcessor
 from scripts.asd_risk_classifier import ASDRiskClassifier
 from scripts.run_global_deduplication import DeduplicationMigration
 
 # Configure logging
 setup_logging(log_file="logs/unified_pipeline.log")
+# Install end-of-run summary handler + demote noisy third-party loggers
+# so WARNINGs/ERRORs don't get drowned out by per-request HTTP chatter.
+install_run_summary()
 logger = logging.getLogger(__name__)
 
 
@@ -207,6 +214,17 @@ class UnifiedPipeline:
             pipeline.close()
             logger.info(f"Initial discovery complete: {initial_events} events found")
 
+            # Sanity check: zero events from a non-trivial lookback window
+            # is almost certainly a misconfiguration (API key missing, all
+            # sources disabled, network down) - flag it as a warning.
+            lookback_days = getattr(args, "days", 0) or 0
+            if initial_events == 0 and lookback_days > 0:
+                logger.warning(
+                    f"Discovery returned zero events over a {lookback_days}-day "
+                    "window. Check API keys (PERPLEXITY_API_KEY, "
+                    "GOOGLE_CUSTOMSEARCH_API_KEY) and source filters."
+                )
+
             # Step 2: Automatically run Perplexity enrichment on newly discovered events
             logger.info("\nStep 2/3: Enriching events with Perplexity AI (high-quality enrichment)...")
             logger.info("This automatically upgrades GPT-4o-mini enrichment to Perplexity AI...")
@@ -275,6 +293,18 @@ class UnifiedPipeline:
             logger.info(f"Perplexity enrichment complete: {enriched_count} enriched, {failed_count} failed")
             self.results['reenrichment']['success'] = True
             self.results['reenrichment']['events_enriched'] = enriched_count
+            self.results['reenrichment']['events_failed'] = failed_count
+
+            # Sanity check: a high failure rate suggests the API is
+            # rate-limiting, the prompt has issues, or the network is
+            # flaky. Surface it as a warning so the user notices.
+            attempted = enriched_count + failed_count
+            if attempted >= 10 and failed_count / attempted > 0.25:
+                logger.warning(
+                    f"Perplexity enrichment failure rate {failed_count}/"
+                    f"{attempted} ({failed_count / attempted:.0%}) above 25% "
+                    "threshold. Check API key + network."
+                )
             return True
 
         except Exception as e:
@@ -337,6 +367,15 @@ class UnifiedPipeline:
 
             self.results['reenrichment']['success'] = True
             self.results['reenrichment']['events_enriched'] = enriched_count
+            self.results['reenrichment']['events_failed'] = failed_count
+
+            attempted = enriched_count + failed_count
+            if attempted >= 10 and failed_count / attempted > 0.25:
+                logger.warning(
+                    f"Re-enrichment failure rate {failed_count}/{attempted} "
+                    f"({failed_count / attempted:.0%}) above 25% threshold. "
+                    "Check Perplexity API key + network."
+                )
             return True
 
         except Exception as e:
@@ -366,6 +405,24 @@ class UnifiedPipeline:
             dedup_count = stats.get('output_events') or stats.get('final_active_events')
             if dedup_count is not None:
                 self.results['deduplication']['events_deduplicated'] = dedup_count
+
+            # Sanity check: if dedup output is more than the input, or
+            # input >> output by an unrealistic factor, something is off.
+            input_events = stats.get('input_events') or stats.get('total_enriched_events')
+            if (isinstance(input_events, int) and isinstance(dedup_count, int)
+                    and input_events > 0 and dedup_count > 0):
+                if dedup_count > input_events:
+                    logger.warning(
+                        f"Deduplication produced more output ({dedup_count}) "
+                        f"than input ({input_events}) - schema invariant "
+                        "violated; inspect DeduplicatedEvents."
+                    )
+                elif dedup_count < input_events * 0.10:
+                    logger.warning(
+                        f"Deduplication collapsed {input_events} input events "
+                        f"to only {dedup_count} dedup events ({dedup_count / input_events:.1%}). "
+                        "Threshold may be too aggressive."
+                    )
 
             self.results['deduplication']['success'] = True
             logger.info("Global deduplication completed successfully")
@@ -510,6 +567,20 @@ class UnifiedPipeline:
             static_file = self._generate_static_dashboard(args)
             if static_file:
                 files_created.append(static_file)
+                # Sanity check: a real dashboard with all chart sections
+                # is at least ~50 KB once embedded JSON is injected. A
+                # tiny file means a query failed silently and we wrote a
+                # stub.
+                try:
+                    size = Path(static_file).stat().st_size
+                    if size < 50 * 1024:
+                        logger.warning(
+                            f"Dashboard file {static_file} is only "
+                            f"{size:,} bytes (<50 KB). Likely a query "
+                            "returned no rows - inspect DB contents."
+                        )
+                except Exception:
+                    pass
 
             self.results['dashboard']['success'] = True
             self.results['dashboard']['files_created'] = files_created
@@ -739,16 +810,28 @@ Examples:
 
     # Run pipeline
     pipeline = UnifiedPipeline(args.db_path)
-    
+
+    exit_code = 1
     try:
-        success = asyncio.run(pipeline.run_pipeline(args))
-        sys.exit(0 if success else 1)
-    except KeyboardInterrupt:
-        print("\nPipeline interrupted by user")
-        sys.exit(130)
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        sys.exit(1)
+        try:
+            success = asyncio.run(pipeline.run_pipeline(args))
+            exit_code = 0 if success else 1
+        except KeyboardInterrupt:
+            print("\nPipeline interrupted by user")
+            logger.warning("Pipeline interrupted by user (Ctrl+C)")
+            exit_code = 130
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            exit_code = 1
+    finally:
+        # Always print the end-of-run summary - success, failure, and
+        # Ctrl+C alike. Includes phase-level results so the user can
+        # see exactly which phase passed/failed at a glance.
+        try:
+            print_run_summary(phase_results=pipeline.results)
+        except Exception:
+            pass
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

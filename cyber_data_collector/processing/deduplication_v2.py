@@ -1322,7 +1322,11 @@ class DeduplicationEngine:
                 perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
             )
             if validated_records != max_records:
-                self.logger.warning(
+                # INFO: validator caught and corrected an LLM overshoot during
+                # merge. The validator is doing its job; the user can't act on
+                # individual rejections. Aggregate quality issues are surfaced
+                # by separate phase-level sanity checks.
+                self.logger.info(
                     f"Merge: records_affected {max_records:,} rejected for '{master.title[:50]}' - "
                     f"using {validated_records if validated_records else 'NULL'}"
                 )

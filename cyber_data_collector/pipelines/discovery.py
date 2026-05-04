@@ -59,6 +59,32 @@ def _enum_value_or_str(value: Any) -> Optional[str]:
     return value.value if hasattr(value, 'value') else str(value)
 
 
+def _parse_event_date(raw: Any):
+    """Coerce a SQLite-returned event_date into a ``datetime.date``.
+
+    SQLite's behaviour depends on column type (TEXT vs DATE) AND the
+    connection's detect_types config: it can return any of str / date /
+    datetime / None for the same logical column. This helper handles
+    every shape so callers don't trip the recurring
+    ``fromisoformat: argument must be str`` bug.
+
+    Returns ``None`` for unparseable / missing values.
+    """
+    from datetime import date as _date, datetime as _datetime
+    if raw is None:
+        return None
+    if isinstance(raw, _datetime):
+        return raw.date()
+    if isinstance(raw, _date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return _datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    return None
+
+
 # Configure logging with Unicode support + tqdm-safe output
 class UnicodeStreamHandler(logging.StreamHandler):
     def emit(self, record):
@@ -2299,13 +2325,13 @@ class EventDiscoveryEnrichmentPipeline:
             # Query all enriched events from the database
             cursor = self.db._conn.cursor()
             cursor.execute("""
-                SELECT enriched_event_id, title, summary, event_date, event_type, severity, 
+                SELECT enriched_event_id, title, summary, event_date, event_type, severity,
                        records_affected, confidence_score
                 FROM EnrichedEvents
                 WHERE status = 'Active'
                 ORDER BY event_date DESC
             """)
-            
+
             enriched_events = []
             for row in cursor.fetchall():
                 # Convert database row to CyberEvent object
@@ -2313,7 +2339,7 @@ class EventDiscoveryEnrichmentPipeline:
                     event_id=row[0],
                     title=row[1],
                     summary=row[2],
-                    event_date=datetime.fromisoformat(row[3]).date() if row[3] else None,
+                    event_date=_parse_event_date(row[3]),
                     event_type=row[4],
                     severity=row[5],
                     records_affected=row[6],
@@ -2322,10 +2348,10 @@ class EventDiscoveryEnrichmentPipeline:
                     confidence=row[7] if row[7] else 0.5
                 )
                 enriched_events.append(event)
-            
+
             logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(enriched_events)} enriched events from database")
             return enriched_events
-            
+
         except Exception as e:
             logger.error(f"[GLOBAL DEDUPLICATION] Failed to load enriched events: {e}")
             return []

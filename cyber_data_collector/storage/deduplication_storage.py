@@ -269,7 +269,10 @@ class DeduplicationStorage:
                 perplexity_api_key=os.getenv('PERPLEXITY_API_KEY'),
             )
             if validated_records != event.records_affected and event.records_affected is not None:
-                self.logger.warning(
+                # INFO: validator-side adjustment during persistence. Same
+                # rationale as validation.py - the validator successfully
+                # caught an LLM extraction error; not user-actionable.
+                self.logger.info(
                     f"records_affected adjusted from {event.records_affected:,} to "
                     f"{validated_records if validated_records else 'NULL'} for: {event.title[:60]}"
                 )

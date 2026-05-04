@@ -974,8 +974,20 @@ def load_oaic_data() -> List[Dict[str, Any]]:
                     if record.get('individuals_affected_distribution') and not existing.get('individuals_affected_distribution'):
                         existing['individuals_affected_distribution'] = record['individuals_affected_distribution']
 
-                    # For top_sectors, prefer records with valid sectors over empty/null
-                    if record.get('top_sectors') and not existing.get('top_sectors'):
+                    # For top_sectors, prefer records with VALID sectors -
+                    # i.e. at least one entry has a populated `notifications`
+                    # count. The older code only checked truthiness of the
+                    # array, which misclassified an array of "all-null
+                    # notifications" entries (a regression introduced by an
+                    # earlier scraper bug) as valid and refused to fall
+                    # through to older files that DID have counts.
+                    def _has_any_notifications(rec):
+                        ts = rec.get('top_sectors') or []
+                        return any(
+                            isinstance(s, dict) and isinstance(s.get('notifications'), (int, float))
+                            for s in ts
+                        )
+                    if record.get('top_sectors') and not _has_any_notifications(existing):
                         existing['top_sectors'] = record['top_sectors']
 
                     # For attack types, prefer valid (non-null) values
@@ -3754,6 +3766,68 @@ def main():
             'asd_risk_current': get_asd_risk_matrix(conn, current_year),
             'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),
         }
+
+    # Per-section data-presence sanity checks. Each chart section in the
+    # dashboard has a "no data available" fallback render path; if any of
+    # those would fire, surface it as a WARNING so the operator sees it
+    # in the end-of-run summary instead of silently shipping an empty
+    # chart. Specs: (data_key, what_to_check, friendly_label)
+    section_checks = [
+        ('oaic_sectors',
+         lambda d: bool(d.get('sectors')),
+         "OAIC: Top Affected Sectors"),
+        ('oaic_sectors',
+         lambda d: any(d.get('ratios') or []),
+         "Comparison: Database/OAIC Ratio by Sector"),
+        ('oaic_comparison',
+         lambda d: bool(d.get('periods')),
+         "Comparison: Australian Notifications - DB vs OAIC"),
+        ('oaic_cyber_incidents',
+         lambda d: bool(d.get('periods')),
+         "OAIC: Cyber Incidents over Time"),
+        ('oaic_attack_types',
+         lambda d: bool(d.get('attack_types')),
+         "OAIC: Attack Types"),
+        ('oaic_individuals_affected',
+         lambda d: bool(d.get('periods')),
+         "OAIC: Individuals Affected per Period"),
+        ('oaic_monthly_comparison',
+         lambda d: bool(d.get('months')),
+         "Comparison: Monthly Notifications"),
+        ('oaic_individuals_affected_distribution',
+         lambda d: bool(d.get('buckets')),
+         "Comparison: Individuals-Affected Distribution"),
+        ('oaic_source_split',
+         lambda d: bool(d.get('periods')),
+         "Comparison: Source of Breaches"),
+        ('oaic_time_to_identify',
+         lambda d: bool(d.get('periods')) and bool(d.get('buckets')),
+         "OAIC: Time-to-Identify"),
+        ('oaic_time_to_notify',
+         lambda d: bool(d.get('periods')) and bool(d.get('buckets')),
+         "OAIC: Time-to-Notify"),
+        ('oaic_personal_info_types',
+         lambda d: bool(d.get('periods')),
+         "Comparison: Personal Information Types over Time"),
+    ]
+    empty_sections = []
+    for key, check, label in section_checks:
+        section_data = data.get(key) or {}
+        try:
+            if not check(section_data):
+                empty_sections.append(label)
+        except Exception:
+            empty_sections.append(label)
+
+    if empty_sections:
+        # Single WARNING listing all the empty sections is easier to act
+        # on than one warning per section; the user gets a checklist.
+        logger.warning(
+            "Dashboard built with %d empty section(s) - charts will show "
+            "'No data available'. Affected: %s. Likely root cause: stale "
+            "or partial OAIC scrape. Re-run scripts/oaic/OAIC_dashboard_scraper.py.",
+            len(empty_sections), ", ".join(empty_sections),
+        )
 
     html = build_html(data, start_date, end_date)
     out_file.write_text(html, encoding='utf-8')

@@ -396,16 +396,25 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
     if value is None:
         return None
 
+    # NOTE on log levels for the rest of this function:
+    # All `records_affected` rejections below fire when the validator
+    # successfully catches an LLM extraction error (off-by-1000 parsing
+    # mistake, headline-number hallucination, etc.). The validator is
+    # doing its job - the user can't act on individual rejections, so
+    # they're INFO-level "what I cleaned" notes rather than WARNINGs
+    # that need attention. Aggregate problems (e.g. 90% of LLM outputs
+    # rejected) are caught by separate phase-level sanity checks.
+
     # Convert to int if needed
     try:
         value = int(value)
     except (ValueError, TypeError):
-        logger.warning(f"Invalid records_affected value '{value}' for event: {event_title}")
+        logger.info(f"Invalid records_affected value '{value}' for event: {event_title}")
         return None
 
     # Reject negative values
     if value < 0:
-        logger.warning(f"Negative records_affected ({value}) rejected for event: {event_title}")
+        logger.info(f"Negative records_affected ({value}) rejected for event: {event_title}")
         return None
 
     # Reject zero (use None instead)
@@ -415,7 +424,7 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
     # Reject suspiciously low values (likely parsing error where units were missed)
     MIN_REALISTIC_RECORDS = 50
     if value < MIN_REALISTIC_RECORDS:
-        logger.warning(
+        logger.info(
             f"Suspiciously low records_affected ({value}) rejected for event: {event_title}. "
             f"Likely parsing error (missed 'thousand' or 'million' units). "
             f"Minimum realistic value is {MIN_REALISTIC_RECORDS}."
@@ -440,7 +449,7 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
 
     if value > SMALL_ORG_MAX and not (is_international or is_major_au or is_gov):
         # Small/unknown organization exceeds 20M cap
-        logger.warning(
+        logger.info(
             f"High records_affected ({value:,}) rejected for small/unknown organization. "
             f"Event: {event_title}. "
             f"Record counts > {SMALL_ORG_MAX:,} only accepted for major organizations. "
@@ -450,7 +459,7 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
 
     if value > LARGE_AU_ORG_MAX and (is_major_au or is_gov) and not is_international:
         # Major Australian organization exceeds 30M cap
-        logger.warning(
+        logger.info(
             f"High records_affected ({value:,}) rejected for major Australian organization. "
             f"Event: {event_title}. "
             f"Major Australian organizations capped at {LARGE_AU_ORG_MAX:,} "
@@ -461,7 +470,7 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
     # Reject values over 1 billion (no single breach can realistically affect more)
     MAX_RECORDS = 1_000_000_000
     if value > MAX_RECORDS:
-        logger.warning(
+        logger.info(
             f"Unrealistic records_affected ({value:,}) rejected (exceeds maximum of {MAX_RECORDS:,}) "
             f"for event: {event_title}"
         )
@@ -674,7 +683,10 @@ def llm_validate_records_affected(
                     )
                     return validated_corrected, True
                 else:
-                    logger.warning(
+                    # INFO: validator caught a Perplexity-side overshoot
+                    # (typically a customer-lifetime number rather than
+                    # actual breach scope). Not user-actionable.
+                    logger.info(
                         "Perplexity's corrected_value %s for '%s' failed validation — ignoring",
                         corrected_int, event_title[:60],
                     )

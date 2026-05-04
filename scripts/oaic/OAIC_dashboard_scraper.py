@@ -50,80 +50,14 @@ logger = logging.getLogger(__name__)
 QUARANTINE_DIR = Path("instance/oaic_debug")
 
 
-# ----------------------------------------------------------------------
-# In-memory log capture so the end-of-run summary can resurface every
-# warning/error that scrolled off the console (per-run, not appended).
-# httpx and openai are demoted to WARNING because their INFO chatter
-# (one line per HTTP request) was the main reason errors got pushed
-# off-screen.
-# ----------------------------------------------------------------------
-
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-
-
-class _RunLogCollector(logging.Handler):
-    """Capture every WARNING/ERROR/CRITICAL emitted during the run, in
-    order, so we can replay them at the end as a clean summary.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self.records: List[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.levelno >= logging.WARNING:
-            self.records.append(record)
-
-    def by_level(self) -> Tuple[List[logging.LogRecord], List[logging.LogRecord]]:
-        warnings = [r for r in self.records if r.levelno == logging.WARNING]
-        errors = [r for r in self.records if r.levelno >= logging.ERROR]
-        return warnings, errors
-
-
-_RUN_LOG_COLLECTOR = _RunLogCollector()
-logging.getLogger().addHandler(_RUN_LOG_COLLECTOR)
-
-
-def _print_run_summary() -> None:
-    """Replay every WARNING/ERROR captured during this run, printing them
-    to stdout with clear section headers so they can't get lost in the
-    HTTP/Playwright noise. Always called from main()'s finally block so
-    summaries surface even on Ctrl+C / unhandled exceptions.
-    """
-    warnings_, errors = _RUN_LOG_COLLECTOR.by_level()
-
-    sep = "=" * 78
-
-    def _fmt(rec: logging.LogRecord) -> str:
-        # Deduplicate-friendly format: time + level + logger + message.
-        ts = datetime.fromtimestamp(rec.created).strftime("%H:%M:%S")
-        return f"[{ts}] {rec.levelname:7s} {rec.name}: {rec.getMessage()}"
-
-    print()
-    print(sep)
-    print(f"  RUN SUMMARY  -  {len(errors)} error(s), {len(warnings_)} warning(s)")
-    print(sep)
-
-    if errors:
-        print()
-        print(f"ERRORS ({len(errors)})")
-        print("-" * 78)
-        for r in errors:
-            print(_fmt(r))
-
-    if warnings_:
-        print()
-        print(f"WARNINGS ({len(warnings_)})")
-        print("-" * 78)
-        for r in warnings_:
-            print(_fmt(r))
-
-    if not warnings_ and not errors:
-        print()
-        print("No warnings or errors captured.")
-    print(sep)
+# Run-summary infra (log-capture + end-of-run replay) is shared with
+# pipeline.py / run_full_pipeline.py so all three entry points present
+# WARNINGs and ERRORs the same way.
+from cyber_data_collector.utils.run_summary import (
+    install_run_summary,
+    print_run_summary as _print_run_summary,
+)
+install_run_summary()
 
 
 class OAICDashboardController:
@@ -2784,22 +2718,45 @@ CRITICAL:
             result["malware"] = None
             result["compromised_credentials"] = None
 
-        # Top sectors
-        sectors_data = extractions.get(9, {})
+        # Top sectors. Page 2's snapshot is the AUTHORITATIVE source -
+        # it lists the top-5 sectors with real per-sector notification
+        # counts read from the bar labels. Page 9's "sector_by_source"
+        # is a different shape (5x3 matrix of source-causes per sector)
+        # and the per-sector total can only be derived by summing its
+        # three source columns - which we do as a fallback when page 9
+        # is available AND page 2's snapshot didn't yield counts.
         result["top_sectors"] = []
-        for sector_info in sectors_data.get("top_sectors", []):
+        for sector_info in snapshot.get("top_sectors", []):
             result["top_sectors"].append({
                 "sector": sector_info.get("sector"),
-                "notifications": sector_info.get("total_notifications")
+                # FIX: was `None`. The snapshot DOES have a real
+                # notifications integer per sector - the previous code
+                # threw it away, leaving every entry useless and breaking
+                # the dashboard's "OAIC: Top Affected Sectors" chart.
+                "notifications": sector_info.get("notifications"),
             })
 
-        # Also use snapshot sectors if available
-        if not result["top_sectors"]:
-            for sector_info in snapshot.get("top_sectors", []):
-                result["top_sectors"].append({
-                    "sector": sector_info.get("sector"),
-                    "notifications": None
-                })
+        # Page-9 fallback: when the snapshot didn't supply counts (e.g.
+        # the LLM missed those bars) AND we have a clean page-9 matrix,
+        # sum its 3 source columns per sector to derive a total.
+        if result["top_sectors"] and any(
+            entry["notifications"] is None for entry in result["top_sectors"]
+        ):
+            p9_totals: Dict[str, int] = {}
+            for row in (extractions.get(9, {}).get("sector_by_source") or []):
+                sector_name = row.get("sector")
+                if not sector_name:
+                    continue
+                total = 0
+                for col in ("human_error", "malicious_or_criminal", "system_fault"):
+                    v = row.get(col)
+                    if isinstance(v, (int, float)):
+                        total += int(v)
+                if total > 0:
+                    p9_totals[sector_name] = total
+            for entry in result["top_sectors"]:
+                if entry["notifications"] is None and entry["sector"] in p9_totals:
+                    entry["notifications"] = p9_totals[entry["sector"]]
 
         # Individuals affected distribution
         individuals = extractions.get(4, {})
