@@ -477,7 +477,15 @@ def _severity_to_numeric(severity: str) -> int:
 
 
 def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    """Get maximum and average severity per month with entity details."""
+    """Get maximum and average severity per month with entity details.
+
+    Excludes events with Unknown / unrecognised severity so months that contain
+    *only* unknown events are omitted from the chart entirely, rather than
+    plotted as a misleading dip to zero.
+    """
+    # Severity values to ignore for the max/avg charts (clean + legacy bug variants).
+    excluded = ('Unknown', 'EventSeverity.UNKNOWN', 'EventSeverity.UNKNOW')
+
     # Query for maximum severity
     query_max = """
         SELECT
@@ -491,6 +499,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
         LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
         WHERE de.status = 'Active'
             AND de.severity IS NOT NULL
+            AND de.severity NOT IN (?, ?, ?)
             AND de.event_date >= ?
             AND de.event_date <= ?
         ORDER BY strftime('%Y-%m', de.event_date),
@@ -507,7 +516,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             END
     """
 
-    # Query for average severity
+    # Query for average severity (Unknown excluded so it doesn't drag the mean to 0).
     query_avg = """
         SELECT
             strftime('%Y-%m', event_date) as month,
@@ -520,11 +529,12 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
                 WHEN 'EventSeverity.MEDIUM' THEN 2
                 WHEN 'Low' THEN 1
                 WHEN 'EventSeverity.LOW' THEN 1
-                ELSE 0
+                ELSE NULL
             END) as avg_severity_numeric
         FROM DeduplicatedEvents
         WHERE status = 'Active'
             AND severity IS NOT NULL
+            AND severity NOT IN (?, ?, ?)
             AND event_date >= ?
             AND event_date <= ?
         GROUP BY month
@@ -532,7 +542,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
     """
 
     # Get maximum severity per month
-    rows = conn.execute(query_max, (start_date, end_date)).fetchall()
+    rows = conn.execute(query_max, (*excluded, start_date, end_date)).fetchall()
 
     # Group by month and get the first (highest severity) event
     monthly_max = {}
@@ -550,7 +560,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             }
 
     # Get average severity per month
-    avg_rows = conn.execute(query_avg, (start_date, end_date)).fetchall()
+    avg_rows = conn.execute(query_avg, (*excluded, start_date, end_date)).fetchall()
     monthly_avg = {}
     for row in avg_rows:
         month = row['month']
@@ -575,7 +585,8 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
 
 
 def get_median_severity_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    """Get median severity per month."""
+    """Get median severity per month, excluding Unknown / unrecognised values."""
+    excluded = ('Unknown', 'EventSeverity.UNKNOWN', 'EventSeverity.UNKNOW')
     query = """
         SELECT
             strftime('%Y-%m', event_date) as month,
@@ -583,11 +594,12 @@ def get_median_severity_per_month(conn: sqlite3.Connection, start_date: str, end
         FROM DeduplicatedEvents
         WHERE status = 'Active'
             AND severity IS NOT NULL
+            AND severity NOT IN (?, ?, ?)
             AND event_date >= ?
             AND event_date <= ?
         ORDER BY month, event_date
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, (*excluded, start_date, end_date)).fetchall()
 
     # Group by month and calculate median
     monthly_severities = {}
@@ -912,12 +924,21 @@ def load_oaic_data() -> List[Dict[str, Any]]:
     Combines PDF-scraped data (has individuals_affected_average/median) with
     dashboard-scraped data (has individuals_affected_distribution) to get the
     most complete dataset. Validates data to filter out obviously incorrect values.
+
+    Files are processed **newest-first** (by mtime) so a fresh re-scrape
+    automatically supersedes any stale or corrupt fields from older runs;
+    older files only contribute fields the newest run left blank.
     """
-    oaic_files = glob.glob('oaic_cyber_statistics_*.json')
+    oaic_files = sorted(
+        glob.glob('oaic_cyber_statistics_*.json'),
+        key=os.path.getmtime,
+        reverse=True,  # newest first
+    )
 
     if not oaic_files:
         logger.warning("No OAIC data files found. Run oaic_data_scraper.py first.")
         return []
+    logger.info(f"Loading OAIC data from {len(oaic_files)} file(s), newest first: {oaic_files[0]}")
 
     # Load all OAIC files and merge by period
     all_records: Dict[str, Dict[str, Any]] = {}  # key: "year period" -> record
@@ -1189,16 +1210,22 @@ def normalize_sector_name(sector: str) -> str:
     if not sector:
         return sector
 
-    # Mapping of variations to canonical names
+    # Mapping of variations to canonical names. OAIC reports Insurance as
+    # its own sector but our DB groups insurance companies under Finance, so
+    # we collapse "Insurance" into "Finance" here for an apples-to-apples
+    # comparison. Same idea for the various 'Health' / 'Government' aliases.
     sector_mappings = {
-        'Australian': 'Australian Government',
-        'Australian government': 'Australian Government',
-        'Government': 'Australian Government',
-        'Finance (incl. superannuation)': 'Finance',
-        'Finance (including superannuation)': 'Finance',
-        'Health service providers': 'Health',
-        'Health services': 'Health',
-        'Healthcare': 'Health',
+        'Australian':                          'Australian Government',
+        'Australian government':               'Australian Government',
+        'Government':                          'Australian Government',
+        'Finance (incl. superannuation)':      'Finance',
+        'Finance (including superannuation)':  'Finance',
+        'Insurance':                           'Finance',  # combined for DB-vs-OAIC comparison
+        'Health service providers':            'Health',
+        'Health services':                     'Health',
+        'Healthcare':                          'Health',
+        # OAIC label vs DB label for recruitment agencies
+        'Recruitment/Employment Services':     'Recruitment Agencies',
     }
 
     # Check for exact match first
@@ -1221,15 +1248,45 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
 
     sector_totals = defaultdict(int)
 
+    # Sanity range: real OAIC top-5 sector counts per semester are between
+    # ~10 and ~250 per sector. Anything below 10 is almost certainly a rank
+    # position the scraper captured under a "System Fault" / "Cyber Incident"
+    # filtered view, not the unfiltered count we want; anything above 250 is
+    # almost certainly the LLM hallucinating a total-for-all-sectors against
+    # one sector. Either way it would silently corrupt the comparison chart,
+    # so we drop it.
+    OAIC_SECTOR_COUNT_MIN = 10
+    OAIC_SECTOR_COUNT_MAX = 250
+    dropped = 0
+
     for record in oaic_data:
         top_sectors = record.get('top_sectors') or []
         for sector_entry in top_sectors:
             sector = sector_entry.get('sector')
             notifications = sector_entry.get('notifications', 0)
-            if sector and notifications:
-                # Normalize sector name before aggregating
-                normalized_sector = normalize_sector_name(sector)
-                sector_totals[normalized_sector] += notifications
+            if not sector or not notifications:
+                continue
+            try:
+                n = int(notifications)
+            except (TypeError, ValueError):
+                continue
+            if not (OAIC_SECTOR_COUNT_MIN <= n <= OAIC_SECTOR_COUNT_MAX):
+                logger.debug(
+                    "Dropping out-of-range OAIC top_sector entry: "
+                    "%s %s sector=%r notifications=%s (sanity range %d-%d)",
+                    record.get('year'), record.get('period'), sector, n,
+                    OAIC_SECTOR_COUNT_MIN, OAIC_SECTOR_COUNT_MAX,
+                )
+                dropped += 1
+                continue
+            normalized_sector = normalize_sector_name(sector)
+            sector_totals[normalized_sector] += n
+    if dropped:
+        logger.warning(
+            "OAIC top-sectors aggregation: dropped %d entries outside "
+            "sanity range %d-%d (likely rank values or LLM hallucinations)",
+            dropped, OAIC_SECTOR_COUNT_MIN, OAIC_SECTOR_COUNT_MAX,
+        )
 
     # Sort by total notifications
     sorted_sectors = sorted(sector_totals.items(), key=lambda x: x[1], reverse=True)
@@ -1258,11 +1315,19 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
 
     # Map database industry names to OAIC sector names (using normalized names)
     industry_mapping = {
-        'Healthcare': 'Health',
-        'Government': 'Australian Government',
-        'Finance': 'Finance',
-        'Retail': 'Retail',
-        'Education': 'Education'
+        'Healthcare':                          'Health',
+        'Government':                          'Australian Government',
+        'Finance':                             'Finance',
+        'Retail':                              'Retail',
+        'Education':                           'Education',
+        # OAIC's "Legal, accounting & management services" bucket maps to our
+        # Legal Services category (which we use for accounting/consulting too).
+        'Legal Services':                      'Legal, accounting & management services',
+        'Legal':                               'Legal, accounting & management services',
+        # OAIC reports "Recruitment Agencies"; we use a slash-separated label
+        # for these in the DB. Map it through.
+        'Recruitment/Employment Services':     'Recruitment Agencies',
+        'Recruitment':                         'Recruitment Agencies',
     }
 
     # Build comparison data
@@ -1302,61 +1367,100 @@ def calculate_stats_from_distribution(distribution: List[Dict[str, Any]]) -> Tup
     if not distribution:
         return None, None
 
-    # Define midpoints for each range
+    # Define midpoints for each range. Includes BOTH the older bucket scheme
+    # (used by historical PDF scraper, e.g. '10,001-50,000') AND the newer
+    # OAIC dashboard scheme (which split that into '10,001-25,000' and
+    # '25,001-50,000', and uses '1,000,001-10,000,000' as the upper bucket
+    # instead of '1,000,001-5,000,000'). Missing any of these makes
+    # affected buckets silently drop out of the median calculation.
     range_midpoints = {
         '1': 1,
         '2-10': 6,
         '11-100': 55,
-        '101-1,000': 550,
-        '101-1000': 550,
-        '1,001-5,000': 3000,
-        '1001-5000': 3000,
-        '5,001-10,000': 7500,
-        '5001-10000': 7500,
-        '10,001-50,000': 30000,
-        '10001-50000': 30000,
-        '50,001-100,000': 75000,
-        '50001-100000': 75000,
-        '100,001-250,000': 175000,
-        '100001-250000': 175000,
-        '250,001-500,000': 375000,
-        '250001-500000': 375000,
-        '500,001-1,000,000': 750000,
-        '500001-1000000': 750000,
-        '1,000,001-5,000,000': 3000000,
-        '1000001-5000000': 3000000,
-        '5,000,001+': 7500000,
-        '5000001+': 7500000,
+        '101-1,000': 550,                 '101-1000': 550,
+        '1,001-5,000': 3000,              '1001-5000': 3000,
+        '5,001-10,000': 7500,             '5001-10000': 7500,
+        # Old wide bucket
+        '10,001-50,000': 30000,           '10001-50000': 30000,
+        # New (current OAIC dashboard) split
+        '10,001-25,000': 17500,           '10001-25000': 17500,
+        '25,001-50,000': 37500,           '25001-50000': 37500,
+        '50,001-100,000': 75000,          '50001-100000': 75000,
+        '100,001-250,000': 175000,        '100001-250000': 175000,
+        '250,001-500,000': 375000,        '250001-500000': 375000,
+        '500,001-1,000,000': 750000,      '500001-1000000': 750000,
+        # Old upper-bucket label
+        '1,000,001-5,000,000': 3000000,   '1000001-5000000': 3000000,
+        # New (current OAIC dashboard) upper bucket
+        '1,000,001-10,000,000': 5500000,  '1000001-10000000': 5500000,
+        '5,000,001+': 7500000,            '5000001+': 7500000,
     }
 
-    # Build a list of estimated values
+    # Bucket bounds (low, high) for INTERPOLATED median calculation.
+    # Without interpolation the median collapses to the same bucket midpoint
+    # across all heavily-right-skewed OAIC distributions (the median always
+    # falls in the 11-100 bucket -> reported as 55 every semester), which
+    # loses all the real per-semester variation.
+    range_bounds = {
+        '1': (1, 1),
+        '2-10': (2, 10),
+        '11-100': (11, 100),
+        '101-1,000': (101, 1000),                 '101-1000': (101, 1000),
+        '1,001-5,000': (1001, 5000),              '1001-5000': (1001, 5000),
+        '5,001-10,000': (5001, 10_000),           '5001-10000': (5001, 10_000),
+        '10,001-50,000': (10_001, 50_000),        '10001-50000': (10_001, 50_000),
+        '10,001-25,000': (10_001, 25_000),        '10001-25000': (10_001, 25_000),
+        '25,001-50,000': (25_001, 50_000),        '25001-50000': (25_001, 50_000),
+        '50,001-100,000': (50_001, 100_000),      '50001-100000': (50_001, 100_000),
+        '100,001-250,000': (100_001, 250_000),    '100001-250000': (100_001, 250_000),
+        '250,001-500,000': (250_001, 500_000),    '250001-500000': (250_001, 500_000),
+        '500,001-1,000,000': (500_001, 1_000_000),'500001-1000000': (500_001, 1_000_000),
+        '1,000,001-5,000,000': (1_000_001, 5_000_000),
+        '1000001-5000000': (1_000_001, 5_000_000),
+        '1,000,001-10,000,000': (1_000_001, 10_000_000),
+        '1000001-10000000': (1_000_001, 10_000_000),
+        '5,000,001+': (5_000_001, 15_000_000),    '5000001+': (5_000_001, 15_000_000),
+    }
+
+    # Build per-bucket counts in distribution order
+    ordered = []
     values = []
     for item in distribution:
-        range_str = item.get('range', '')
-        count = item.get('count', 0)
-
+        range_str = (item.get('range') or '').strip()
+        count = item.get('count') or 0
         if range_str.lower() == 'unknown' or count == 0:
             continue
-
-        # Normalize range string (remove spaces, handle variations)
         range_normalized = range_str.replace(' ', '').replace(',', '')
-
         midpoint = range_midpoints.get(range_str) or range_midpoints.get(range_normalized)
+        bounds = range_bounds.get(range_str) or range_bounds.get(range_normalized)
+        if midpoint is None or bounds is None:
+            continue
+        ordered.append({'range': range_str, 'count': count,
+                        'midpoint': midpoint, 'low': bounds[0], 'high': bounds[1]})
+        values.extend([midpoint] * count)
 
-        if midpoint:
-            values.extend([midpoint] * count)
-
-    if not values:
+    if not values or not ordered:
         return None, None
 
-    # Calculate average and median
-    avg = sum(values) / len(values)
-    sorted_values = sorted(values)
-    n = len(sorted_values)
-    if n % 2 == 0:
-        median = (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
-    else:
-        median = sorted_values[n//2]
+    # Sort buckets by midpoint so interpolation walks them in order
+    ordered.sort(key=lambda b: b['midpoint'])
+    total_count = sum(b['count'] for b in ordered)
+
+    # Average is just sum-of-midpoints / count (same as before)
+    avg = sum(b['midpoint'] * b['count'] for b in ordered) / total_count
+
+    # Median via linear interpolation: find the bucket containing position
+    # total_count/2 and interpolate within it.
+    target_pos = total_count / 2.0
+    cumulative = 0
+    median: float = ordered[-1]['midpoint']
+    for b in ordered:
+        if cumulative + b['count'] >= target_pos:
+            # The median falls inside this bucket
+            within = (target_pos - cumulative) / b['count']
+            median = b['low'] + within * (b['high'] - b['low'])
+            break
+        cumulative += b['count']
 
     return avg, median
 
@@ -1424,6 +1528,314 @@ def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_p
         'averages': averages,
         'medians': medians,
         'db_averages': db_averages
+    }
+
+
+def prepare_oaic_monthly_comparison(
+    oaic_data: List[Dict[str, Any]],
+    db_path: str = 'instance/cyber_events.db',
+) -> Dict[str, Any]:
+    """OAIC monthly notifications vs DB monthly event count for 2022-01 onwards.
+
+    OAIC publishes per-month bar charts for each semester on page 2. We unfold
+    each semester record into 6 (or fewer) {month, oaic_count} entries indexed
+    by absolute YYYY-MM, then join with DB-event-count-per-month.
+    """
+    import sqlite3
+
+    MONTH_NAME_TO_NUM = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    }
+
+    oaic_by_ym: Dict[str, int] = {}
+    for r in oaic_data:
+        year = r.get('year')
+        if not isinstance(year, int):
+            continue
+        for entry in (r.get('monthly_notifications') or []):
+            mname = (entry.get('month') or '').strip().lower()[:3]
+            mnum = MONTH_NAME_TO_NUM.get(mname)
+            count = entry.get('count')
+            if mnum is None or not isinstance(count, (int, float)):
+                continue
+            oaic_by_ym[f"{year:04d}-{mnum:02d}"] = int(count)
+
+    if not oaic_by_ym:
+        return {'months': [], 'oaic_counts': [], 'db_counts': []}
+
+    months = sorted(oaic_by_ym.keys())
+
+    # DB counts per month over the same range
+    db_by_ym: Dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        for ym, c in conn.execute(
+            "SELECT strftime('%Y-%m', event_date) ym, COUNT(*) c "
+            "FROM DeduplicatedEvents "
+            "WHERE status='Active' AND event_date IS NOT NULL "
+            "GROUP BY ym"
+        ):
+            db_by_ym[ym] = c
+        conn.close()
+    except Exception as e:
+        logger.warning("Monthly comparison DB query failed: %s", e)
+
+    return {
+        'months':      months,
+        'oaic_counts': [oaic_by_ym.get(m) for m in months],
+        'db_counts':   [db_by_ym.get(m, 0) for m in months],
+    }
+
+
+def prepare_individuals_affected_distribution_comparison(
+    oaic_data: List[Dict[str, Any]],
+    db_path: str = 'instance/cyber_events.db',
+) -> Dict[str, Any]:
+    """Comparison of individuals-affected bucket distribution: OAIC vs DB,
+    aggregated across 2022 H1 - latest semester.
+    """
+    import sqlite3
+
+    BUCKETS = [
+        ('1',                     1, 1),
+        ('2-10',                  2, 10),
+        ('11-100',                11, 100),
+        ('101-1,000',             101, 1_000),
+        ('1,001-5,000',           1_001, 5_000),
+        ('5,001-10,000',          5_001, 10_000),
+        ('10,001-25,000',         10_001, 25_000),
+        ('25,001-50,000',         25_001, 50_000),
+        ('50,001-100,000',        50_001, 100_000),
+        ('100,001-250,000',       100_001, 250_000),
+        ('250,001-500,000',       250_001, 500_000),
+        ('1,000,001-10,000,000',  1_000_001, 10_000_000),
+    ]
+    label_to_idx = {lbl: i for i, (lbl, _, _) in enumerate(BUCKETS)}
+
+    oaic_totals = [0] * len(BUCKETS)
+    for r in oaic_data:
+        if (r.get('year') or 0) < 2022:
+            continue
+        for entry in (r.get('individuals_affected_distribution') or []):
+            label = (entry.get('range') or '').strip()
+            count = entry.get('count')
+            if label in label_to_idx and isinstance(count, (int, float)):
+                oaic_totals[label_to_idx[label]] += int(count)
+
+    # DB: bucket records_affected
+    db_totals = [0] * len(BUCKETS)
+    try:
+        conn = sqlite3.connect(db_path)
+        for ra, in conn.execute(
+            "SELECT records_affected FROM DeduplicatedEvents "
+            "WHERE status='Active' AND records_affected IS NOT NULL "
+            "AND event_date >= '2022-01-01'"
+        ):
+            if not isinstance(ra, (int, float)) or ra < 1:
+                continue
+            for i, (_lbl, lo, hi) in enumerate(BUCKETS):
+                if lo <= ra <= hi:
+                    db_totals[i] += 1
+                    break
+        conn.close()
+    except Exception as e:
+        logger.warning("Individuals-affected DB bucket query failed: %s", e)
+
+    return {
+        'buckets':     [b[0] for b in BUCKETS],
+        'oaic_counts': oaic_totals,
+        'db_counts':   db_totals,
+    }
+
+
+def prepare_source_split_comparison(
+    oaic_data: List[Dict[str, Any]],
+    db_path: str = 'instance/cyber_events.db',
+) -> Dict[str, Any]:
+    """OAIC source-of-breaches (Human / Malicious / System) per semester vs
+    DB-classified event sources. DB events are mostly cyber-incident
+    coverage, so this comparison highlights our news-bias toward malicious
+    attacks.
+    """
+    import sqlite3
+
+    periods = []
+    oaic_human, oaic_malicious, oaic_system = [], [], []
+    for r in sorted(oaic_data, key=lambda x: (x.get('year') or 0, x.get('period') or '')):
+        year, period = r.get('year'), r.get('period')
+        if not (isinstance(year, int) and period in ('H1', 'H2') and year >= 2022):
+            continue
+        bs = r.get('breach_sources') or {}
+        he = (bs.get('human_error') or {}).get('current_period')
+        mc = (bs.get('malicious_attack') or {}).get('current_period')
+        sf = (bs.get('system_fault') or {}).get('current_period')
+        if not any(isinstance(v, (int, float)) for v in (he, mc, sf)):
+            continue
+        periods.append(f"{year} {period}")
+        oaic_human.append(he)
+        oaic_malicious.append(mc)
+        oaic_system.append(sf)
+
+    # DB-side: use the LLM-classified breach_source_category column added by
+    # scripts/enrich_pii_and_source_category.py. "Cyber Incident" and
+    # "Malicious or Criminal Attack" both roll up to OAIC's "Malicious"
+    # bucket. "Other" is excluded so we don't pollute the comparison.
+    db_malicious = []
+    db_human = []
+    db_system = []
+    try:
+        conn = sqlite3.connect(db_path)
+        for label in periods:
+            year_str, half = label.split()
+            year = int(year_str)
+            if half == 'H1':
+                start, end = f"{year}-01-01", f"{year}-06-30"
+            else:
+                start, end = f"{year}-07-01", f"{year}-12-31"
+            row = conn.execute(
+                "SELECT "
+                "  SUM(CASE WHEN breach_source_category IN ('Cyber Incident','Malicious or Criminal Attack') THEN 1 ELSE 0 END), "
+                "  SUM(CASE WHEN breach_source_category = 'Human Error' THEN 1 ELSE 0 END), "
+                "  SUM(CASE WHEN breach_source_category = 'System Fault' THEN 1 ELSE 0 END) "
+                "FROM DeduplicatedEvents "
+                "WHERE status='Active' AND event_date BETWEEN ? AND ?",
+                (start, end),
+            ).fetchone()
+            db_malicious.append(int(row[0] or 0))
+            db_human.append(int(row[1] or 0))
+            db_system.append(int(row[2] or 0))
+        conn.close()
+    except Exception as e:
+        logger.warning("Source-split DB query failed: %s", e)
+        if not db_malicious:
+            db_malicious = [0] * len(periods)
+            db_human = [0] * len(periods)
+            db_system = [0] * len(periods)
+
+    return {
+        'periods':       periods,
+        'oaic_human':    oaic_human,
+        'oaic_malicious': oaic_malicious,
+        'oaic_system':   oaic_system,
+        'db_human':      db_human,
+        'db_malicious':  db_malicious,
+        'db_system':     db_system,
+    }
+
+
+def prepare_oaic_time_distribution_series(
+    oaic_data: List[Dict[str, Any]],
+    field_name: str,
+) -> Dict[str, Any]:
+    """Generic helper: build a time-series matrix where rows are time-buckets
+    and columns are semesters. Used for both 'time_to_identify_pct' and
+    'time_to_notify_pct'.
+    """
+    periods = []
+    matrix: Dict[str, List] = {}  # bucket -> per-period list
+
+    relevant = [
+        r for r in oaic_data
+        if (r.get('year') or 0) >= 2022 and r.get(field_name)
+    ]
+    relevant.sort(key=lambda r: (r['year'], r['period']))
+
+    for r in relevant:
+        label = f"{r['year']} {r['period']}"
+        periods.append(label)
+
+    # First pass: enumerate all buckets seen
+    all_buckets = []
+    for r in relevant:
+        for entry in r.get(field_name) or []:
+            b = entry.get('bucket')
+            if b and b not in all_buckets:
+                all_buckets.append(b)
+
+    for b in all_buckets:
+        matrix[b] = []
+
+    for r in relevant:
+        entries_by_bucket = {e['bucket']: e for e in (r.get(field_name) or [])
+                             if e.get('bucket')}
+        for b in all_buckets:
+            entry = entries_by_bucket.get(b)
+            matrix[b].append(entry.get('current_pct') if entry else None)
+
+    return {
+        'periods': periods,
+        'buckets': all_buckets,
+        'series':  matrix,
+    }
+
+
+def prepare_oaic_personal_info_series(
+    oaic_data: List[Dict[str, Any]],
+    db_path: str = 'instance/cyber_events.db',
+) -> Dict[str, Any]:
+    """OAIC personal-info-types counts per semester PLUS DB-side counts
+    derived from the LLM-classified personal_info_types_json column added
+    by scripts/enrich_pii_and_source_category.py.
+    """
+    import json
+    import sqlite3
+
+    periods, series = [], {}
+    relevant = [r for r in oaic_data
+                if (r.get('year') or 0) >= 2022 and r.get('personal_info_types')]
+    relevant.sort(key=lambda r: (r['year'], r['period']))
+    cats = ['contact_information', 'identity_information', 'financial_details',
+            'health_information', 'tax_file_numbers', 'other_sensitive_information']
+    for c in cats:
+        series[c] = []
+    for r in relevant:
+        periods.append(f"{r['year']} {r['period']}")
+        pi = r.get('personal_info_types') or {}
+        for c in cats:
+            v = pi.get(c)
+            series[c].append(v if isinstance(v, (int, float)) else None)
+
+    # DB-side per-semester counts of each PII category. Aggregates the
+    # boolean classification across all Active dedup events whose
+    # event_date falls in the semester window.
+    db_series: Dict[str, List[int]] = {c: [] for c in cats}
+    try:
+        conn = sqlite3.connect(db_path)
+        for label in periods:
+            y_str, half = label.split()
+            y = int(y_str)
+            if half == 'H1':
+                start, end = f"{y}-01-01", f"{y}-06-30"
+            else:
+                start, end = f"{y}-07-01", f"{y}-12-31"
+            tally = {c: 0 for c in cats}
+            for row in conn.execute(
+                "SELECT personal_info_types_json FROM DeduplicatedEvents "
+                "WHERE status='Active' AND event_date BETWEEN ? AND ? "
+                "AND personal_info_types_json IS NOT NULL",
+                (start, end),
+            ):
+                try:
+                    d = json.loads(row[0])
+                except Exception:
+                    continue
+                for c in cats:
+                    if d.get(c):
+                        tally[c] += 1
+            for c in cats:
+                db_series[c].append(tally[c])
+        conn.close()
+    except Exception as e:
+        logger.warning("Personal-info DB aggregation failed: %s", e)
+        if not any(db_series.values()):
+            for c in cats:
+                db_series[c] = [0] * len(periods)
+
+    return {
+        'periods':    periods,
+        'series':     series,
+        'db_series':  db_series,
     }
 
 
@@ -1632,6 +2044,20 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     oaic_at = json.dumps(data.get('oaic_attack_types', {'periods': [], 'attack_types': {}}))
     oaic_sec = json.dumps(data.get('oaic_sectors', {'sectors': [], 'oaic_counts': [], 'database_counts': []}))
     oaic_ind_aff = json.dumps(data.get('oaic_individuals_affected', {'periods': [], 'averages': [], 'medians': [], 'db_averages': []}))
+    # New comparison data structures (added 2026-05-03)
+    oaic_monthly = json.dumps(data.get('oaic_monthly_comparison',
+        {'months': [], 'oaic_counts': [], 'db_counts': []}))
+    oaic_indaff_dist = json.dumps(data.get('oaic_individuals_affected_distribution',
+        {'buckets': [], 'oaic_counts': [], 'db_counts': []}))
+    oaic_source_split = json.dumps(data.get('oaic_source_split',
+        {'periods': [], 'oaic_human': [], 'oaic_malicious': [], 'oaic_system': [],
+         'db_human': [], 'db_malicious': [], 'db_system': []}))
+    oaic_t2id = json.dumps(data.get('oaic_time_to_identify',
+        {'periods': [], 'buckets': [], 'series': {}}))
+    oaic_t2n = json.dumps(data.get('oaic_time_to_notify',
+        {'periods': [], 'buckets': [], 'series': {}}))
+    oaic_pi_types = json.dumps(data.get('oaic_personal_info_types',
+        {'periods': [], 'series': {}, 'db_series': {}}))
     asd_all = json.dumps(data.get('asd_risk_all', {}))
     asd_current = json.dumps(data.get('asd_risk_current', {}))
     asd_previous = json.dumps(data.get('asd_risk_previous', {}))
@@ -1672,79 +2098,79 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     <div class="row">
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Monthly Trends in Unique Event Count</div>
+          <div class="chart-title">Database: Monthly Trends in Unique Event Count</div>
           <canvas id="monthlyTrendsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Monthly Trends in Severity</div>
+          <div class="chart-title">Database: Monthly Trends in Severity</div>
           <canvas id="severityTrendsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Monthly Trends in Average Records Affected</div>
+          <div class="chart-title">Database: Monthly Trends in Average Records Affected</div>
           <canvas id="recordsAffectedChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Monthly Trends in Event Type Mix</div>
+          <div class="chart-title">Database: Monthly Trends in Event Type Mix</div>
           <canvas id="eventTypeMixChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Overall Mix of Entity Types</div>
+          <div class="chart-title">Database: Overall Mix of Entity Types</div>
           <canvas id="entityTypeChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Overall Event Type Mix (Pie)</div>
+          <div class="chart-title">Database: Overall Event Type Mix (Pie)</div>
           <canvas id="overallEventTypePieChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Records Affected Histogram</div>
+          <div class="chart-title">Database: Records Affected Histogram</div>
           <canvas id="recordsHistogramChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Severity per Month</div>
+          <div class="chart-title">Database: Severity per Month</div>
           <canvas id="maxSeverityChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Maximum Records Affected Per Month</div>
+          <div class="chart-title">Database: Maximum Records Affected Per Month</div>
           <canvas id="maxRecordsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Average Severity by Industry</div>
+          <div class="chart-title">Database: Average Severity by Industry</div>
           <canvas id="severityByIndustryChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Average Severity by Attack Type</div>
+          <div class="chart-title">Database: Average Severity by Attack Type</div>
           <canvas id="severityByAttackTypeChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Average Records Affected by Attack Type</div>
+          <div class="chart-title">Database: Average Records Affected by Attack Type</div>
           <canvas id="recordsByAttackTypeChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container" style="height: 440px; overflow: hidden;">
-          <div class="chart-title">Histogram of Monthly Unique Event Counts</div>
+          <div class="chart-title">Database: Histogram of Monthly Unique Event Counts</div>
           <div id="monthlyCountsSubtitle" class="chart-subtitle" style="font-size: 0.95rem; color: #6b7280; margin-top: -8px; margin-bottom: 8px;"></div>
           <div style="height: 300px; position: relative;">
             <canvas id="monthlyCountsHistChart"></canvas>
@@ -1754,45 +2180,83 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>
+          <div class="chart-title">Comparison: Database vs OAIC Official Notifications (Half-Yearly)</div>
           <canvas id="oaicComparisonChart"></canvas>
           <div id="oaicComparisonStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>
+          <div class="chart-title">OAIC: Cyber Incidents vs Total Notifications</div>
           <canvas id="oaicCyberIncidentsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC Attack Types Over Time</div>
+          <div class="chart-title">OAIC: Attack Types Over Time</div>
           <canvas id="oaicAttackTypesChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title" id="oaicSectorsTitle">OAIC Top Affected Sectors (2020-2025)</div>
+          <div class="chart-title" id="oaicSectorsTitle">OAIC: Top Affected Sectors (2020-2025)</div>
           <canvas id="oaicSectorsChart"></canvas>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">Database/OAIC Ratio by Sector</div>
+          <div class="chart-title">Comparison: Database/OAIC Ratio by Sector</div>
           <canvas id="oaicSectorRatioChart"></canvas>
         </div>
       </div>
       <div class="col-lg-12 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC Individuals Affected Trends</div>
+          <div class="chart-title">OAIC: Individuals Affected Trends</div>
           <canvas id="oaicIndividualsAffectedChart"></canvas>
         </div>
       </div>
+      <!-- New OAIC vs DB comparison charts -->
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Comparison: Monthly Notifications - OAIC vs Database</div>
+          <canvas id="oaicMonthlyComparisonChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Comparison: Individuals-Affected Distribution - OAIC vs Database (2022+)</div>
+          <canvas id="oaicIndAffDistChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Comparison: Source of Breaches - OAIC vs Database (per semester)</div>
+          <canvas id="oaicSourceSplitChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC: Time-to-Identify (% per bucket, time-series)</div>
+          <canvas id="oaicTimeToIdentifyChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">OAIC: Time-to-Notify (% per bucket, time-series)</div>
+          <canvas id="oaicTimeToNotifyChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-12 col-md-12">
+        <div class="chart-container">
+          <div class="chart-title">Comparison: Personal Information Types over Time - OAIC vs Database (2022+)</div>
+          <canvas id="oaicPersonalInfoChart"></canvas>
+        </div>
+      </div>
+      <!-- end new OAIC comparison charts -->
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>ASD Risk Matrix (All Years)</span>
+            <span>Database: ASD Risk Matrix (All Years)</span>
             <span class="badge bg-secondary">Classifications: <span id="asdAllTotal">0</span></span>
           </div>
           <div id="asdRiskMatrixAll"></div>
@@ -1801,7 +2265,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>ASD Risk Matrix (Last Year)</span>
+            <span>Database: ASD Risk Matrix (Last Year)</span>
             <span class="badge bg-secondary">Classifications: <span id="asdPreviousTotal">0</span></span>
           </div>
           <div id="asdRiskMatrixPrevious"></div>
@@ -1810,7 +2274,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>ASD Risk Matrix (Current Year)</span>
+            <span>Database: ASD Risk Matrix (Current Year)</span>
             <span class="badge bg-secondary">Classifications: <span id="asdCurrentTotal">0</span></span>
           </div>
           <div id="asdRiskMatrixCurrent"></div>
@@ -1818,7 +2282,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-12 col-md-12">
         <div class="chart-container" style="height: 500px;">
-          <div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>
+          <div class="chart-title">Database: Event Type Correlation Matrix (Monthly Counts)</div>
           <canvas id="correlationMatrixChart"></canvas>
           <div id="correlationMatrixStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
@@ -1844,6 +2308,12 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const oaicAttackTypes = __OAIC_AT__;
     const oaicSectors = __OAIC_SEC__;
     const oaicIndividualsAffected = __OAIC_IND_AFF__;
+    const oaicMonthlyComparison = __OAIC_MONTHLY__;
+    const oaicIndAffDist = __OAIC_INDAFF_DIST__;
+    const oaicSourceSplit = __OAIC_SOURCE_SPLIT__;
+    const oaicTimeToIdentify = __OAIC_T2ID__;
+    const oaicTimeToNotify = __OAIC_T2N__;
+    const oaicPersonalInfoTypes = __OAIC_PI_TYPES__;
     const asdRiskAll = __ASD_ALL__;
     const asdRiskCurrent = __ASD_CURR__;
     const asdRiskPrevious = __ASD_PREV__;
@@ -2164,7 +2634,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const oaic = oaicComparison;
       if (!oaic.periods || oaic.periods.length === 0) {
         document.getElementById('oaicComparisonChart').parentElement.innerHTML =
-          '<div class="chart-title">Database vs OAIC Official Notifications (Half-Yearly)</div>' +
+          '<div class="chart-title">Comparison: Database vs OAIC Official Notifications (Half-Yearly)</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.<br>Run <code>python oaic_data_scraper.py</code> first.</p></div>';
         return;
       }
@@ -2298,7 +2768,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicCyberIncidents;
       if (!data.periods || data.periods.length === 0) {
         document.getElementById('oaicCyberIncidentsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Cyber Incidents vs Total Notifications</div>' +
+          '<div class="chart-title">OAIC: Cyber Incidents vs Total Notifications</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2353,7 +2823,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicAttackTypes;
       if (!data.periods || data.periods.length === 0) {
         document.getElementById('oaicAttackTypesChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Attack Types Over Time</div>' +
+          '<div class="chart-title">OAIC: Attack Types Over Time</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2406,7 +2876,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicSectors;
       if (!data.sectors || data.sectors.length === 0) {
         document.getElementById('oaicSectorsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Top Affected Sectors (2020-2025)</div>' +
+          '<div class="chart-title">OAIC: Top Affected Sectors (2020-2025)</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2464,7 +2934,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicSectors;
       if (!data.sectors || data.sectors.length === 0 || !data.ratios) {
         document.getElementById('oaicSectorRatioChart').parentElement.innerHTML =
-          '<div class="chart-title">Database/OAIC Ratio by Sector</div>' +
+          '<div class="chart-title">Comparison: Database/OAIC Ratio by Sector</div>' +
           '<div class="text-center text-muted mt-5"><p>No ratio data available.</p></div>';
         return;
       }
@@ -2551,7 +3021,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicIndividualsAffected;
       if (!data.periods || data.periods.length === 0) {
         document.getElementById('oaicIndividualsAffectedChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC Individuals Affected Trends</div>' +
+          '<div class="chart-title">OAIC: Individuals Affected Trends</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2631,12 +3101,158 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       });
     })();
 
+    // 13a) Monthly Notifications: OAIC vs Database
+    (function(){
+      const d = oaicMonthlyComparison;
+      if (!d.months || !d.months.length) return;
+      new Chart(document.getElementById('oaicMonthlyComparisonChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: d.months,
+          datasets: [
+            { label: 'OAIC', data: d.oaic_counts, backgroundColor: 'rgba(37,99,235,0.7)' },
+            { label: 'Database (news-discovered)', data: d.db_counts,
+              backgroundColor: 'rgba(34,197,94,0.7)' },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Notifications' } } },
+          plugins: { tooltip: { mode: 'index', intersect: false } },
+        },
+      });
+    })();
+
+    // 13b) Individuals Affected Distribution: OAIC vs Database
+    (function(){
+      const d = oaicIndAffDist;
+      if (!d.buckets || !d.buckets.length) return;
+      new Chart(document.getElementById('oaicIndAffDistChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: d.buckets,
+          datasets: [
+            { label: 'OAIC', data: d.oaic_counts, backgroundColor: 'rgba(37,99,235,0.7)' },
+            { label: 'Database', data: d.db_counts, backgroundColor: 'rgba(34,197,94,0.7)' },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          scales: { x: { ticks: { maxRotation: 45, minRotation: 45 } },
+                    y: { beginAtZero: true, title: { display: true, text: 'Breaches in bucket' } } },
+        },
+      });
+    })();
+
+    // 13c) Source split per semester: OAIC vs Database
+    (function(){
+      const d = oaicSourceSplit;
+      if (!d.periods || !d.periods.length) return;
+      new Chart(document.getElementById('oaicSourceSplitChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: d.periods,
+          datasets: [
+            { label: 'OAIC: Malicious',  data: d.oaic_malicious, backgroundColor: 'rgba(220,38,38,0.7)',  stack: 'oaic' },
+            { label: 'OAIC: Human err',  data: d.oaic_human,     backgroundColor: 'rgba(245,158,11,0.7)', stack: 'oaic' },
+            { label: 'OAIC: System flt', data: d.oaic_system,    backgroundColor: 'rgba(107,114,128,0.7)', stack: 'oaic' },
+            { label: 'DB: Malicious',    data: d.db_malicious,   backgroundColor: 'rgba(34,197,94,0.7)',   stack: 'db'   },
+            { label: 'DB: Human err',    data: d.db_human,       backgroundColor: 'rgba(34,197,94,0.4)',   stack: 'db'   },
+            { label: 'DB: System flt',   data: d.db_system,      backgroundColor: 'rgba(34,197,94,0.2)',   stack: 'db'   },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true,
+                    title: { display: true, text: 'Notifications' } } },
+          plugins: { title: { display: true, text: 'OAIC stacks left, DB stacks right (DB classified by GPT-4o-mini)' } },
+        },
+      });
+    })();
+
+    // 13d) Time-to-Identify time series
+    (function(){
+      const d = oaicTimeToIdentify;
+      if (!d.periods || !d.periods.length || !d.buckets || !d.buckets.length) return;
+      const colors = ['#1d4ed8','#16a34a','#f59e0b','#dc2626','#7c3aed','#0891b2','#ea580c'];
+      const datasets = d.buckets.map((b, i) => ({
+        label: b,
+        data: d.series[b] || [],
+        borderColor: colors[i % colors.length],
+        backgroundColor: colors[i % colors.length] + '33',
+        fill: false, tension: 0.2,
+      }));
+      new Chart(document.getElementById('oaicTimeToIdentifyChart').getContext('2d'), {
+        type: 'line',
+        data: { labels: d.periods, datasets },
+        options: { responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, title: { display: true, text: '% of breaches' } } },
+        },
+      });
+    })();
+
+    // 13e) Time-to-Notify time series
+    (function(){
+      const d = oaicTimeToNotify;
+      if (!d.periods || !d.periods.length || !d.buckets || !d.buckets.length) return;
+      const colors = ['#1d4ed8','#16a34a','#f59e0b','#dc2626','#7c3aed','#0891b2','#ea580c'];
+      const datasets = d.buckets.map((b, i) => ({
+        label: b,
+        data: d.series[b] || [],
+        borderColor: colors[i % colors.length],
+        backgroundColor: colors[i % colors.length] + '33',
+        fill: false, tension: 0.2,
+      }));
+      new Chart(document.getElementById('oaicTimeToNotifyChart').getContext('2d'), {
+        type: 'line',
+        data: { labels: d.periods, datasets },
+        options: { responsive: true, maintainAspectRatio: false,
+          scales: { y: { beginAtZero: true, title: { display: true, text: '% of breaches' } } },
+        },
+      });
+    })();
+
+    // 13f) Personal info types over time (OAIC solid, DB dashed)
+    (function(){
+      const d = oaicPersonalInfoTypes;
+      if (!d.periods || !d.periods.length || !d.series) return;
+      const colors = ['#1d4ed8','#16a34a','#f59e0b','#dc2626','#7c3aed','#0891b2'];
+      const cats = Object.keys(d.series);
+      const datasets = [];
+      cats.forEach((c, i) => {
+        const color = colors[i % colors.length];
+        const labelBase = c.replace(/_/g, ' ');
+        datasets.push({
+          label: 'OAIC: ' + labelBase,
+          data: d.series[c] || [],
+          borderColor: color,
+          backgroundColor: color + '33',
+          fill: false, tension: 0.2,
+        });
+        if (d.db_series && d.db_series[c]) {
+          datasets.push({
+            label: 'DB: ' + labelBase,
+            data: d.db_series[c],
+            borderColor: color,
+            backgroundColor: color + '11',
+            borderDash: [6, 4],
+            fill: false, tension: 0.2,
+          });
+        }
+      });
+      new Chart(document.getElementById('oaicPersonalInfoChart').getContext('2d'), {
+        type: 'line',
+        data: { labels: d.periods, datasets },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { title: { display: true, text: 'Solid = OAIC, Dashed = DB (LLM-classified)' } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'Breaches involving this category' } } },
+        },
+      });
+    })();
+
     // 14) Event Type Correlation Matrix
     (function(){
       const corr = eventTypeCorrelation;
       if (!corr.labels || corr.labels.length === 0) {
         document.getElementById('correlationMatrixChart').parentElement.innerHTML =
-          '<div class="chart-title">Event Type Correlation Matrix (Monthly Counts)</div>' +
+          '<div class="chart-title">Database: Event Type Correlation Matrix (Monthly Counts)</div>' +
           '<div class="text-center text-muted mt-5"><p>Insufficient data for correlation analysis.<br>Need at least 2 event types with 5+ months of data.</p></div>';
         return;
       }
@@ -2898,7 +3514,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       if (severityByIndustry.no_data || !severityByIndustry.industries || severityByIndustry.industries.length === 0) {
         const container = document.getElementById('severityByIndustryChart').parentElement;
         container.innerHTML =
-          '<div class="chart-title">Average Severity by Industry</div>' +
+          '<div class="chart-title">Database: Average Severity by Industry</div>' +
           '<div class="text-center text-muted mt-5">' +
           '<p>No industry data available.</p>' +
           '<p style="font-size: 0.9rem;">The enrichment process has not yet populated industry information for events.</p>' +
@@ -3053,6 +3669,12 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__OAIC_AT__', oaic_at)
             .replace('__OAIC_SEC__', oaic_sec)
             .replace('__OAIC_IND_AFF__', oaic_ind_aff)
+            .replace('__OAIC_MONTHLY__', oaic_monthly)
+            .replace('__OAIC_INDAFF_DIST__', oaic_indaff_dist)
+            .replace('__OAIC_SOURCE_SPLIT__', oaic_source_split)
+            .replace('__OAIC_T2ID__', oaic_t2id)
+            .replace('__OAIC_T2N__', oaic_t2n)
+            .replace('__OAIC_PI_TYPES__', oaic_pi_types)
             .replace('__ASD_ALL__', asd_all)
             .replace('__ASD_CURR__', asd_current)
             .replace('__ASD_PREV__', asd_previous)
@@ -3091,6 +3713,13 @@ def main():
         oaic_attack_types = prepare_oaic_attack_types_data(oaic_data)
         oaic_sectors = prepare_oaic_sectors_data(oaic_data)
         oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data)
+        # New OAIC vs DB comparisons added 2026-05-03
+        oaic_monthly_comparison = prepare_oaic_monthly_comparison(oaic_data)
+        oaic_individuals_affected_distribution = prepare_individuals_affected_distribution_comparison(oaic_data)
+        oaic_source_split = prepare_source_split_comparison(oaic_data)
+        oaic_time_to_identify = prepare_oaic_time_distribution_series(oaic_data, 'time_to_identify_pct')
+        oaic_time_to_notify = prepare_oaic_time_distribution_series(oaic_data, 'time_to_notify_pct')
+        oaic_personal_info_types = prepare_oaic_personal_info_series(oaic_data)
 
         event_type_mix = get_monthly_event_type_mix(conn, start_date, end_date)
 
@@ -3115,6 +3744,12 @@ def main():
             'oaic_attack_types': oaic_attack_types,
             'oaic_sectors': oaic_sectors,
             'oaic_individuals_affected': oaic_individuals_affected,
+            'oaic_monthly_comparison': oaic_monthly_comparison,
+            'oaic_individuals_affected_distribution': oaic_individuals_affected_distribution,
+            'oaic_source_split': oaic_source_split,
+            'oaic_time_to_identify': oaic_time_to_identify,
+            'oaic_time_to_notify': oaic_time_to_notify,
+            'oaic_personal_info_types': oaic_personal_info_types,
             'asd_risk_all': get_asd_risk_matrix(conn),
             'asd_risk_current': get_asd_risk_matrix(conn, current_year),
             'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),

@@ -256,16 +256,65 @@ python scripts/build_static_dashboard.py               # Generate dashboard/inde
 python scripts/wipe_database.py                        # Reset entire database
 ```
 
+### Data Integrity Checker
+
+End-to-end sanity check that detects every failure mode encountered to date
+(truncated severity strings, qualified `EventSeverity.X` enum names,
+ASD-classification orphans, byte-identical OAIC H1/H2 records, top_sectors
+notification counts outside a sensible range, etc.). Returns exit code 1 if
+any check fails, so it doubles as a CI gate.
+
+```bash
+python scripts/check_data_integrity.py                 # Full report
+python scripts/check_data_integrity.py --quiet         # Only show failures
+python scripts/check_data_integrity.py --db PATH       # Override DB path
+```
+
+### Safety Vault (snapshot/restore around destructive operations)
+
+`run_global_deduplication.py --force` automatically snapshots ASD
+classifications and industry overrides before rebuilding `DeduplicatedEvents`,
+then restores them via the stable `master_enriched_event_id` after the rebuild.
+Snapshots are written to `instance/safety_vault/`. No manual action required;
+a force-dedup is now safe to re-run without losing session-level corrections.
+
+The vault module: [`cyber_data_collector/utils/safety_vault.py`](cyber_data_collector/utils/safety_vault.py).
+Tests: [`cyber_data_collector/tests/test_safety_net.py`](cyber_data_collector/tests/test_safety_net.py).
+
 ### OAIC Data Collection
 
 OAIC (Office of the Australian Information Commissioner) publishes semi-annual Notifiable Data Breaches reports. Update when new reports are released (H1: August/September, H2: February/March).
 
+The OAIC dashboard scraper extracts these fields per semester (page 2-9):
+
+| Field | Source page | Notes |
+|---|---|---|
+| `total_notifications` | 2 | Big KPI |
+| `monthly_notifications` | 2 | One bar per month |
+| `human_error_pct` / `malicious_attacks_pct` / `system_faults_pct` | 2 | Donut |
+| `cyber_incidents` (phishing/ransomware/etc. %) | 2 | Bar chart |
+| `top_sectors[].notifications` | 2 | Top-5 sectors with COUNTS |
+| `small_breaches_100_or_fewer_pct` | 2 | KPI |
+| `human_error_causes` | 2 | Top-3 causes |
+| `individuals_affected_distribution` | 4 | 13 buckets, real OAIC labels |
+| `large_scale_australians` | 4 | Right-side table |
+| `personal_info_types` | 5 | Contact / Identity / Financial / Health / TFN / Other / CDR / Digital ID |
+| `breach_sources` | 6 | Human / Malicious / System current+previous |
+| `time_to_identify_pct` | 7 | 5 buckets `Unknown` / `<= 10 days` / `11-20 days` / `21-30 days` / `> 30 days` |
+| `time_to_notify_pct` | 8 | Same 5 buckets |
+| `sector_by_source` | 9 | 5×3 matrix (still WIP - filter-click bug) |
+
+Every per-page extraction is verified against the dashboard's own
+"Show results for ..." semester label so silent semester-selection failures
+can't mislabel data.
+
 ```bash
-# Scrape statistics from OAIC PDF reports
+# Scrape statistics from OAIC PDF reports (older mechanism, less detailed)
 python scripts/oaic/oaic_data_scraper.py --start-year 2024 --end-year 2025 --output json
 
-# Scrape OAIC Power BI dashboard (uses Playwright + GPT-4o-mini Vision)
-python scripts/oaic/OAIC_dashboard_scraper.py
+# Scrape OAIC Power BI dashboard (preferred - Playwright + GPT-4o Vision).
+# All 7 most recent semesters in parallel under 4 minutes:
+python scripts/oaic/OAIC_dashboard_scraper.py --from-year 2022
 python scripts/oaic/OAIC_dashboard_scraper.py --semester "Jan-Jun 2025"
 
 # Validate and consolidate OAIC data (run after scraping)

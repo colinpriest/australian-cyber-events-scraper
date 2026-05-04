@@ -26,6 +26,12 @@ from cyber_data_collector.models.events import (
 from cyber_data_collector.utils import RateLimiter
 
 
+# Process-wide cache for the OAIC article-list page. The list is a global
+# resource (not per-month), so fetching + parsing it once per process and
+# reusing across months saves ~30+ minutes per run. Keyed by search URL.
+_OAIC_ARTICLE_CACHE: Dict[str, List[Dict[str, str]]] = {}
+
+
 class OAICDataSource(DataSource):
     """Australian Information Commissioner's Office (OAIC) media centre scraper for cyber-related regulatory actions."""
 
@@ -39,74 +45,101 @@ class OAICDataSource(DataSource):
     def validate_config(self) -> bool:
         return True
 
+    async def _get_article_links_cached(self) -> List[Dict[str, str]]:
+        """Fetch + parse the OAIC search-results page, cached across months.
+
+        The OAIC article list is a single global resource. Previously we
+        re-fetched and re-parsed it for every month processed (3+ months per
+        run), then iterated all 1300+ links each time. The fetch is cheap; the
+        per-link processing was the killer. Caching the parsed list eliminates
+        the duplicate work entirely.
+        """
+        if self.search_url in _OAIC_ARTICLE_CACHE:
+            cached = _OAIC_ARTICLE_CACHE[self.search_url]
+            self.logger.debug(f"Reusing cached OAIC article list ({len(cached)} entries)")
+            return cached
+
+        await self.rate_limiter.wait("oaic_search")
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: requests.get(self.search_url, headers=headers, timeout=self.config.timeout),
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, "html.parser")
+
+        article_links = self._extract_article_links(soup)
+        _OAIC_ARTICLE_CACHE[self.search_url] = article_links
+        self.logger.info(f"Found {len(article_links)} potential article links from OAIC (cached for this run)")
+        return article_links
+
     async def collect_events(self, date_range: DateRange) -> List[CyberEvent]:
         """
         Collects cyber-related regulatory events from OAIC media centre.
         """
         try:
-            await self.rate_limiter.wait("oaic_search")
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.get(self.search_url, headers=headers, timeout=self.config.timeout),
-            )
-            response.raise_for_status()
-            soup = BeautifulSoup(response.content, "html.parser")
+            from dateutil.relativedelta import relativedelta
 
-            # Extract article links from search results
-            article_links = self._extract_article_links(soup)
-            self.logger.info(f"Found {len(article_links)} potential article links from OAIC")
+            article_links = await self._get_article_links_cached()
+
+            # Pre-compute the date window once (was being recomputed per-link)
+            range_start_raw = date_range.start_date.date() if hasattr(date_range.start_date, 'date') else date_range.start_date
+            range_end = date_range.end_date.date() if hasattr(date_range.end_date, 'date') else date_range.end_date
+            # Expand to 3-month window to catch late-reported events
+            range_start = range_start_raw - relativedelta(months=2)
 
             all_events: List[CyberEvent] = []
+            skipped_known = 0
+            skipped_out_of_range = 0
+            scraped_count = 0
+
             for link_info in article_links:
-                # First check if we have a publication date from search results
                 pub_date_str = link_info.get('publication_date')
+
+                # Date filter (cheap, no I/O) — apply first
+                pub_date_parsed: Optional[datetime] = None
                 if pub_date_str:
                     try:
-                        from dateutil.relativedelta import relativedelta
-                        pub_date = dateutil_parse(pub_date_str)
-                        pub_date_only = pub_date.date()
-                        # Expand to 3-month window to catch late-reported events
-                        range_start_raw = date_range.start_date.date() if hasattr(date_range.start_date, 'date') else date_range.start_date
-                        range_start = range_start_raw - relativedelta(months=2)
-                        range_end = date_range.end_date.date() if hasattr(date_range.end_date, 'date') else date_range.end_date
-
+                        pub_date_parsed = dateutil_parse(pub_date_str)
+                        pub_date_only = pub_date_parsed.date()
                         if not (range_start <= pub_date_only <= range_end):
-                            self.logger.debug(f"OAIC article outside 3-month range ({pub_date_only}): {link_info['text'][:50]}...")
+                            skipped_out_of_range += 1
                             continue
                     except Exception as exc:
                         self.logger.debug("Failed to parse OAIC publication date '%s': %s", pub_date_str, exc)
+                        pub_date_parsed = None
 
-                await self.rate_limiter.wait("oaic_detail")
-
-                # Get the actual article URL (may need to resolve redirects)
+                # Resolve URL (cheap, no I/O — just URL parsing)
                 actual_url = self._resolve_article_url(link_info['url'])
                 if not actual_url:
                     continue
 
-                # Skip articles already in the database
+                # Skip articles already in the database BEFORE we hit the rate
+                # limiter or fetch the article. Previously this was checked
+                # *after* the rate-limit wait, wasting time on every known URL.
                 if actual_url in self.known_urls:
+                    skipped_known += 1
                     self.logger.debug(f"Skipping known OAIC article: {link_info['text'][:50]}...")
                     continue
 
-                # Pass the publication date if we found one
-                publication_date = None
-                if pub_date_str:
-                    try:
-                        publication_date = dateutil_parse(pub_date_str)
-                    except Exception as exc:
-                        self.logger.debug("Failed to parse OAIC publication date '%s': %s", pub_date_str, exc)
+                # Now we know we will actually scrape — apply rate limit
+                await self.rate_limiter.wait("oaic_detail")
+                scraped_count += 1
 
-                event = self._scrape_article_page(actual_url, link_info['text'], publication_date)
+                event = self._scrape_article_page(actual_url, link_info['text'], pub_date_parsed)
                 if event:
-                    # Include all events from articles published in the date range
+                    # Include all events from articles published in the date range.
                     # Do NOT filter by event_date - late-reported incidents may have
-                    # event_date outside the processing month (e.g., incident in Sept, reported in Nov)
+                    # event_date outside the processing month.
                     self.logger.info(f"OAIC event: {event.title[:50]}...")
                     all_events.append(event)
 
-            self.logger.info(f"Collected {len(all_events)} OAIC events within the date range")
+            self.logger.info(
+                f"Collected {len(all_events)} OAIC events within the date range "
+                f"(scraped {scraped_count} new articles, skipped {skipped_known} known, "
+                f"{skipped_out_of_range} out-of-range)"
+            )
             return all_events
 
         except Exception as exc:

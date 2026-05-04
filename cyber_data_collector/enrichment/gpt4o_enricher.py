@@ -230,9 +230,144 @@ Example 5: "The breach at an unnamed Australian healthcare provider affected 50,
 → ✗ WRONG: victim_organization: "Australian healthcare provider"
 → ✓ CORRECT: victim_organization: null (organization not specifically named)
 
+═══════════════════════════════════════════════════════════════════════════════
+1b. VICTIM INDUSTRY CLASSIFICATION
+═══════════════════════════════════════════════════════════════════════════════
+
+CRITICAL RULE: victim_industry must reflect the BREACHED organisation's OWN core
+business, NOT the industries of its CLIENTS or DOWNSTREAM VICTIMS.
+
+Many cyber breaches affect supply-chain vendors that serve customers across many
+sectors. Classify by what the breached company DOES, not who they serve.
+
+VENDOR / SUPPLY-CHAIN EXAMPLES (very common mistake):
+
+Example A: "HWL Ebsworth data breach exposes Home Affairs, PM&C and Defence client data"
+→ victim_organization: "HWL Ebsworth"
+→ ✓ CORRECT victim_industry: "LEGAL_SERVICES" (HWL Ebsworth is a private law firm)
+→ ✗ WRONG: "GOVERNMENT" (their clients are government, but THEY are a law firm)
+
+Example B: "Frontier Software ransomware attack exposes 80,000 SA government employees"
+→ victim_organization: "Frontier Software"
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (Frontier Software is a private payroll-software vendor)
+→ ✗ WRONG: "GOVERNMENT" (the affected employees were government workers; the breached company is a tech vendor)
+
+Example C: "OracleCMS call-service breach affects multiple Victorian councils"
+→ victim_organization: "OracleCMS"
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (call-service / IT services vendor)
+→ ✗ WRONG: "GOVERNMENT"
+
+Example D: "Datatime Services breach: Medicare and Centrelink data exposed"
+→ victim_organization: "Datatime Services"
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (data-services vendor)
+→ ✗ WRONG: "GOVERNMENT"
+
+Example E: "Dialog Pty Ltd contractor breach exposes ADF personnel data"
+→ victim_organization: "Dialog Pty Ltd"
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (private Defence IT contractor)
+→ ✗ WRONG: "GOVERNMENT"
+
+Example F: "State of Victoria - Department of Health hotel-quarantine data leak"
+→ victim_organization: "State of Victoria - Department of Health"
+→ ✓ CORRECT victim_industry: "HEALTHCARE" (it IS a Health department)
+
+Example G: "Australian Labor Party data breach"
+→ victim_organization: "Australian Labor Party"
+→ ✓ CORRECT victim_industry: "OTHER" (political party, not a government agency)
+
+Example H: "Australian Federal Police officer details leaked in cyber breach"
+→ victim_organization: "Australian Federal Police"
+→ ✓ CORRECT victim_industry: "GOVERNMENT" (genuinely a government agency)
+
+OTHER COMMON FINANCE-EDGE-CASES (LLM tends to over-tag as FINANCIAL_SERVICES):
+
+Example I: "PricewaterhouseCoopers caught up in MOVEit breach"
+→ victim_organization: "PricewaterhouseCoopers"
+→ ✓ CORRECT victim_industry: "LEGAL_SERVICES" (Big-4 audit/consulting/tax firm; LEGAL_SERVICES
+   covers accounting & management consulting in this taxonomy, NOT financial services)
+→ ✗ WRONG: "FINANCIAL_SERVICES" (PwC services finance clients but is itself a professional-services firm)
+
+Example J: "Iress Limited security breach affects financial-planning software users"
+→ victim_organization: "Iress Limited"
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (sells financial-planning SaaS to advisers; it is
+   a SOFTWARE COMPANY, not a financial-services company)
+→ ✗ WRONG: "FINANCIAL_SERVICES"
+
+Example K: "Morningstar data breach reveals KPMG deal-maker lists"
+→ victim_organization: "Morningstar, Inc."
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (financial-data / analytics vendor)
+→ ✗ WRONG: "FINANCIAL_SERVICES"
+
+Example L: "Tabcorp says bad data, technical error behind online betting breach"
+→ victim_organization: "Tabcorp Holdings Limited"
+→ ✓ CORRECT victim_industry: "ENTERTAINMENT" (gambling/wagering operator)
+→ ✗ WRONG: "FINANCIAL_SERVICES"
+
+Example M: "Perth Mint visitor data stolen after feedback survey company hacked"
+→ victim_organization: "Gold Corporation" (operates as Perth Mint)
+→ ✓ CORRECT victim_industry: "MANUFACTURING" (mints coins / produces bullion -
+   commercial enterprise, not a financial-services firm)
+→ ✗ WRONG: "FINANCIAL_SERVICES"
+
+ARTICLE-TOPIC-DOES-NOT-DETERMINE-INDUSTRY: choose industry from what the
+breached organisation IS, not what the article is ABOUT.
+
+Example N: "Beyond Bank Australia warns of phishing campaign targeting schools"
+→ victim_organization: "Beyond Bank Australia"
+→ ✓ CORRECT victim_industry: "FINANCIAL_SERVICES" (Beyond Bank is a BANK)
+→ ✗ WRONG: "EDUCATION" (the article happens to mention schools as the phishing
+   targets but the BREACHED entity is the bank)
+
+Example O: "ProctorU breach impacts Australian universities"
+→ victim_organization: "ProctorU" (or "Proctorio, Inc.")
+→ ✓ CORRECT victim_industry: "TECHNOLOGY" (online-proctoring SaaS vendor)
+→ ✗ WRONG: "EDUCATION" (their CUSTOMERS are universities; ProctorU is a tech vendor)
+
+Example P: "ASIC reports cyber-attack: Australian companies hit by online education phishing"
+→ victim_organization: "Australian Securities and Investments Commission"
+→ ✓ CORRECT victim_industry: "GOVERNMENT" (ASIC is a federal regulator)
+→ ✗ WRONG: "EDUCATION" (the phishing TOPIC mentions education; ASIC is government)
+
+Example Q: "National Tertiary Education Union becomes victim of data breach"
+→ victim_organization: "National Tertiary Education Union"
+→ ✓ CORRECT victim_industry: "NON_PROFIT" (it's a labor UNION; "Education" appears
+   in its name but it is NOT an educational institution)
+→ ✗ WRONG: "EDUCATION"
+
+EDUCATION SCOPE: use ONLY for actual educational institutions: universities,
+schools (primary/secondary/independent), TAFE/colleges, government departments
+of education. DO NOT use for:
+  • Edtech vendors / proctoring software / LMS providers (those are TECHNOLOGY)
+  • Education-related unions, professional bodies, advocacy groups (NON_PROFIT)
+  • Companies whose breach merely AFFECTS students or schools
+
+LEGAL_SERVICES SCOPE (broader than just law): use this category for
+  • Law firms (Allens, MinterEllison, HWL Ebsworth)
+  • Accounting / audit / tax firms (PwC, Deloitte, EY, KPMG, mid-tier accountants like Nexia)
+  • Management & strategy consultancies
+  • Professional bodies (CPA Australia, Law Society NSW)
+
+FINANCIAL_SERVICES SCOPE - use ONLY for companies whose CORE BUSINESS is one of:
+  banking, lending, insurance, superannuation/retirement, wealth management,
+  brokerage, payments processing, money-transfer, funds management, mortgages.
+  DO NOT use for accounting firms, financial-software vendors, financial-data
+  providers, or gambling operators.
+
+GOVERNMENT category - use ONLY when the breached entity ITSELF is a government
+body (federal/state/local/territory agency, council, public-sector department,
+police, defence, courts, public schools, public universities). DO NOT use for:
+  • Private vendors, contractors, software providers serving government clients
+  • Law/accounting firms with government clients
+  • Statutory insurers, agencies operating commercially (e.g. iCare, NDIA edge cases)
+  • Political parties, lobbying groups
+  • Government-Owned-Enterprises that operate in a private sector (classify by sector)
+
+When in doubt for a vendor: ask "would this company exist if all government
+clients vanished?" If yes → use the vendor's own sector (TECHNOLOGY, etc.).
+
 EXTRACT:
 - victim_organization: String (exact organization name) OR null
-- victim_industry: One of [{categories_list}] OR null
+- victim_industry: One of [{categories_list}] OR null - reflects BREACHED ORG's own business
 - is_australian_organization: Boolean (is victim Australian-based?)
 - extraction_confidence: Float 0.0-1.0 (how certain are you?)
 - reasoning: String (explain your decision in 1-2 sentences, citing specific text)

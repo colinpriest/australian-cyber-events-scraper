@@ -48,11 +48,52 @@ This module provides a complete deduplication solution that:
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import difflib
 import hashlib
+
+# Legal entity suffixes commonly trailing organisation names. We strip these
+# during canonicalisation so "Latitude Financial Services Pty Ltd" matches
+# "Latitude Financial Services Limited" and "Latitude Financial Services Holdings".
+# Order matters: longer/more-specific phrases first so "pty limited" is consumed
+# before "limited" alone.
+_LEGAL_SUFFIX_TOKENS = (
+    'pty ltd', 'pty. ltd.', 'pty limited', 'pty. limited',
+    'pty', 'pty.',
+    'limited', 'ltd', 'ltd.',
+    'incorporated', 'inc', 'inc.',
+    'l.l.c.', 'llc', 'llc.',
+    'p.l.c.', 'plc', 'plc.',
+    'corporation', 'corp', 'corp.',
+    'company', 'co.', 'co',
+    'holdings', 'holding', 'group',
+    'gmbh', 'a.g.', 'ag',
+    's.a.', 'sa',
+    'n.v.', 'nv',
+    'b.v.', 'bv',
+    'international',
+)
+# Regex: one-or-more trailing suffix tokens, separated by whitespace/punctuation.
+# Pre-compile once. We strip iteratively so chains like "Holdings Pty Ltd" all go.
+_LEGAL_SUFFIX_RE = re.compile(
+    r'(?:\s+|^)(?:' + '|'.join(re.escape(s) for s in _LEGAL_SUFFIX_TOKENS) + r')\.?$',
+    flags=re.IGNORECASE,
+)
+
+# Hard list separators (always indicate a compound name). " and "/" & " are
+# treated separately because they're ambiguous: ANZ's full legal name
+# "Australia and New Zealand Banking Group Limited" contains " and " inside.
+_COMPOUND_PRIMARY_SPLIT_RE = re.compile(r'\s*[,;|/]\s*')
+# Pattern matching " and X" or " & X" at the start of a token (Oxford-comma
+# tail). Used after a primary split when the trailing token starts with "and".
+_LEADING_AND_RE = re.compile(r'^(?:and|&)\s+', flags=re.IGNORECASE)
+# Pattern matching "X and Y" / "X & Y" inside a single token. Used to split
+# the LAST primary token only (the "...NAB and Westpac" tail of an Oxford list,
+# or a standalone two-org compound like "Apple & Microsoft").
+_INNER_AND_RE = re.compile(r'^(.+?)\s+(?:and|&)\s+(.+)$', flags=re.IGNORECASE)
 
 from tqdm import tqdm
 
@@ -869,6 +910,154 @@ class DeduplicationEngine:
 
         return entity_name
 
+    @staticmethod
+    def _canonicalize_entity(name: Optional[str]) -> str:
+        """Single-name canonical form for cross-record matching.
+
+        Handles three classes of pre-canonical noise the dedup engine has been
+        seen to miss:
+
+        1. Curly/smart-quotes vs straight quotes (NFKC + manual mapping).
+           "Austin's Financial Solutions" == "Austin's Financial Solutions"
+
+        2. Legal-suffix variants. "Latitude Financial Services Pty Ltd",
+           "Latitude Financial Services Limited" and
+           "Latitude Financial Services Australia Holdings Pty Ltd" all
+           collapse to "latitude financial services".
+
+        3. Trailing punctuation, multi-space runs, capitalisation drift.
+
+        Returns a lowercase whitespace-collapsed token-bag string.
+        Empty / None input returns "".
+        """
+        if not name:
+            return ""
+
+        # NFKC fixes most ligatures and most quote shapes, but not all dashes
+        # and apostrophes. Map the remaining common ones explicitly.
+        text = unicodedata.normalize('NFKC', name)
+        text = (text
+                .replace('‘', "'").replace('’', "'")
+                .replace('“', '"').replace('”', '"')
+                .replace('–', '-').replace('—', '-'))
+
+        text = text.lower().strip()
+
+        # Drop "(parenthetical descriptions)" e.g. "OracleCMS (multiple Victorian councils affected)"
+        text = re.sub(r'\s*\([^)]*\)\s*', ' ', text)
+
+        # Iteratively peel trailing legal suffixes: "...holdings pty ltd" needs
+        # ltd, then pty, then holdings to be removed.
+        prev = None
+        while prev != text:
+            prev = text
+            text = _LEGAL_SUFFIX_RE.sub('', text).rstrip(' .,;')
+
+        # Strip the geographic-suffix variant ("...Australia") once at end - it
+        # commonly appears before legal suffixes ("Latitude Financial Services
+        # Australia Holdings Pty Ltd") and is a hint, not part of the brand.
+        # NEGATIVE lookbehind for " of " preserves names like
+        # "Commonwealth Bank of Australia" where "Australia" IS part of the brand.
+        text = re.sub(r'(?<!of)\s+(?:australia|australasia|asia[ -]pacific|apac|us|usa|uk|nz)$',
+                      '', text, flags=re.IGNORECASE)
+
+        # Collapse internal punctuation/whitespace.
+        text = re.sub(r'[\s\-_,.]+', ' ', text).strip()
+        return text
+
+    @staticmethod
+    def _split_compound_entity(name: Optional[str]) -> List[str]:
+        """Split a compound name like "ANZ; CBA; NAB; Westpac" into parts.
+
+        Two-stage split:
+        1. Primary separators (``,;|/``) always split. These are unambiguous.
+        2. ``and`` / ``&`` only split if either:
+           * the LAST primary part starts with "and " (Oxford-comma list:
+             ``A, B, and C`` -> ``[A, B, C]``); or
+           * the LAST primary part contains an inner " and " / " & " AND BOTH
+             sides are short standalone names (heuristic to handle
+             ``A, B, C and D`` while preserving names like
+             ``Australia and New Zealand Banking Group``); or
+           * there are NO primary parts and the whole name is a short
+             ``X & Y`` style two-org compound.
+
+        Returns the original (single-element) list for non-compound names.
+        """
+        if not name:
+            return []
+
+        primary_parts = [p.strip() for p in _COMPOUND_PRIMARY_SPLIT_RE.split(name)
+                         if p and p.strip()]
+
+        if len(primary_parts) <= 1:
+            # No hard list separators. Only treat the whole name as a compound
+            # if it cleanly splits into TWO short names ("Apple & Microsoft").
+            match = _INNER_AND_RE.match(name.strip())
+            if match:
+                left, right = match.group(1).strip(), match.group(2).strip()
+                if 0 < len(left.split()) <= 2 and 0 < len(right.split()) <= 2:
+                    return [left, right]
+            return [name.strip()]
+
+        # Multiple primary parts. Only the LAST may have an "and X" tail.
+        last = primary_parts[-1]
+        leading_and = _LEADING_AND_RE.match(last)
+        if leading_and:
+            primary_parts[-1] = last[leading_and.end():].strip()
+        else:
+            inner = _INNER_AND_RE.match(last)
+            if inner:
+                left, right = inner.group(1).strip(), inner.group(2).strip()
+                # Only split if BOTH halves look like standalone short names.
+                if 0 < len(left.split()) <= 4 and 0 < len(right.split()) <= 4:
+                    primary_parts[-1] = left
+                    primary_parts.append(right)
+        return primary_parts
+
+    # Generic single-word stems that should NEVER be treated as a brand hint -
+    # they're too common across unrelated companies and would cause false matches.
+    _GENERIC_WORD_STEMS = frozenset({
+        'australia', 'australian', 'national', 'international', 'global',
+        'commonwealth', 'group', 'holdings', 'industries', 'industry',
+        'services', 'limited', 'company', 'corporate', 'corporation',
+        'pacific', 'asian', 'european', 'american', 'state',
+        'royal', 'general', 'united', 'central', 'regional',
+    })
+
+    def _entity_components(self, name: Optional[str]) -> Set[str]:
+        """Return the set of canonical components that make up *name*.
+
+        For "ANZ; CBA; NAB; Westpac" returns {"anz", "cba", "nab", "westpac"};
+        for "Latitude Financial Services Pty Ltd" returns
+        {"latitude financial services", "latitude"}; the extra single-word
+        "brand-stem" entry lets bare "Latitude" match the longer form.
+
+        Empty / None input returns an empty set.
+        """
+        if not name:
+            return set()
+        # Run entity_mappings normalisation first so e.g. "Ticketmaster LLC"
+        # resolves to "Live Nation" before suffix stripping.
+        normalized = self._normalize_entity_name(name) or name
+        parts = self._split_compound_entity(normalized) or [normalized]
+        canonicals = {self._canonicalize_entity(p) for p in parts}
+        canonicals = {c for c in canonicals if c}
+
+        # Brand-stem hints: for each multi-word canonical name, also include
+        # the first word as a synthetic component IF it is long enough (>=5 chars)
+        # and not in the generic-word blocklist. This lets
+        # "Finsure Finance & Insurance" match bare "Finsure" without doing
+        # unsafe substring matching on every short token.
+        brand_stems = set()
+        for canonical in canonicals:
+            words = canonical.split()
+            if len(words) < 2:
+                continue
+            head = words[0]
+            if len(head) >= 5 and head not in self._GENERIC_WORD_STEMS:
+                brand_stems.add(head)
+        return canonicals | brand_stems
+
     def _same_entity(self, event1: CyberEvent, event2: CyberEvent) -> bool:
         """
         Check if two events have the same victim organization.
@@ -886,6 +1075,19 @@ class DeduplicationEngine:
         name2_raw = event2.victim_organization_name
         name1_normalized = self._normalize_entity_name(name1_raw)
         name2_normalized = self._normalize_entity_name(name2_raw)
+
+        # Component-set match: handles legal-suffix variants, smart quotes, and
+        # compound names ("ANZ; CBA; NAB; Westpac" vs "ANZ, CBA, NAB, Westpac").
+        # Two events are the same entity if their canonical component sets
+        # intersect (i.e. at least one canonical brand is shared).
+        components1 = self._entity_components(name1_raw)
+        components2 = self._entity_components(name2_raw)
+        if components1 and components2 and components1 & components2:
+            self.logger.debug(
+                f"Component-set match: {sorted(components1)} ∩ {sorted(components2)} "
+                f"= {sorted(components1 & components2)}"
+            )
+            return True
 
         # Try organization name matching (only if both have organization names)
         if name1_normalized and name2_normalized:
