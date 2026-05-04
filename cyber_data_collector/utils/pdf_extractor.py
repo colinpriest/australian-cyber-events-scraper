@@ -200,8 +200,15 @@ class PDFExtractor:
             return None
 
     def _error_result(self, error_message: str) -> Dict[str, Any]:
-        """Return error result structure"""
-        self.logger.error(error_message)
+        """Return error result structure.
+
+        Logged at INFO level: this is the extractor's contract for
+        failure (network 403, image-only PDF, file-not-found, etc.) and
+        the caller is responsible for deciding severity. We don't double-
+        log as ERROR here since callers like entity_scraper already
+        emit a single WARNING when they receive `success: False`.
+        """
+        self.logger.info(error_message)
         return {
             'text': '',
             'pages': 0,

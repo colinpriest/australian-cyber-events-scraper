@@ -160,10 +160,17 @@ class PlaywrightScraper:
                     self.logger.info(f"Successfully extracted {len(result['text'])} chars from PDF using {result['extraction_method']}")
                     return _format_return(result['text'])
                 else:
-                    self.logger.warning(f"PDF extraction failed: {result.get('error')}")
+                    # INFO: a single PDF failing (403 from publisher, image-
+                    # only PDF, etc.) is an expected outcome and not user-
+                    # actionable. The pipeline continues with what it can
+                    # extract from the article HTML. Stays in the log file
+                    # for diagnostics but doesn't pollute the run summary.
+                    self.logger.info(f"PDF extraction failed: {result.get('error')}")
                     return _format_return(None)
             except Exception as e:
-                self.logger.error(f"PDF extraction error: {e}")
+                # Unexpected exception (not just a controlled failure
+                # result) - keep at WARNING since this is the unhappy path.
+                self.logger.warning(f"PDF extraction error: {e}")
                 return _format_return(None)
 
         # For sites known to heavily block scrapers, try Perplexity first
