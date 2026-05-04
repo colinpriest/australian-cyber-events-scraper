@@ -27,7 +27,7 @@ if sys.platform == "win32" and sys.stdout.encoding != "utf-8":
     sys.stdout = codecs.getwriter("utf-8")(sys.stdout.buffer)
 
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
-from cyber_data_collector.utils.entity_scraper import PlaywrightScraper
+from cyber_data_collector.utils.entity_scraper import PlaywrightScraper, is_blocked_domain
 from cyber_data_collector.utils.llm_extractor import extract_event_details_with_llm
 
 # Data collection imports
@@ -45,6 +45,18 @@ from cyber_data_collector.utils.validation import (
     validate_enrichment_data_for_storage,
 )
 from cyber_data_collector.filtering.rf_event_filter import RfEventFilter
+
+
+def _enum_value_or_str(value: Any) -> Optional[str]:
+    """Serialise an enum (or any value) for DB storage.
+
+    Returns ``value.value`` for Enum members (e.g. ``EventSeverity.HIGH`` -> ``"High"``)
+    rather than ``str(value)`` which yields the qualified name (``"EventSeverity.HIGH"``)
+    on Python 3.11+ and gets truncated by downstream VARCHAR validators.
+    """
+    if value is None:
+        return None
+    return value.value if hasattr(value, 'value') else str(value)
 
 
 # Configure logging with Unicode support + tqdm-safe output
@@ -602,8 +614,8 @@ class EventDiscoveryEnrichmentPipeline:
                 'event_date': event_date_str,
                 'source_url': source_url,
                 'metadata': {
-                    'event_type': str(event.event_type) if hasattr(event, 'event_type') else None,
-                    'severity': str(event.severity) if hasattr(event, 'severity') else None,
+                    'event_type': _enum_value_or_str(getattr(event, 'event_type', None)),
+                    'severity': _enum_value_or_str(getattr(event, 'severity', None)),
                     'confidence': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else None,
                     'australian_relevance': event.australian_relevance if hasattr(event, 'australian_relevance') else None,
                     'data_sources_count': len(event.data_sources) if event.data_sources else 0,
@@ -682,8 +694,8 @@ class EventDiscoveryEnrichmentPipeline:
                 'title': title,  # NOT NULL - guaranteed not empty
                 'description': event.description,
                 'summary': getattr(event, 'summary', None),
-                'event_type': str(event.event_type) if hasattr(event, 'event_type') else None,
-                'severity': str(event.severity) if hasattr(event, 'severity') else None,
+                'event_type': _enum_value_or_str(getattr(event, 'event_type', None)),
+                'severity': _enum_value_or_str(getattr(event, 'severity', None)),
                 'event_date': event_date_str,
                 'records_affected': event.financial_impact.customers_affected if event.financial_impact else None,
                 'is_australian_event': is_australian,  # NOT NULL - guaranteed boolean
@@ -1357,10 +1369,61 @@ class EventDiscoveryEnrichmentPipeline:
             logger.debug("[SCRAPING] No events have URLs to scrape for this month")
             return 0
 
-        logger.info(f"[SCRAPING] Found {len(events_with_urls)} events to scrape for this month")
-
+        # PRE-SCRAPE FILTERING: drop URLs we know we cannot scrape and obvious
+        # non-cyber content based on title+URL alone. Saves Playwright + Perplexity
+        # roundtrips on events that would be filtered out post-scrape anyway.
         scraped_count = 0
         failed_scrapes = []
+        events_after_prefilter = []
+        prefilter_blocked = 0
+        prefilter_rf_filtered = 0
+
+        for event in events_with_urls:
+            url = event.get('source_url') or ''
+            title = event.get('raw_title') or ''
+
+            # Hard-skip blocked domains (LinkedIn, Facebook, X, YouTube, etc.)
+            if is_blocked_domain(url):
+                prefilter_blocked += 1
+                failed_scrapes.append({
+                    'title': title[:50] if title else 'Unknown',
+                    'url': url or 'No URL',
+                    'reason': 'Skipped (social/profile/marketplace domain - not a news article)',
+                    'perplexity_attempted': False,
+                    'perplexity_succeeded': False,
+                })
+                continue
+
+            # Pre-scrape RF filter on title + URL alone. We only act on a
+            # *negative* prediction here, since title+URL is a weaker signal than
+            # full content; the post-scrape RF pass remains the authoritative one.
+            if self._apply_rf_url_prefilter(event):
+                events_after_prefilter.append(event)
+            else:
+                prefilter_rf_filtered += 1
+                failed_scrapes.append({
+                    'title': title[:50] if title else 'Unknown',
+                    'url': url or 'No URL',
+                    'reason': 'Pre-scrape RF filter rejected (title+URL non-cyber)',
+                    'perplexity_attempted': False,
+                    'perplexity_succeeded': False,
+                })
+
+        if prefilter_blocked or prefilter_rf_filtered:
+            logger.info(
+                f"[SCRAPING] Pre-filter dropped {prefilter_blocked + prefilter_rf_filtered} URLs "
+                f"({prefilter_blocked} blocked-domain, {prefilter_rf_filtered} RF pre-filter)"
+            )
+
+        if not events_after_prefilter:
+            logger.info("[SCRAPING] All candidate URLs dropped by pre-filter; nothing to scrape")
+            # Still report failures so caller has accurate counts
+            self._log_scrape_failures(failed_scrapes, total=len(events_with_urls))
+            return 0
+
+        events_with_urls = events_after_prefilter
+        logger.info(f"[SCRAPING] Found {len(events_with_urls)} events to scrape for this month")
+
         # Use async context manager like the existing scraping code
         async with PlaywrightScraper() as scraper:
             # Process events in parallel batches
@@ -1406,34 +1469,84 @@ class EventDiscoveryEnrichmentPipeline:
                     self.stats['errors'] += 1
 
         logger.info(f"[SCRAPING] Successfully scraped {scraped_count}/{len(events_with_urls)} events for this month")
-        
-        # Report failed scrapes at the end
-        if failed_scrapes:
-            logger.info(f"[SCRAPING] Failed to scrape {len(failed_scrapes)} events:")
-            
-            # Count Perplexity attempts
-            perplexity_attempted_count = sum(1 for f in failed_scrapes if f.get('perplexity_attempted', False))
-            perplexity_succeeded_count = sum(1 for f in failed_scrapes if f.get('perplexity_succeeded', False))
-            
-            if perplexity_attempted_count > 0:
-                logger.info(f"[SCRAPING] Perplexity fallback: {perplexity_attempted_count} attempted, {perplexity_succeeded_count} succeeded")
-            
-            for i, failed in enumerate(failed_scrapes[:10], 1):  # Show first 10 failures
-                perplexity_info = ""
-                if failed.get('perplexity_attempted', False):
-                    if failed.get('perplexity_succeeded', False):
-                        perplexity_info = " (Perplexity fallback succeeded but content still too short)"
-                    else:
-                        perplexity_info = " (Perplexity fallback attempted but failed)"
-                
-                logger.info(f"[SCRAPING] {i}. {failed['title']}... - {failed['reason']}{perplexity_info}")
-                logger.info(f"[SCRAPING]    URL: {failed['url']}")
-            if len(failed_scrapes) > 10:
-                logger.info(f"[SCRAPING] ... and {len(failed_scrapes) - 10} more failures")
-        else:
-            logger.info("[SCRAPING] All events scraped successfully!")
-            
+        self._log_scrape_failures(failed_scrapes)
         return scraped_count
+
+    def _log_scrape_failures(self, failed_scrapes: List[Dict[str, Any]], total: Optional[int] = None) -> None:
+        """Emit the standard failure summary used by the scraping phase."""
+        if not failed_scrapes:
+            logger.info("[SCRAPING] All events scraped successfully!")
+            return
+
+        logger.info(f"[SCRAPING] Failed to scrape {len(failed_scrapes)} events:")
+
+        perplexity_attempted_count = sum(1 for f in failed_scrapes if f.get('perplexity_attempted', False))
+        perplexity_succeeded_count = sum(1 for f in failed_scrapes if f.get('perplexity_succeeded', False))
+        if perplexity_attempted_count > 0:
+            logger.info(
+                f"[SCRAPING] Perplexity fallback: {perplexity_attempted_count} attempted, "
+                f"{perplexity_succeeded_count} succeeded"
+            )
+
+        for i, failed in enumerate(failed_scrapes[:10], 1):
+            perplexity_info = ""
+            if failed.get('perplexity_attempted', False):
+                if failed.get('perplexity_succeeded', False):
+                    perplexity_info = " (Perplexity fallback succeeded but content still too short)"
+                else:
+                    perplexity_info = " (Perplexity fallback attempted but failed)"
+            logger.info(f"[SCRAPING] {i}. {failed['title']}... - {failed['reason']}{perplexity_info}")
+            logger.info(f"[SCRAPING]    URL: {failed['url']}")
+        if len(failed_scrapes) > 10:
+            logger.info(f"[SCRAPING] ... and {len(failed_scrapes) - 10} more failures")
+
+    def _apply_rf_url_prefilter(self, event: Dict[str, Any]) -> bool:
+        """Run RF filter on title + URL only, BEFORE scraping.
+
+        Returns True if the event should proceed to scraping. We are deliberately
+        conservative here: title+URL alone is a weaker signal than full content,
+        so we trust a *negative* RF prediction only when its confidence is
+        meaningfully low (< 0.4). The post-scrape RF pass remains authoritative
+        for borderline cases.
+
+        The win: events where title+URL alone clearly indicate non-cyber content
+        (vendor homepages, generic threat reports, profile pages that slip past
+        the blocked-domain list) are dropped without paying for Playwright +
+        Perplexity. In production, these are the events that consistently end up
+        as "Content filtered out as non-cyber (Random Forest filter)" post-scrape.
+        """
+        try:
+            url = event.get('source_url') or ''
+            title = event.get('raw_title') or ''
+            source_type = event.get('source_type') or ''
+
+            # If we don't already have source_type on the event dict, fetch it
+            if not source_type:
+                with self.db._lock:
+                    cursor = self.db._conn.cursor()
+                    cursor.execute(
+                        "SELECT source_type FROM RawEvents WHERE raw_event_id = ?",
+                        (event.get('raw_event_id'),),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        source_type = row[0] or ''
+
+            filter_result = self.filter_system.should_keep_event(
+                source_type=source_type,
+                title=title,
+                description="",
+                content="",
+                url=url,
+            )
+            # Conservative: only drop when the model is confidently negative.
+            if not filter_result.is_cyber_relevant and filter_result.confidence_score < 0.4:
+                return False
+            return True
+
+        except Exception as exc:
+            logger.debug(f"[RF_FILTER] Pre-scrape filter error (keeping event): {exc}")
+            return True
 
     def _apply_rf_content_filter(self, event: Dict[str, Any]) -> bool:
         """Apply Random Forest content filtering to determine if event should be kept."""
@@ -1528,10 +1641,47 @@ class EventDiscoveryEnrichmentPipeline:
 
         # Filter for events with URLs
         events_with_urls = [e for e in events_to_scrape if e.get('source_url')]
-        logger.info(f"[SCRAPING] Found {len(events_with_urls)} events with URLs to scrape")
 
+        # Pre-scrape filter: drop blocked domains and obvious non-cyber URLs
+        # before paying Playwright + Perplexity round-trips.
         scraped_count = 0
         failed_scrapes = []
+        events_after_prefilter = []
+        prefilter_blocked = 0
+        prefilter_rf_filtered = 0
+
+        for event in events_with_urls:
+            url = event.get('source_url') or ''
+            title = event.get('raw_title') or ''
+
+            if is_blocked_domain(url):
+                prefilter_blocked += 1
+                failed_scrapes.append({
+                    'title': title[:50] if title else 'Unknown',
+                    'url': url or 'No URL',
+                    'reason': 'Skipped (social/profile/marketplace domain - not a news article)',
+                })
+                continue
+
+            if self._apply_rf_url_prefilter(event):
+                events_after_prefilter.append(event)
+            else:
+                prefilter_rf_filtered += 1
+                failed_scrapes.append({
+                    'title': title[:50] if title else 'Unknown',
+                    'url': url or 'No URL',
+                    'reason': 'Pre-scrape RF filter rejected (title+URL non-cyber)',
+                })
+
+        if prefilter_blocked or prefilter_rf_filtered:
+            logger.info(
+                f"[SCRAPING] Pre-filter dropped {prefilter_blocked + prefilter_rf_filtered} URLs "
+                f"({prefilter_blocked} blocked-domain, {prefilter_rf_filtered} RF pre-filter)"
+            )
+
+        events_with_urls = events_after_prefilter
+        logger.info(f"[SCRAPING] Found {len(events_with_urls)} events with URLs to scrape")
+
         async with PlaywrightScraper() as scraper:
             # Create tasks with event info attached
             tasks = []
@@ -2143,6 +2293,8 @@ class EventDiscoveryEnrichmentPipeline:
 
     async def _load_all_enriched_events(self):
         """Load all enriched events from the database for global deduplication"""
+        from cyber_data_collector.processing.deduplication_v2 import CyberEvent
+
         try:
             # Query all enriched events from the database
             cursor = self.db._conn.cursor()

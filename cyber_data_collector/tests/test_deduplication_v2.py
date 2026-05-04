@@ -731,5 +731,125 @@ class TestIntegration:
         conn.close()
 
 
+class TestEntityNormalization:
+    """Regression tests for entity-normalization patterns the deduplicator
+    used to miss: legal-suffix variants, smart-quote variants, and compound names.
+
+    Each pattern was observed live in the Finance bucket where the deduplicator
+    failed to merge what were obviously the same incident across slightly
+    different victim_organization_name spellings.
+    """
+
+    def setup_method(self):
+        self.engine = DeduplicationEngine(similarity_threshold=0.7)
+
+    # ----- _canonicalize_entity ----- #
+
+    @pytest.mark.parametrize("name,expected", [
+        ("Latitude Financial Services Pty Ltd",     "latitude financial services"),
+        ("Latitude Financial Services Limited",     "latitude financial services"),
+        ("Latitude Financial Services Australia Holdings Pty Ltd",
+                                                    "latitude financial services"),
+        ("Finsure Holding Pty Ltd",                 "finsure"),
+        ("Finsure Pty Ltd",                         "finsure"),
+        ("Finsure Finance & Insurance Pty Ltd",     "finsure finance & insurance"),
+        ("Austin’s Financial Solutions",       "austin's financial solutions"),
+        ("Austin's Financial Solutions",            "austin's financial solutions"),
+        ("OracleCMS (multiple Victorian councils affected)", "oraclecms"),
+        ("PricewaterhouseCoopers International Limited",     "pricewaterhousecoopers"),
+        ("",                                        ""),
+        (None,                                      ""),
+    ])
+    def test_canonicalize_entity_strips_legal_suffixes_and_smart_quotes(self, name, expected):
+        assert DeduplicationEngine._canonicalize_entity(name) == expected
+
+    # ----- _split_compound_entity ----- #
+
+    @pytest.mark.parametrize("name,expected", [
+        ("ANZ; CBA; NAB; Westpac",         ["ANZ", "CBA", "NAB", "Westpac"]),
+        ("ANZ, CBA, NAB, Westpac",         ["ANZ", "CBA", "NAB", "Westpac"]),
+        ("ANZ, CBA, NAB and Westpac",      ["ANZ", "CBA", "NAB", "Westpac"]),
+        ("Apple & Microsoft",              ["Apple", "Microsoft"]),
+        ("Single Org Pty Ltd",             ["Single Org Pty Ltd"]),
+        ("",                               []),
+    ])
+    def test_split_compound_entity(self, name, expected):
+        assert DeduplicationEngine._split_compound_entity(name) == expected
+
+    # ----- _entity_components ----- #
+
+    def test_entity_components_compound_name_yields_canonical_set(self):
+        big_four_long = ("Australia and New Zealand Banking Group Limited; "
+                         "Commonwealth Bank of Australia; "
+                         "National Australia Bank Limited; "
+                         "Westpac Banking Corporation")
+        big_four_short = "ANZ, CBA, NAB, Westpac"
+        comps_long = self.engine._entity_components(big_four_long)
+        comps_short = self.engine._entity_components(big_four_short)
+
+        # Short form: 4 short canonicals, no brand-stem hints (single-word names)
+        assert comps_short == {'anz', 'cba', 'nab', 'westpac'}
+
+        # Long form: at minimum the 4 multi-word canonicals AND a 'westpac' brand
+        # stem from "Westpac Banking Corporation" -> "westpac banking" -> "westpac".
+        assert 'westpac' in comps_long, f"Expected 'westpac' brand stem in {comps_long}"
+        # The two compound names must overlap so _same_entity returns True.
+        assert comps_long & comps_short, (
+            f"Compound long/short forms must share a brand stem: "
+            f"long={sorted(comps_long)} short={sorted(comps_short)}"
+        )
+
+    # ----- _same_entity end-to-end ----- #
+
+    def test_same_entity_legal_suffix_variants(self):
+        """Latitude Financial Pty Ltd / Limited / Holdings Pty Ltd -> SAME entity."""
+        a = CyberEvent(event_id="a", title="Latitude breach",
+                       victim_organization_name="Latitude Financial Services Pty Ltd",
+                       event_date=date(2023, 3, 1))
+        b = CyberEvent(event_id="b", title="Latitude data leak",
+                       victim_organization_name="Latitude Financial Services Limited",
+                       event_date=date(2023, 3, 1))
+        c = CyberEvent(event_id="c", title="Latitude flags costs",
+                       victim_organization_name="Latitude Financial Services Australia Holdings Pty Ltd",
+                       event_date=date(2023, 3, 1))
+        assert self.engine._same_entity(a, b)
+        assert self.engine._same_entity(a, c)
+        assert self.engine._same_entity(b, c)
+
+    def test_same_entity_smart_quote_variants(self):
+        """Curly vs straight apostrophe in 'Austin's' -> SAME entity."""
+        a = CyberEvent(event_id="a", title="Austin's breach",
+                       victim_organization_name="Austin's Financial Solutions",
+                       event_date=date(2024, 12, 19))
+        b = CyberEvent(event_id="b", title="Austin's ransomware",
+                       victim_organization_name="Austin’s Financial Solutions Pty Ltd",
+                       event_date=date(2024, 12, 19))
+        assert self.engine._same_entity(a, b)
+
+    def test_same_entity_compound_separator_variants(self):
+        """Different separators in compound bank-name lists -> SAME entity."""
+        a = CyberEvent(event_id="a", title="Banks credentials",
+                       victim_organization_name="ANZ; CBA; NAB; Westpac",
+                       event_date=date(2021, 1, 1))
+        b = CyberEvent(event_id="b", title="Big Four banks",
+                       victim_organization_name="ANZ, CBA, NAB, Westpac",
+                       event_date=date(2021, 1, 1))
+        c = CyberEvent(event_id="c", title="Banks again",
+                       victim_organization_name="ANZ, CBA, NAB and Westpac",
+                       event_date=date(2021, 1, 1))
+        assert self.engine._same_entity(a, b)
+        assert self.engine._same_entity(a, c)
+
+    def test_same_entity_negative_does_not_overmatch(self):
+        """Sanity check: unrelated orgs MUST NOT match via the new logic."""
+        a = CyberEvent(event_id="a", title="One",
+                       victim_organization_name="Latitude Financial Services Pty Ltd",
+                       event_date=date(2023, 3, 1))
+        b = CyberEvent(event_id="b", title="Two",
+                       victim_organization_name="Optus Pty Ltd",
+                       event_date=date(2023, 3, 1))
+        assert not self.engine._same_entity(a, b)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

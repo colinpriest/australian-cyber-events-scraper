@@ -260,10 +260,61 @@ class PerplexityBackfillProcessor:
         if enrichment.victim_count:
             logger.info(f"    Victim Count: {original.get('records_affected')} -> {enrichment.victim_count} (conf: {enrichment.victim_count_confidence:.2f})")
 
+    async def enrich_events_concurrent(
+        self,
+        events: List[Dict],
+        max_concurrent: int = 10,
+        progress_log_every: int = 10,
+    ) -> Dict[str, int]:
+        """Run Perplexity enrichment for many events concurrently.
+
+        Perplexity tolerates ~10 concurrent calls comfortably; this is the same
+        semaphore size used by llm_classifier.py and entity_extractor.py.
+        Replaces a serial loop that took ~3-6 sec per event.
+
+        Returns counts dict: {'enriched': N, 'failed': M}
+        """
+        if not events:
+            return {'enriched': 0, 'failed': 0}
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+        enriched_count = 0
+        failed_count = 0
+        completed = 0
+        total = len(events)
+
+        async def _enrich_one(event: Dict) -> bool:
+            async with semaphore:
+                try:
+                    enriched_data = await self.enrich_event(event)
+                    if enriched_data:
+                        # apply_enrichment_to_database is sync but uses self.db._lock
+                        # internally, so it is safe to call from async tasks.
+                        self.apply_enrichment_to_database(enriched_data)
+                        return True
+                    return False
+                except Exception as exc:
+                    logger.warning(f"Failed to enrich event {event.get('enriched_event_id')}: {exc}")
+                    return False
+
+        tasks = [asyncio.create_task(_enrich_one(event)) for event in events]
+        for task in asyncio.as_completed(tasks):
+            success = await task
+            completed += 1
+            if success:
+                enriched_count += 1
+            else:
+                failed_count += 1
+            if progress_log_every and completed % progress_log_every == 0:
+                logger.info(f"Progress: {completed}/{total} events processed ({enriched_count} enriched)")
+
+        return {'enriched': enriched_count, 'failed': failed_count}
+
     async def process_backfill(
         self,
         limit: Optional[int] = None,
-        priority_only: bool = False
+        priority_only: bool = False,
+        max_concurrent: int = 10,
     ):
         """Main backfill processing function."""
 
@@ -282,33 +333,26 @@ class PerplexityBackfillProcessor:
             logger.info("No events need enrichment")
             return
 
-        logger.info(f"Processing {len(events)} events...")
+        logger.info(f"Processing {len(events)} events with max_concurrent={max_concurrent}...")
 
-        # Process each event
-        for i, event in enumerate(events, 1):
-            logger.info(f"\nProcessing {i}/{len(events)}: {event['title'][:60]}...")
-
-            try:
-                # Enrich with Perplexity
-                enriched = await self.enrich_event(event)
-
-                if enriched:
-                    # Apply enrichment to database
-                    success = self.apply_enrichment_to_database(enriched)
-                    if success:
+        if self.dry_run:
+            # Dry run still serial so we can print proposed changes per event
+            for i, event in enumerate(events, 1):
+                logger.info(f"\nProcessing {i}/{len(events)}: {event['title'][:60]}...")
+                try:
+                    enriched = await self.enrich_event(event)
+                    if enriched:
+                        self.apply_enrichment_to_database(enriched)
                         self.stats['enriched_successfully'] += 1
                     else:
-                        self.stats['skipped'] += 1
-                else:
+                        self.stats['enriched_failed'] += 1
+                except Exception as e:
+                    logger.error(f"Error processing event: {e}")
                     self.stats['enriched_failed'] += 1
-
-                # Rate limiting - wait between requests
-                if i < len(events):  # Don't wait after last event
-                    await asyncio.sleep(2.0)
-
-            except Exception as e:
-                logger.error(f"Error processing event: {e}")
-                self.stats['enriched_failed'] += 1
+        else:
+            counts = await self.enrich_events_concurrent(events, max_concurrent=max_concurrent)
+            self.stats['enriched_successfully'] = counts['enriched']
+            self.stats['enriched_failed'] = counts['failed']
 
         # Print summary
         self._print_summary()

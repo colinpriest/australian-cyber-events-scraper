@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -18,6 +19,10 @@ from cyber_data_collector.utils import RateLimiter
 
 class GoogleSearchDataSource(DataSource):
     """Google Custom Search API data source."""
+
+    # Google's JSON API caps each query at 100 total results (10 pages × 10 `num`).
+    _DEFAULT_MAX_PAGES = 10
+    _API_MAX_PAGES = 10
 
     # Class-level flag to track if we've hit the daily quota
     _daily_quota_exceeded = False
@@ -61,6 +66,18 @@ class GoogleSearchDataSource(DataSource):
             self.logger.error("GOOGLE_CUSTOMSEARCH_CX_KEY not configured")
             return False
         return True
+
+    def _max_search_pages(self) -> int:
+        """Pages to request per query (1–10). The API never returns more than 100 results per query."""
+        raw = self.config.custom_config.get("max_pages")
+        if raw is None:
+            env_raw = os.getenv("GOOGLE_SEARCH_MAX_PAGES")
+            raw = env_raw if env_raw is not None else str(self._DEFAULT_MAX_PAGES)
+        try:
+            n = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return self._DEFAULT_MAX_PAGES
+        return max(1, min(n, self._API_MAX_PAGES))
 
     async def collect_events(self, date_range: DateRange) -> List[CyberEvent]:
         # Check if quota was exceeded earlier today
@@ -115,8 +132,9 @@ class GoogleSearchDataSource(DataSource):
         else:
             date_filter += datetime.now().strftime("%Y%m%d")
 
+        max_pages = self._max_search_pages()
         all_results: List[Dict] = []
-        for page in range(5):
+        for page in range(max_pages):
             params = {
                 "key": self.api_key,
                 "cx": self.cx_key,

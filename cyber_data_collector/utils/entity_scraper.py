@@ -18,6 +18,34 @@ try:
 except ImportError:
     PDFExtractor = None
 
+
+# Module-level blocked-domain list. Sites where the URL is fundamentally not an
+# article page (profile, group, video, marketplace listing). Both scraping AND
+# Perplexity fallback consistently fail on these — observed Perplexity success
+# rate ~0/6 to 1/14 in production logs. Hard-skip immediately.
+BLOCKED_DOMAINS = (
+    'linkedin.com',
+    'facebook.com',
+    'twitter.com',
+    'x.com',
+    'etsy.com',
+    'youtube.com',
+    'youtu.be',
+    'instagram.com',
+    'tiktok.com',
+    'pinterest.com',
+    'reddit.com',
+)
+
+
+def is_blocked_domain(url: str) -> bool:
+    """True if the URL is from a domain we should never attempt to scrape."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    return any(domain in url_lower for domain in BLOCKED_DOMAINS)
+
+
 class PlaywrightScraper:
     """
     A robust Playwright-based scraper designed to fetch web page content while
@@ -115,6 +143,13 @@ class PlaywrightScraper:
                     "perplexity_succeeded": perplexity_succeeded,
                 }
             return text
+
+        # Hard-skip domains where neither scraping nor Perplexity fallback work
+        # (LinkedIn profiles, Facebook posts, X/Twitter, YouTube, marketplace listings).
+        # Saves 2-5 sec per URL by avoiding both Playwright and Perplexity calls.
+        if self._is_blocked_domain(url):
+            self.logger.info(f"Skipping scrape (social/profile/marketplace domain): {url}")
+            return _format_return(None)
 
         # Check if URL points to a PDF file
         if self.pdf_extractor and self.pdf_extractor.is_pdf_url(url):
@@ -392,11 +427,21 @@ class PlaywrightScraper:
         ]
         return any(domain in url.lower() for domain in australian_domains)
 
+    def _is_blocked_domain(self, url: str) -> bool:
+        """Check if URL is from a domain we should never attempt to scrape.
+
+        Delegates to the module-level :func:`is_blocked_domain`. These are sites
+        where the URL points to a profile, post container, video, or listing page
+        rather than an article — both Playwright and Perplexity fallback
+        consistently fail on them. Hard-skipping saves 2-5 sec per URL.
+        """
+        return is_blocked_domain(url)
+
     def _is_stubborn_site(self, url: str) -> bool:
         """Check if URL is from a site known to block scrapers."""
         stubborn_domains = [
-            'nytimes.com', 'reuters.com', 'facebook.com', 'twitter.com',
-            'linkedin.com', 'news.com.au', 'theaustralian.com.au',
+            'nytimes.com', 'reuters.com',
+            'news.com.au', 'theaustralian.com.au',
             'afr.com', 'wsj.com', 'ft.com', 'bloomberg.com'
         ]
         return any(domain in url.lower() for domain in stubborn_domains)

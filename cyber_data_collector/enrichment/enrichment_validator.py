@@ -356,15 +356,58 @@ class EnrichmentValidator:
                 'bhp': 'MINING',
                 'rio tinto': 'MINING',
                 'fortescue': 'MINING',
+                # Vendors / supply-chain orgs commonly mis-tagged as GOVERNMENT
+                # because their CLIENTS are government - they are NOT government.
+                'hwl ebsworth': 'LEGAL_SERVICES',
+                'frontier software': 'TECHNOLOGY',
+                'datatime services': 'TECHNOLOGY',
+                'oraclecms': 'TECHNOLOGY',
+                'dialog pty': 'TECHNOLOGY',
+                'idmatch': 'TECHNOLOGY',
+                'australian labor party': 'OTHER',
+                'copyright agency limited': 'NON_PROFIT',
+                'insurance and care nsw': 'FINANCIAL_SERVICES',
+                'icare': 'FINANCIAL_SERVICES',
+                # Vendors / professional-services firms commonly mis-tagged as
+                # FINANCIAL_SERVICES because their CLIENTS are financial firms.
+                'pricewaterhousecoopers':            'LEGAL_SERVICES',
+                'pwc':                               'LEGAL_SERVICES',
+                'deloitte':                          'LEGAL_SERVICES',
+                'ernst & young':                     'LEGAL_SERVICES',
+                'ey ':                               'LEGAL_SERVICES',
+                'kpmg':                              'LEGAL_SERVICES',
+                'cpa australia':                     'OTHER',
+                'nexia australia':                   'LEGAL_SERVICES',
+                'gibbs hurley':                      'LEGAL_SERVICES',
+                'iress':                             'TECHNOLOGY',
+                'morningstar':                       'TECHNOLOGY',
+                'tabcorp':                           'ENTERTAINMENT',
+                'gold corporation':                  'MANUFACTURING',  # Perth Mint
+                'perth mint':                        'MANUFACTURING',
+                # Vendors/orgs commonly mis-tagged as EDUCATION (LLM picks
+                # education because the article topic mentions schools/uni
+                # students, but the breached company is something else).
+                'proctoru':                              'TECHNOLOGY',  # online proctoring SaaS
+                'proctorio':                             'TECHNOLOGY',
+                'national tertiary education union':     'NON_PROFIT',  # labor union, not a school
+                'australian human resources institute':  'NON_PROFIT',  # professional body
+                'scout association of australia':        'NON_PROFIT',  # youth organisation
+                'thanks for the help':                   'TECHNOLOGY',  # edtech vendor
+                'beyond bank':                           'FINANCIAL_SERVICES',  # bank, not a school
+                'department of primary industries':      'GOVERNMENT',
             }
 
             org_lower = org_name.lower()
             for known_org, expected_industry in known_orgs.items():
                 if known_org in org_lower and industry != expected_industry:
+                    # AUTO-CORRECT (not just warn): mutate the extraction in place
+                    # so downstream consumers see the right industry. The original
+                    # value is preserved in the warning for audit.
                     warnings.append(
-                        f"Industry classification mismatch: '{org_name}' classified as {industry}, "
-                        f"expected {expected_industry}"
+                        f"Industry auto-corrected for '{org_name}': "
+                        f"{industry} -> {expected_industry} (known organisation)"
                     )
+                    extraction.setdefault('victim', {})['industry'] = expected_industry
                     break
 
         return {

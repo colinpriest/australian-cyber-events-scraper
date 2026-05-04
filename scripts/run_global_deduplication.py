@@ -102,6 +102,25 @@ class DeduplicationMigration:
                 mode = "forced full rebuild" if self.force else "initial full build"
                 logger.info(f"🔄 Running {mode}...")
 
+                # SAFETY VAULT: snapshot ASD classifications + industry overrides
+                # before the rebuild wipes them. They're auto-restored at the
+                # end of this path. Without this, a force-dedup loses every
+                # session-level industry correction and every ASD classification
+                # (cascade-deleted via FK).
+                vault = None
+                if self.force and not self.dry_run:
+                    try:
+                        from cyber_data_collector.utils.safety_vault import SafetyVault
+                        vault = SafetyVault(self.db_path)
+                        snap = vault.snapshot(label="pre_force_dedup")
+                        logger.info(
+                            "🛡️ SafetyVault snapshot saved (ASD=%d, industry_overrides=%d)",
+                            snap['asd'], snap['industry_overrides'],
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️ SafetyVault snapshot failed: {e}")
+                        vault = None
+
                 if not self._apply_database_constraints():
                     return False
 
@@ -111,6 +130,22 @@ class DeduplicationMigration:
 
                 if not self._run_global_deduplication(enriched_events):
                     return False
+
+                # SAFETY VAULT: restore ASD + industry overrides after rebuild
+                if vault is not None:
+                    try:
+                        n_asd, n_ind = vault.restore()
+                        logger.info(
+                            "🛡️ SafetyVault restored: ASD classifications=%d, "
+                            "industry overrides=%d",
+                            n_asd, n_ind,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"❌ SafetyVault restore FAILED: {e}. "
+                            f"Use the snapshot at instance/safety_vault/ to "
+                            f"restore manually."
+                        )
 
             elif len(new_event_ids) == 0:
                 # --- PATH B: Nothing to do ---

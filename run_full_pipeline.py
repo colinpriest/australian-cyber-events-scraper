@@ -266,25 +266,11 @@ class UnifiedPipeline:
                 logger.info("No events need Perplexity enrichment")
                 return True
 
-            logger.info(f"Enriching {len(events)} events with Perplexity AI...")
+            logger.info(f"Enriching {len(events)} events with Perplexity AI (concurrent, max_concurrent=10)...")
 
-            # Enrich events
-            enriched_count = 0
-            failed_count = 0
-
-            for event in events:
-                try:
-                    enriched_data = await processor.enrich_event(event)
-                    if enriched_data:
-                        processor.apply_enrichment_to_database(enriched_data)
-                        enriched_count += 1
-                        if enriched_count % 10 == 0:
-                            logger.info(f"Progress: {enriched_count}/{len(events)} events enriched")
-                    else:
-                        failed_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to enrich event: {e}")
-                    failed_count += 1
+            counts = await processor.enrich_events_concurrent(events, max_concurrent=10)
+            enriched_count = counts['enriched']
+            failed_count = counts['failed']
 
             logger.info(f"Perplexity enrichment complete: {enriched_count} enriched, {failed_count} failed")
             self.results['reenrichment']['success'] = True
@@ -337,26 +323,11 @@ class UnifiedPipeline:
                 self.results['reenrichment']['events_enriched'] = 0
                 return True
 
-            logger.info(f"Re-enriching {len(events)} events...")
+            logger.info(f"Re-enriching {len(events)} events (concurrent, max_concurrent=10)...")
 
-            # Process events
-            enriched_count = 0
-            failed_count = 0
-
-            for event in events:
-                try:
-                    enriched_data = await processor.enrich_event(event)
-                    if enriched_data:
-                        processor.apply_enrichment_to_database(enriched_data)
-                        enriched_count += 1
-                        if enriched_count % 10 == 0:
-                            logger.info(f"Progress: {enriched_count}/{len(events)} events re-enriched")
-                    else:
-                        failed_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to enrich event {event.get('enriched_event_id')}: {e}")
-                    failed_count += 1
-                    self.results['reenrichment']['errors'].append(str(e))
+            counts = await processor.enrich_events_concurrent(events, max_concurrent=10)
+            enriched_count = counts['enriched']
+            failed_count = counts['failed']
 
             # Print statistics
             logger.info(f"\nRe-enrichment complete:")

@@ -32,6 +32,8 @@ batch_enrichment_*.json
 migration_report_*.json
 oaic_cyber_statistics_*.json
 oaic_cyber_statistics_*.csv
+oaic_pdf_vs_dashboard_comparison_*.json
+*.PARTIAL_*
 CORRECTED_VALUES.json
 
 # Downloaded data directories

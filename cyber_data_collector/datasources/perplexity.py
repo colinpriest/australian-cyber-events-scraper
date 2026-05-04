@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 try:  # pragma: no cover - optional dependency
@@ -133,16 +134,33 @@ class PerplexityDataSource(DataSource):
         return all_events
 
     def _generate_search_queries(self, date_range: DateRange) -> List[str]:
-        # Expand search window to 3 months back to catch late-reported events
-        # Events may be reported months after they occurred
+        # We have two competing concerns:
+        #  - Late-reported events: an event from January may surface in news in March,
+        #    so back-expanding the window catches them when scraping a single old month.
+        #  - The user's --days N flag: when the caller is doing a small rolling refresh
+        #    (e.g. --days 33), the pipeline already iterates the recent calendar months,
+        #    so a per-month +2-month expansion just turns "33 days" into "~90 days" and
+        #    causes massive overlap with the months we've already scraped.
+        # Compromise: only back-expand if the window we were given is *not* already recent.
+        # Threshold: if start_date is within the last 60 days, skip expansion.
         from dateutil.relativedelta import relativedelta
-        expanded_start = date_range.start_date - relativedelta(months=2)
+        days_to_today = (datetime.now() - date_range.start_date).days
+        if days_to_today <= 60:
+            expanded_start = date_range.start_date
+            window_label = "recent (no back-expansion - rolling pipeline handles late reporting)"
+        else:
+            expanded_start = date_range.start_date - relativedelta(months=2)
+            window_label = "expanded 3-month window for late-reported events"
 
         date_str = f"after:{expanded_start.strftime('%m/%d/%Y')}"
         if date_range.end_date:
             date_str += f" before:{date_range.end_date.strftime('%m/%d/%Y')}"
 
-        self.logger.info(f"Perplexity searching with expanded 3-month window: {expanded_start.strftime('%Y-%m-%d')} to {date_range.end_date.strftime('%Y-%m-%d') if date_range.end_date else 'now'}")
+        self.logger.info(
+            f"Perplexity searching {window_label}: "
+            f"{expanded_start.strftime('%Y-%m-%d')} to "
+            f"{date_range.end_date.strftime('%Y-%m-%d') if date_range.end_date else 'now'}"
+        )
 
         base_queries = [
             "Australian cyber attack {date_range} data breach security incident",
