@@ -3713,27 +3713,39 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
            )
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Build a static dashboard HTML (no Flask).')
-    parser.add_argument('--db-path', default='instance/cyber_events.db', help='Path to SQLite database file')
-    parser.add_argument('--out-dir', default='dashboard', help='Output directory for static HTML')
-    args = parser.parse_args()
+def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
+                         out_dir: str = 'dashboard') -> str:
+    """Assemble every dashboard data section and write the static HTML.
 
+    This is the single source of truth for dashboard generation. Both the
+    standalone CLI (``main``) and ``run_full_pipeline --dashboard-only`` call
+    it, so the two entry points can never drift and ship a dashboard missing
+    chart sections (which previously left the source-split, time-distribution,
+    personal-info, monthly-comparison and individuals-distribution charts empty
+    when run via the pipeline).
+
+    Args:
+        db_path: Path to the SQLite database.
+        out_dir: Directory to write index.html into.
+
+    Returns:
+        The path to the written index.html.
+    """
     start_date = '2020-01-01'
     end_date = date.today().strftime('%Y-%m-%d')
     current_year = date.today().year
 
-    if not os.path.exists(args.db_path):
-        raise FileNotFoundError(f'Database not found: {args.db_path}')
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f'Database not found: {db_path}')
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / 'index.html'
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir_path / 'index.html'
 
     # Load OAIC data
     oaic_data = load_oaic_data()
 
-    with get_connection(args.db_path) as conn:
+    with get_connection(db_path) as conn:
         monthly_counts = get_monthly_event_counts(conn, start_date, end_date)
 
         # Get half-yearly database counts for OAIC comparison
@@ -3743,8 +3755,8 @@ def main():
         # Prepare additional OAIC data for new charts
         oaic_cyber_incidents = prepare_oaic_cyber_incidents_data(oaic_data)
         oaic_attack_types = prepare_oaic_attack_types_data(oaic_data)
-        oaic_sectors = prepare_oaic_sectors_data(oaic_data)
-        oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data)
+        oaic_sectors = prepare_oaic_sectors_data(oaic_data, db_path)
+        oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data, db_path)
         # New OAIC vs DB comparisons added 2026-05-03
         oaic_monthly_comparison = prepare_oaic_monthly_comparison(oaic_data)
         oaic_individuals_affected_distribution = prepare_individuals_affected_distribution_comparison(oaic_data)
@@ -3851,6 +3863,17 @@ def main():
 
     html = build_html(data, start_date, end_date)
     out_file.write_text(html, encoding='utf-8')
+    logger.info(f'Static dashboard generated: {out_file}')
+    return str(out_file)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Build a static dashboard HTML (no Flask).')
+    parser.add_argument('--db-path', default='instance/cyber_events.db', help='Path to SQLite database file')
+    parser.add_argument('--out-dir', default='dashboard', help='Output directory for static HTML')
+    args = parser.parse_args()
+
+    out_file = build_dashboard_file(db_path=args.db_path, out_dir=args.out_dir)
     print(f'Static dashboard generated: {out_file}')
 
 
