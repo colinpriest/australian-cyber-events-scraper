@@ -364,7 +364,7 @@ Be conservative: if uncertain, answer false.
     async def _query_perplexity_with_retry(
         self,
         prompt: str,
-        max_tokens: int = 1000
+        max_tokens: int = 1500
     ) -> str:
         """Query Perplexity with exponential backoff retry."""
 
@@ -443,13 +443,75 @@ Be conservative: if uncertain, answer false.
                     lines = json_str.split("\n")
                     json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
 
-            data = json.loads(json_str)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                # Perplexity frequently truncates the response at max_tokens,
+                # cutting off the trailing reasoning/sources fields mid-string.
+                # Salvage the fields that completed rather than discarding the
+                # whole (otherwise useful) enrichment.
+                data = self._repair_truncated_json(json_str)
+                if data is None:
+                    raise
+                self.logger.info(
+                    "Recovered %d field(s) from truncated Perplexity enrichment "
+                    "response (%s)",
+                    len(data), e,
+                )
+
             return PerplexityEventEnrichment(**data)
 
         except (json.JSONDecodeError, ValueError) as e:
             self.logger.warning(f"Failed to parse Perplexity response: {e}")
             # Return empty enrichment with low confidence
             return PerplexityEventEnrichment(overall_confidence=0.0)
+
+    @staticmethod
+    def _repair_truncated_json(json_str: str) -> Optional[dict]:
+        """Repair JSON truncated mid-value (e.g. by max_tokens).
+
+        Scans the string tracking string/escape state and bracket depth, then
+        cuts back to the last top-level comma (dropping the incomplete trailing
+        field) and closes any still-open brackets/braces. Returns the parsed
+        dict, or None if it still cannot be parsed.
+        """
+        stack: List[str] = []
+        in_string = False
+        escape = False
+        last_comma_idx: Optional[int] = None
+        last_comma_stack: Optional[List[str]] = None
+
+        for i, ch in enumerate(json_str):
+            if escape:
+                escape = False
+                continue
+            if in_string:
+                if ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack:
+                    stack.pop()
+            elif ch == ",":
+                # Everything before this comma is a complete run of values.
+                last_comma_idx = i
+                last_comma_stack = list(stack)
+
+        if last_comma_idx is None or not last_comma_stack:
+            return None
+
+        repaired = json_str[:last_comma_idx] + "".join(reversed(last_comma_stack))
+        try:
+            data = json.loads(repaired)
+            return data if isinstance(data, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     def _parse_duplicate_check_response(self, response: str) -> PerplexityDuplicateCheck:
         """Parse duplicate check response."""
@@ -464,7 +526,19 @@ Be conservative: if uncertain, answer false.
                     lines = json_str.split("\n")
                     json_str = "\n".join(lines[1:-1]) if len(lines) > 2 else json_str
 
-            data = json.loads(json_str)
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                data = self._repair_truncated_json(json_str)
+                if data is None:
+                    raise
+                # reasoning is the last (and required) field, so it is the most
+                # likely casualty of truncation — backfill it if dropped.
+                data.setdefault("reasoning", "Recovered from truncated response")
+                self.logger.info(
+                    "Recovered duplicate-check fields from truncated response (%s)", e
+                )
+
             return PerplexityDuplicateCheck(**data)
 
         except (json.JSONDecodeError, ValueError) as e:
