@@ -112,9 +112,58 @@ class CyberIncidents(BaseModel):
     malware_pct: Optional[float] = Field(None, ge=0, le=100)
 
 
+# Plausible per-sector notification count for a top-5 OAIC ranking. The max
+# real value observed across 7+ semesters is ~123; anything above this cap is
+# an LLM misread of a period total (or a different metric). Kept in sync with
+# check_data_integrity.OAIC_SECTOR_NOTIF_MAX so persisted data that we sanitize
+# here always passes the standalone integrity check.
+OAIC_SECTOR_NOTIF_MAX = 250
+
+
 class TopSectorEntry(BaseModel):
     sector: str = Field(..., min_length=1, max_length=120)
     notifications: Optional[int] = Field(None, ge=0, le=1000)
+
+
+def sanitize_top_sectors(
+    top_sectors: Optional[List[Dict[str, Any]]],
+    total_notifications: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Null out implausible per-sector notification counts (non-raising).
+
+    A single top-5 sector cannot exceed the period total, and counts above
+    ``OAIC_SECTOR_NOTIF_MAX`` are almost always an LLM misread. Rather than
+    discard the sector (we still want its name/rank) or reject the whole
+    extraction, we null just the offending count — which the integrity check
+    treats as acceptable. Acts as a safety net for data that bypassed or
+    pre-dated strict page validation.
+
+    Args:
+        top_sectors: List of ``{"sector": str, "notifications": int|None}``.
+        total_notifications: Period total, used as a hard upper bound when known.
+
+    Returns:
+        A new list with implausible ``notifications`` values replaced by None.
+    """
+    if not top_sectors:
+        return top_sectors or []
+
+    cap = OAIC_SECTOR_NOTIF_MAX
+    if isinstance(total_notifications, (int, float)) and total_notifications > 0:
+        cap = min(cap, int(total_notifications))
+
+    sanitized: List[Dict[str, Any]] = []
+    for entry in top_sectors:
+        cleaned = dict(entry)
+        n = cleaned.get("notifications")
+        if isinstance(n, (int, float)) and n > cap:
+            logger.warning(
+                "Nulling implausible top_sectors count %s for %r (cap=%s, total=%s)",
+                n, cleaned.get("sector"), cap, total_notifications,
+            )
+            cleaned["notifications"] = None
+        sanitized.append(cleaned)
+    return sanitized
 
 
 class HumanErrorCauses(BaseModel):

@@ -268,10 +268,18 @@ INTEGRITY_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_data
 
 
 def _run_integrity_check(db_path: Path) -> tuple[int, str]:
-    """Run the integrity-check script against `db_path` and return (rc, stdout+stderr)."""
+    """Run the integrity-check script against `db_path` and return (rc, stdout+stderr).
+
+    Runs with the CWD set to the test's own directory (where `db_path` lives)
+    rather than the project root. The JSON checks glob `oaic_cyber_statistics_*`
+    relative to the CWD, so running from the project root would let real scrape
+    outputs pollute these DB-focused tests. Isolating the CWD means the JSON
+    checks see no files (and pass vacuously), so each test exercises only the
+    DB invariant it targets.
+    """
     proc = subprocess.run(
         [sys.executable, str(INTEGRITY_SCRIPT), "--db", str(db_path), "--quiet"],
-        capture_output=True, text=True, cwd=INTEGRITY_SCRIPT.parents[1],
+        capture_output=True, text=True, cwd=str(db_path.parent),
     )
     return proc.returncode, proc.stdout + proc.stderr
 
