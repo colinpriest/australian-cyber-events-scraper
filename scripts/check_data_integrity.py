@@ -14,6 +14,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -32,6 +33,24 @@ class CheckResult:
 # Sanity ranges
 OAIC_SECTOR_NOTIF_MIN = 10
 OAIC_SECTOR_NOTIF_MAX = 250
+
+# Match the YYYYMMDD_HHMMSS scrape stamp embedded in OAIC output filenames.
+_OAIC_TS_RE = re.compile(r"(\d{8})_(\d{6})")
+
+
+def _oaic_files_newest_first() -> List[str]:
+    """Return OAIC stat files, newest scrape first.
+
+    Sorts by the timestamp embedded in the filename rather than os.path.getmtime,
+    which is unreliable: copying, restoring, or rewriting a file (e.g. a cleanup
+    pass or backup) resets its mtime and can silently promote stale data for a
+    period. The filename stamp reflects the actual scrape time and is stable.
+    """
+    def _key(path: str):
+        m = _OAIC_TS_RE.search(os.path.basename(path))
+        return m.group(1) + m.group(2) if m else "0"
+
+    return sorted(glob.glob("oaic_cyber_statistics_*.json"), key=_key, reverse=True)
 SEVERITY_VALUES = {"Critical", "High", "Medium", "Low", "Unknown", None}
 EVENT_TYPE_VALUES_KNOWN_PREFIXES = (
     "Ransomware", "Data Breach", "Phishing", "Malware", "Vulnerability Exploit",
@@ -112,8 +131,7 @@ def check_no_duplicate_h1_h2_oaic(_unused) -> CheckResult:
     classic 'silent semester-selection failure' signature.
     """
     bad = []
-    for f in sorted(glob.glob("oaic_cyber_statistics_*.json"),
-                    key=os.path.getmtime, reverse=True):
+    for f in _oaic_files_newest_first():
         try:
             data = json.load(open(f))
         except Exception:
@@ -151,8 +169,7 @@ def check_oaic_top_sectors_in_range(_unused) -> CheckResult:
     almost certainly an LLM hallucination of a period total.
     """
     bad = []
-    files = sorted(glob.glob("oaic_cyber_statistics_*.json"),
-                   key=os.path.getmtime, reverse=True)
+    files = _oaic_files_newest_first()
     seen_keys = set()
     for f in files:
         try:
@@ -319,8 +336,7 @@ def check_oaic_period_publication_realistic(_unused) -> CheckResult:
     extracted, or the scraper captured an unfiltered all-period total).
     """
     bad = []
-    files = sorted(glob.glob("oaic_cyber_statistics_*.json"),
-                   key=os.path.getmtime, reverse=True)
+    files = _oaic_files_newest_first()
     seen = set()
     for f in files:
         try:

@@ -37,6 +37,7 @@ from cyber_data_collector.utils import setup_logging
 from scripts.oaic.oaic_validators import (
     OAICValidationError,
     quarantine_extraction,
+    sanitize_top_sectors,
     validate_cross_page_totals,
     validate_displayed_semester,
     validate_inter_semester_delta,
@@ -2757,6 +2758,14 @@ CRITICAL:
             for entry in result["top_sectors"]:
                 if entry["notifications"] is None and entry["sector"] in p9_totals:
                     entry["notifications"] = p9_totals[entry["sector"]]
+
+        # Safety net: null any per-sector count that exceeds the period total
+        # or the plausibility cap (LLM misreads of a period total). Keeps the
+        # sector name/rank but drops the bad number so persisted data always
+        # passes the integrity check.
+        result["top_sectors"] = sanitize_top_sectors(
+            result["top_sectors"], result.get("total_notifications")
+        )
 
         # Individuals affected distribution
         individuals = extractions.get(4, {})

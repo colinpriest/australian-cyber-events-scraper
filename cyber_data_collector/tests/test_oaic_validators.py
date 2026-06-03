@@ -8,14 +8,52 @@ import pytest
 
 from scripts.oaic.oaic_validators import (
     CANONICAL_TIME_BUCKETS,
+    OAIC_SECTOR_NOTIF_MAX,
     OAICValidationError,
     normalize_time_bucket,
     quarantine_extraction,
+    sanitize_top_sectors,
     validate_cross_page_totals,
     validate_displayed_semester,
     validate_inter_semester_delta,
     validate_page_payload,
 )
+
+
+# ----------------------------------------------------------------------
+# sanitize_top_sectors — safety net for implausible per-sector counts
+# ----------------------------------------------------------------------
+
+def test_sanitize_nulls_count_above_cap():
+    sectors = [{"sector": "Education", "notifications": 448}]
+    out = sanitize_top_sectors(sectors, total_notifications=527)
+    assert out[0]["sector"] == "Education"
+    assert out[0]["notifications"] is None  # 448 > 250 cap
+
+
+def test_sanitize_nulls_count_exceeding_total():
+    # 240 is under the 250 cap but impossible when the period total is 200.
+    sectors = [{"sector": "Retail", "notifications": 240}]
+    out = sanitize_top_sectors(sectors, total_notifications=200)
+    assert out[0]["notifications"] is None
+
+
+def test_sanitize_keeps_plausible_counts():
+    sectors = [
+        {"sector": "Health", "notifications": 96},
+        {"sector": "Finance", "notifications": 73},
+        {"sector": "Unknown", "notifications": None},
+    ]
+    out = sanitize_top_sectors(sectors, total_notifications=532)
+    assert [s["notifications"] for s in out] == [96, 73, None]
+
+
+def test_sanitize_handles_empty_and_missing_total():
+    assert sanitize_top_sectors([], None) == []
+    assert sanitize_top_sectors(None, None) == []
+    # With no total, the absolute cap still applies.
+    out = sanitize_top_sectors([{"sector": "X", "notifications": OAIC_SECTOR_NOTIF_MAX + 1}], None)
+    assert out[0]["notifications"] is None
 
 
 # ----------------------------------------------------------------------

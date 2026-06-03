@@ -16,21 +16,21 @@ import os
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+from scripts.oaic.oaic_validators import sanitize_top_sectors
+
 
 def validate_record(record: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and clean a single OAIC record."""
     total = record.get('total_notifications') or 0
 
-    # Validate top_sectors
-    if record.get('top_sectors') and total > 0:
-        valid_sectors = []
-        for sector in record['top_sectors']:
-            count = sector.get('notifications') or 0
-            if count <= total * 1.1:  # Allow 10% margin
-                valid_sectors.append(sector)
-            else:
-                print(f"  Removing invalid sector: {sector.get('sector')}={count} (total={total})")
-        record['top_sectors'] = valid_sectors if valid_sectors else []
+    # Null implausible per-sector counts (> period total, or > the plausibility
+    # cap). Uses the shared sanitizer so cleanup, scraper and integrity check
+    # all agree. The old `count <= total * 1.1` guard kept counts that were
+    # ~80-90% of the total, which is impossible for one of five top sectors.
+    if record.get('top_sectors'):
+        record['top_sectors'] = sanitize_top_sectors(
+            record['top_sectors'], total if total > 0 else None
+        )
 
     # Validate attack type counts
     attack_fields = ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']
