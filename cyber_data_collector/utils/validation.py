@@ -8,10 +8,68 @@ from __future__ import annotations
 
 import logging
 import json
+import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_validation_response(content: str) -> Dict[str, Any]:
+    """Parse a Perplexity records_affected validation response into a dict.
+
+    Perplexity occasionally returns JSON whose trailing ``reasoning`` field is
+    truncated (max_tokens) or contains unescaped quotes, which breaks a strict
+    ``json`` parse. The decision-relevant fields all precede ``reasoning``, so
+    on failure we salvage them with field-level regexes rather than discarding
+    the whole response.
+
+    Args:
+        content: Raw model content (markdown fences already stripped).
+
+    Returns:
+        A dict with whatever decision fields could be recovered.
+    """
+    try:
+        decoder = json.JSONDecoder()
+        result, _ = decoder.raw_decode(content.strip())
+        return result
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    # Salvage decision fields individually (reasoning is intentionally ignored
+    # because it is the field most likely to be malformed and is purely
+    # informational).
+    salvaged: Dict[str, Any] = {}
+
+    bool_patterns = {
+        "is_cyber_incident": r'"is_cyber_incident"\s*:\s*(true|false)',
+        "is_plausible": r'"is_plausible"\s*:\s*(true|false)',
+    }
+    for key, pattern in bool_patterns.items():
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            salvaged[key] = match.group(1).lower() == "true"
+
+    corrected_match = re.search(
+        r'"corrected_value"\s*:\s*(null|-?\d+)', content, re.IGNORECASE
+    )
+    if corrected_match:
+        token = corrected_match.group(1).lower()
+        salvaged["corrected_value"] = None if token == "null" else int(token)
+
+    category_match = re.search(
+        r'"org_size_category"\s*:\s*"([^"]*)"', content
+    )
+    if category_match:
+        salvaged["org_size_category"] = category_match.group(1)
+
+    if salvaged:
+        logger.warning(
+            "Perplexity validation JSON was malformed; salvaged %d field(s): %s",
+            len(salvaged), ", ".join(sorted(salvaged)),
+        )
+    return salvaged
 
 
 # ---------------------------------------------------------------------------
@@ -583,14 +641,14 @@ def llm_validate_records_affected(
             '  "corrected_value": null or integer (if the number was likely misread),\n'
             '  "org_size_category": "major_international" | "major_australian" | "small_regional" | "unknown",\n'
             '  "estimated_customer_base": integer or null,\n'
-            '  "reasoning": "brief explanation"\n'
+            '  "reasoning": "brief explanation, max 25 words, no double quotes"\n'
             "}\n"
         )
 
         payload = {
             "model": "sonar-pro",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 500,
+            "max_tokens": 800,
             "temperature": 0.1,
         }
 
@@ -631,8 +689,7 @@ def llm_validate_records_affected(
         if content.endswith("```"):
             content = content[:-3]
 
-        decoder = json.JSONDecoder()
-        result, _ = decoder.raw_decode(content.strip())
+        result = _parse_validation_response(content)
 
         is_cyber = result.get("is_cyber_incident", True)  # default True for backwards compat
         is_plausible = result.get("is_plausible", False)

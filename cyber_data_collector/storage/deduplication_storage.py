@@ -195,11 +195,15 @@ class DeduplicationStorage:
                 if len(skipped_duplicates) > 5:
                     self.logger.warning(f"  ... and {len(skipped_duplicates) - 5} more duplicates skipped")
 
-            # Store unique events
-            stored_events = self._store_unique_events(cursor, events_to_store)
-            
+            # Store unique events. Returns a map of source event_id ->
+            # generated deduplicated_event_id so lineage rows can satisfy the
+            # foreign key on DeduplicatedEvents(deduplicated_event_id).
+            stored_events, dedup_id_by_event = self._store_unique_events(cursor, events_to_store)
+
             # Store merge groups and lineage
-            merge_groups_created = self._store_merge_groups(cursor, result.merge_groups)
+            merge_groups_created = self._store_merge_groups(
+                cursor, result.merge_groups, dedup_id_by_event
+            )
             
             # Commit transaction
             self.conn.commit()
@@ -251,13 +255,25 @@ class DeduplicationStorage:
 
         return unique_events, skipped_duplicates
     
-    def _store_unique_events(self, cursor: sqlite3.Cursor, events: List[CyberEvent]) -> int:
-        """Store unique events in DeduplicatedEvents table"""
+    def _store_unique_events(
+        self, cursor: sqlite3.Cursor, events: List[CyberEvent]
+    ) -> Tuple[int, Dict[str, str]]:
+        """Store unique events in DeduplicatedEvents table.
+
+        Returns:
+            Tuple of (stored_count, dedup_id_by_event) where dedup_id_by_event
+            maps each source ``event.event_id`` to the generated
+            ``deduplicated_event_id``. Lineage rows use this map so their
+            ``deduplicated_event_id`` foreign key resolves to a real
+            DeduplicatedEvents row.
+        """
         stored_count = 0
-        
+        dedup_id_by_event: Dict[str, str] = {}
+
         for event in events:
             # Generate unique deduplicated event ID
             deduplicated_event_id = str(uuid.uuid4())
+            dedup_id_by_event[event.event_id] = deduplicated_event_id
             
             # Validate records_affected with LLM fallback for uncertain cases
             import os
@@ -326,16 +342,42 @@ class DeduplicationStorage:
             ))
             
             stored_count += 1
-        
-        return stored_count
-    
-    def _store_merge_groups(self, cursor: sqlite3.Cursor, merge_groups: List[MergeGroup]) -> int:
-        """Store merge groups and create lineage tracking"""
+
+        return stored_count, dedup_id_by_event
+
+    def _store_merge_groups(
+        self,
+        cursor: sqlite3.Cursor,
+        merge_groups: List[MergeGroup],
+        dedup_id_by_event: Dict[str, str],
+    ) -> int:
+        """Store merge groups and create lineage tracking.
+
+        Args:
+            cursor: Active cursor within the storage transaction.
+            merge_groups: Merge groups to persist.
+            dedup_id_by_event: Map of source ``event_id`` to the generated
+                ``deduplicated_event_id`` (from :meth:`_store_unique_events`).
+                Used so lineage rows reference an existing DeduplicatedEvents
+                row and satisfy the foreign key constraint.
+        """
         stored_count = 0
 
         for group in merge_groups:
             # Skip groups with no merges (single events)
             if len(group.merged_events) == 0:
+                continue
+
+            # Resolve the master event to its stored DeduplicatedEvents row.
+            # If the master was itself dropped as a duplicate before storage,
+            # skip the group rather than violate the foreign key.
+            dedup_event_id = dedup_id_by_event.get(group.master_event.event_id)
+            if dedup_event_id is None:
+                self.logger.warning(
+                    "Skipping merge group: master event %s has no stored "
+                    "DeduplicatedEvents row",
+                    group.master_event.event_id,
+                )
                 continue
 
             # Create cluster record (match actual schema)
@@ -350,7 +392,7 @@ class DeduplicationStorage:
                 ) VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 cluster_id,
-                group.master_event.event_id,
+                dedup_event_id,
                 cluster_size,
                 avg_similarity,
                 group.merge_timestamp,
@@ -371,7 +413,7 @@ class DeduplicationStorage:
                     map_id,
                     merged_event.event_id,  # Source enriched event
                     merged_event.event_id,  # Same as enriched
-                    group.master_event.event_id,  # Master deduplicated event
+                    dedup_event_id,  # Master deduplicated event row
                     'merged',  # This is a merged duplicate
                     similarity_score,
                     1.0  # Default weight
@@ -439,8 +481,8 @@ class DeduplicationStorage:
         if 'EventDeduplicationMap' in existing_tables:
             cursor.execute("""
                 SELECT COUNT(*) FROM EventDeduplicationMap edm
-                LEFT JOIN DeduplicatedEvents de ON edm.deduplicated_event_id = de.master_enriched_event_id
-                WHERE de.master_enriched_event_id IS NULL
+                LEFT JOIN DeduplicatedEvents de ON edm.deduplicated_event_id = de.deduplicated_event_id
+                WHERE de.deduplicated_event_id IS NULL
             """)
             orphaned_mappings = cursor.fetchone()[0]
 
@@ -455,8 +497,8 @@ class DeduplicationStorage:
         if 'DeduplicationClusters' in existing_tables:
             cursor.execute("""
                 SELECT COUNT(*) FROM DeduplicationClusters dc
-                LEFT JOIN DeduplicatedEvents de ON dc.deduplicated_event_id = de.master_enriched_event_id
-                WHERE de.master_enriched_event_id IS NULL
+                LEFT JOIN DeduplicatedEvents de ON dc.deduplicated_event_id = de.deduplicated_event_id
+                WHERE de.deduplicated_event_id IS NULL
             """)
             orphaned_clusters = cursor.fetchone()[0]
 
