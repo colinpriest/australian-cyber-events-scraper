@@ -96,7 +96,7 @@ from scripts.build_static_dashboard import (
     get_median_severity_per_month, get_maximum_records_affected_per_month,
     get_severity_by_industry, get_severity_by_attack_type, get_records_affected_by_attack_type,
     get_asd_risk_matrix, prepare_oaic_cyber_incidents_data, prepare_oaic_attack_types_data,
-    prepare_oaic_sectors_data, prepare_oaic_individuals_affected_data
+    prepare_oaic_sectors_data, prepare_oaic_individuals_affected_data, build_dashboard_file
 )
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
@@ -592,72 +592,15 @@ class UnifiedPipeline:
             return False
 
     def _generate_static_dashboard(self, args) -> Optional[str]:
-        """Generate static HTML dashboard."""
+        """Generate static HTML dashboard.
+
+        Delegates to build_static_dashboard.build_dashboard_file so the pipeline
+        and the standalone CLI assemble the exact same set of chart sections.
+        A previous in-line copy here had drifted and omitted several OAIC
+        comparison charts, shipping a dashboard with empty plots.
+        """
         try:
-            from datetime import date
-            
-            start_date = '2020-01-01'
-            end_date = date.today().strftime('%Y-%m-%d')
-            
-            # Create output directory
-            out_dir = Path(args.out_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_file = out_dir / 'index.html'
-            
-            # Load OAIC data
-            oaic_data = load_oaic_data()
-
-            # Query database and build dashboard
-            with get_connection(self.db_path) as conn:
-                monthly_counts = get_monthly_event_counts(conn, start_date, end_date)
-                database_half_yearly = get_half_yearly_database_counts(conn, start_date, end_date)
-                oaic_comparison = prepare_oaic_comparison_data(database_half_yearly, oaic_data)
-
-                # Prepare all OAIC data components
-                oaic_cyber_incidents = prepare_oaic_cyber_incidents_data(oaic_data)
-                oaic_attack_types = prepare_oaic_attack_types_data(oaic_data)
-                oaic_sectors = prepare_oaic_sectors_data(oaic_data, self.db_path)
-                oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data, self.db_path)
-
-                # Get current year for ASD risk matrix
-                current_year = date.today().year
-
-                data = {
-                    'monthly_counts': monthly_counts,
-                    'severity_trends': get_monthly_severity_trends(conn, start_date, end_date),
-                    'records_affected': get_monthly_records_affected(conn, start_date, end_date),
-                    'event_type_mix': get_monthly_event_type_mix(conn, start_date, end_date),
-                    'overall_event_type_mix': get_overall_event_type_mix(conn, start_date, end_date),
-                    'entity_types': get_entity_type_distribution(conn, start_date, end_date),
-                    'records_histogram': get_records_affected_histogram(conn, start_date, end_date),
-                    'max_severity_per_month': get_maximum_severity_per_month(conn, start_date, end_date),
-                    'median_severity_per_month': get_median_severity_per_month(conn, start_date, end_date),
-                    'max_records_per_month': get_maximum_records_affected_per_month(conn, start_date, end_date),
-                    'severity_by_industry': get_severity_by_industry(conn, start_date, end_date),
-                    'severity_by_attack_type': get_severity_by_attack_type(conn, start_date, end_date),
-                    'records_by_attack_type': get_records_affected_by_attack_type(conn, start_date, end_date),
-                    'monthly_counts_stats': compute_monthly_counts_stats(monthly_counts),
-                    'event_type_correlation': compute_event_type_correlation_matrix(get_monthly_event_type_mix(conn, start_date, end_date)),
-                    'oaic_comparison': oaic_comparison,
-                    'oaic_cyber_incidents': oaic_cyber_incidents,
-                    'oaic_attack_types': oaic_attack_types,
-                    'oaic_sectors': oaic_sectors,
-                    'oaic_individuals_affected': oaic_individuals_affected,
-                    'asd_risk_all': get_asd_risk_matrix(conn),
-                    'asd_risk_current': get_asd_risk_matrix(conn, current_year),
-                    'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),
-                }
-            
-            # Generate HTML
-            html = build_html(data, start_date, end_date)
-            
-            # Write to file
-            with open(out_file, 'w', encoding='utf-8') as f:
-                f.write(html)
-            
-            logger.info(f"Static dashboard created: {out_file}")
-            return str(out_file)
-            
+            return build_dashboard_file(db_path=self.db_path, out_dir=args.out_dir)
         except Exception as e:
             logger.error(f"Static dashboard generation failed: {e}")
             self.results['dashboard']['errors'].append(f"Static dashboard: {e}")

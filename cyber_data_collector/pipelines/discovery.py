@@ -2322,11 +2322,15 @@ class EventDiscoveryEnrichmentPipeline:
         from cyber_data_collector.processing.deduplication_v2 import CyberEvent
 
         try:
-            # Query all enriched events from the database
+            # Query all enriched events from the database. perplexity_enrichment_data
+            # carries the formal entity name and victim industry; we must pass these
+            # through to the deduplicated events, otherwise a dedup rebuild silently
+            # drops victim_organization_name/industry (which the dashboard's sector
+            # charts depend on). Mirrors run_global_deduplication._load_enriched_events.
             cursor = self.db._conn.cursor()
             cursor.execute("""
                 SELECT enriched_event_id, title, summary, event_date, event_type, severity,
-                       records_affected, confidence_score
+                       records_affected, confidence_score, perplexity_enrichment_data
                 FROM EnrichedEvents
                 WHERE status = 'Active'
                 ORDER BY event_date DESC
@@ -2334,6 +2338,17 @@ class EventDiscoveryEnrichmentPipeline:
 
             enriched_events = []
             for row in cursor.fetchall():
+                # Extract victim organization name and industry from Perplexity enrichment JSON
+                victim_org_name = None
+                victim_org_industry = None
+                if row[8]:  # perplexity_enrichment_data
+                    try:
+                        enrichment_data = json.loads(row[8])
+                        victim_org_name = enrichment_data.get('formal_entity_name')
+                        victim_org_industry = enrichment_data.get('victim_industry')
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 # Convert database row to CyberEvent object
                 event = CyberEvent(
                     event_id=row[0],
@@ -2343,6 +2358,8 @@ class EventDiscoveryEnrichmentPipeline:
                     event_type=row[4],
                     severity=row[5],
                     records_affected=row[6],
+                    victim_organization_name=victim_org_name,
+                    victim_organization_industry=victim_org_industry,
                     data_sources=[],  # Not available in EnrichedEvents
                     urls=[],  # Not available in EnrichedEvents
                     confidence=row[7] if row[7] else 0.5
