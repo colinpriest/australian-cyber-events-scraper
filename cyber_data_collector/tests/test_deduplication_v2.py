@@ -851,5 +851,121 @@ class TestEntityNormalization:
         assert not self.engine._same_entity(a, b)
 
 
+class TestForeignKeyEnforcedStorage:
+    """Regression test for the FOREIGN KEY constraint failure that killed the
+    in-pipeline deduplication path.
+
+    The pipeline runs storage on a connection with ``PRAGMA foreign_keys = ON``
+    (CyberEventDataV2), while the standalone script does not. Lineage rows used
+    to store ``master_event.event_id`` in the ``deduplicated_event_id`` column,
+    which never matches the freshly-generated DeduplicatedEvents primary key, so
+    the foreign key failed whenever enforcement was on and a merge group existed.
+    """
+
+    @pytest.fixture
+    def fk_db(self):
+        fd, db_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE DeduplicatedEvents (
+                deduplicated_event_id TEXT PRIMARY KEY,
+                master_enriched_event_id TEXT,
+                title TEXT,
+                summary TEXT,
+                event_date DATE,
+                event_type TEXT,
+                severity TEXT,
+                records_affected INTEGER,
+                victim_organization_name TEXT,
+                victim_organization_industry TEXT,
+                is_australian_event BOOLEAN,
+                is_specific_event BOOLEAN,
+                confidence_score REAL,
+                status TEXT DEFAULT 'Active',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Lineage tables WITH the foreign key, exactly as the production schema.
+        cursor.execute("""
+            CREATE TABLE EventDeduplicationMap (
+                map_id TEXT PRIMARY KEY,
+                raw_event_id TEXT NOT NULL,
+                enriched_event_id TEXT,
+                deduplicated_event_id TEXT NOT NULL,
+                contribution_type VARCHAR(50),
+                similarity_score REAL,
+                data_source_weight REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(raw_event_id, deduplicated_event_id),
+                FOREIGN KEY (deduplicated_event_id)
+                    REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE DeduplicationClusters (
+                cluster_id TEXT PRIMARY KEY,
+                deduplicated_event_id TEXT NOT NULL,
+                cluster_size INTEGER NOT NULL,
+                average_similarity REAL,
+                deduplication_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                algorithm_version VARCHAR(20),
+                FOREIGN KEY (deduplicated_event_id)
+                    REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        yield db_path
+        os.unlink(db_path)
+
+    def test_store_with_merge_group_under_fk_enforcement(self, fk_db):
+        conn = sqlite3.connect(fk_db)
+        conn.execute("PRAGMA foreign_keys = ON;")  # mirror the live pipeline connection
+        storage = DeduplicationStorage(conn)
+
+        # Two events that merge (same entity) plus one standalone event.
+        events = [
+            CyberEvent(event_id="1", title="Optus Data Breach",
+                       summary="Optus breach", event_date=date(2023, 1, 1),
+                       event_type="Data Breach", severity="High",
+                       records_affected=1000000),
+            CyberEvent(event_id="2", title="Optus Data Breach Incident",
+                       summary="Optus security incident", event_date=date(2023, 1, 2),
+                       event_type="Security Incident", severity="High",
+                       records_affected=2000000),
+            CyberEvent(event_id="3", title="Telstra Network Outage",
+                       summary="Telstra outage", event_date=date(2023, 1, 3),
+                       event_type="Network Outage", severity="Medium",
+                       records_affected=50000),
+        ]
+
+        engine = DeduplicationEngine(similarity_threshold=0.7)
+        result = engine.deduplicate(events)
+        assert len(result.merge_groups) == 1  # the two Optus events merge
+
+        # This raised "FOREIGN KEY constraint failed" before the fix.
+        storage_result = storage.store_deduplication_result(result)
+        assert storage_result.success is True
+        assert storage_result.merge_groups_created == 1
+
+        # Lineage rows must reference a real DeduplicatedEvents primary key.
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM EventDeduplicationMap edm
+            LEFT JOIN DeduplicatedEvents de
+                ON edm.deduplicated_event_id = de.deduplicated_event_id
+            WHERE de.deduplicated_event_id IS NULL
+        """)
+        assert cursor.fetchone()[0] == 0
+        assert storage.validate_storage_integrity() == []
+
+        conn.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
