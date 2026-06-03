@@ -563,23 +563,36 @@ class DeduplicationMigration:
                              dedup_to_master: Dict[str, str]) -> None:
         """Record that new_event maps to an existing deduplicated event."""
         map_id = str(uuid.uuid4())
-        # EventDeduplicationMap.deduplicated_event_id stores the master_enriched_event_id
-        # (not the deduplicated_event_id UUID) to match the convention used by full rebuild
-        master_id = dedup_to_master.get(existing_dedup.event_id, existing_dedup.event_id)
-        cursor.execute("""
-            INSERT OR IGNORE INTO EventDeduplicationMap (
-                map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
-                contribution_type, similarity_score, data_source_weight
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            map_id,
-            new_event.event_id,
-            new_event.event_id,
-            master_id,
-            'incremental_merge',
-            1.0,
-            1.0
-        ))
+        # EventDeduplicationMap.deduplicated_event_id is a FK to
+        # DeduplicatedEvents(deduplicated_event_id), so it must store the real
+        # deduplicated_event_id UUID. existing_dedup.event_id already IS that
+        # UUID (see _load_existing_deduplicated_events). A previous version
+        # stored master_enriched_event_id here, which produced ORPHANED_MAPPINGS
+        # in the integrity check and would violate the FK under enforcement.
+        dedup_event_id = existing_dedup.event_id
+        # raw_event_id is a FK to RawEvents; new_event.event_id is an enriched
+        # event id, so resolve the real raw_event_id from EnrichedEvents.
+        raw_event_id = self._resolve_raw_event_id(cursor, new_event.event_id)
+        if raw_event_id is None:
+            logger.warning(
+                "Skipping incremental lineage row: no RawEvents row for enriched "
+                f"event {new_event.event_id}"
+            )
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO EventDeduplicationMap (
+                    map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
+                    contribution_type, similarity_score, data_source_weight
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                map_id,
+                raw_event_id,
+                new_event.event_id,
+                dedup_event_id,
+                'incremental_merge',
+                1.0,
+                1.0
+            ))
 
         # Update date to earliest if the new event is earlier
         if (new_event.event_date and existing_dedup.event_date
@@ -589,6 +602,53 @@ class DeduplicationMigration:
                 SET event_date = ?, updated_at = ?
                 WHERE deduplicated_event_id = ?
             """, (new_event.event_date, datetime.now().isoformat(), existing_dedup.event_id))
+
+    @staticmethod
+    def _resolve_raw_event_id(cursor: sqlite3.Cursor, enriched_event_id: str) -> Optional[str]:
+        """Resolve an enriched_event_id to its source RawEvents.raw_event_id.
+
+        Returns None if the EnrichedEvents row cannot be found, so the caller
+        can skip the lineage row instead of writing a dangling raw_event_id.
+        """
+        try:
+            cursor.execute(
+                "SELECT raw_event_id FROM EnrichedEvents WHERE enriched_event_id = ?",
+                (enriched_event_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except sqlite3.Error as exc:
+            logger.warning(
+                f"Failed to resolve raw_event_id for enriched event {enriched_event_id}: {exc}"
+            )
+            return None
+
+    def _repair_orphaned_incremental_mappings(self, cursor: sqlite3.Cursor) -> int:
+        """Heal EventDeduplicationMap rows that stored master_enriched_event_id
+        in the deduplicated_event_id column (a pre-fix incremental_merge bug).
+
+        Rewrites those rows to point at the real deduplicated_event_id so the
+        storage-integrity check (and the FK) are satisfied. Returns the number
+        of rows repaired. Idempotent.
+        """
+        cursor.execute("""
+            UPDATE EventDeduplicationMap
+            SET deduplicated_event_id = (
+                SELECT de.deduplicated_event_id
+                FROM DeduplicatedEvents de
+                WHERE de.master_enriched_event_id = EventDeduplicationMap.deduplicated_event_id
+            )
+            WHERE deduplicated_event_id NOT IN (
+                SELECT deduplicated_event_id FROM DeduplicatedEvents
+            )
+            AND deduplicated_event_id IN (
+                SELECT master_enriched_event_id FROM DeduplicatedEvents
+            )
+        """)
+        repaired = cursor.rowcount
+        if repaired:
+            logger.info(f"🩹 Repaired {repaired} orphaned incremental mapping(s)")
+        return repaired
 
     def _clear_existing_deduplications(self) -> bool:
         """Clear existing deduplicated events (already done in _apply_database_constraints)"""
@@ -669,6 +729,15 @@ class DeduplicationMigration:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 storage = DeduplicationStorage(conn)
+
+                # Self-heal any orphaned incremental mappings left by the old
+                # (pre-fix) convention before validating, so a single legacy
+                # row can't fail the whole migration.
+                if not self.dry_run:
+                    cursor = conn.cursor()
+                    repaired = self._repair_orphaned_incremental_mappings(cursor)
+                    if repaired:
+                        conn.commit()
 
                 # Check for integrity issues
                 integrity_errors = storage.validate_storage_integrity()
