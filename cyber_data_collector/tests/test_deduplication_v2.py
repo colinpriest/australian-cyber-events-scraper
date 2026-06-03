@@ -856,10 +856,20 @@ class TestForeignKeyEnforcedStorage:
     in-pipeline deduplication path.
 
     The pipeline runs storage on a connection with ``PRAGMA foreign_keys = ON``
-    (CyberEventDataV2), while the standalone script does not. Lineage rows used
-    to store ``master_event.event_id`` in the ``deduplicated_event_id`` column,
-    which never matches the freshly-generated DeduplicatedEvents primary key, so
-    the foreign key failed whenever enforcement was on and a merge group existed.
+    (CyberEventDataV2), while the standalone script does not — which is why the
+    bug only surfaced in the pipeline. The fixture below mirrors the REAL
+    production schema (with every foreign key the live DB enforces) and seeds
+    real RawEvents/EnrichedEvents rows. An earlier version of this test used a
+    fabricated schema missing those foreign keys and gave false confidence:
+
+      * DeduplicatedEvents.master_enriched_event_id -> EnrichedEvents
+      * EventDeduplicationMap.raw_event_id          -> RawEvents
+      * EventDeduplicationMap.enriched_event_id     -> EnrichedEvents
+      * EventDeduplicationMap.deduplicated_event_id -> DeduplicatedEvents
+
+    A ``CyberEvent.event_id`` is an *enriched* event id, so storing it into the
+    map's ``raw_event_id`` column (a RawEvents FK) raised
+    "FOREIGN KEY constraint failed" whenever a merge group existed.
     """
 
     @pytest.fixture
@@ -869,11 +879,32 @@ class TestForeignKeyEnforcedStorage:
 
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE RawEvents (
+                raw_event_id TEXT PRIMARY KEY,
+                source_type VARCHAR(50) NOT NULL,
+                raw_title TEXT,
+                event_date DATE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE EnrichedEvents (
+                enriched_event_id TEXT PRIMARY KEY,
+                raw_event_id TEXT NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                is_australian_event BOOLEAN NOT NULL DEFAULT 1,
+                is_specific_event BOOLEAN NOT NULL DEFAULT 1,
+                status VARCHAR(20) DEFAULT 'Active',
+                FOREIGN KEY (raw_event_id)
+                    REFERENCES RawEvents(raw_event_id) ON DELETE CASCADE
+            )
+        """)
         cursor.execute("""
             CREATE TABLE DeduplicatedEvents (
                 deduplicated_event_id TEXT PRIMARY KEY,
-                master_enriched_event_id TEXT,
-                title TEXT,
+                master_enriched_event_id TEXT NOT NULL,
+                title VARCHAR(255) NOT NULL,
                 summary TEXT,
                 event_date DATE,
                 event_type TEXT,
@@ -881,15 +912,16 @@ class TestForeignKeyEnforcedStorage:
                 records_affected INTEGER,
                 victim_organization_name TEXT,
                 victim_organization_industry TEXT,
-                is_australian_event BOOLEAN,
-                is_specific_event BOOLEAN,
+                is_australian_event BOOLEAN NOT NULL,
+                is_specific_event BOOLEAN NOT NULL,
                 confidence_score REAL,
                 status TEXT DEFAULT 'Active',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (master_enriched_event_id)
+                    REFERENCES EnrichedEvents(enriched_event_id) ON DELETE CASCADE
             )
         """)
-        # Lineage tables WITH the foreign key, exactly as the production schema.
         cursor.execute("""
             CREATE TABLE EventDeduplicationMap (
                 map_id TEXT PRIMARY KEY,
@@ -901,6 +933,10 @@ class TestForeignKeyEnforcedStorage:
                 data_source_weight REAL DEFAULT 1.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(raw_event_id, deduplicated_event_id),
+                FOREIGN KEY (raw_event_id)
+                    REFERENCES RawEvents(raw_event_id) ON DELETE CASCADE,
+                FOREIGN KEY (enriched_event_id)
+                    REFERENCES EnrichedEvents(enriched_event_id) ON DELETE CASCADE,
                 FOREIGN KEY (deduplicated_event_id)
                     REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
             )
@@ -917,6 +953,18 @@ class TestForeignKeyEnforcedStorage:
                     REFERENCES DeduplicatedEvents(deduplicated_event_id) ON DELETE CASCADE
             )
         """)
+
+        # Seed real raw + enriched rows. CyberEvent.event_id == enriched id.
+        for i in (1, 2, 3):
+            cursor.execute(
+                "INSERT INTO RawEvents (raw_event_id, source_type, raw_title) VALUES (?, ?, ?)",
+                (f"raw-{i}", "Perplexity", f"Title {i}"),
+            )
+            cursor.execute(
+                "INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title) "
+                "VALUES (?, ?, ?)",
+                (f"enr-{i}", f"raw-{i}", f"Title {i}"),
+            )
         conn.commit()
         conn.close()
 
@@ -928,17 +976,17 @@ class TestForeignKeyEnforcedStorage:
         conn.execute("PRAGMA foreign_keys = ON;")  # mirror the live pipeline connection
         storage = DeduplicationStorage(conn)
 
-        # Two events that merge (same entity) plus one standalone event.
+        # event_id values are real EnrichedEvents ids. The two Optus events merge.
         events = [
-            CyberEvent(event_id="1", title="Optus Data Breach",
+            CyberEvent(event_id="enr-1", title="Optus Data Breach",
                        summary="Optus breach", event_date=date(2023, 1, 1),
                        event_type="Data Breach", severity="High",
                        records_affected=1000000),
-            CyberEvent(event_id="2", title="Optus Data Breach Incident",
+            CyberEvent(event_id="enr-2", title="Optus Data Breach Incident",
                        summary="Optus security incident", event_date=date(2023, 1, 2),
                        event_type="Security Incident", severity="High",
                        records_affected=2000000),
-            CyberEvent(event_id="3", title="Telstra Network Outage",
+            CyberEvent(event_id="enr-3", title="Telstra Network Outage",
                        summary="Telstra outage", event_date=date(2023, 1, 3),
                        event_type="Network Outage", severity="Medium",
                        records_affected=50000),
@@ -953,15 +1001,29 @@ class TestForeignKeyEnforcedStorage:
         assert storage_result.success is True
         assert storage_result.merge_groups_created == 1
 
-        # Lineage rows must reference a real DeduplicatedEvents primary key.
         cursor = conn.cursor()
+
+        # Every lineage row must point at real parent rows (FK targets).
         cursor.execute("""
             SELECT COUNT(*) FROM EventDeduplicationMap edm
             LEFT JOIN DeduplicatedEvents de
                 ON edm.deduplicated_event_id = de.deduplicated_event_id
+            LEFT JOIN RawEvents re ON edm.raw_event_id = re.raw_event_id
+            LEFT JOIN EnrichedEvents ee ON edm.enriched_event_id = ee.enriched_event_id
             WHERE de.deduplicated_event_id IS NULL
+               OR re.raw_event_id IS NULL
+               OR ee.enriched_event_id IS NULL
         """)
         assert cursor.fetchone()[0] == 0
+
+        # The map's raw_event_id must be a resolved RawEvents id, not the
+        # enriched id that used to be stored there. One Optus event is merged.
+        cursor.execute("SELECT raw_event_id FROM EventDeduplicationMap")
+        raw_ids = {r[0] for r in cursor.fetchall()}
+        assert len(raw_ids) == 1
+        assert raw_ids <= {"raw-1", "raw-2"}  # a merged Optus event's raw id
+        assert "enr-1" not in raw_ids and "enr-2" not in raw_ids  # never the enriched id
+
         assert storage.validate_storage_integrity() == []
 
         conn.close()

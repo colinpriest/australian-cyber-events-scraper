@@ -401,19 +401,32 @@ class DeduplicationStorage:
 
             # Create mapping records for each merged event
             for merged_event in group.merged_events:
+                # CyberEvent.event_id is an EnrichedEvents.enriched_event_id.
+                # EventDeduplicationMap.raw_event_id has a FK to RawEvents, so
+                # we must resolve the real raw_event_id rather than store the
+                # enriched id there (which caused FOREIGN KEY constraint failed).
+                raw_event_id = self._resolve_raw_event_id(cursor, merged_event.event_id)
+                if raw_event_id is None:
+                    self.logger.warning(
+                        "Skipping lineage row: no RawEvents row found for enriched "
+                        "event %s",
+                        merged_event.event_id,
+                    )
+                    continue
+
                 similarity_score = group.similarity_scores.get(merged_event.event_id, 0.0)
                 map_id = str(uuid.uuid4())
 
                 cursor.execute("""
-                    INSERT INTO EventDeduplicationMap (
+                    INSERT OR IGNORE INTO EventDeduplicationMap (
                         map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
                         contribution_type, similarity_score, data_source_weight
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     map_id,
-                    merged_event.event_id,  # Source enriched event
-                    merged_event.event_id,  # Same as enriched
-                    dedup_event_id,  # Master deduplicated event row
+                    raw_event_id,  # Real RawEvents.raw_event_id (FK target)
+                    merged_event.event_id,  # EnrichedEvents.enriched_event_id (FK target)
+                    dedup_event_id,  # DeduplicatedEvents.deduplicated_event_id (FK target)
                     'merged',  # This is a merged duplicate
                     similarity_score,
                     1.0  # Default weight
@@ -422,6 +435,29 @@ class DeduplicationStorage:
             stored_count += 1
 
         return stored_count
+
+    def _resolve_raw_event_id(
+        self, cursor: sqlite3.Cursor, enriched_event_id: str
+    ) -> Optional[str]:
+        """Resolve an enriched_event_id to its source RawEvents.raw_event_id.
+
+        Returns None if the EnrichedEvents row (or its raw event) cannot be
+        found, so callers can skip the lineage row instead of violating the
+        foreign key.
+        """
+        try:
+            cursor.execute(
+                "SELECT raw_event_id FROM EnrichedEvents WHERE enriched_event_id = ?",
+                (enriched_event_id,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except sqlite3.Error as exc:
+            self.logger.warning(
+                "Failed to resolve raw_event_id for enriched event %s: %s",
+                enriched_event_id, exc,
+            )
+            return None
     
     def validate_storage_integrity(self) -> List[ValidationError]:
         """Check database for duplicate deduplicated_event_ids and other integrity issues"""
