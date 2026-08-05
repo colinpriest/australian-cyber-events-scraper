@@ -518,32 +518,57 @@ class TestDeduplicationStorage:
         conn.close()
     
     def test_validate_storage_integrity_duplicate_events(self, temp_db):
-        """Test storage integrity validation with duplicate events"""
+        """Two active rows for one master event are a genuine duplicate.
+
+        Identity keys on master_enriched_event_id, which is assigned once and
+        never rewritten - not on the title, which is mutable display metadata.
+        """
         conn = sqlite3.connect(temp_db)
         storage = DeduplicationStorage(conn)
-        
-        # Add duplicate events
+
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO DeduplicatedEvents (
-                deduplicated_event_id, master_enriched_event_id, title, event_date, status
-            )
-            VALUES (?, ?, ?, ?, ?)
-        """, ("id1", "master1", "Duplicate Event", "2023-01-01", "Active"))
-        cursor.execute("""
-            INSERT INTO DeduplicatedEvents (
-                deduplicated_event_id, master_enriched_event_id, title, event_date, status
-            )
-            VALUES (?, ?, ?, ?, ?)
-        """, ("id2", "master2", "Duplicate Event", "2023-01-01", "Active"))
+        for dedup_id, title, date in (
+            ("id1", "First headline", "2023-01-01"),
+            ("id2", "A completely different headline", "2024-06-05"),
+        ):
+            cursor.execute("""
+                INSERT INTO DeduplicatedEvents (
+                    deduplicated_event_id, master_enriched_event_id, title,
+                    event_date, status
+                )
+                VALUES (?, ?, ?, ?, ?)
+            """, (dedup_id, "same-master", title, date, "Active"))
         conn.commit()
-        
+
         errors = storage.validate_storage_integrity()
-        
-        # Should detect duplicate events
-        assert len(errors) > 0
+
         assert any(error.error_type == "DUPLICATE_EVENT" for error in errors)
-        
+        conn.close()
+
+    def test_shared_title_and_date_is_not_a_duplicate(self, temp_db):
+        """Distinct incidents may share a title and date.
+
+        This used to be reported as DUPLICATE_EVENT, which both raised false
+        alarms on placeholder titles ("Untitled Event") and made titles
+        impossible to correct.
+        """
+        conn = sqlite3.connect(temp_db)
+        storage = DeduplicationStorage(conn)
+
+        cursor = conn.cursor()
+        for dedup_id, master in (("id1", "master1"), ("id2", "master2")):
+            cursor.execute("""
+                INSERT INTO DeduplicatedEvents (
+                    deduplicated_event_id, master_enriched_event_id, title,
+                    event_date, status
+                )
+                VALUES (?, ?, ?, ?, ?)
+            """, (dedup_id, master, "Untitled Event", "2023-01-01", "Active"))
+        conn.commit()
+
+        errors = storage.validate_storage_integrity()
+
+        assert not any(error.error_type == "DUPLICATE_EVENT" for error in errors)
         conn.close()
     
     def test_get_deduplication_statistics(self, temp_db):
@@ -1017,12 +1042,21 @@ class TestForeignKeyEnforcedStorage:
         assert cursor.fetchone()[0] == 0
 
         # The map's raw_event_id must be a resolved RawEvents id, not the
-        # enriched id that used to be stored there. One Optus event is merged.
-        cursor.execute("SELECT raw_event_id FROM EventDeduplicationMap")
-        raw_ids = {r[0] for r in cursor.fetchall()}
-        assert len(raw_ids) == 1
-        assert raw_ids <= {"raw-1", "raw-2"}  # a merged Optus event's raw id
-        assert "enr-1" not in raw_ids and "enr-2" not in raw_ids  # never the enriched id
+        # enriched id that used to be stored there.
+        #
+        # This previously asserted exactly ONE lineage row, which encoded a
+        # defect rather than a requirement: only *merged* members were
+        # recorded, so masters (and therefore every single-source event) had no
+        # lineage at all. That is why 650 of 1,034 production events ended up
+        # untraceable. Every contributing event now gets a row, so all three
+        # raw ids appear: two masters plus the merged Optus duplicate.
+        cursor.execute("SELECT raw_event_id, contribution_type FROM EventDeduplicationMap")
+        rows = cursor.fetchall()
+        raw_ids = {r[0] for r in rows}
+        assert raw_ids == {"raw-1", "raw-2", "raw-3"}
+        assert {r[1] for r in rows} == {"master", "merged"}
+        # Never the enriched id in the raw_event_id column.
+        assert not (raw_ids & {"enr-1", "enr-2", "enr-3"})
 
         assert storage.validate_storage_integrity() == []
 

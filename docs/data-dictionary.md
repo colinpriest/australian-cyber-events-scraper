@@ -206,6 +206,36 @@ Organizations, government agencies, and other entities mentioned in cyber events
 | `confidence_score` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0) |
 | `created_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | Row creation timestamp |
 | `updated_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | Last update timestamp |
+| `entity_kind` | TEXT | Yes | NULL | What the entity **is**, independent of any event: `organisation`, `government_body`, `product`, `person`, `threat_actor`, `other`. Distinct from the per-event role on `EnrichedEventEntities.relationship_type` |
+| `size_estimate` | TEXT | Yes | NULL | Ordinal size band: `SMALL`, `MEDIUM`, `LARGE`, `HUGE`, `UNKNOWN`. See [Entity size bands](#entity-size-bands) |
+| `size_confidence` | REAL | Yes | NULL | Confidence in the band (0.0–1.0) |
+| `size_employees` | INTEGER | Yes | NULL | Best point estimate of headcount behind the band |
+| `size_revenue_aud` | REAL | Yes | NULL | Approximate annual revenue, turnover or budget, in AUD |
+| `size_basis` | TEXT | Yes | NULL | One or two sentences naming the decisive facts |
+| `size_method` | TEXT | Yes | NULL | `perplexity` (researched online), `rule` (not a sizeable entity), `human` (never overwritten), `unavailable` (research unreachable — retried next run) |
+| `size_sources` | TEXT | Yes | NULL | JSON array of URLs the research cited |
+| `size_estimated_at` | TIMESTAMP | Yes | NULL | When the band was established |
+
+**Note.** `turnover` and `employee_count` predate the size columns and were NULL
+on every row; `size_employees` now also writes through to `employee_count` so
+existing readers see data without changing. Populated by
+`python scripts/dedup_admin.py size-entities`.
+
+##### Entity size bands
+
+| Band | Definition |
+|---|---|
+| `SMALL` | fewer than 20 employees, or under A$10m annual revenue |
+| `MEDIUM` | 20–199 employees, or A$10m–100m |
+| `LARGE` | 200–4,999 employees, or A$100m–1b |
+| `HUGE` | 5,000+ employees or over A$1b; also national/state government departments, the major universities, ASX-100 companies |
+| `UNKNOWN` | the organisation cannot be identified, or is not an organisation (a product, a person, a threat actor, a collective noun) |
+
+The three-way cut follows the ABS definition of business size (small 0–19,
+medium 20–199, large 200+); `LARGE` is split at 5,000 because that band
+otherwise spans a mid-sized firm through to Telstra. Employee count is the
+primary axis and revenue the tiebreaker, since government bodies and
+universities have headcounts but no commercial turnover.
 
 ---
 

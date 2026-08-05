@@ -424,6 +424,9 @@ class UnifiedPipeline:
                         "Threshold may be too aggressive."
                     )
 
+            self.run_recurrence_check(args)
+            self.run_entity_sizing(args)
+
             self.results['deduplication']['success'] = True
             logger.info("Global deduplication completed successfully")
             return True
@@ -432,6 +435,122 @@ class UnifiedPipeline:
             logger.error(f"Deduplication phase failed: {e}")
             self.results['deduplication']['errors'].append(str(e))
             return False
+
+    def run_recurrence_check(self, args) -> None:
+        """Re-check repeat attacks that follow the previous one within 90 days.
+
+        Deduplication blocks candidates on entity and date, so one incident
+        whose coverage was published weeks apart survives as two events - a
+        repeat attack that never happened, landing in the short-gap band every
+        recurrence analysis is estimated from. This runs after every dedup pass
+        because that is when the false pairs appear.
+
+        Never fails the phase: leaving a suspected duplicate in place is a
+        smaller problem than aborting a completed deduplication.
+        """
+        if getattr(args, 'skip_recurrence_check', False):
+            logger.info("Skipping recurrence check (--skip-recurrence-check)")
+            return
+
+        import sqlite3
+
+        from cyber_data_collector.dedup import schema
+        from cyber_data_collector.dedup.ledger import DedupLedger
+        from cyber_data_collector.dedup.recurrence_check import (
+            RecurrenceAuditor, attach_source_urls, build_runs,
+            findings_from_partition, load_recurrence_events,
+        )
+
+        logger.info("Re-checking repeat attacks less than "
+                    f"{args.recurrence_window} days apart...")
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            schema.migrate(conn)
+            ledger = DedupLedger(conn)
+            auditor = RecurrenceAuditor(window_days=args.recurrence_window)
+            runs = build_runs(load_recurrence_events(conn),
+                              window_days=args.recurrence_window)
+            if not runs:
+                logger.info("No repeat attacks inside the window")
+                return
+
+            merged = 0
+            for run in runs:
+                attach_source_urls(conn, run)
+                partition = auditor.audit_run(run)
+                for finding in findings_from_partition(run, partition):
+                    if finding["certainty"] < args.recurrence_min_certainty:
+                        logger.info(
+                            "Repeat at %r left alone (certainty %.2f below %.2f)",
+                            finding["entity"], finding["certainty"],
+                            args.recurrence_min_certainty)
+                        continue
+                    for source in finding["sources"]:
+                        try:
+                            ledger.merge_events(
+                                finding["target"]["id"], source["id"],
+                                reason=(f"[recurrence {finding['certainty']:.2f}] "
+                                        f"{finding['label']}: apparent repeat "
+                                        f"{finding['max_gap_days']} days apart is "
+                                        f"the same incident reported again. "
+                                        f"{finding['reasoning']}"),
+                                actor="pipeline")
+                            merged += 1
+                        except (sqlite3.Error, ValueError) as exc:
+                            logger.warning("Recurrence merge failed: %s", exc)
+                conn.commit()
+            self.results['deduplication']['recurrences_merged'] = merged
+            logger.info("Recurrence check: %d run(s) examined, %d false repeat(s) "
+                        "merged", len(runs), merged)
+        except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
+            logger.warning("Recurrence check failed: %s", exc)
+            self.results['deduplication']['errors'].append(f"recurrence: {exc}")
+        finally:
+            conn.close()
+
+    def run_entity_sizing(self, args) -> None:
+        """Give newly discovered entities an ordinal size band.
+
+        Incremental: entities already carrying a band are skipped, so a monthly
+        refresh sizes only what it just added. Without a Perplexity key the step
+        is skipped rather than filling the column with guesses.
+        """
+        if getattr(args, 'skip_entity_sizing', False):
+            logger.info("Skipping entity sizing (--skip-entity-sizing)")
+            return
+
+        import sqlite3
+
+        from cyber_data_collector.dedup import schema
+        from cyber_data_collector.dedup.entity_size import (
+            EntitySizeResearcher, estimate_sizes, pending_entities,
+        )
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            schema.migrate(conn)
+            rows = pending_entities(conn, limit=args.entity_size_limit)
+            if not rows:
+                logger.info("Every entity already has a size estimate")
+                return
+            researcher = EntitySizeResearcher()
+            if not researcher.perplexity_key:
+                logger.warning("PERPLEXITY_API_KEY not set; %d entit%s left "
+                               "unsized rather than guessed", len(rows),
+                               "y" if len(rows) == 1 else "ies")
+                return
+            logger.info("Estimating size for %d new entit%s...", len(rows),
+                        "y" if len(rows) == 1 else "ies")
+            stats = estimate_sizes(conn, rows, researcher=researcher, workers=6)
+            self.results['deduplication']['entities_sized'] = stats["stored"]
+            logger.info("Entity sizing: %s", stats["bands"])
+        except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
+            logger.warning("Entity sizing failed: %s", exc)
+            self.results['deduplication']['errors'].append(f"entity sizing: {exc}")
+        finally:
+            conn.close()
 
     def run_classification_phase(self, args) -> bool:
         """
@@ -709,6 +828,19 @@ Examples:
                         help='Limit number of events to classify (default: all unclassified events)')
     parser.add_argument('--force-dedup', action='store_true',
                         help='Force full deduplication rebuild (skip incremental mode)')
+    parser.add_argument('--skip-recurrence-check', action='store_true',
+                        help='Skip re-checking repeat attacks on one entity that '
+                             'fall within the recurrence window')
+    parser.add_argument('--recurrence-window', type=int, default=90,
+                        help='Inter-event gap in days below which a repeat attack '
+                             'is re-checked as possible re-reporting (default: 90)')
+    parser.add_argument('--recurrence-min-certainty', type=float, default=0.85,
+                        help='Merge a suspected re-report only at or above this '
+                             'certainty (default: 0.85)')
+    parser.add_argument('--skip-entity-sizing', action='store_true',
+                        help='Skip estimating an ordinal size band for new entities')
+    parser.add_argument('--entity-size-limit', type=int, default=None,
+                        help='Cap how many entities are sized per run (default: all)')
     parser.add_argument('--continue-on-error', action='store_true',
                         help='Continue to next phase even if previous phase fails')
 
