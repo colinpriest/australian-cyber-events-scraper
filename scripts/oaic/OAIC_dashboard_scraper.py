@@ -2679,18 +2679,38 @@ CRITICAL:
             _from_p6("system_fault") or snapshot.get("system_faults")
         )
 
-        # Calculate cyber incidents from percentages
         cyber = snapshot.get("cyber_incidents", {})
         if result["total_notifications"] and result["malicious_attacks"]:
-            # Cyber incidents are subset of malicious attacks
+            # OAIC's "Cyber incident" is a STRICT SUBSET of malicious/criminal
+            # attacks (405 vs 253 for 2025 H2, the one period where both are
+            # published). This code used to set cyber_incidents_total =
+            # malicious_attacks, which made the dashboard overstate the cyber
+            # share of Australian breach activity by ~22 points.
+            #
+            # The Power BI dashboard does not expose the narrow count - page 2
+            # only gives per-method percentages, and those partition cyber
+            # incidents (they sum to ~100%), not malicious attacks. So the
+            # honest value here is None; only data.gov.au periods can fill it
+            # (see scripts/oaic/oaic_datagov_scraper.py).
+            result["cyber_incident_only"] = None
+            # Retained under its historical name for backwards compatibility
+            # with already-published stat files; it holds malicious attacks.
             result["cyber_incidents_total"] = result["malicious_attacks"]
-            if result["malicious_attacks"] and result["total_notifications"]:
-                result["cyber_incidents_percentage"] = round(
-                    (result["malicious_attacks"] / result["total_notifications"]) * 100, 1
-                )
+            result["cyber_incidents_percentage"] = round(
+                (result["malicious_attacks"] / result["total_notifications"]) * 100, 1
+            )
 
-        # Attack type breakdowns - calculate counts from percentages
-        # The cyber_incidents dict contains percentages of malicious attacks
+        # Attack type breakdowns - calculate counts from percentages.
+        #
+        # KNOWN OVERSTATEMENT: these percentages partition CYBER INCIDENTS, not
+        # malicious attacks - they sum to ~100% on every semester observed
+        # (2025 H1: 28+21+21+17+6+4 = 97). Multiplying them by malicious_attacks
+        # therefore inflates every per-method count by the malicious/cyber ratio,
+        # which is 405/253 = 1.6x on the only period where both are published.
+        # Correcting this needs the narrow cyber count per period, which the
+        # Power BI dashboard does not expose - so the scaling base is left as-is
+        # rather than swapped for a guess. Treat phishing/ransomware/hacking/
+        # brute_force/malware/compromised_credentials as upper bounds.
         malicious_count = result.get("malicious_attacks") or 0
         if malicious_count and cyber:
             # Calculate absolute counts from percentages

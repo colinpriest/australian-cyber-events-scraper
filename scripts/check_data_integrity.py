@@ -232,6 +232,63 @@ def check_asd_categories_valid(conn: sqlite3.Connection) -> CheckResult:
     return CheckResult("asd-categories-valid", True, "All ASD severity_category values valid")
 
 
+def check_entity_size_bands_valid(conn: sqlite3.Connection) -> CheckResult:
+    """Size must be one of the five ordinal bands, and agree with its own figures.
+
+    Both halves have bitten before elsewhere in this schema: a free-text column
+    silently accumulating variants ('Large', 'huge', 'EventSeverity.HIGH'), and
+    a label that contradicts the evidence stored beside it. A band that
+    disagrees with its own headcount means the reconciliation in
+    ``entity_size._derive_band`` was bypassed - the estimate was written by
+    something that did not go through it.
+    """
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(EntitiesV2)")}
+    if "size_estimate" not in columns:
+        return CheckResult("entity-size-bands-valid", True,
+                           "Size columns not present (schema not yet migrated)")
+
+    bad = list(conn.execute("""
+        SELECT size_estimate, COUNT(*) c FROM EntitiesV2
+        WHERE size_estimate IS NOT NULL
+          AND size_estimate NOT IN ('SMALL','MEDIUM','LARGE','HUGE','UNKNOWN')
+        GROUP BY size_estimate
+    """))
+    if bad:
+        return CheckResult(
+            "entity-size-bands-valid", False,
+            f"{sum(r[1] for r in bad)} entities have an invalid size_estimate",
+            [f"{r[0]!r}: {r[1]}" for r in bad],
+        )
+
+    # A stated band that contradicts the headcount recorded alongside it.
+    # UNKNOWN is exempt: it can legitimately sit beside a figure found while the
+    # organisation itself stayed unidentified.
+    mismatched = list(conn.execute("""
+        SELECT entity_name, size_estimate, size_employees FROM EntitiesV2
+        WHERE size_employees IS NOT NULL AND size_estimate IS NOT NULL
+          AND size_estimate != 'UNKNOWN'
+          AND size_estimate != CASE
+                WHEN size_employees < 20   THEN 'SMALL'
+                WHEN size_employees < 200  THEN 'MEDIUM'
+                WHEN size_employees < 5000 THEN 'LARGE'
+                ELSE 'HUGE' END
+        LIMIT 20
+    """))
+    if mismatched:
+        return CheckResult(
+            "entity-size-bands-valid", False,
+            f"{len(mismatched)} entities have a size band contradicting their "
+            "own recorded headcount",
+            [f"{r[0]!r}: {r[1]} with {r[2]} employees" for r in mismatched],
+        )
+
+    n = conn.execute(
+        "SELECT COUNT(*) FROM EntitiesV2 WHERE size_estimate IS NOT NULL"
+    ).fetchone()[0]
+    return CheckResult("entity-size-bands-valid", True,
+                       f"All {n} entity size bands valid and self-consistent")
+
+
 def check_dedup_master_links_exist(conn: sqlite3.Connection) -> CheckResult:
     """Every DeduplicatedEvents.master_enriched_event_id must point to an
     existing EnrichedEvents row.
@@ -315,10 +372,16 @@ def check_no_records_affected_outliers(conn: sqlite3.Connection) -> CheckResult:
 
 
 def check_no_dedup_status_drift(conn: sqlite3.Connection) -> CheckResult:
-    """status column should only contain 'Active' or 'Merged'."""
+    """status should only be 'Active', 'Merged' or 'Rejected'.
+
+    'Rejected' marks a row that was never an incident - a scraped policy page
+    or FAQ that the discovery filter let through. It is kept rather than
+    deleted so the false positive stays visible and cannot be rediscovered
+    silently, but it is excluded from every active query.
+    """
     bad = list(conn.execute("""
         SELECT status, COUNT(*) c FROM DeduplicatedEvents
-        WHERE status IS NOT NULL AND status NOT IN ('Active', 'Merged')
+        WHERE status IS NOT NULL AND status NOT IN ('Active', 'Merged', 'Rejected')
         GROUP BY status
     """))
     if bad:
@@ -370,6 +433,7 @@ DB_CHECKS: List[Callable[[sqlite3.Connection], CheckResult]] = [
     check_severity_in_known_set,
     check_asd_no_orphans,
     check_asd_categories_valid,
+    check_entity_size_bands_valid,
     check_dedup_master_links_exist,
     check_industry_known_vendors_correct,
     check_no_records_affected_outliers,

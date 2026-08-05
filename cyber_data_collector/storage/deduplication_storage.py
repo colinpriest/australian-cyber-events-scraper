@@ -47,6 +47,8 @@ class DeduplicationStorage:
         self.conn = db_connection
         self.logger = logging.getLogger(f"{__name__}.DeduplicationStorage")
         self._lock = threading.RLock()
+        # Cached result of the RawEvents provenance-column probe; None = unchecked.
+        self._provenance_ok: Optional[bool] = None
         self._validate_schema()
     
     def _validate_schema(self) -> None:
@@ -204,7 +206,11 @@ class DeduplicationStorage:
             merge_groups_created = self._store_merge_groups(
                 cursor, result.merge_groups, dedup_id_by_event
             )
-            
+
+            # Derive total_data_sources from what was actually written, so the
+            # column can never silently sit at 0 the way it did previously.
+            self._refresh_source_counts(cursor)
+
             # Commit transaction
             self.conn.commit()
             
@@ -340,10 +346,84 @@ class DeduplicationStorage:
                 event_data['created_at'],
                 event_data['updated_at']
             ))
-            
+
+            # Record the master's own lineage and provenance.
+            #
+            # Previously neither was written here: singleton events got no
+            # EventDeduplicationMap row at all and merge groups omitted their
+            # master, so only 384 of 1,034 events had traceable lineage and
+            # DeduplicatedEventSources was completely empty. Because dedup ids
+            # are regenerated on every rebuild, that provenance could not be
+            # recovered afterwards without this backfill-equivalent step.
+            self._store_master_lineage(
+                cursor, deduplicated_event_id, event.event_id
+            )
+
             stored_count += 1
 
         return stored_count, dedup_id_by_event
+
+    def _provenance_columns_available(self, cursor: sqlite3.Cursor) -> bool:
+        """Whether RawEvents carries the columns needed to record provenance.
+
+        Degrades rather than aborting when running against a reduced schema
+        (older databases, minimal test fixtures). Logged at WARNING, not
+        DEBUG: silently skipping provenance is precisely the failure that left
+        DeduplicatedEventSources empty across the whole database.
+        """
+        if self._provenance_ok is None:
+            columns = {r[1] for r in cursor.execute("PRAGMA table_info(RawEvents)")}
+            self._provenance_ok = "source_url" in columns
+            if not self._provenance_ok:
+                self.logger.warning(
+                    "RawEvents has no source_url column; per-event source "
+                    "provenance will not be recorded for this run."
+                )
+        return self._provenance_ok
+
+    def _store_master_lineage(
+        self, cursor: sqlite3.Cursor, deduplicated_event_id: str,
+        master_enriched_event_id: str,
+    ) -> None:
+        """Write the master lineage row plus its source provenance."""
+        raw_event_id = self._resolve_raw_event_id(cursor, master_enriched_event_id)
+        if raw_event_id is None:
+            self.logger.debug(
+                "No RawEvents row for master %s; lineage row skipped",
+                master_enriched_event_id,
+            )
+            return
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO EventDeduplicationMap (
+                map_id, raw_event_id, enriched_event_id, deduplicated_event_id,
+                contribution_type, similarity_score, data_source_weight
+            ) VALUES (?, ?, ?, ?, 'master', 1.0, 1.0)
+        """, (str(uuid.uuid4()), raw_event_id, master_enriched_event_id,
+              deduplicated_event_id))
+
+        self._store_source_row(cursor, deduplicated_event_id, raw_event_id)
+
+    def _store_source_row(
+        self, cursor: sqlite3.Cursor, deduplicated_event_id: str, raw_event_id: str
+    ) -> None:
+        """Record one contributing source URL for a deduplicated event."""
+        if not self._provenance_columns_available(cursor):
+            return
+        row = cursor.execute(
+            "SELECT source_url, source_type, discovered_at, "
+            "substr(COALESCE(raw_description, raw_content, ''), 1, 400) "
+            "FROM RawEvents WHERE raw_event_id = ?",
+            (raw_event_id,),
+        ).fetchone()
+        if row and row[0]:
+            cursor.execute("""
+                INSERT OR IGNORE INTO DeduplicatedEventSources (
+                    deduplicated_event_id, source_url, source_type,
+                    credibility_score, content_snippet, discovered_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (deduplicated_event_id, row[0], row[1], None, row[3],
+                  row[2] or datetime.now()))
 
     def _store_merge_groups(
         self,
@@ -432,9 +512,47 @@ class DeduplicationStorage:
                     1.0  # Default weight
                 ))
 
+                # Each merged member contributes its own source URL; without
+                # this the multi-source corroboration a merge represents is
+                # invisible downstream.
+                self._store_source_row(cursor, dedup_event_id, raw_event_id)
+
             stored_count += 1
 
         return stored_count
+
+    def _refresh_source_counts(self, cursor: sqlite3.Cursor) -> int:
+        """Set total_data_sources from real membership for every event.
+
+        Runs at the end of a storage pass so the column reflects what was
+        actually persisted rather than defaulting to 0. Falls back to the
+        membership count alone when the sources table is absent (reduced
+        schemas), so the count is never left at 0 either way.
+        """
+        columns = {r[1] for r in cursor.execute("PRAGMA table_info(DeduplicatedEvents)")}
+        if "total_data_sources" not in columns:
+            return 0
+
+        tables = {
+            r[0] for r in cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        sources_term = (
+            """(SELECT COUNT(*) FROM DeduplicatedEventSources s
+                 WHERE s.deduplicated_event_id = DeduplicatedEvents.deduplicated_event_id),"""
+            if "DeduplicatedEventSources" in tables else ""
+        )
+        cursor.execute(f"""
+            UPDATE DeduplicatedEvents
+            SET total_data_sources = MAX(
+                {sources_term}
+                (SELECT COUNT(DISTINCT m.enriched_event_id) FROM EventDeduplicationMap m
+                 WHERE m.deduplicated_event_id = DeduplicatedEvents.deduplicated_event_id),
+                1
+            )
+        """)
+        return cursor.rowcount
 
     def _resolve_raw_event_id(
         self, cursor: sqlite3.Cursor, enriched_event_id: str
@@ -496,21 +614,27 @@ class DeduplicationStorage:
                 context={"dedup_id": dedup_id, "count": count}
             ))
         
-        # Check for duplicate title+date combinations
+        # Identity check, keyed on the immutable master event id.
+        #
+        # This used to flag duplicate (title, event_date) pairs. Title is a
+        # mutable display field - a merged event inherits its master's headline
+        # and should be free to be improved - so treating it as identity both
+        # blocked corrections and raised false alarms whenever two distinct
+        # incidents shared a placeholder title. master_enriched_event_id is
+        # assigned once and never rewritten, so it is what identity keys on.
         cursor.execute("""
-            SELECT title, event_date, COUNT(*) as count
+            SELECT master_enriched_event_id, COUNT(*) as count
             FROM DeduplicatedEvents
             WHERE status = 'Active'
-            GROUP BY title, event_date
+            GROUP BY master_enriched_event_id
             HAVING COUNT(*) > 1
         """)
-        duplicate_events = cursor.fetchall()
-        
-        for title, date, count in duplicate_events:
+        for master_id, count in cursor.fetchall():
             errors.append(ValidationError(
                 error_type="DUPLICATE_EVENT",
-                message=f"Duplicate event found: '{title}' on {date} ({count} times)",
-                context={"title": title, "date": date, "count": count}
+                message=(f"Duplicate active event for master {master_id} "
+                         f"({count} rows)"),
+                context={"master_enriched_event_id": master_id, "count": count}
             ))
         
         # Check for orphaned mapping records (only if table exists)

@@ -517,7 +517,12 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             e.entity_name,
             de.deduplicated_event_id
         FROM DeduplicatedEvents de
-        LEFT JOIN DeduplicatedEventEntities dee ON de.deduplicated_event_id = dee.deduplicated_event_id
+        LEFT JOIN DeduplicatedEventEntities dee
+               ON de.deduplicated_event_id = dee.deduplicated_event_id
+              -- Only the breached organisation. Without this the join
+              -- can return any linked entity, including the customers
+              -- affected ("Australians") or a regulator.
+              AND dee.relationship_type = 'victim'
         LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
         WHERE de.status = 'Active'
             AND de.severity IS NOT NULL
@@ -676,7 +681,12 @@ def get_maximum_records_affected_per_month(conn: sqlite3.Connection, start_date:
             CAST(de.records_affected AS INTEGER) as records_affected,
             de.deduplicated_event_id
         FROM DeduplicatedEvents de
-        LEFT JOIN DeduplicatedEventEntities dee ON de.deduplicated_event_id = dee.deduplicated_event_id
+        LEFT JOIN DeduplicatedEventEntities dee
+               ON de.deduplicated_event_id = dee.deduplicated_event_id
+              -- Only the breached organisation. Without this the join
+              -- can return any linked entity, including the customers
+              -- affected ("Australians") or a regulator.
+              AND dee.relationship_type = 'victim'
         LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
         LEFT JOIN EnrichedEvents me ON de.master_enriched_event_id = me.enriched_event_id
         WHERE de.status = 'Active'
@@ -1177,34 +1187,52 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
 
 
 def prepare_oaic_cyber_incidents_data(oaic_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Prepare OAIC cyber incidents trends over time."""
-    from collections import defaultdict
+    """Prepare the OAIC malicious-attack trend, plus the narrow cyber-incident
+    series where OAIC actually publishes it.
 
-    # Group by year-period
+    Historical note: every dashboard-scraped period from 2023 H1 onward wrote
+    ``cyber_incidents_total = malicious_attacks``, so that field never carried
+    OAIC's narrower "Cyber incident" figure - it was a duplicate under a
+    misleading name. Plotting it as "Cyber Incidents" overstated the cyber
+    share of Australian breach activity (60% vs 38% for 2025 H2).
+
+    This now plots ``malicious_attacks`` under its true name and exposes
+    ``cyber_incident_only`` as a separate, sparse series. ``cyber_incidents_total``
+    is read only as a legacy fallback for periods scraped before the fix.
+    """
     periods = []
-    cyber_incidents = []
+    malicious_attacks = []
+    cyber_incident_only = []
     total_notifications = []
 
     for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
         year = record.get('year')
         period = record.get('period')
+        if not (year and period):
+            continue
 
-        if year and period:
-            period_key = f"{year} {period}"
-            periods.append(period_key)
+        periods.append(f"{year} {period}")
 
-            # Get cyber incidents (prefer total over percentage calculation)
-            cyber_inc = record.get('cyber_incidents_total')
-            if not cyber_inc and record.get('cyber_incidents_percentage') and record.get('total_notifications'):
-                cyber_inc = round((record['cyber_incidents_percentage'] / 100) * record['total_notifications'])
+        # Prefer the explicit source count; fall back to the legacy alias, then
+        # to the stored percentage (which was also malicious/total).
+        malicious = record.get('malicious_attacks')
+        if not malicious:
+            malicious = record.get('cyber_incidents_total')
+        if not malicious and record.get('cyber_incidents_percentage') and record.get('total_notifications'):
+            malicious = round((record['cyber_incidents_percentage'] / 100) * record['total_notifications'])
 
-            cyber_incidents.append(cyber_inc)
-            total_notifications.append(record.get('total_notifications'))
+        malicious_attacks.append(malicious)
+        # Sparse by design: only data.gov.au periods publish this breakdown.
+        cyber_incident_only.append(record.get('cyber_incident_only'))
+        total_notifications.append(record.get('total_notifications'))
 
     return {
         'periods': periods,
-        'cyber_incidents': cyber_incidents,
-        'total_notifications': total_notifications
+        'malicious_attacks': malicious_attacks,
+        'cyber_incident_only': cyber_incident_only,
+        'total_notifications': total_notifications,
+        # Retained so older embedded payloads/templates keep working.
+        'cyber_incidents': malicious_attacks,
     }
 
 
@@ -1426,6 +1454,9 @@ def calculate_stats_from_distribution(distribution: List[Dict[str, Any]]) -> Tup
         # New (current OAIC dashboard) upper bucket
         '1,000,001-10,000,000': 5500000,  '1000001-10000000': 5500000,
         '5,000,001+': 7500000,            '5000001+': 7500000,
+        # data.gov.au XLSX (Jul-Dec 2025 onward) adds an open-ended bucket
+        # above 10,000,000 that the dashboard scheme never had.
+        '10,000,001+': 15000000,          '10000001+': 15000000,
     }
 
     # Bucket bounds (low, high) for INTERPOLATED median calculation.
@@ -1452,6 +1483,8 @@ def calculate_stats_from_distribution(distribution: List[Dict[str, Any]]) -> Tup
         '1,000,001-10,000,000': (1_000_001, 10_000_000),
         '1000001-10000000': (1_000_001, 10_000_000),
         '5,000,001+': (5_000_001, 15_000_000),    '5000001+': (5_000_001, 15_000_000),
+        '10,000,001+': (10_000_001, 20_000_000),
+        '10000001+': (10_000_001, 20_000_000),
     }
 
     # Build per-bucket counts in distribution order
@@ -2219,7 +2252,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC: Cyber Incidents vs Total Notifications</div>
+          <div class="chart-title">OAIC: Malicious Attacks vs Total Notifications</div>
           <canvas id="oaicCyberIncidentsChart"></canvas>
         </div>
       </div>
@@ -2800,7 +2833,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicCyberIncidents;
       if (!data.periods || data.periods.length === 0) {
         document.getElementById('oaicCyberIncidentsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC: Cyber Incidents vs Total Notifications</div>' +
+          '<div class="chart-title">OAIC: Malicious Attacks vs Total Notifications</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -2811,11 +2844,24 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           labels: data.periods,
           datasets: [
             {
-              label: 'Cyber Incidents',
-              data: data.cyber_incidents,
+              label: 'Malicious or Criminal Attacks',
+              data: data.malicious_attacks || data.cyber_incidents,
               borderColor: colors.danger,
               backgroundColor: colors.danger + '20',
               fill: true,
+              tension: 0.3
+            },
+            {
+              // Sparse: OAIC only publishes the narrow "Cyber incident"
+              // sub-source on data.gov.au (2025 H2 onward). spanGaps keeps
+              // the line readable across periods where it is unavailable.
+              label: 'Cyber Incidents (OAIC sub-source)',
+              data: data.cyber_incident_only || [],
+              borderColor: colors.warning || '#f0ad4e',
+              backgroundColor: 'transparent',
+              borderDash: [6, 4],
+              spanGaps: true,
+              fill: false,
               tension: 0.3
             },
             {

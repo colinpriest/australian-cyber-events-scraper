@@ -354,6 +354,7 @@ MAJOR_INTERNATIONAL_ORGANIZATIONS = {
     'facebook', 'meta', 'instagram', 'whatsapp',
     'google', 'alphabet', 'youtube', 'gmail', 'chrome',
     'microsoft', 'linkedin', 'windows', 'azure',
+    'dell', 'dell technologies',
     'amazon', 'aws', 'amazon web services',
     'apple', 'icloud',
     'twitter', 'x corp',
@@ -430,7 +431,62 @@ AUSTRALIAN_GOVERNMENT_IDENTIFIERS = {
 }
 
 
-def validate_records_affected(value: Optional[int], event_title: str = "") -> Optional[int]:
+# Australia's resident population (~27M) is a hard ceiling for any breach whose
+# victim is a domestic organisation: a local university, council or clinic
+# cannot lose more records than there are people in the country.
+AUSTRALIAN_POPULATION_CEILING = 27_000_000
+
+# Words identifying an organisation that operates only in Australia, and whose
+# user base is therefore bounded by the domestic population.
+LOCAL_AUSTRALIAN_ENTITY_MARKERS = {
+    'university', 'universities', 'tafe', 'college', 'school',
+    'council', 'shire', 'municipality',
+    'hospital', 'health service', 'clinic', 'medical centre', 'pathology',
+    'credit union', 'mutual', 'co-operative', 'cooperative',
+    'pty ltd', 'pty limited', 'incorporated association',
+}
+
+
+# A global brand's Australian arm: "McDonald's Australia Limited", "Toyota
+# Australia", "Dell (Australia) Pty Ltd". The parent is worldwide, but the
+# entity actually named is the local subsidiary, whose customer base is bounded
+# by the domestic population.
+_AUSTRALIAN_ARM = re.compile(
+    r"\baustralia\b[\s,]*(pty|ltd|limited|holdings|group|inc|corporation)?"
+    r"[\s.]*$|\(\s*australia\s*\)", re.IGNORECASE)
+
+
+def is_australian_arm(name: str) -> bool:
+    """True when the name denotes the Australian subsidiary of a wider group."""
+    return bool(name) and bool(_AUSTRALIAN_ARM.search(name.strip()))
+
+
+def is_local_australian_entity(name: str) -> bool:
+    """True when an organisation's reach is bounded by Australia's population.
+
+    Used to reject global-vendor totals that have been misattributed to the
+    Australian customer caught up in the breach.
+
+    The Australian-arm test runs *before* the international-brand exemption:
+    "McDonald's Australia Limited" matched the exemption on "mcdonald's" and so
+    kept 64,000,000 - the worldwide McHire applicant total - even though the
+    entity named is the local subsidiary and Australia has 27 million people.
+    """
+    if not name:
+        return False
+    lowered = name.lower()
+    if is_australian_arm(name):
+        return True
+    if any(org in lowered for org in MAJOR_INTERNATIONAL_ORGANIZATIONS):
+        return False
+    return any(marker in lowered for marker in LOCAL_AUSTRALIAN_ENTITY_MARKERS)
+
+
+def validate_records_affected(
+    value: Optional[int],
+    event_title: str = "",
+    victim_organization: str = "",
+) -> Optional[int]:
     """
     Validate and sanitize records_affected values using common-sense rules.
 
@@ -489,17 +545,51 @@ def validate_records_affected(value: Optional[int], event_title: str = "") -> Op
         )
         return None
 
+    # Victim-based ceiling, checked FIRST.
+    #
+    # The tiers below infer the organisation from the event TITLE, which fails
+    # exactly where it matters most: when a global vendor is breached and an
+    # Australian customer is caught up in it, the title mentions the vendor,
+    # the international tier is applied, and the vendor's worldwide total is
+    # accepted for the local victim. That is how the University of Melbourne
+    # (about 50,000 students) came to claim 275,000,000 affected records - the
+    # global Canvas/Instructure figure.
+    #
+    # The recorded victim is the authoritative field, so it wins.
+    if value > AUSTRALIAN_POPULATION_CEILING and is_local_australian_entity(victim_organization):
+        logger.info(
+            f"records_affected ({value:,}) rejected for Australian organisation "
+            f"{victim_organization!r} on event: {event_title}. Exceeds Australia's "
+            f"population ({AUSTRALIAN_POPULATION_CEILING:,}); this is almost "
+            f"certainly a global vendor total misattributed to a local victim."
+        )
+        return None
+
     # Check organization type for high record counts
     title_lower = event_title.lower()
 
-    # Check if it's a major international organization (allows up to 1 billion)
-    is_international = any(org in title_lower for org in MAJOR_INTERNATIONAL_ORGANIZATIONS)
+    # Check if it's a major international organization (allows up to 1 billion).
+    # The recorded victim is consulted as well as the title: titles frequently
+    # omit the company's formal name, so a title-only test wrongly demoted
+    # genuine global breaches (Dell 49M, Ticketmaster 560M) to the 20M
+    # small-organisation cap and discarded correct figures.
+    victim_lower = (victim_organization or "").lower()
+    is_international = any(
+        org in title_lower or org in victim_lower
+        for org in MAJOR_INTERNATIONAL_ORGANIZATIONS
+    )
 
     # Check if it's a major Australian organization (allows up to 30 million)
-    is_major_au = any(org in title_lower for org in MAJOR_AUSTRALIAN_ORGANIZATIONS)
+    is_major_au = any(
+        org in title_lower or org in victim_lower
+        for org in MAJOR_AUSTRALIAN_ORGANIZATIONS
+    )
 
     # Check if it's an Australian government organization (allows up to 30 million)
-    is_gov = any(identifier in title_lower for identifier in AUSTRALIAN_GOVERNMENT_IDENTIFIERS)
+    is_gov = any(
+        identifier in title_lower or identifier in victim_lower
+        for identifier in AUSTRALIAN_GOVERNMENT_IDENTIFIERS
+    )
 
     # Apply tiered limits based on organization type
     SMALL_ORG_MAX = 20_000_000

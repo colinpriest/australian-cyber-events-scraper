@@ -266,7 +266,10 @@ def add_entity_covariates(events: pd.DataFrame) -> pd.DataFrame:
     events["org_size_score"] = known_scores.fillna(mean_known_score)
     events["org_size_unknown"] = (events["org_size"] == "UNKNOWN").astype(int)
     events["employee_size"] = events["employee_count"].apply(employee_size_bucket)
-    events["turnover_size"] = events["turnover"].apply(turnover_size_bucket)
+    events["turnover_size"] = [
+        turnover_size_bucket(revenue_for_bucket(researched, legacy))
+        for researched, legacy in zip(events["size_revenue_aud"], events["turnover"])
+    ]
     events["entity_kind_group"] = events["entity_kind"].apply(entity_kind_bucket)
     events["sector_proxy"] = [
         sector_proxy(row.entity_name, row.entity_kind, row.industry)
