@@ -1,0 +1,6 @@
+model,log_likelihood,parameters,aic,bic,converged,message,params_json
+exponential,-909.8333200252891,1,1821.6666400505783,1826.2119897109128,True,closed-form censored MLE,"{""mean_days"": 7255.336956521736, ""rate"": 0.00013782957373208033}"
+loglogistic,-909.7448593924034,2,1823.4897187848069,1832.5804181054757,True,Optimization terminated successfully.,"{""scale_days"": 6010.1003643213935, ""shape"": 1.0511717545592039}"
+weibull,-909.8255718511463,2,1823.6511437022925,1832.7418430229613,True,Optimization terminated successfully.,"{""scale_days"": 7389.06138753479, ""shape"": 0.9893812992887926}"
+lognormal,-909.8775907092511,2,1823.7551814185022,1832.845880739171,True,Optimization terminated successfully.,"{""median_days"": 8477.679256645215, ""mu"": 9.045192018765356, ""sigma"": 1.9586252087523985}"
+generalized_gamma,-909.8327422627142,3,1825.6654845254284,1839.3015335064317,True,Optimization terminated successfully.,"{""a"": 1.0002765904510837, ""c"": 0.9994416908303643, ""scale_days"": 7257.615213619817}"
