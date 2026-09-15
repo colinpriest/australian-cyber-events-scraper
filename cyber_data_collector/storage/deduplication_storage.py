@@ -147,8 +147,26 @@ class DeduplicationStorage:
         self.conn.commit()
         self.logger.info(f"Created missing tables: {missing_tables}")
     
-    def clear_existing_deduplications(self) -> None:
-        """Remove all existing deduplicated events (idempotent)"""
+    def clear_existing_deduplications(self, *, confirm_destroy_curated_state: bool = False) -> None:
+        """Remove all existing deduplicated events and their ASD classifications.
+
+        This destroys curated state that no rebuild can recreate: merges and
+        splits from the dedup v3 repair passes, canonicalised victims, entity
+        roles, and every ASD classification. A routine refresh once called this
+        silently on every run, so the caller must now opt in explicitly.
+
+        Args:
+            confirm_destroy_curated_state: Must be True, or nothing is deleted.
+
+        Raises:
+            RuntimeError: If the destruction was not explicitly confirmed.
+        """
+        if not confirm_destroy_curated_state:
+            raise RuntimeError(
+                "clear_existing_deduplications() destroys curated dedup state "
+                "and ASD classifications; pass confirm_destroy_curated_state=True "
+                "only for a deliberate full rebuild."
+            )
         with self._lock:
             cursor = self.conn.cursor()
 

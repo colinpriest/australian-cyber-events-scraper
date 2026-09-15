@@ -310,15 +310,16 @@ class EventDiscoveryEnrichmentPipeline:
         self.stats['events_discovered'] = total_events_discovered
         logger.info(f"[DISCOVERY] Completed processing all months. Total events discovered: {total_events_discovered}")
 
-        # Run global deduplication after all data collection is complete
-        # Also run if DeduplicatedEvents is empty (e.g., was cleared but needs repopulation)
-        dedup_count = self._get_deduplicated_event_count()
-        if total_events_discovered > 0 or dedup_count == 0:
-            if dedup_count == 0:
-                logger.info("[GLOBAL DEDUPLICATION] DeduplicatedEvents table is empty, running deduplication to repopulate...")
-            else:
-                logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication process...")
-            await self.run_global_deduplication()
+        # Deduplication is deliberately NOT run here. It is owned by the caller
+        # (run_full_pipeline.UnifiedPipeline.run_deduplication_phase), which runs
+        # the incremental DeduplicationMigration after Perplexity enrichment.
+        #
+        # This method used to clear DeduplicatedEvents and rebuild it from
+        # scratch whenever a single new event was discovered. That erased every
+        # curated merge, split, canonicalised victim and entity role from the
+        # dedup v3 repair passes, and orphaned every ASD classification, on
+        # every routine refresh (observed 2026-09-15: 762 curated events
+        # rebuilt as 1,087, MediSecure fragmented back into 10).
 
     async def _discover_events_for_month(self, year: int, month: int, source_types: List[str], max_events: int) -> int:
         """
@@ -2214,164 +2215,6 @@ class EventDiscoveryEnrichmentPipeline:
         print(f"[RF_FILTER] Prediction errors: {filter_stats['prediction_errors']} ({filter_stats['error_rate']:.1%})")
 
         print("="*60)
-
-    async def run_global_deduplication(self):
-        """Run global deduplication once after all data collection"""
-        logger.info("[GLOBAL DEDUPLICATION] Starting global deduplication...")
-        
-        try:
-            # Import the new deduplication system
-            from cyber_data_collector.processing.deduplication_v2 import DeduplicationEngine, LLMArbiter, DeduplicationValidator
-            from cyber_data_collector.storage.deduplication_storage import DeduplicationStorage
-            
-            # Load ALL enriched events (not just recent months)
-            all_events = await self._load_all_enriched_events()
-            logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(all_events)} enriched events for deduplication")
-            
-            if not all_events:
-                logger.warning("[GLOBAL DEDUPLICATION] No enriched events found, skipping deduplication")
-                return
-            
-            # Clear existing deduplications
-            storage = DeduplicationStorage(self.db._conn)
-            storage.clear_existing_deduplications()
-            logger.info("[GLOBAL DEDUPLICATION] Cleared existing deduplicated events")
-            
-            # Load entity mappings from database
-            entity_mappings = self._load_entity_mappings()
-            if entity_mappings:
-                logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(entity_mappings)} entity mappings")
-
-            # Run deduplication
-            engine = DeduplicationEngine(
-                similarity_threshold=0.75,
-                llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
-                validators=[DeduplicationValidator()],
-                entity_mappings=entity_mappings
-            )
-            
-            logger.info("[GLOBAL DEDUPLICATION] Running deduplication engine...")
-            result = engine.deduplicate(all_events)
-            
-            # Log validation warnings (non-fatal - still proceed with storage)
-            if result.validation_errors:
-                logger.warning(f"[GLOBAL DEDUPLICATION] Validation found {len(result.validation_errors)} issues (non-fatal)")
-                for error in result.validation_errors:
-                    logger.warning(f"[VALIDATION WARNING] {error.error_type}: {error.message}")
-
-            # Store result
-            logger.info("[GLOBAL DEDUPLICATION] Storing deduplication results...")
-            storage_result = storage.store_deduplication_result(result)
-            
-            if not storage_result.success:
-                logger.error(f"[GLOBAL DEDUPLICATION] Storage failed: {len(storage_result.validation_errors)} errors")
-                raise ValueError("Failed to store deduplication results")
-            
-            # Final validation
-            logger.info("[GLOBAL DEDUPLICATION] Validating storage integrity...")
-            integrity_errors = storage.validate_storage_integrity()
-            if integrity_errors:
-                logger.error(f"[GLOBAL DEDUPLICATION] Storage integrity check failed: {len(integrity_errors)} issues")
-                for error in integrity_errors:
-                    logger.error(f"[INTEGRITY ERROR] {error.error_type}: {error.message}")
-                raise ValueError("Database contains duplicates after deduplication")
-            
-            # Log success statistics
-            stats = result.statistics
-            logger.info(f"[GLOBAL DEDUPLICATION] Deduplication complete: {stats.input_events} -> {stats.output_events} events")
-            logger.info(f"[GLOBAL DEDUPLICATION] Merge groups: {stats.merge_groups}, Total merges: {stats.total_merges}")
-            logger.info(f"[GLOBAL DEDUPLICATION] Average confidence: {stats.avg_confidence:.2f}")
-            logger.info(f"[GLOBAL DEDUPLICATION] Processing time: {stats.processing_time_seconds:.1f}s")
-            
-            return result.statistics
-            
-        except Exception as e:
-            logger.error(f"[GLOBAL DEDUPLICATION] Failed: {e}")
-            raise
-
-    def _get_deduplicated_event_count(self) -> int:
-        """Get the count of active deduplicated events"""
-        try:
-            cursor = self.db._conn.execute("""
-                SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'
-            """)
-            return cursor.fetchone()[0]
-        except Exception as e:
-            logger.warning(f"[DEDUPLICATION] Could not count deduplicated events: {e}")
-            return 0
-
-    def _load_entity_mappings(self) -> Dict[str, str]:
-        """Load entity mappings from the EntityMappings table.
-
-        Returns a dict mapping source_entity -> canonical_entity.
-        Used to normalize entity names during deduplication (e.g., Ticketmaster -> Live Nation).
-        """
-        try:
-            cursor = self.db._conn.execute("""
-                SELECT source_entity, canonical_entity
-                FROM EntityMappings
-            """)
-            mappings = {row[0]: row[1] for row in cursor.fetchall()}
-            return mappings
-        except Exception as e:
-            logger.warning(f"[ENTITY MAPPINGS] Could not load entity mappings: {e}")
-            return {}
-
-    async def _load_all_enriched_events(self):
-        """Load all enriched events from the database for global deduplication"""
-        from cyber_data_collector.processing.deduplication_v2 import CyberEvent
-
-        try:
-            # Query all enriched events from the database. perplexity_enrichment_data
-            # carries the formal entity name and victim industry; we must pass these
-            # through to the deduplicated events, otherwise a dedup rebuild silently
-            # drops victim_organization_name/industry (which the dashboard's sector
-            # charts depend on). Mirrors run_global_deduplication._load_enriched_events.
-            cursor = self.db._conn.cursor()
-            cursor.execute("""
-                SELECT enriched_event_id, title, summary, event_date, event_type, severity,
-                       records_affected, confidence_score, perplexity_enrichment_data
-                FROM EnrichedEvents
-                WHERE status = 'Active'
-                ORDER BY event_date DESC
-            """)
-
-            enriched_events = []
-            for row in cursor.fetchall():
-                # Extract victim organization name and industry from Perplexity enrichment JSON
-                victim_org_name = None
-                victim_org_industry = None
-                if row[8]:  # perplexity_enrichment_data
-                    try:
-                        enrichment_data = json.loads(row[8])
-                        victim_org_name = enrichment_data.get('formal_entity_name')
-                        victim_org_industry = enrichment_data.get('victim_industry')
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                # Convert database row to CyberEvent object
-                event = CyberEvent(
-                    event_id=row[0],
-                    title=row[1],
-                    summary=row[2],
-                    event_date=_parse_event_date(row[3]),
-                    event_type=row[4],
-                    severity=row[5],
-                    records_affected=row[6],
-                    victim_organization_name=victim_org_name,
-                    victim_organization_industry=victim_org_industry,
-                    data_sources=[],  # Not available in EnrichedEvents
-                    urls=[],  # Not available in EnrichedEvents
-                    confidence=row[7] if row[7] else 0.5
-                )
-                enriched_events.append(event)
-
-            logger.info(f"[GLOBAL DEDUPLICATION] Loaded {len(enriched_events)} enriched events from database")
-            return enriched_events
-
-        except Exception as e:
-            logger.error(f"[GLOBAL DEDUPLICATION] Failed to load enriched events: {e}")
-            return []
 
     def close(self):
         """Clean up resources"""
