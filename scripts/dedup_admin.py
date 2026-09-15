@@ -103,6 +103,7 @@ from cyber_data_collector.dedup.entity_merge import (
 )
 from cyber_data_collector.dedup.ledger import DedupLedger, pair_key
 from cyber_data_collector.dedup.state_restore import restore_dedup_state
+from cyber_data_collector.dedup.non_incident import reject_non_incident_events
 from cyber_data_collector.dedup.title_selection import (
     TitleGenerator, derive_title, needs_regeneration,
 )
@@ -2071,6 +2072,55 @@ def cmd_override(args) -> int:
     return 0
 
 
+def cmd_merge(args) -> int:
+    """Fold one deduplicated event into another, as a human ruling.
+
+    ``override ... same`` only records a verdict; nothing moves until a later
+    adjudication pass happens to consult it. This applies the merge now and
+    also records the override on the two events' master records, so the
+    ruling survives a future rebuild (dedup ids are regenerated; enriched ids
+    are stable).
+    """
+    conn = _connect(args.db)
+    refresher = _make_refresher(args)
+    try:
+        masters = {
+            row["deduplicated_event_id"]: row
+            for row in conn.execute(
+                "SELECT deduplicated_event_id, master_enriched_event_id, status, title "
+                "FROM DeduplicatedEvents WHERE deduplicated_event_id IN (?, ?)",
+                (args.target, args.source),
+            )
+        }
+        for dedup_id in (args.target, args.source):
+            row = masters.get(dedup_id)
+            if row is None:
+                print(f"No such deduplicated event: {dedup_id}")
+                return 1
+            if row["status"] != "Active":
+                print(f"Event {dedup_id} is {row['status']}, not Active - refusing to merge")
+                return 1
+
+        target, source = masters[args.target], masters[args.source]
+        print(f"Merge: {source['title']!r}\n Into: {target['title']!r}")
+        if args.dry_run:
+            print("DRY RUN - re-run without --dry-run to apply.")
+            return 0
+
+        ledger = DedupLedger(conn, role_refresher=refresher)
+        ledger.add_override(
+            target["master_enriched_event_id"], source["master_enriched_event_id"],
+            OverrideVerdict.SAME, reason=args.reason,
+        )
+        ledger.merge_events(args.target, args.source, args.reason, actor="human")
+        conn.commit()
+        print(f"Merged {args.source} into {args.target} (override recorded)")
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+    return 0
+
+
 def cmd_learn(args) -> int:
     conn = _connect(args.db)
     try:
@@ -2094,6 +2144,29 @@ def cmd_ancestry(args) -> int:
         print(json.dumps(tree, indent=2, ensure_ascii=False, default=str))
     finally:
         conn.close()
+    return 0
+
+
+def cmd_reject_non_incidents(args) -> int:
+    """Reject events built only from pages that were never cyber incidents.
+
+    See :mod:`cyber_data_collector.dedup.non_incident` for the gate. Each
+    rejection is snapshotted, and new records meeting the gate are kept out of
+    dedup automatically by run_global_deduplication.py.
+    """
+    conn = _connect(args.db)
+    try:
+        found = reject_non_incident_events(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    if not found:
+        print("No non-incident events found.")
+        return 0
+    for event in found:
+        print(f"  {event['event_date'] or '----------'}  {event['deduplicated_event_id']}  "
+              f"{event['title']}  ({len(event['member_ids'])} record(s))")
+    verb = "Would reject" if args.dry_run else "Rejected"
+    print(f"{verb} {len(found)} event(s).")
     return 0
 
 
@@ -2322,11 +2395,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--reason", default="")
     p.set_defaults(func=cmd_override)
 
+    p = sub.add_parser("merge",
+                       help="Fold SOURCE deduplicated event into TARGET now, and "
+                            "record a 'same' override so it survives rebuilds")
+    p.add_argument("target", help="deduplicated_event_id that survives")
+    p.add_argument("source", help="deduplicated_event_id folded into target")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_merge)
+
     sub.add_parser("learn").set_defaults(func=cmd_learn)
 
     p = sub.add_parser("ancestry")
     p.add_argument("dedup_id")
     p.set_defaults(func=cmd_ancestry)
+
+    p = sub.add_parser("reject-non-incidents",
+                       help="Reject events whose every record is a non-Australian "
+                            "page Perplexity could not tie to any incident")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_reject_non_incidents)
 
     p = sub.add_parser("restore-dedup-state",
                        help="Restore curated dedup tables and ASD classifications "

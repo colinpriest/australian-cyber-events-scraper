@@ -94,6 +94,15 @@ class DeduplicationMigration:
             if not self._backup_current_data():
                 return False
 
+            # Step 1b: keep pages that were never incidents (vendor marketing,
+            # service pages) from becoming events. Conservative gate - see
+            # cyber_data_collector.dedup.non_incident.
+            if not self.dry_run:
+                from cyber_data_collector.dedup.non_incident import deactivate_unmapped_non_incidents
+                with sqlite3.connect(self.db_path) as conn:
+                    rejected = deactivate_unmapped_non_incidents(conn)
+                self.migration_report['statistics']['non_incidents_deactivated'] = len(rejected)
+
             # Step 2: Detect new events and decide mode
             new_event_ids, existing_dedup_exists = self._detect_new_events()
 
