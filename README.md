@@ -663,7 +663,8 @@ can't mislabel data.
 python scripts/oaic/oaic_data_scraper.py --start-year 2024 --end-year 2025 --output json
 
 # Scrape OAIC Power BI dashboard (Playwright + GPT-4o Vision).
-# All 7 most recent semesters in parallel under 4 minutes:
+# Periods up to Jan-Jun 2025 only - the dashboard is discontinued after that.
+# Needed when rebuilding/repairing older periods, not for routine refreshes.
 python scripts/oaic/OAIC_dashboard_scraper.py --from-year 2022
 python scripts/oaic/OAIC_dashboard_scraper.py --semester "Jan-Jun 2025"
 
@@ -685,12 +686,17 @@ updated rather than being backfilled**, so all three scrapers remain necessary:
 | up to 2025 H1 | Power BI statistics dashboard | `OAIC_dashboard_scraper.py` |
 | 2025 H2 onward | XLSX resource on data.gov.au | `oaic_datagov_scraper.py` |
 
-As of August 2026 the Power BI dashboard still states "Updates to this
-dashboard are forthcoming and will include data for July-December 2025 and
-January-June 2026", so the dashboard scraper alone will silently report
-"no new data" even when a new period has been published. The data.gov.au
-ingester discovers resources through the CKAN API rather than hard-coded
-URLs, so a future Jan-Jun 2026 release is picked up without a code change.
+The Power BI dashboard has been **discontinued** and ceased to be the source
+for OAIC statistics after June 2025: its last period is Jan-Jun 2025, and it
+will not receive July-December 2025 or later data. `OAIC_dashboard_scraper.py`
+is still required to (re)build periods up to 2025 H1, but on a routine refresh
+it can only re-scrape stale periods and will silently report "no new data".
+For every period from July 2025 onward, use `oaic_datagov_scraper.py` against
+the data.gov.au [Notifiable Data Breaches (NDB) scheme](https://data.gov.au/data/dataset/notifiable-data-breaches-ndb-scheme)
+dataset. The ingester discovers resources through the CKAN API rather than
+hard-coded URLs, so a future Jan-Jun 2026 release is picked up without a code
+change. (Jul-Dec 2025 appeared there on 29 June 2026, roughly six months after
+the period closed.)
 
 Two caveats on data.gov.au periods:
 

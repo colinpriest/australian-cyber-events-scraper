@@ -235,11 +235,12 @@ class UnifiedPipeline:
                 logger.warning("Perplexity enrichment had errors, but continuing with pipeline...")
 
             # Step 3: Run global deduplication (cross-month, entity-based).
-            # NOTE: The discovery pipeline (EventDiscoveryEnrichmentPipeline) already runs a
-            # within-month deduplication pass during event storage.  This global pass is
-            # intentionally separate: it performs cross-month entity-based merging (0.15
-            # similarity threshold) across the entire database, which the per-month pass
-            # cannot do.  Both passes serve distinct purposes and are not redundant.
+            # This is the ONLY place deduplication runs during a refresh. It is
+            # incremental: new enriched events are merged into the existing,
+            # curated DeduplicatedEvents rather than rebuilding them. The
+            # discovery pipeline must not deduplicate - it previously wiped and
+            # rebuilt the table on every refresh, erasing all dedup v3 repairs.
+            # A full rebuild happens only with --force-dedup.
             logger.info("\nStep 3/3: Running global deduplication...")
             dedup_success = self.run_deduplication_phase(args)
 

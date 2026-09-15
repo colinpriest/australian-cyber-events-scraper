@@ -55,6 +55,14 @@ def _build_pipeline_args(
         re_enrich_limit=None,
         skip_classification=skip_classification,
         classify_limit=None,
+        # Read unconditionally by UnifiedPipeline's post-dedup steps; leaving
+        # them off made the recurrence check and entity sizing fail silently.
+        force_dedup=False,
+        skip_recurrence_check=False,
+        recurrence_window=90,
+        recurrence_min_certainty=0.85,
+        skip_entity_sizing=False,
+        entity_size_limit=None,
         continue_on_error=False,
         source=sources,
         max_events=max_events,

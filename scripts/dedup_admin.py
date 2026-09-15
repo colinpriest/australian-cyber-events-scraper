@@ -102,6 +102,7 @@ from cyber_data_collector.dedup.entity_merge import (
     merge_entities,
 )
 from cyber_data_collector.dedup.ledger import DedupLedger, pair_key
+from cyber_data_collector.dedup.state_restore import restore_dedup_state
 from cyber_data_collector.dedup.title_selection import (
     TitleGenerator, derive_title, needs_regeneration,
 )
@@ -2096,6 +2097,39 @@ def cmd_ancestry(args) -> int:
     return 0
 
 
+def cmd_restore_dedup_state(args) -> int:
+    """Put curated dedup state back from a backup after a destructive rebuild.
+
+    A full rebuild regenerates every ``deduplicated_event_id``, which orphans
+    ASD classifications and discards merges, splits and entity roles from the
+    repair passes. The enriched records underneath are unchanged, so restoring
+    only the dedup-derived tables recovers all of it; records added since the
+    backup are then merged by the next incremental dedup run.
+    """
+    conn = _connect(args.db)
+    try:
+        report = restore_dedup_state(conn, args.backup, dry_run=args.dry_run)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Refusing to restore: {exc}")
+        return 2
+    finally:
+        conn.close()
+
+    print(f"{'table':28} {'live':>8} {'backup':>8} {'differing':>10}")
+    for table, stats in report["tables"].items():
+        print(f"{table:28} {stats['live']:>8} {stats['backup']:>8} "
+              f"{stats['differing_rows']:>10}")
+    if not report["changed"]:
+        print("Dedup state already matches the backup - nothing to restore.")
+    elif report["applied"]:
+        print("Restored dedup state from the backup.")
+    else:
+        print("DRY RUN - re-run without --dry-run to restore.")
+    print(f"Enriched events awaiting incremental dedup: {report['pending_incremental']} "
+          "(run scripts/run_global_deduplication.py to merge them)")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Deduplication v3 administration")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
@@ -2293,6 +2327,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("ancestry")
     p.add_argument("dedup_id")
     p.set_defaults(func=cmd_ancestry)
+
+    p = sub.add_parser("restore-dedup-state",
+                       help="Restore curated dedup tables and ASD classifications "
+                            "from a backup after a destructive rebuild")
+    p.add_argument("backup", help="SQLite backup holding the dedup state to restore")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_restore_dedup_state)
 
     args = parser.parse_args(argv)
     logging.basicConfig(

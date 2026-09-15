@@ -496,13 +496,30 @@ class TestDeduplicationStorage:
         conn.commit()
         
         # Clear deduplications
-        storage.clear_existing_deduplications()
-        
+        storage.clear_existing_deduplications(confirm_destroy_curated_state=True)
+
         # Verify data is cleared
         cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents")
         count = cursor.fetchone()[0]
         assert count == 0
-        
+
+        conn.close()
+
+    def test_clear_existing_deduplications_refuses_without_confirmation(self, temp_db):
+        """Regression: a routine refresh silently wiped curated dedup state."""
+        conn = sqlite3.connect(temp_db)
+        storage = DeduplicationStorage(conn)
+        conn.execute(
+            "INSERT INTO DeduplicatedEvents (deduplicated_event_id, master_enriched_event_id, title) "
+            "VALUES (?, ?, ?)",
+            ("keep1", "master1", "Curated Event"),
+        )
+        conn.commit()
+
+        with pytest.raises(RuntimeError, match="confirm_destroy_curated_state"):
+            storage.clear_existing_deduplications()
+
+        assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents").fetchone()[0] == 1
         conn.close()
     
     def test_validate_storage_integrity_no_issues(self, temp_db):
