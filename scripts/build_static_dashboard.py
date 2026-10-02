@@ -22,7 +22,7 @@ import json
 import glob
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Iterator, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -1252,6 +1252,36 @@ def bf_month_estimates(monthly_counts: Dict[Tuple[int, int], int],
     return out
 
 
+def _month_ages(months: List[Tuple[int, int]], extraction_date: date) -> List[np.ndarray]:
+    """Day-level ages at E (days) for every day of each month."""
+    return [np.array([(extraction_date - d).days for d in _month_days(y, m)], dtype=float)
+            for (y, m) in months]
+
+
+def _bf_bootstrap_replicates(rng: np.random.Generator,
+                             sorted_lags: np.ndarray,
+                             monthly_counts: Dict[Tuple[int, int], int],
+                             months_for_rate: List[Tuple[int, int]],
+                             extraction_date: date,
+                             n_boot: int) -> Iterator[Tuple[np.ndarray, float]]:
+    """Yield (resampled lags, resampled rate R*) for each bootstrap replicate.
+
+    Each replicate resamples (a) the lag sample behind F and (b) the months
+    behind R, both with replacement. A generator, so the caller's own draws
+    (the Poisson step) interleave with these in a fixed order: the stream of
+    random numbers, and so every interval, is reproducible from the seed.
+    """
+    lags = np.asarray(sorted_lags, dtype=float)
+    rate_ages = _month_ages(months_for_rate, extraction_date)
+    rate_counts = np.array([monthly_counts.get(rm, 0) for rm in months_for_rate], dtype=float)
+    for _ in range(n_boot):
+        lag_b = np.sort(rng.choice(lags, size=len(lags), replace=True)) if len(lags) else lags
+        idx = rng.integers(0, len(months_for_rate), size=len(months_for_rate))
+        fr = np.array([lag_completeness(lag_b, rate_ages[i]).mean() for i in idx])
+        rate_b = float(np.mean(np.where(fr > 0, rate_counts[idx] / np.where(fr > 0, fr, 1), rate_counts[idx])))
+        yield lag_b, rate_b
+
+
 def bf_interval(monthly_counts: Dict[Tuple[int, int], int],
                 period_months: List[Tuple[int, int]],
                 extraction_date: date,
@@ -1269,24 +1299,45 @@ def bf_interval(monthly_counts: Dict[Tuple[int, int], int],
     """
     rng = np.random.default_rng(seed)
     observed_total = sum(int(monthly_counts.get(pm, 0)) for pm in period_months)
-    lags = np.asarray(sorted_lags, dtype=float)
-    # Day-level ages for each period month and each rate month, computed once.
-    period_ages = [np.array([(extraction_date - d).days for d in _month_days(y, m)], dtype=float)
-                   for (y, m) in period_months]
-    rate_ages = [np.array([(extraction_date - d).days for d in _month_days(y, m)], dtype=float)
-                 for (y, m) in months_for_rate]
-    rate_counts = np.array([monthly_counts.get(rm, 0) for rm in months_for_rate], dtype=float)
+    period_ages = _month_ages(period_months, extraction_date)
 
     totals = np.empty(n_boot)
-    for b in range(n_boot):
-        lag_b = np.sort(rng.choice(lags, size=len(lags), replace=True)) if len(lags) else lags
-        idx = rng.integers(0, len(months_for_rate), size=len(months_for_rate))
-        fr = np.array([lag_completeness(lag_b, rate_ages[i]).mean() for i in idx])
-        rate_b = float(np.mean(np.where(fr > 0, rate_counts[idx] / np.where(fr > 0, fr, 1), rate_counts[idx])))
+    replicates = _bf_bootstrap_replicates(rng, sorted_lags, monthly_counts, months_for_rate,
+                                          extraction_date, n_boot)
+    for b, (lag_b, rate_b) in enumerate(replicates):
         unreported = sum(rate_b * (1.0 - lag_completeness(lag_b, a).mean()) for a in period_ages)
         totals[b] = observed_total + rng.poisson(max(unreported, 0.0))
     low, high = np.percentile(totals, percentiles)
     return float(low), float(high)
+
+
+def bf_month_intervals(monthly_counts: Dict[Tuple[int, int], int],
+                       months: List[Tuple[int, int]],
+                       extraction_date: date,
+                       sorted_lags: np.ndarray,
+                       months_for_rate: List[Tuple[int, int]],
+                       n_boot: int = BF_BOOTSTRAP_SAMPLES,
+                       seed: int = BF_BOOTSTRAP_SEED,
+                       percentiles: Tuple[float, float] = BF_INTERVAL) -> List[Tuple[float, float]]:
+    """Bootstrap interval for each month's full count, separately.
+
+    Same replicates as ``bf_interval`` (resampled lags and rate months), but
+    the unreported events are drawn per month, Poisson(R* (1 - f*_m)), and
+    each month's percentiles are taken on its own. Fixed seed.
+    """
+    if not months:
+        return []
+    rng = np.random.default_rng(seed)
+    observed = np.array([int(monthly_counts.get(pm, 0)) for pm in months], dtype=float)
+    ages = _month_ages(months, extraction_date)
+    totals = np.empty((n_boot, len(months)))
+    replicates = _bf_bootstrap_replicates(rng, sorted_lags, monthly_counts, months_for_rate,
+                                          extraction_date, n_boot)
+    for b, (lag_b, rate_b) in enumerate(replicates):
+        unreported = np.array([max(rate_b * (1.0 - lag_completeness(lag_b, a).mean()), 0.0) for a in ages])
+        totals[b] = observed + rng.poisson(unreported)
+    lows, highs = np.percentile(totals, percentiles, axis=0)
+    return [(float(lo), float(hi)) for lo, hi in zip(lows, highs)]
 
 
 def compute_partial_period_estimate(monthly_counts: Dict[Tuple[int, int], int],
@@ -1358,12 +1409,71 @@ def compute_partial_period_estimate(monthly_counts: Dict[Tuple[int, int], int],
     return result
 
 
-def get_partial_period_estimate(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
-    """Load lag data from the database and estimate the current half-year.
+BF_MONTHLY_REPORTED_THRESHOLD = 0.95   # months at least this reported get no estimate
+BF_MONTHLY_MAX_LOOKBACK = 36           # never look further back than this many months
 
-    E is the date of the latest ingest (``get_data_collection_timestamp``),
-    never the wall clock. First-known date of an event is the earliest
-    ``RawEvents.discovered_at`` among its member records.
+
+def compute_monthly_bf_estimates(monthly_counts: Dict[Tuple[int, int], int],
+                                 events: List[Tuple[date, date]],
+                                 extraction_date: date,
+                                 collection_start: Optional[date] = None,
+                                 min_lag_sample: int = BF_MIN_LAG_SAMPLE,
+                                 threshold: float = BF_MONTHLY_REPORTED_THRESHOLD) -> Optional[Dict[str, Any]]:
+    """Per-month Bornhuetter-Ferguson estimates for under-reported recent months.
+
+    Covers the month containing E and every earlier month whose expected
+    reported share at E is below ``threshold``; months at or above it are
+    treated as complete and get no estimate. The reported share rises with a
+    month's age, so the walk back from E stops at the first month that
+    reaches the threshold.
+
+    Returns None when the lag curve cannot be estimated (fewer than
+    ``min_lag_sample`` developed incidents): the chart then shows no estimate
+    rather than an unadjusted one. Otherwise a dict whose ``months`` (oldest
+    first) each carry month, observed, reported_fraction, estimate, and the
+    80% interval low/high (widened, if need be, to contain the estimate).
+    """
+    lags = reporting_lag_sample(events, extraction_date, collection_start=collection_start)
+    if len(lags) < min_lag_sample:
+        return None
+
+    months_for_rate = rate_months(extraction_date)
+    rate = expected_monthly_rate(monthly_counts, extraction_date, lags, months_for_rate)
+
+    target: List[Tuple[int, int]] = []
+    y, m = extraction_date.year, extraction_date.month
+    for _ in range(BF_MONTHLY_MAX_LOOKBACK):
+        if month_reported_fraction(y, m, extraction_date, lags) >= threshold:
+            break
+        target.append((y, m))
+        y, m = _shift_month(y, m, -1)
+    target.reverse()
+
+    rows = bf_month_estimates(monthly_counts, target, extraction_date, lags, rate)
+    intervals = bf_month_intervals(monthly_counts, target, extraction_date, lags, months_for_rate)
+    for row, (low, high) in zip(rows, intervals):
+        row['low'] = min(low, row['estimate'])
+        row['high'] = max(high, row['estimate'])
+    return {
+        'method': 'bornhuetter_ferguson',
+        'extraction_date': extraction_date.isoformat(),
+        'threshold': threshold,
+        'rate': rate,
+        'rate_months': [f"{yy:04d}-{mm:02d}" for (yy, mm) in months_for_rate],
+        'lag_sample_size': int(len(lags)),
+        'months': rows,
+    }
+
+
+def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[date], List[Tuple[date, date]],
+                                                                 Dict[Tuple[int, int], int]]]:
+    """Read what the BF estimates need from the database.
+
+    Returns (extraction date E, collection start, [(incident, first known)],
+    {(year, month): count}) or None when unavailable. E is the date of the
+    latest ingest (``get_data_collection_timestamp``), never the wall clock.
+    First-known date of an event is the earliest ``RawEvents.discovered_at``
+    among its member records.
     """
     extraction = _parse_collection_date(get_data_collection_timestamp(conn))
     if extraction is None:
@@ -1389,7 +1499,7 @@ def get_partial_period_estimate(conn: sqlite3.Connection) -> Optional[Dict[str, 
             GROUP BY 1, 2
         """, (extraction.isoformat(),)).fetchall()
     except sqlite3.Error as exc:
-        logger.warning("Partial-period estimate unavailable: %s", exc)
+        logger.warning("Bornhuetter-Ferguson inputs unavailable: %s", exc)
         return None
 
     events = []
@@ -1399,6 +1509,27 @@ def get_partial_period_estimate(conn: sqlite3.Connection) -> Optional[Dict[str, 
         if incident is not None and known is not None and incident <= extraction:
             events.append((incident, known))
     monthly_counts = {(int(y), int(m)): int(c) for y, m, c in count_rows if y and m}
+    return extraction, collection_start, events, monthly_counts
+
+
+def get_monthly_bf_estimates(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
+    """Per-month BF estimates for the monthly unique-event chart (None on fallback)."""
+    inputs = _load_bf_inputs(conn)
+    if inputs is None:
+        return None
+    extraction, collection_start, events, monthly_counts = inputs
+    return compute_monthly_bf_estimates(monthly_counts, events, extraction, collection_start)
+
+
+def get_partial_period_estimate(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
+    """Load lag data from the database and estimate the current half-year.
+
+    See ``_load_bf_inputs`` for how E and first-known dates are defined.
+    """
+    inputs = _load_bf_inputs(conn)
+    if inputs is None:
+        return None
+    extraction, collection_start, events, monthly_counts = inputs
     return compute_partial_period_estimate(monthly_counts, events, extraction, collection_start)
 
 
@@ -2509,6 +2640,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     incomplete_note = json.dumps((data.get('incomplete_month') or {}).get('note') or '')
     header = dashboard_header_dates(end_date, data.get('incomplete_month'), data.get('extraction_date'))
     mc = json.dumps(data['monthly_counts'])
+    mbf = json.dumps(data.get('monthly_bf'))
     sev = json.dumps(data['severity_trends'])
     ra = json.dumps(data['records_affected'])
     etm = json.dumps(data['event_type_mix'])
@@ -2787,6 +2919,9 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       padding: { bottom: 6 }
     };
     const monthlyCounts = __MC__;
+    // Per-month Bornhuetter-Ferguson estimates for under-reported recent
+    // months (null when the lag curve could not be estimated).
+    const monthlyBF = __MONTHLY_BF__;
     const severityTrends = __SEV__;
     const recordsAffected = __RA__;
     const eventTypeMix = __ETM__;
@@ -2874,12 +3009,14 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     renderRiskMatrix('asdRiskMatrixPrevious', asdRiskPrevious, 'asdPreviousTotal');
     renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
 
-    // 1) Monthly Trends (line) with trend line
+    // 1) Monthly Trends (line) with trend line, plus Bornhuetter-Ferguson
+    // estimates of the full count for months still under-reported at
+    // extraction (including the partial month, shown only as an estimate).
     (function() {
       const counts = monthlyCounts.counts;
       const n = counts.length;
 
-      // Calculate linear regression for trend line
+      // Calculate linear regression for trend line (observed months only)
       let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
       for (let i = 0; i < n; i++) {
         sumX += i;
@@ -2897,46 +3034,155 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         trendLine.push(slope * i + intercept);
       }
 
+      // x axis: observed months, extended by any estimate-only month (the
+      // partial month at extraction is excluded from the observed series).
+      const bfMonths = (monthlyBF && Array.isArray(monthlyBF.months)) ? monthlyBF.months : [];
+      const labels = monthlyCounts.months.slice();
+      bfMonths.forEach(m => { if (!labels.includes(m.month)) labels.push(m.month); });
+      labels.sort();
+      const observedByMonth = {};
+      monthlyCounts.months.forEach((m, i) => { observedByMonth[m] = counts[i]; });
+      const observedData = labels.map(m => (m in observedByMonth) ? observedByMonth[m] : null);
+      const trendByMonth = {};
+      monthlyCounts.months.forEach((m, i) => { trendByMonth[m] = trendLine[i]; });
+      const trendData = labels.map(m => (m in trendByMonth) ? trendByMonth[m] : null);
+
+      const datasets = [
+        {
+          label: 'Unique Events',
+          data: observedData,
+          borderColor: colors.primary,
+          backgroundColor: '#2563eb20',
+          fill: true,
+          tension: 0.4,
+          order: 2
+        },
+        {
+          label: 'Trend',
+          data: trendData,
+          borderColor: '#dc2626',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          fill: false,
+          tension: 0,
+          pointRadius: 0,
+          order: 1
+        }
+      ];
+
+      let bfMax = null;
+      if (bfMonths.length > 0) {
+        const bfByMonth = {};
+        bfMonths.forEach(m => { bfByMonth[m.month] = m; });
+        const estimateData = labels.map(m => bfByMonth[m] ? Math.round(bfByMonth[m].estimate) : null);
+        bfMax = Math.max(...bfMonths.map(m => Math.round(m.high)));
+        datasets.push({
+          label: 'Estimated full count (Bornhuetter-Ferguson)',
+          isMonthlyEstimate: true,
+          bfDetail: labels.map(m => bfByMonth[m] || null),
+          // Drawn as vertical bars with caps by monthlyErrorBars below.
+          errorBars: labels.map(m => bfByMonth[m]
+            ? { low: Math.round(bfByMonth[m].low), high: Math.round(bfByMonth[m].high) } : null),
+          data: estimateData,
+          borderColor: '#7c3aed',
+          backgroundColor: '#ffffff',
+          borderWidth: 2,
+          borderDash: [6, 4],
+          fill: false,
+          tension: 0,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBorderWidth: 2,
+          pointBackgroundColor: '#ffffff',
+          spanGaps: false,
+          order: 0
+        });
+      }
+
+      // Inline error-bar plugin (same approach as the OAIC comparison chart).
+      const monthlyErrorBars = {
+        id: 'monthlyErrorBars',
+        afterDatasetsDraw(chart) {
+          const ctx = chart.ctx;
+          const yScale = chart.scales.y;
+          chart.data.datasets.forEach((ds, i) => {
+            if (!ds.errorBars || !chart.isDatasetVisible(i)) return;
+            const meta = chart.getDatasetMeta(i);
+            ds.errorBars.forEach((bar, j) => {
+              if (!bar || !meta.data[j]) return;
+              const x = meta.data[j].x;
+              const yLow = yScale.getPixelForValue(bar.low);
+              const yHigh = yScale.getPixelForValue(bar.high);
+              const cap = 4;
+              ctx.save();
+              ctx.strokeStyle = ds.borderColor;
+              ctx.globalAlpha = 0.7;
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x, yLow); ctx.lineTo(x, yHigh);
+              ctx.moveTo(x - cap, yLow); ctx.lineTo(x + cap, yLow);
+              ctx.moveTo(x - cap, yHigh); ctx.lineTo(x + cap, yHigh);
+              ctx.stroke();
+              ctx.restore();
+            });
+          });
+        }
+      };
+
+      // Subtitle: what the observed line excludes, and what the dashed line is.
+      const subtitleParts = [];
+      if (incompleteMonthNote) {
+        subtitleParts.push(bfMonths.length > 0 ? 'Observed ' + incompleteMonthNote.charAt(0).toLowerCase() + incompleteMonthNote.slice(1) : incompleteMonthNote);
+      }
+      if (bfMonths.length > 0) {
+        subtitleParts.push('dashed = estimated full count, 80% interval');
+      }
+      const monthlySubtitle = Object.assign({}, incompleteMonthSubtitle, {
+        display: subtitleParts.length > 0,
+        text: subtitleParts.join('; ')
+      });
+
+      const fmtMonth = (m) => {
+        const [y, mo] = m.split('-').map(Number);
+        return new Date(y, mo - 1, 1).toLocaleString('en-AU', { month: 'short', year: 'numeric' });
+      };
+
       new Chart(document.getElementById('monthlyTrendsChart').getContext('2d'), {
         type: 'line',
         data: {
-          labels: monthlyCounts.months,
-          datasets: [
-            {
-              label: 'Unique Events',
-              data: counts,
-              borderColor: colors.primary,
-              backgroundColor: '#2563eb20',
-              fill: true,
-              tension: 0.4,
-              order: 2
-            },
-            {
-              label: 'Trend',
-              data: trendLine,
-              borderColor: '#dc2626',
-              backgroundColor: 'transparent',
-              borderWidth: 2,
-              borderDash: [5, 5],
-              fill: false,
-              tension: 0,
-              pointRadius: 0,
-              order: 1
-            }
-          ],
+          labels: labels,
+          datasets: datasets,
         },
+        plugins: [monthlyErrorBars],
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            subtitle: incompleteMonthSubtitle,
+            subtitle: monthlySubtitle,
             legend: {
               display: true,
-              position: 'top'
+              position: 'top',
+              labels: { sort: (a, b) => a.datasetIndex - b.datasetIndex }
+            },
+            tooltip: {
+              callbacks: {
+                label: function(item) {
+                  const d = item.dataset.isMonthlyEstimate ? item.dataset.bfDetail[item.dataIndex] : null;
+                  if (!d) return `${item.dataset.label}: ${item.formattedValue}`;
+                  return [
+                    `${fmtMonth(d.month)}: estimated full count ${Math.round(d.estimate)}`,
+                    `Observed so far: ${d.observed}`,
+                    `Reported share at extraction: ${(d.reported_fraction * 100).toFixed(0)}%`,
+                    `80% interval: ${Math.round(d.low)} - ${Math.round(d.high)}`,
+                    'Bornhuetter-Ferguson (adjusts for reporting lag)'
+                  ];
+                }
+              }
             }
           },
           scales: {
-            y: { beginAtZero: true },
+            y: { beginAtZero: true, suggestedMax: bfMax !== null ? bfMax : undefined },
             x: { title: { display: true, text: 'Month' }}
           }
         }
@@ -4303,6 +4549,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__INCOMPLETE_MONTH_NOTE__', incomplete_note)
             .replace('__END__', end_date)
             .replace('__MC__', mc)
+            .replace('__MONTHLY_BF__', mbf)
             .replace('__SEV__', sev)
             .replace('__RA__', ra)
             .replace('__ETM__', etm)
@@ -4410,8 +4657,11 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             monthly_counts_series = monthly_counts
             event_type_mix_series = event_type_mix
 
+        monthly_bf = get_monthly_bf_estimates(conn)
+
         data = {
             'incomplete_month': incomplete_month,
+            'monthly_bf': monthly_bf,
             'extraction_date': get_data_collection_timestamp(conn),
             'monthly_counts': monthly_counts_series,
             'severity_trends': get_monthly_severity_trends(conn, start_date, series_end_date),
