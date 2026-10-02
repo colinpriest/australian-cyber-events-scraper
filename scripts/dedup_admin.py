@@ -1468,42 +1468,42 @@ def cmd_check_coherence(args) -> int:
                   f"incident: {verdict.event_incident[:50]})")
             entry = {"event": event["id"], "title": event["title"], "incident": verdict.event_incident,
                      "strays": []}
-            # Strays from one event naming the same incident stay together:
-            # splitting them one by one made TfNSW's three Accellion records
-            # three separate events.
-            group_target: Dict[str, str] = {}
+            # Strays naming the same incident leave together as one event
+            # (one-by-one splits cached rulings between them and they could
+            # never be regrouped).
+            groups: Dict[str, List[Dict]] = {}
             for s in out:
                 print(f"    - {s['certainty']:.2f}  {s['title'][:60]}  -> {s['actual_incident'][:45]}")
-                record = {"enriched_id": s["id"], "title": s["title"], "org": s["org"],
-                          "actual_incident": s["actual_incident"], "certainty": s["certainty"],
-                          "reasoning": s["reasoning"], "new_event": None, "merged_into": None}
+                groups.setdefault(s["actual_incident"].strip().lower() or s["id"], []).append(s)
+            for label, members in groups.items():
+                records = [{"enriched_id": s["id"], "title": s["title"], "org": s["org"],
+                            "actual_incident": s["actual_incident"], "certainty": s["certainty"],
+                            "reasoning": s["reasoning"], "new_event": None, "merged_into": None}
+                           for s in members]
                 if not args.dry_run:
-                    new_id = ledger.split_member(
-                        event["id"], s["id"],
-                        reason=f"[coherence {s['certainty']:.2f}] about {s['actual_incident']}: {s['reasoning']}",
+                    first = members[0]
+                    new_id = ledger.split_members(
+                        event["id"], [s["id"] for s in members],
+                        reason=(f"[coherence {first['certainty']:.2f}] about "
+                                f"{first['actual_incident']}: {first['reasoning']}"),
                         actor="pipeline")
-                    split_n += 1
-                    record["new_event"] = new_id
-                    label = s["actual_incident"].strip().lower()
-                    if label and label in group_target:
-                        ledger.merge_events(group_target[label], new_id,
-                                            reason=f"[coherence] same stray incident: {s['actual_incident']}",
-                                            actor="pipeline")
-                        record["merged_into"] = group_target[label]
-                        conn.commit()
-                        entry["strays"].append(record)
-                        continue
-                    home = coherence.find_home(conn, resolver, s["org"], s["date"], exclude=[event["id"], new_id])
+                    split_n += len(members)
+                    home = coherence.find_home(conn, resolver, first["org"], first["date"],
+                                               exclude=[event["id"], new_id])
                     if home:
-                        ledger.merge_events(home, new_id,
-                                            reason=f"[coherence] stray record re-homed: {s['actual_incident']}",
-                                            actor="pipeline")
-                        record["merged_into"] = home
-                        homed += 1
-                    if label:
-                        group_target[label] = record["merged_into"] or new_id
+                        try:
+                            ledger.merge_events(
+                                home, new_id,
+                                reason=f"[coherence] stray records re-homed: {first['actual_incident']}",
+                                actor="pipeline")
+                            homed += 1
+                        except ValueError as exc:   # a cached 'different' ruling forbids it
+                            logger.info("Not re-homing %s: %s", new_id, exc)
+                            home = None
+                    for r in records:
+                        r["new_event"], r["merged_into"] = new_id, home
                     conn.commit()
-                entry["strays"].append(record)
+                entry["strays"].extend(records)
             findings.append(entry)
 
         COHERENCE_FINDINGS.parent.mkdir(parents=True, exist_ok=True)
@@ -2316,11 +2316,13 @@ def cmd_split(args) -> int:
     refresher = _make_refresher(args)
     try:
         ledger = DedupLedger(conn, role_refresher=refresher)
-        new_id = ledger.split_member(
-            args.dedup_id, args.enriched_id, args.reason, actor="human"
-        )
+        ids = args.enriched_id
+        if len(ids) == 1:
+            new_id = ledger.split_member(args.dedup_id, ids[0], args.reason, actor="human")
+        else:
+            new_id = ledger.split_members(args.dedup_id, ids, args.reason, actor="human")
         conn.commit()
-        print(f"Split {args.enriched_id} out into new event {new_id}")
+        print(f"Split {' '.join(ids)} out into new event {new_id}")
     finally:
         _flush_refresher(conn, refresher)
         conn.close()
@@ -2385,7 +2387,13 @@ def cmd_merge(args) -> int:
             target["master_enriched_event_id"], source["master_enriched_event_id"],
             OverrideVerdict.SAME, reason=args.reason,
         )
-        ledger.merge_events(args.target, args.source, args.reason, actor="human")
+        conflict = ledger.override_conflict(args.target, args.source)
+        if conflict and not args.force:
+            print(f"Refusing: a 'different' ruling exists ({conflict}). "
+                  "Re-run with --force to overrule it.")
+            return 1
+        ledger.merge_events(args.target, args.source, args.reason, actor="human",
+                            respect_overrides=not args.force)
         conn.commit()
         print(f"Merged {args.source} into {args.target} (override recorded)")
     finally:
@@ -2686,9 +2694,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Mark every event stale (e.g. after changing the classifier).")
     p.set_defaults(func=cmd_roles_status)
 
-    p = sub.add_parser("split")
+    p = sub.add_parser("split",
+                       help="Move one or more records out of an event into one new event; "
+                            "the ruling is cached so no merge pass can undo it")
     p.add_argument("dedup_id")
-    p.add_argument("enriched_id")
+    p.add_argument("enriched_id", nargs="+",
+                   help="Record(s) to move out; several move together as one event.")
     p.add_argument("--reason", default="manual split")
     p.set_defaults(func=cmd_split)
 
@@ -2705,6 +2716,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("target", help="deduplicated_event_id that survives")
     p.add_argument("source", help="deduplicated_event_id folded into target")
     p.add_argument("--reason", required=True)
+    p.add_argument("--force", action="store_true",
+                   help="Merge even if a 'different' ruling exists between the events.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_merge)
 

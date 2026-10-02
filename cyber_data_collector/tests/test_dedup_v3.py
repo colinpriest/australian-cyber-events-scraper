@@ -663,3 +663,61 @@ def test_evidence_summary_line_is_human_readable():
 
 def test_pair_key_is_order_independent():
     assert pair_key("b", "a") == pair_key("a", "b")
+
+
+# --------------------------------------------------------------------------
+# Splits are cached as 'different' rulings that every merge path honours
+# --------------------------------------------------------------------------
+
+def test_split_is_cached_and_blocks_a_later_merge(conn):
+    """Mackay Sugar inside 'Mackay Toyota': once split, no pass may re-merge it."""
+    _, enr_a, ded_a = _add_event(conn, "a", "Mackay Toyota cyber incident", "https://x/1")
+    _, enr_b, ded_b = _add_event(conn, "b", "Mackay Sugar ransomware", "https://x/2")
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    ledger.merge_events(ded_a, ded_b, reason="wrongly merged")
+    new_id = ledger.split_member(ded_a, enr_b, reason="different entities")
+
+    assert ledger.load_overrides()[frozenset((enr_a, enr_b))] is False
+    with pytest.raises(ValueError, match="blocked by a 'different' override"):
+        ledger.merge_events(ded_a, new_id, reason="automated pass", actor="pipeline")
+    # A deliberate human merge can still overrule it.
+    ledger.merge_events(ded_a, new_id, reason="human overrule", respect_overrides=False)
+
+
+def test_split_can_opt_out_of_caching(conn):
+    _, enr_a, ded_a = _add_event(conn, "a", "Acme breach", "https://x/1")
+    _, enr_b, ded_b = _add_event(conn, "b", "Acme incident", "https://x/2")
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    ledger.merge_events(ded_a, ded_b, reason="same")
+    ledger.split_member(ded_a, enr_b, reason="tmp", record_override=False)
+    assert frozenset((enr_a, enr_b)) not in ledger.load_overrides()
+
+
+def test_group_split_keeps_the_group_together_and_rules_only_against_the_rest(conn):
+    """Toll: Jan-Feb MailTo records leave together; rulings only vs the May attack."""
+    _, e1, d1 = _add_event(conn, "m1", "Toll MailTo attack", "https://x/1")
+    _, e2, d2 = _add_event(conn, "m2", "Toll MailTo shutdown", "https://x/2")
+    _, e3, d3 = _add_event(conn, "n1", "Toll Nefilim attack", "https://x/3")
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    ledger.merge_events(d3, d1, reason="wrong")
+    ledger.merge_events(d3, d2, reason="wrong")
+    new_id = ledger.split_members(d3, [e1, e2], reason="separate attacks")
+
+    members = {r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id=?", (new_id,))}
+    assert members == {e1, e2}
+    overrides = ledger.load_overrides()
+    assert overrides[frozenset((e3, e1))] is False and overrides[frozenset((e3, e2))] is False
+    assert frozenset((e1, e2)) not in overrides
+    with pytest.raises(ValueError, match="blocked"):
+        ledger.merge_events(d3, new_id, reason="automated", actor="pipeline")
+
+
+def test_group_split_refuses_to_empty_the_event(conn):
+    _, e1, d1 = _add_event(conn, "a", "Acme breach", "https://x/1")
+    run_backfill(conn)
+    with pytest.raises(ValueError):
+        DedupLedger(conn).split_members(d1, [e1], reason="x")

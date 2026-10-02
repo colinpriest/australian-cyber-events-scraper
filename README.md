@@ -359,6 +359,27 @@ python scripts/dedup_admin.py apply-missed --min-certainty 0.9
 python scripts/dedup_admin.py merge <target_dedup_id> <source_dedup_id> --reason "..."
 ```
 
+### Cached rulings: splits stay split
+
+Every split is recorded as a `different` ruling in `DedupOverrides` between
+the departing record(s) and every record left behind, and `merge_events`
+refuses to join two events when any record of one has a `different` ruling
+against any record of the other. So a manual correction cannot be undone by a
+later automated pass (`find-missed`, `adjudicate-candidates`,
+`reconcile-entities`, `adjudicate-clusters`, `check-recurrences`, ...).
+Rulings are keyed on `enriched_event_id`, which survives rebuilds.
+
+```bash
+# Move records out together as ONE event (rulings only against what stays)
+python scripts/dedup_admin.py split <dedup_id> <enriched_id> [<enriched_id> ...] --reason "..."
+# A human can still overrule a cached ruling deliberately
+python scripts/dedup_admin.py merge <target> <source> --reason "..." --force
+```
+
+Move a multi-record incident out with one `split` naming all its records:
+splitting them one at a time caches rulings *between* them, and the safeguard
+then (correctly) refuses to regroup them.
+
 ### Stray records: event coherence
 
 The opposite of a missed merge: an event holding records about a *different*

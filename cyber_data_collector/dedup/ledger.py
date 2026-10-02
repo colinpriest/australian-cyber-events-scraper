@@ -169,12 +169,71 @@ class DedupLedger:
         enriched_event_id: str,
         reason: str,
         actor: str = "human",
+        record_override: bool = True,
     ) -> str:
         """Detach one member from a merged event, creating its own dedup row.
 
         This is the reverse of a merge and runs entirely against stored state -
         no re-scraping, no re-enrichment, no full pipeline run.
+
+        The split is also cached as a 'different' override between the
+        departing record and every record left behind, so no later merge pass
+        can put them back together (``merge_events`` refuses). Overrides are
+        keyed on enriched ids, which survive a rebuild.
         """
+        remaining = [r["enriched_event_id"] for r in self.conn.execute(
+            "SELECT enriched_event_id FROM EventDeduplicationMap "
+            "WHERE deduplicated_event_id = ? AND enriched_event_id != ?",
+            (deduplicated_event_id, enriched_event_id))]
+        result = self._split_member(deduplicated_event_id, enriched_event_id, reason, actor)
+        if record_override:
+            for other in remaining:
+                self.add_override(other, enriched_event_id, OverrideVerdict.DIFFERENT,
+                                  reason=f"split: {reason}", created_by=actor)
+        return result
+
+    def split_members(
+        self,
+        deduplicated_event_id: str,
+        enriched_event_ids: Sequence[str],
+        reason: str,
+        actor: str = "human",
+    ) -> str:
+        """Move several members out TOGETHER into one event.
+
+        Splitting them one at a time cached a 'different' ruling between each
+        departing record and the records still waiting to leave, so the group
+        could never be put back together (the nine Jan-Feb 2020 Toll MailTo
+        records, 2026-10-02). Here the group leaves as one event and rulings
+        are recorded only between the group and the records that stay.
+        """
+        group = list(dict.fromkeys(enriched_event_ids))
+        if not group:
+            raise ValueError("no members given")
+        remaining = [r["enriched_event_id"] for r in self.conn.execute(
+            "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?",
+            (deduplicated_event_id,)) if r["enriched_event_id"] not in group]
+        if not remaining:
+            raise ValueError("splitting every member would leave an event with no records")
+        home = self._split_member(deduplicated_event_id, group[0], reason, actor)
+        for eid in group[1:]:
+            moved = self._split_member(deduplicated_event_id, eid, reason, actor)
+            if moved != home:
+                self.merge_events(home, moved, reason=f"group split: {reason}", actor=actor,
+                                  respect_overrides=False)
+        for other in remaining:
+            for eid in group:
+                self.add_override(other, eid, OverrideVerdict.DIFFERENT,
+                                  reason=f"split: {reason}", created_by=actor)
+        return home
+
+    def _split_member(
+        self,
+        deduplicated_event_id: str,
+        enriched_event_id: str,
+        reason: str,
+        actor: str = "human",
+    ) -> str:
         batch_id = f"revert-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         self.snapshot_event(batch_id, deduplicated_event_id)
 
@@ -395,6 +454,7 @@ class DedupLedger:
         source_dedup_id: str,
         reason: str,
         actor: str = "human",
+        respect_overrides: bool = True,
     ) -> None:
         """Fold ``source_dedup_id``'s members into ``target_dedup_id``.
 
@@ -403,6 +463,12 @@ class DedupLedger:
         """
         if target_dedup_id == source_dedup_id:
             raise ValueError("cannot merge an event into itself")
+        if respect_overrides:
+            conflict = self.override_conflict(target_dedup_id, source_dedup_id)
+            if conflict:
+                raise ValueError(
+                    f"merge {source_dedup_id} -> {target_dedup_id} blocked by a 'different' "
+                    f"override ({conflict}); remove or replace the override to merge")
         batch_id = f"merge-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         self.snapshot_event(batch_id, target_dedup_id)
         self.snapshot_event(batch_id, source_dedup_id)
@@ -632,6 +698,36 @@ class DedupLedger:
             left_enriched_id, right_enriched_id, verdict.value,
         )
         return override_id
+
+    def override_conflict(self, left_dedup_id: str, right_dedup_id: str) -> Optional[str]:
+        """The first active 'different' override between any member of each event.
+
+        Checked across all members, not just masters: a split record is often
+        re-attached to an existing event where it is not the master, and the
+        ruling must still hold.
+        """
+        try:
+            row = self.conn.execute(
+                """
+                SELECT o.left_enriched_event_id, o.right_enriched_event_id, o.reason
+                FROM DedupOverrides o
+                WHERE o.active = 1 AND o.verdict = ?
+                  AND (
+                    (o.left_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?)
+                     AND o.right_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?))
+                    OR
+                    (o.left_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?)
+                     AND o.right_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?))
+                  )
+                LIMIT 1
+                """,
+                (OverrideVerdict.DIFFERENT.value, left_dedup_id, right_dedup_id, right_dedup_id, left_dedup_id),
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return f"{row[0][:8]} vs {row[1][:8]}: {row[2] or 'no reason'}"
 
     def load_overrides(self) -> Dict[frozenset, bool]:
         """Active overrides as ``{frozenset(pair): is_same_event}``."""
