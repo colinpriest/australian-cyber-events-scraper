@@ -2411,8 +2411,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_ancestry)
 
     p = sub.add_parser("reject-non-incidents",
-                       help="Reject events whose every record is a non-Australian "
-                            "page Perplexity could not tie to any incident")
+                       help="Reject events whose every record is a non-incident: "
+                            "a non-Australian page Perplexity could not tie to any "
+                            "incident, or a page on the vendor blocklist "
+                            "(cyber_data_collector/dedup/vendor_source_blocklist.txt)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_reject_non_incidents)
 
