@@ -105,6 +105,7 @@ from cyber_data_collector.dedup.ledger import DedupLedger, pair_key
 from cyber_data_collector.dedup.state_restore import restore_dedup_state
 from cyber_data_collector.dedup.non_incident import reject_non_incident_events
 from cyber_data_collector.dedup import page_classifier
+from cyber_data_collector.dedup import coherence
 from cyber_data_collector.dedup.title_selection import (
     TitleGenerator, derive_title, needs_regeneration,
 )
@@ -1431,6 +1432,93 @@ def cmd_reconcile_entities(args) -> int:
 
 
 CANDIDATE_CLUSTER_FINDINGS = Path("instance/dedup_candidate_clusters.json")
+COHERENCE_FINDINGS = Path("instance/dedup_coherence_findings.json")
+
+
+def cmd_check_coherence(args) -> int:
+    """Split out stray records - members describing a different incident.
+
+    See :mod:`cyber_data_collector.dedup.coherence`. Suspects are found for
+    free (a member naming another organisation); one model call per suspect
+    event decides which members do not belong; those at or above
+    --min-certainty are split out with the ledger and, where exactly one
+    existing event for the same organisation lies within 90 days, folded into
+    it. Findings are written to instance/dedup_coherence_findings.json.
+    """
+    conn = _connect(args.db)
+    refresher = _make_refresher(args)
+    try:
+        ledger = DedupLedger(conn, role_refresher=refresher)
+        resolver = EntityResolver(conn)
+        suspects = coherence.find_suspect_events(conn, resolver, only=args.event or None)
+        suspects.sort(key=lambda e: -len(e["suspect_ids"]))
+        if args.limit:
+            suspects = suspects[: args.limit]
+        print(f"{len(suspects)} event(s) with a member naming another organisation")
+
+        findings, split_n, homed = [], 0, 0
+        for event in suspects:
+            verdict = coherence.judge_event(event)
+            if verdict is None:
+                continue
+            out = coherence.strays(event, verdict, args.min_certainty, resolver=resolver)
+            if not out:
+                continue
+            print(f"\n[{event['id'][:8]}] {event['title'][:70]}  ({len(event['members'])} records; "
+                  f"incident: {verdict.event_incident[:50]})")
+            entry = {"event": event["id"], "title": event["title"], "incident": verdict.event_incident,
+                     "strays": []}
+            # Strays from one event naming the same incident stay together:
+            # splitting them one by one made TfNSW's three Accellion records
+            # three separate events.
+            group_target: Dict[str, str] = {}
+            for s in out:
+                print(f"    - {s['certainty']:.2f}  {s['title'][:60]}  -> {s['actual_incident'][:45]}")
+                record = {"enriched_id": s["id"], "title": s["title"], "org": s["org"],
+                          "actual_incident": s["actual_incident"], "certainty": s["certainty"],
+                          "reasoning": s["reasoning"], "new_event": None, "merged_into": None}
+                if not args.dry_run:
+                    new_id = ledger.split_member(
+                        event["id"], s["id"],
+                        reason=f"[coherence {s['certainty']:.2f}] about {s['actual_incident']}: {s['reasoning']}",
+                        actor="pipeline")
+                    split_n += 1
+                    record["new_event"] = new_id
+                    label = s["actual_incident"].strip().lower()
+                    if label and label in group_target:
+                        ledger.merge_events(group_target[label], new_id,
+                                            reason=f"[coherence] same stray incident: {s['actual_incident']}",
+                                            actor="pipeline")
+                        record["merged_into"] = group_target[label]
+                        conn.commit()
+                        entry["strays"].append(record)
+                        continue
+                    home = coherence.find_home(conn, resolver, s["org"], s["date"], exclude=[event["id"], new_id])
+                    if home:
+                        ledger.merge_events(home, new_id,
+                                            reason=f"[coherence] stray record re-homed: {s['actual_incident']}",
+                                            actor="pipeline")
+                        record["merged_into"] = home
+                        homed += 1
+                    if label:
+                        group_target[label] = record["merged_into"] or new_id
+                    conn.commit()
+                entry["strays"].append(record)
+            findings.append(entry)
+
+        COHERENCE_FINDINGS.parent.mkdir(parents=True, exist_ok=True)
+        COHERENCE_FINDINGS.write_text(json.dumps(findings, indent=2, ensure_ascii=False, default=str),
+                                      encoding="utf-8")
+        total = sum(len(f["strays"]) for f in findings)
+        if args.dry_run:
+            print(f"\nDRY RUN: {total} stray record(s) in {len(findings)} event(s) would be split out")
+        else:
+            print(f"\n{split_n} stray record(s) split out of {len(findings)} event(s); "
+                  f"{homed} folded into an existing event for their organisation")
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+    return 0
 
 
 def cmd_adjudicate_candidates(args) -> int:
@@ -2625,6 +2713,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("ancestry")
     p.add_argument("dedup_id")
     p.set_defaults(func=cmd_ancestry)
+
+    p = sub.add_parser("check-coherence",
+                       help="Split out stray records that describe a different "
+                            "incident from the event they are in")
+    p.add_argument("--event", action="append", default=None,
+                   help="Only this event (dedup id or prefix); repeatable.")
+    # Every correct split in the 2026-10-02 review came at certainty 1.00; the
+    # wrong ones (supplier customers, follow-ups) at 0.90-0.95.
+    p.add_argument("--min-certainty", type=float, default=0.99)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_check_coherence)
 
     p = sub.add_parser("adjudicate-candidates",
                        help="Find missed duplicates by partitioning whole groups of "

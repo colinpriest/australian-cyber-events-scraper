@@ -359,6 +359,34 @@ python scripts/dedup_admin.py apply-missed --min-certainty 0.9
 python scripts/dedup_admin.py merge <target_dedup_id> <source_dedup_id> --reason "..."
 ```
 
+### Stray records: event coherence
+
+The opposite of a missed merge: an event holding records about a *different*
+incident. "Sharp Motor Group" held 18 records of which 5 were about it - 9 were
+unrelated Cyber Daily articles and 4 were about another company (Sharp Office
+Systems) - and took its date from a stray Partnered Health record. Strays
+distort dates and counts and pull every later duplicate check toward wrong
+matches.
+
+```bash
+python scripts/dedup_admin.py check-coherence --dry-run     # review proposals
+python scripts/dedup_admin.py check-coherence               # split out (logged, reversible)
+python scripts/dedup_admin.py check-coherence --event <dedup_id>
+```
+
+A member is a *suspect* when the organisation Perplexity named for it shares no
+distinctive name key with the event's victim, vendor or majority organisation;
+one GPT-4o call per suspect event judges every member. A member is split out
+only if it is a suspect, judged foreign at certainty >= 0.99, its own incident
+label does not name the event, and the strays are not a majority all naming one
+incident (that pattern means the event is mislabelled). Strays naming the same
+incident stay together; one is folded into an existing event only when exactly
+one event for its organisation lies within 90 days. Every guard comes from a
+wrong split seen in review - supplier customers (Frontier / NSW Health), misdated
+copies (Partnered Health), brand variants (youX / Vroom by YouX). First run
+(2026-10-02): 25 strays split out of 14 events. Findings:
+`instance/dedup_coherence_findings.json`.
+
 ### Cluster-level adjudication
 
 Pairwise comparison cannot see a cluster. When one breach generates a long tail
