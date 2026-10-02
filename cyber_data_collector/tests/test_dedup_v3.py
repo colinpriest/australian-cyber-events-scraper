@@ -493,15 +493,20 @@ def test_human_override_beats_everything(conn):
     assert result.certainty == 1.0
 
 
-def test_shared_url_is_conclusive():
-    adj = Adjudicator()
-    result = adj.adjudicate(
-        _rec("a", "Totally different wording", "Acme Ltd", url="https://x/1"),
-        _rec("b", "Other wording entirely", "Acme Ltd", url="https://x/1"),
-    )
+def test_shared_url_is_strong_evidence_but_judged_by_the_llm():
+    """A shared article used to auto-merge at 0.99. One article can cover two
+    incidents, so it now routes the pair to the LLM (past the name gate and
+    embedding filter) and is shown to it as evidence."""
+    fake = _FakeClient(LLMPairAdjudication(
+        is_same_event=True, certainty=0.95, reasoning="same article, same breach",
+        supporting_facts=["shared source"], distinguishing_facts=[]))
+    adj = Adjudicator(openai_client=fake)
+    left = _rec("a", "Totally different wording", "Acme Ltd", url="https://x.com/news/1")
+    right = _rec("b", "Other wording entirely", "Acme Ltd", url="https://x.com/news/1")
+    result = adj.adjudicate(left, right)
     assert result.is_same_event is True
-    assert result.decided_by == DecidedBy.RULE
-    assert result.certainty >= 0.99
+    assert result.decided_by == DecidedBy.LLM
+    assert result.evidence.shared_urls == ["x.com/news/1"]
 
 
 def test_entity_mismatch_rejected_without_llm():

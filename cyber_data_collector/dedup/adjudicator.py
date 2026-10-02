@@ -12,8 +12,14 @@ Three layers, cheapest first, each recording why it decided what it did:
 3. **LLM adjudication** (expensive, precise) - GPT-4o rules on the survivors
    and must justify itself in terms a reviewer can check.
 
-Two short-circuits sit in front of all three: an active human override always
-wins, and a shared source URL is near-conclusive.
+An active human override always wins. A shared source article is strong
+evidence but not a verdict: it routes the pair past the cheap rejections to the
+LLM, because one article can cover two incidents.
+
+Candidate generation (:mod:`candidates`) blocks on every organisation linked to
+an event, on shared non-hub source URLs and on corpus-rare subject words. The
+original single-victim-name blocking surfaced only 9 of 21 known duplicates in
+the May/June 2026 review; the multi-key version surfaces 20.
 
 Everything returns a :class:`PairVerdict` carrying certainty *and* evidence,
 so nothing is merged on an unexplained number.
@@ -29,6 +35,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.dedup import candidates as candidate_keys
 from cyber_data_collector.dedup.entity_resolution import (
     EntityResolver,
     name_similarity,
@@ -73,7 +80,16 @@ class EventRecord(BaseModel):
     alt_entities: List[str] = Field(default_factory=list)
     event_date: Optional[str] = None
     source_url: Optional[str] = None
+    # Every source URL behind the event, not just one: a shared article is the
+    # strongest duplicate signal there is, and LIMIT 1 almost never collided.
+    source_urls: List[str] = Field(default_factory=list)
     records_affected: Optional[int] = None
+
+    def all_urls(self) -> List[str]:
+        urls = list(self.source_urls)
+        if self.source_url and self.source_url not in urls:
+            urls.append(self.source_url)
+        return urls
 
     def all_entities(self) -> List[str]:
         names = [self.entity_name] if self.entity_name else []
@@ -158,6 +174,10 @@ class Adjudicator:
         # a hard entity gate would confidently break correct groups.
         self.require_entity_match = require_entity_match
         self._embeddings: Dict[str, List[float]] = {}
+        # Why each candidate pair was generated, and which URLs are hubs
+        # (roundups / list pages) that must not count as shared evidence.
+        self.pair_reasons: Dict[frozenset, Set[str]] = {}
+        self.hub_urls: Set[str] = set()
         self.stats: Dict[str, int] = {
             "override_hits": 0, "url_matches": 0, "embed_automerges": 0,
             "llm_calls": 0, "llm_failures": 0, "rejected_early": 0,
@@ -226,35 +246,60 @@ class Adjudicator:
     # Candidate generation
     # ------------------------------------------------------------------
 
+    # A name key shared by more events than this is a generic bucket
+    # ("government", "university") rather than an organisation.
+    MAX_ENTITY_BUCKET = 40
+
     def candidate_pairs(
         self, records: Sequence[EventRecord]
     ) -> List[Tuple[EventRecord, EventRecord]]:
-        """Generate pairs worth adjudicating.
+        """Generate pairs worth adjudicating, from three independent keys.
 
-        Blocking on entity keys keeps this near-linear instead of comparing all
-        N^2 pairs: at 1,000 events that is ~500k comparisons avoided.
+        * every organisation linked to the event (not just the scalar victim);
+        * a shared non-hub source URL;
+        * a corpus-rare subject word within a date window.
+
+        Each key alone missed duplicates the others caught; see
+        :mod:`candidates`. Blocking keeps this far below all N^2 pairs.
         """
         by_id = {r.enriched_event_id: r for r in records}
-        self.resolver.fit([r.entity_name for r in records])
-        blocks = self.resolver.group_candidates(
-            [(r.enriched_event_id, r.entity_name) for r in records]
-        )
+        reasons: Dict[frozenset, Set[str]] = {}
 
-        seen: Set[frozenset] = set()
-        pairs: List[Tuple[EventRecord, EventRecord]] = []
-        for member_ids in blocks.values():
-            if len(member_ids) < 2:
+        def add(pair_reasons):
+            for key, why in pair_reasons.items():
+                reasons.setdefault(key, set()).update(why)
+
+        self.resolver.fit([n for r in records for n in r.all_entities()])
+        blocks: Dict[str, Set[str]] = {}
+        for record in records:
+            for name in record.all_entities():
+                for key in self.resolver.blocks_for(name) or ():
+                    blocks.setdefault(key, set()).add(record.enriched_event_id)
+        for key, members in blocks.items():
+            if len(members) < 2 or len(members) > self.MAX_ENTITY_BUCKET:
                 continue
-            for i, left_id in enumerate(member_ids):
-                for right_id in member_ids[i + 1:]:
-                    key = frozenset((left_id, right_id))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    pairs.append((by_id[left_id], by_id[right_id]))
+            ordered = sorted(members)
+            for i, left_id in enumerate(ordered):
+                for right_id in ordered[i + 1:]:
+                    reasons.setdefault(frozenset((left_id, right_id)), set()).add(f"entity '{key}'")
+
+        url_reasons, self.hub_urls = candidate_keys.url_pairs(
+            {r.enriched_event_id: r.all_urls() for r in records})
+        add(url_reasons)
+        add(candidate_keys.content_pairs(
+            {r.enriched_event_id: (r.title or "", " ".join(
+                x for x in (r.summary, r.description) if x)) for r in records},
+            {r.enriched_event_id: r.event_date for r in records}))
+
+        self.pair_reasons = reasons
+        pairs = []
+        for key in reasons:
+            left_id, right_id = sorted(key)
+            pairs.append((by_id[left_id], by_id[right_id]))
+        pairs.sort(key=lambda p: (p[0].enriched_event_id, p[1].enriched_event_id))
         logger.info(
-            "Blocking produced %d candidate pair(s) from %d event(s)",
-            len(pairs), len(records),
+            "Blocking produced %d candidate pair(s) from %d event(s) "
+            "(%d hub URL(s) ignored)", len(pairs), len(records), len(self.hub_urls),
         )
         return pairs
 
@@ -279,9 +324,9 @@ class Adjudicator:
 
     def _build_evidence(self, left: EventRecord, right: EventRecord) -> MatchEvidence:
         gap = date_gap_days(left, right)
-        shared = []
-        if left.source_url and right.source_url and left.source_url == right.source_url:
-            shared.append(left.source_url)
+        left_urls = {candidate_keys.normalise_url(u) for u in left.all_urls()}
+        right_urls = {candidate_keys.normalise_url(u) for u in right.all_urls()}
+        shared = sorted(u for u in (left_urls & right_urls) - self.hub_urls if u)
         return MatchEvidence(
             entity_left=", ".join(left.all_entities()) or left.entity_name,
             entity_right=", ".join(right.all_entities()) or right.entity_name,
@@ -326,19 +371,22 @@ class Adjudicator:
                 evidence=evidence,
             )
 
-        # 2. Identical source URL - the same article cannot be two incidents.
+        # 2. A shared article or subject is strong evidence the name gate and
+        #    embedding filter would wrongly discard: supplier breaches name a
+        #    different victim per report, and fragments are often stored with
+        #    a description instead of a name. Those pairs go to the LLM.
+        reasons = self.pair_reasons.get(pair_key, set())
         if evidence.shared_urls:
             self.stats["url_matches"] += 1
-            return PairVerdict(
-                is_same_event=True,
-                certainty=0.99,
-                reasoning=f"Both events cite the same source URL: {evidence.shared_urls[0]}",
-                decided_by=DecidedBy.RULE,
-                evidence=evidence,
-            )
+        content_linked = bool(evidence.shared_urls) or any(
+            r.startswith("shared subject") for r in reasons)
+        if content_linked:
+            return self._llm_adjudicate(left, right, evidence)
 
-        # 3. Cheap rejections before spending an LLM call.
-        if self.require_entity_match and not evidence.entity_match:
+        # 3. Cheap rejections before spending an LLM call. The name gate only
+        #    applies when both sides actually carry a name.
+        names_known = bool(left.all_entities()) and bool(right.all_entities())
+        if self.require_entity_match and names_known and not evidence.entity_match:
             self.stats["rejected_early"] += 1
             return PairVerdict(
                 is_same_event=False,
@@ -422,7 +470,28 @@ class Adjudicator:
                             "incident. Two different incidents at the same "
                             "organisation are NOT the same event. Follow-up "
                             "coverage, regulatory action and class actions "
-                            "about one incident ARE the same event. Be decisive "
+                            "about one incident ARE the same event. A breach "
+                            "of ONE supplier's own systems (a SaaS platform, "
+                            "software vendor or service provider holding its "
+                            "customers' data) reported by or about several of "
+                            "its customers is ONE event, even though each "
+                            "record names a different victim. That rule is "
+                            "narrow: the SAME ransomware gang, threat actor or "
+                            "campaign hitting different organisations is NOT "
+                            "the same event, and exploitation of the same "
+                            "product vulnerability on each organisation's own "
+                            "systems is NOT the same event. A roundup, "
+                            "newsletter, weekly review, statistics page, scam "
+                            "alert page or general guidance page is NEVER the "
+                            "same event as a single incident - answer false. "
+                            "Organisation fields may hold a description "
+                            "('Queensland education sector') instead of a "
+                            "name. Dates are often publication dates, so a gap "
+                            "of weeks can be reporting lag; a record dated "
+                            "years away from otherwise identical reporting is "
+                            "usually misdated. A shared source article is "
+                            "strong evidence of the same event unless that "
+                            "article plainly covers two incidents. Be decisive "
                             "when the evidence is clear and explicitly "
                             "uncertain when it is not."
                         ),
@@ -464,7 +533,7 @@ class Adjudicator:
                 f"Organisation: {rec.entity_name or 'unknown'}\n"
                 f"Date: {rec.event_date or 'unknown'}\n"
                 f"Records affected: {rec.records_affected if rec.records_affected is not None else 'unknown'}\n"
-                f"URL: {rec.source_url or 'unknown'}\n"
+                f"Source URLs: {', '.join(rec.all_urls()[:6]) or 'unknown'}\n"
                 f"Detail: {body or '(none)'}\n"
             )
 
@@ -473,6 +542,7 @@ class Adjudicator:
             f"Canonical entity keys: {evidence.entity_canonical_left!r} vs "
             f"{evidence.entity_canonical_right!r}\n"
             f"Date gap (days): {evidence.date_delta_days}\n"
+            f"Shared source URLs: {', '.join(evidence.shared_urls) or 'none'}\n"
             f"Embedding similarity: "
             f"{evidence.embedding_similarity if evidence.embedding_similarity is not None else 'n/a'}\n"
         )

@@ -124,6 +124,10 @@ python run_full_pipeline.py --skip-classification
 | `--skip-recurrence-check` | Skip re-checking short-gap repeat attacks | False |
 | `--recurrence-window N` | Gap in days below which a repeat is re-checked | 90 |
 | `--recurrence-min-certainty F` | Certainty required to merge a suspected re-report | 0.85 |
+| `--skip-missed-merge-check` | Skip the multi-key search for duplicates incremental dedup missed | False |
+| `--missed-merge-apply` | Merge missed-duplicate findings automatically (default: report only) | False |
+| `--missed-merge-days N` | Only judge pairs touching events changed in the last N days | 120 |
+| `--missed-merge-min-certainty F` | Certainty required to merge a missed duplicate | 0.9 |
 | `--skip-entity-sizing` | Skip estimating size bands for new entities | False |
 | `--entity-size-limit N` | Cap entities sized per run | No limit |
 | `--continue-on-error` | Continue if a phase fails | False |
@@ -284,6 +288,49 @@ the evidence. Splits and merges run against stored state — **no re-scraping or
 pipeline rerun** — and each mutation snapshots the previous state for restore.
 Overrides are keyed on `enriched_event_id` pairs (stable) rather than
 `deduplicated_event_id` (regenerated every rebuild), so corrections persist.
+
+### Missed-duplicate detection: three candidate keys
+
+Deduplication can only merge what candidate generation puts in front of it. A
+review of May/June 2026 found 21 duplicates still stored as separate events,
+and the original blocking - on the single `victim_organization_name` - would
+have surfaced only **9 of them**. Three shapes defeated it:
+
+| Shape | Example | Key that catches it |
+|---|---|---|
+| No usable victim name | "Australian sugar producer", "Queensland education sector" | every organisation linked to the event: entity links, vendor, and Perplexity's formal victim name on each source record |
+| Same article, different framing | "OpenAI slows training" vs "OpenAI hacked Medicare portal" | a shared source URL, ignoring *hub* URLs (roundups, breach lists, section indexes cited by more than 3 events) |
+| Supplier breach, a different victim per report | Canvas/Instructure -> USyd, QLD DoE, DECYP | a corpus-rare subject word shared within 60 days |
+
+With all three, 20 of the 21 surface. Precision still comes from the
+adjudicator: a shared article or subject sends the pair to GPT-4o (past the
+name gate and embedding filter, which would wrongly reject it) rather than
+merging on a rule, because one article can cover two incidents. The prompt
+states the project convention that one supplier breach reported about several
+customers is one event.
+
+`run_full_pipeline.py` runs this after every incremental dedup, scoped to pairs
+touching events changed in the last 120 days, and writes findings to
+`instance/dedup_missed_merges.json` **for review - it does not merge** unless
+`--missed-merge-apply` is passed (`--skip-missed-merge-check` to skip it).
+
+Why report-only: on a labelled set from the May/June 2026 review, pairwise
+adjudication at certainty >= 0.9 kept 28 of 30 true duplicates but still
+accepted 11 of 22 known-wrong pairs, mostly roundup / newsletter / guidance
+pages matched to the incidents they mention, and it confidently rejected
+misdated fragments of one incident when shown them two at a time. Better
+candidate generation fixed recall; precision needs (1) junk pages rejected
+before deduplication and (2) whole-cluster adjudication over the candidate
+graph, as `adjudicate-clusters` does, instead of pairwise judgement.
+
+A full sweep is manual:
+
+```bash
+python scripts/dedup_admin.py find-missed                  # all pairs
+python scripts/dedup_admin.py find-missed --recent-days 120
+python scripts/dedup_admin.py apply-missed --min-certainty 0.9
+python scripts/dedup_admin.py merge <target_dedup_id> <source_dedup_id> --reason "..."
+```
 
 ### Cluster-level adjudication
 

@@ -153,7 +153,8 @@ def test_pipeline_refresh_args_cover_every_dedup_phase_option():
     assert args.force_dedup is False
     for name in ("skip_recurrence_check", "recurrence_window",
                  "recurrence_min_certainty", "skip_entity_sizing",
-                 "entity_size_limit"):
+                 "entity_size_limit", "skip_missed_merge_check", "missed_merge_apply",
+                 "missed_merge_days", "missed_merge_min_certainty"):
         assert hasattr(args, name), name
 
 
@@ -167,3 +168,22 @@ def test_incremental_dedup_backfills_entity_links():
 
     source = inspect.getsource(rgd.DeduplicationMigration._run_incremental_deduplication)
     assert "run_backfill(conn)" in source
+
+
+def test_refresh_runs_missed_merge_check_before_recurrence_check():
+    import run_full_pipeline
+
+    source = inspect.getsource(run_full_pipeline.UnifiedPipeline.run_deduplication_phase)
+    assert source.index("run_missed_merge_check") < source.index("run_recurrence_check")
+
+
+def test_missed_merge_check_is_report_only_by_default():
+    """Auto-merging is opt-in until adjudication precision is fixed."""
+    import pipeline
+    import run_full_pipeline
+
+    args = pipeline._build_pipeline_args(db_path="x.db", sources=["OAIC"], max_events=1,
+                                         days=1, out_dir="d", skip_classification=False)
+    assert args.missed_merge_apply is False
+    source = inspect.getsource(run_full_pipeline.UnifiedPipeline.run_missed_merge_check)
+    assert "if getattr(args, 'missed_merge_apply', False):" in source
