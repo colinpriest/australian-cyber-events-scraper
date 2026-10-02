@@ -155,3 +155,15 @@ def test_pipeline_refresh_args_cover_every_dedup_phase_option():
                  "recurrence_min_certainty", "skip_entity_sizing",
                  "entity_size_limit"):
         assert hasattr(args, name), name
+
+
+def test_incremental_dedup_backfills_entity_links():
+    """Regression: incremental dedup never wrote DeduplicatedEventEntities.
+
+    The removed full rebuild used to repopulate it, so after the fix every new
+    event was missing from the entity dashboard and recurrence analysis.
+    """
+    from scripts import run_global_deduplication as rgd
+
+    source = inspect.getsource(rgd.DeduplicationMigration._run_incremental_deduplication)
+    assert "run_backfill(conn)" in source
