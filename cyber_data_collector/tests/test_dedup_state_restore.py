@@ -186,4 +186,4 @@ def test_missed_merge_check_is_report_only_by_default():
                                          days=1, out_dir="d", skip_classification=False)
     assert args.missed_merge_apply is False
     source = inspect.getsource(run_full_pipeline.UnifiedPipeline.run_missed_merge_check)
-    assert "if getattr(args, 'missed_merge_apply', False):" in source
+    assert "missed_merge_apply" in source and '"--dry-run"' in source

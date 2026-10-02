@@ -99,3 +99,15 @@ def test_db_helpers_return_latest_values():
 def test_missing_rawevents_table_returns_none():
     conn = sqlite3.connect(':memory:')
     assert get_data_collection_timestamp(conn) is None
+
+
+
+def test_header_separates_incident_range_from_extraction_date():
+    from scripts.build_static_dashboard import dashboard_header_dates
+    cutoff = {"series_end_date": "2026-09-30"}
+    assert dashboard_header_dates("2026-10-02", cutoff, "2026-10-02T09:52:48") == {
+        "incident_end": "2026-09-30", "extraction_date": "2026-10-02"}
+    # Complete latest month: the range runs to the end date.
+    assert dashboard_header_dates("2026-09-30", None, "2026-10-02T09:52:48")["incident_end"] == "2026-09-30"
+    # No ingest timestamp: fall back to the build end date.
+    assert dashboard_header_dates("2026-10-02", None, None)["extraction_date"] == "2026-10-02"

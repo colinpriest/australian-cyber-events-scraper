@@ -139,6 +139,26 @@ MIN_SUPPORTING = 3
 MIN_SHARE = 0.6
 
 
+def _best_day(same_month: Sequence[str]) -> str:
+    """Earliest date in the winning month, unless that is a month placeholder.
+
+    Month-only extractions ("June 2026") are stored as the 1st, so the earliest
+    date in the month is often a placeholder rather than a real start date: the
+    OpenAI/Medicare event was dated 1 June although its records agree on 18
+    June. When the earliest date is the 1st and two or more members agree on a
+    specific later day, that day wins; otherwise the earliest date stands.
+    """
+    earliest = same_month[0]
+    if not earliest.endswith("-01"):
+        return earliest
+    days = Counter(d for d in same_month if not d.endswith("-01"))
+    supported = [d for d, n in days.items() if n >= 2]
+    if not supported:
+        return earliest
+    top = max(days[d] for d in supported)
+    return min(d for d in supported if days[d] == top)
+
+
 def derive_event_date(
     member_dates: Sequence[Optional[str]],
     current: Optional[str] = None,
@@ -167,11 +187,15 @@ def derive_event_date(
     same_month = sorted(str(d)[:10] for d in member_dates if _month_of(d) == winner)
     if not same_month:
         return current
-    best = same_month[0]
+    best = _best_day(same_month)
 
     if not current:
         return best
     if _month_of(current) == winner:
+        # Same month: only a stored month placeholder (the 1st) gives way, and
+        # only to a day the members agree on (see _best_day).
+        if str(current)[:10].endswith("-01") and best != str(current)[:10]:
+            return best
         return current
 
     if title and _title_asserts(title, current):

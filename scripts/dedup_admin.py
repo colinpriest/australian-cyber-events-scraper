@@ -104,6 +104,7 @@ from cyber_data_collector.dedup.entity_merge import (
 from cyber_data_collector.dedup.ledger import DedupLedger, pair_key
 from cyber_data_collector.dedup.state_restore import restore_dedup_state
 from cyber_data_collector.dedup.non_incident import reject_non_incident_events
+from cyber_data_collector.dedup import page_classifier
 from cyber_data_collector.dedup.title_selection import (
     TitleGenerator, derive_title, needs_regeneration,
 )
@@ -1429,6 +1430,118 @@ def cmd_reconcile_entities(args) -> int:
     return 0
 
 
+CANDIDATE_CLUSTER_FINDINGS = Path("instance/dedup_candidate_clusters.json")
+
+
+def cmd_adjudicate_candidates(args) -> int:
+    """Find missed duplicates by judging whole groups of candidates.
+
+    Builds the multi-key candidate graph (shared article, rare shared subject,
+    or a linked organisation backed by semantic similarity), takes its
+    connected groups, and asks the model to partition each group into
+    incidents. Groups at or above --min-certainty are merged into their
+    best-sourced event; a merge contradicting a human 'different' override is
+    skipped. Every proposal is written to instance/dedup_candidate_clusters.json.
+    """
+    from cyber_data_collector.dedup.adjudicator import EMBED_CANDIDATE_THRESHOLD
+    from cyber_data_collector.dedup.candidates import candidate_components
+
+    conn = _connect(args.db)
+    refresher = _make_refresher(args)
+    try:
+        ledger = DedupLedger(conn, role_refresher=refresher)
+        resolver = EntityResolver(conn)
+        pair_judge = Adjudicator(resolver=resolver)
+        records = load_dedup_records(conn)
+        by_id = {r.enriched_event_id: r for r in records}
+        pair_judge.candidate_pairs(records)
+        pair_judge.embed_records(records)
+
+        def strong(key, why) -> bool:
+            if any(w.startswith(("shared source", "shared subject")) for w in why):
+                return True
+            left, right = sorted(key)
+            sim = pair_judge.similarity(by_id[left], by_id[right])
+            return sim is not None and sim >= EMBED_CANDIDATE_THRESHOLD
+
+        def weight(key, why) -> float:
+            # Shared article > shared subject > semantic similarity alone.
+            left, right = sorted(key)
+            sim = pair_judge.similarity(by_id[left], by_id[right]) or 0.0
+            if any(w.startswith("shared source") for w in why):
+                return 2.0 + sim
+            if any(w.startswith("shared subject") for w in why):
+                return 1.0 + sim
+            return sim
+
+        groups = candidate_components(pair_judge.pair_reasons, strong, weight=weight,
+                                      max_size=args.max_cluster_size)
+        if args.recent_days:
+            recent = recent_event_ids(conn, args.recent_days)
+            groups = [g for g in groups if recent & set(g)]
+        if args.limit:
+            groups = groups[: args.limit]
+        print(f"{len(records)} active event(s) -> {len(groups)} candidate group(s) "
+              f"covering {sum(len(g) for g in groups)} event(s)")
+
+        sources = {r[0]: r[1] or 0 for r in conn.execute(
+            "SELECT deduplicated_event_id, total_data_sources FROM DeduplicatedEvents")}
+        masters = {r[0]: r[1] for r in conn.execute(
+            "SELECT deduplicated_event_id, master_enriched_event_id FROM DeduplicatedEvents")}
+        different = {key for key, same in ledger.load_overrides().items() if not same}
+
+        judge = ClusterAdjudicator(resolver=resolver, max_cluster_size=args.max_cluster_size)
+        findings: List[Dict] = []
+        proposed = applied = vetoed = 0
+        for index, ids in enumerate(groups, start=1):
+            cluster = sorted((by_id[i] for i in ids), key=lambda r: r.event_date or "9999")
+            partition = judge.adjudicate_cluster(cluster)
+            for group, member_ids in partition.groups_as_ids(cluster):
+                if len(member_ids) < 2:
+                    continue
+                ordered = sorted(member_ids, key=lambda i: (-sources.get(i, 0), by_id[i].event_date or "9999"))
+                findings.append({
+                    "label": group.label, "certainty": group.certainty,
+                    "reasoning": group.reasoning, "target": ordered[0],
+                    "members": [{"id": i, "title": by_id[i].title, "date": by_id[i].event_date}
+                                for i in ordered],
+                })
+                proposed += len(ordered) - 1
+                print(f"[{index}] {group.label[:70]} ({len(ordered)} events, "
+                      f"certainty {group.certainty:.2f})")
+                if args.verbose:
+                    for i in ordered:
+                        print(f"      - [{by_id[i].event_date or 'no date'}] {by_id[i].title[:70]}")
+                if args.dry_run or group.certainty < args.min_certainty:
+                    continue
+                target = ordered[0]
+                for source in ordered[1:]:
+                    if frozenset((masters.get(target), masters.get(source))) in different:
+                        vetoed += 1
+                        continue
+                    try:
+                        ledger.merge_events(
+                            target, source,
+                            reason=f"[candidate cluster {group.certainty:.2f}] {group.label}: {group.reasoning}",
+                            actor="pipeline")
+                        applied += 1
+                    except (sqlite3.Error, ValueError) as exc:
+                        logger.warning("Candidate-cluster merge %s -> %s failed: %s", source, target, exc)
+            conn.commit()
+
+        CANDIDATE_CLUSTER_FINDINGS.parent.mkdir(parents=True, exist_ok=True)
+        CANDIDATE_CLUSTER_FINDINGS.write_text(
+            json.dumps(findings, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        print(f"\n{proposed} merge(s) proposed; {applied} applied; {vetoed} vetoed by a "
+              f"human 'different' override" + (" (DRY RUN)" if args.dry_run else
+              f"; the rest were below certainty {args.min_certainty}"))
+        print(f"cluster stats: {judge.stats}")
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+    return 0
+
+
 def cmd_retitle(args) -> int:
     """Give every deduplicated event the best available title.
 
@@ -2219,6 +2332,34 @@ def cmd_ancestry(args) -> int:
     return 0
 
 
+def cmd_classify_pages(args) -> int:
+    """Classify suspect source pages (roundups, guidance, profiles, indexes).
+
+    Only records matching a roundup/social title or URL pattern are sent to the
+    model, and each verdict is stored, so re-runs only pay for new suspects.
+    Run ``reject-non-incidents`` afterwards to act on the verdicts.
+    """
+    conn = _connect(args.db)
+    try:
+        suspects = page_classifier.pending_suspects(conn, only_unmapped=args.unmapped_only)
+        if args.limit:
+            suspects = suspects[: args.limit]
+        print(f"{len(suspects)} unclassified suspect record(s)")
+        verdicts = page_classifier.classify_pages(conn, suspects, dry_run=args.dry_run)
+        counts: Dict[str, int] = {}
+        for eid, title, url, _ in suspects:
+            v = verdicts.get(eid)
+            if v is None:
+                continue
+            counts[v.kind] = counts.get(v.kind, 0) + 1
+            if args.verbose or v.kind != "specific_incident":
+                print(f"  {v.kind:22} {v.confidence:.2f}  {title[:70]}")
+        print(("DRY RUN: " if args.dry_run else "") + f"verdicts: {counts}")
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_reject_non_incidents(args) -> int:
     """Reject events built only from pages that were never cyber incidents.
 
@@ -2484,6 +2625,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("ancestry")
     p.add_argument("dedup_id")
     p.set_defaults(func=cmd_ancestry)
+
+    p = sub.add_parser("adjudicate-candidates",
+                       help="Find missed duplicates by partitioning whole groups of "
+                            "multi-key candidates (preferred over find-missed)")
+    p.add_argument("--recent-days", type=int, default=None,
+                   help="Only groups containing an event changed in the last N days.")
+    p.add_argument("--min-certainty", type=float, default=0.9)
+    p.add_argument("--max-cluster-size", type=int, default=20)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_adjudicate_candidates)
+
+    p = sub.add_parser("classify-pages",
+                       help="Classify suspect pages (roundups, guidance, profiles, "
+                            "home pages) with a small model; verdicts are stored")
+    p.add_argument("--unmapped-only", action="store_true",
+                   help="Only records not yet in any event (new ingest).")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_classify_pages)
 
     p = sub.add_parser("reject-non-incidents",
                        help="Reject events whose every record is a non-incident: "

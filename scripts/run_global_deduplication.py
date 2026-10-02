@@ -98,8 +98,14 @@ class DeduplicationMigration:
             # service pages) from becoming events. Conservative gate - see
             # cyber_data_collector.dedup.non_incident.
             if not self.dry_run:
+                from cyber_data_collector.dedup import page_classifier
                 from cyber_data_collector.dedup.non_incident import deactivate_unmapped_non_incidents
                 with sqlite3.connect(self.db_path) as conn:
+                    # Roundup / guidance / profile pages among the new records
+                    # are classified first, so their verdicts feed the gate.
+                    suspects = page_classifier.pending_suspects(conn, only_unmapped=True)
+                    if suspects:
+                        page_classifier.classify_pages(conn, suspects)
                     rejected = deactivate_unmapped_non_incidents(conn)
                 self.migration_report['statistics']['non_incidents_deactivated'] = len(rejected)
 

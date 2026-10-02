@@ -464,21 +464,21 @@ class UnifiedPipeline:
         logger.info("Checking for missed duplicates among events changed in the "
                     "last %d days...", days)
         try:
-            if dedup_admin.main(base + ["find-missed", "--recent-days", str(days),
-                                        "--min-certainty", str(certainty)]) != 0:
-                raise RuntimeError("find-missed failed")
-            # Report-only unless explicitly enabled. Measured on 2026-10-02
-            # (labelled May/June review set): pairwise adjudication at 0.9
-            # still accepted 11 of 22 known-wrong pairs - mostly roundup and
-            # guidance pages matched to the incidents they mention - and
-            # missed misdated fragments of one incident. Findings are written
-            # to instance/dedup_missed_merges.json for review instead.
-            if getattr(args, 'missed_merge_apply', False):
-                if dedup_admin.main(base + ["apply-missed", "--min-certainty", str(certainty)]) != 0:
-                    raise RuntimeError("apply-missed failed")
-            else:
-                logger.info("Missed-merge findings written for review (not applied; "
-                            "pass --missed-merge-apply to merge automatically)")
+            # Whole-group adjudication over the multi-key candidate graph
+            # (dedup_admin adjudicate-candidates). Pairwise judgement rejected
+            # misdated and supplier-breach fragments of one incident when shown
+            # them two at a time; groups make the shared incident visible.
+            apply = getattr(args, 'missed_merge_apply', False)
+            cmd = base + ["adjudicate-candidates", "--recent-days", str(days),
+                          "--min-certainty", str(certainty)]
+            if not apply:
+                cmd.append("--dry-run")
+            if dedup_admin.main(cmd) != 0:
+                raise RuntimeError("adjudicate-candidates failed")
+            if not apply:
+                logger.info("Missed-merge proposals written to "
+                            "instance/dedup_candidate_clusters.json for review "
+                            "(pass --missed-merge-apply to merge automatically)")
             self.results['deduplication']['missed_merge_check'] = 'ok'
         except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
             logger.warning("Missed-merge check failed: %s", exc)

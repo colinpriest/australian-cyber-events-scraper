@@ -118,3 +118,21 @@ def test_slug_day_needs_a_boundary():
     2026, so the month is returned - just not a fabricated day.
     """
     assert date_from_url("https://example.com/as-it-was-2604-april-2026/") == "2026-04-01"
+
+
+def test_placeholder_first_gives_way_to_an_agreed_day():
+    """OpenAI/Medicare: month-only records stored as the 1st outvoted the day
+    most records agree on (18 June)."""
+    members = ["2026-06-01", "2026-06-01", "2026-06-18", "2026-06-18", "2026-06-18", "2026-06-24"]
+    assert derive_event_date(members) == "2026-06-18"
+
+
+def test_a_real_first_of_month_is_kept_without_agreement_on_another_day():
+    assert derive_event_date(["2026-06-01", "2026-06-18", "2026-06-24"]) == "2026-06-01"
+
+
+def test_redate_replaces_a_stored_placeholder_first_with_the_agreed_day():
+    members = ["2026-06-01", "2026-06-18", "2026-06-18", "2026-06-18"]
+    assert derive_event_date(members, current="2026-06-01") == "2026-06-18"
+    # A specific stored day in the winning month is never second-guessed.
+    assert derive_event_date(members, current="2026-06-20") == "2026-06-20"

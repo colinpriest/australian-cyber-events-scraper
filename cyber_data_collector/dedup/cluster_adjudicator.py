@@ -333,19 +333,40 @@ class ClusterAdjudicator:
             "4. Every record must be placed in exactly one incident. Never omit "
             "a record and never place one in two incidents.\n"
             "5. When two records could plausibly be one incident, prefer "
-            "grouping them and lower your certainty, rather than splitting."
+            "grouping them and lower your certainty, rather than splitting.\n"
+            "6. A breach of ONE supplier's own systems (a SaaS platform, "
+            "software vendor or service provider holding customers' data) "
+            "reported by or about several of its customers is ONE incident, "
+            "even though each record names a different organisation.\n"
+            "7. The SAME ransomware gang, threat actor or campaign hitting "
+            "different organisations is NOT one incident, and exploitation of "
+            "one product vulnerability on each organisation's own systems is "
+            "NOT one incident.\n"
+            "8. Organisation fields may hold a description ('Queensland "
+            "education sector') rather than a name, and a record may cite a "
+            "roundup page while reporting one incident - judge by what the "
+            "record says happened.\n"
+            "9. Records sharing a source article are strong evidence of one "
+            "incident unless the article plainly covers several.\n"
+            "10. Use certainty >= 0.9 only when the shared facts (organisation, "
+            "attack, data, supplier, article) make it clear.\n"
+            "11. An event can contain a stray record about a different "
+            "incident. Judge each record by its dominant content and do not let "
+            "one stray detail pull two different incidents together."
         )
 
     @staticmethod
     def _render_cluster(records: Sequence[EventRecord]) -> str:
-        lines = [f"{len(records)} records, possibly describing the same organisation.",
+        lines = [f"{len(records)} records that may describe one or more shared incidents.",
                  "Partition them into distinct real-world incidents.", ""]
         for index, record in enumerate(records, start=1):
             body = (record.summary or record.description or "")[:320]
             entities = ", ".join(record.all_entities()[:4]) or "unknown"
+            urls = ", ".join(record.all_urls()[:3]) or "unknown"
             lines.append(
                 f"[{index}] title: {record.title or '(untitled)'}\n"
                 f"     organisations: {entities}\n"
+                f"     sources: {urls}\n"
                 f"     date: {record.event_date or 'unknown'}   "
                 f"records affected: "
                 f"{record.records_affected if record.records_affected is not None else 'unknown'}\n"

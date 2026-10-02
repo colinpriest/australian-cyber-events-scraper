@@ -99,3 +99,28 @@ def test_name_gate_still_applies_to_name_only_pairs():
     left, right = _rec("a", "Acme breach", "Acme Ltd"), _rec("b", "Zeta breach", "Zeta Ltd")
     adj.adjudicate(left, right)
     assert fake.calls == 0
+
+
+def test_candidate_components_join_only_strong_edges():
+    reasons = {
+        frozenset(("a", "b")): {"shared source x.com/news/1"},
+        frozenset(("b", "c")): {"shared subject 'instructure'"},
+        frozenset(("c", "d")): {"entity 'smith'"},          # weak: must not chain d in
+        frozenset(("e", "f")): {"shared source y.com/news/2"},
+    }
+    strong = lambda key, why: any(w.startswith(("shared source", "shared subject")) for w in why)
+    groups = C.candidate_components(reasons, strong)
+    assert groups == [["a", "b", "c"], ["e", "f"]]
+
+
+def test_capped_components_keep_strongest_links_and_never_chain_past_the_cap():
+    # a-b share an article (strongest); b-c share a subject; c-d only similar.
+    reasons = {
+        frozenset(("a", "b")): {"shared source x.com/1"},
+        frozenset(("b", "c")): {"shared subject 'acme'"},
+        frozenset(("c", "d")): {"entity 'acme'"},
+    }
+    strong = lambda key, why: True
+    weight = lambda key, why: 2.0 if any("source" in w for w in why) else (1.0 if any("subject" in w for w in why) else 0.1)
+    assert C.candidate_components(reasons, strong, weight=weight, max_size=2) == [["a", "b"], ["c", "d"]]
+    assert C.candidate_components(reasons, strong, weight=weight, max_size=3) == [["a", "b", "c"]]

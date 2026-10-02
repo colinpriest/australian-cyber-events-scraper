@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from cyber_data_collector.dedup.ledger import DedupLedger
+from cyber_data_collector.dedup.page_classifier import is_non_incident_verdict, load_verdicts
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,13 @@ def is_blocked_source(url: Optional[str], blocklist: Sequence[Tuple[str, str]]) 
 
 
 def _is_non_incident_record(is_au: Any, pe: Optional[str], url: Optional[str],
-                            blocklist: Sequence[Tuple[str, str]]) -> bool:
-    return is_non_incident(is_au, pe) or is_blocked_source(url, blocklist)
+                            blocklist: Sequence[Tuple[str, str]],
+                            page_verdict: Optional[Tuple[str, float]] = None) -> bool:
+    """Any one signal suffices: the zero-confidence conjunction, the vendor
+    blocklist, or a confident page-classifier verdict (roundup, guidance,
+    profile or index page - see :mod:`page_classifier`)."""
+    return (is_non_incident(is_au, pe) or is_blocked_source(url, blocklist)
+            or is_non_incident_verdict(page_verdict))
 
 
 def _as_float(value: Any) -> Optional[float]:
@@ -146,7 +152,8 @@ def deactivate_unmapped_non_incidents(
         """
     ).fetchall()
     blocklist = load_blocklist() if blocklist is None else blocklist
-    ids = [r[0] for r in rows if _is_non_incident_record(r[1], r[2], r[3], blocklist)]
+    verdicts = load_verdicts(conn)
+    ids = [r[0] for r in rows if _is_non_incident_record(r[1], r[2], r[3], blocklist, verdicts.get(r[0]))]
     if ids and not dry_run:
         conn.executemany(
             "UPDATE EnrichedEvents SET status = 'Inactive', updated_at = ? WHERE enriched_event_id = ?",
@@ -163,6 +170,7 @@ def find_non_incident_events(
 ) -> List[Dict[str, Any]]:
     """Active deduplicated events whose every member record is a non-incident."""
     blocklist = load_blocklist() if blocklist is None else blocklist
+    verdicts = load_verdicts(conn)
     events = conn.execute(
         "SELECT deduplicated_event_id, title, event_date FROM DeduplicatedEvents WHERE status = 'Active'"
     ).fetchall()
@@ -179,7 +187,8 @@ def find_non_incident_events(
             """,
             (dedup_id,),
         ).fetchall()
-        if members and all(_is_non_incident_record(m[1], m[2], m[3], blocklist) for m in members):
+        if members and all(_is_non_incident_record(m[1], m[2], m[3], blocklist, verdicts.get(m[0]))
+                           for m in members):
             found.append({
                 "deduplicated_event_id": dedup_id,
                 "title": title,
