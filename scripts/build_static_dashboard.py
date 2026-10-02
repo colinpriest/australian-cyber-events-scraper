@@ -1087,14 +1087,332 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
     }
 
 
-def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[Dict[str, Any]], end_date: str = None) -> Dict[str, Any]:
+# ---------------------------------------------------------------------------
+# Partial half-year estimate: Bornhuetter-Ferguson with a reporting-lag curve
+# ---------------------------------------------------------------------------
+#
+# Incidents reach the database with a delay (media reporting, then our refresh
+# cadence), so the months just before the extraction date are under-counted.
+# A straight pro-rata of the partial half-year inherits that shortfall and is
+# biased low. The functions below treat it as a claims-reserving problem:
+#
+#   F(a)   completeness curve: P(an incident is known within a days of it
+#          happening), the empirical CDF of reporting lags from fully
+#          developed incidents.
+#   R      expected events per month, from recent well-developed months
+#          grossed up for whatever is still unreported in them.
+#   BF     per month: observed + R * (1 - expected reported fraction).
+#
+# Everything is a pure function of plain Python data so it can be unit
+# tested without a database; ``get_partial_period_estimate`` is the only
+# part that touches SQLite.
+
+BF_LAG_MIN_AGE_DAYS = 180       # incidents at least this old are "fully developed"
+BF_LAG_MAX_AGE_DAYS = 730       # ...and at most ~24 months old (recent behaviour)
+BF_MIN_LAG_SAMPLE = 30          # below this, fall back to straight pro-rata
+BF_RATE_MONTHS = 6              # months averaged for the expected rate R
+BF_RATE_MIN_AGE_DAYS = 90       # a rate month must have ended this long before E
+BF_BOOTSTRAP_SAMPLES = 500
+BF_BOOTSTRAP_SEED = 20261002
+BF_INTERVAL = (10.0, 90.0)      # percentiles -> an approximate 80% interval
+
+
+def half_year_bounds(d: date) -> Tuple[str, date, date]:
+    """Return (label, first day, last day) of the half-year containing ``d``."""
+    if d.month <= 6:
+        return f"{d.year} H1", date(d.year, 1, 1), date(d.year, 6, 30)
+    return f"{d.year} H2", date(d.year, 7, 1), date(d.year, 12, 31)
+
+
+def _month_days(year: int, month: int) -> List[date]:
+    """All calendar days of a month."""
+    first = date(year, month, 1)
+    nxt = date(year + (month == 12), month % 12 + 1, 1)
+    return [first + timedelta(days=i) for i in range((nxt - first).days)]
+
+
+def _month_end(year: int, month: int) -> date:
+    return _month_days(year, month)[-1]
+
+
+def _shift_month(year: int, month: int, delta: int) -> Tuple[int, int]:
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def reporting_lag_sample(events: List[Tuple[date, date]],
+                         extraction_date: date,
+                         min_age_days: int = BF_LAG_MIN_AGE_DAYS,
+                         max_age_days: int = BF_LAG_MAX_AGE_DAYS,
+                         collection_start: Optional[date] = None) -> np.ndarray:
+    """Sorted reporting lags (days) of fully developed incidents.
+
+    Args:
+        events: (incident date, first-known date) per event.
+        extraction_date: E, the date of the latest ingest.
+        min_age_days: only incidents at least this many days before E are used,
+            so lags up to that age are fully observed (no right-censoring).
+        max_age_days: ...and at most this many days before E, so the curve
+            reflects recent reporting behaviour.
+        collection_start: date continuous collection began. Incidents before it
+            are excluded: they were picked up by the initial backfill, so their
+            "lag" measures when the database was built, not reporting delay.
+
+    Returns:
+        Sorted numpy array of lags in days, negatives clipped to 0.
+    """
+    lags = []
+    for incident, first_known in events:
+        if incident is None or first_known is None:
+            continue
+        age = (extraction_date - incident).days
+        if age < min_age_days or age > max_age_days:
+            continue
+        if collection_start is not None and incident < collection_start:
+            continue
+        lags.append(max(0, (first_known - incident).days))
+    return np.sort(np.asarray(lags, dtype=float))
+
+
+def lag_completeness(sorted_lags: np.ndarray, ages_days) -> np.ndarray:
+    """F(a) = P(lag <= a) from the empirical lag CDF; F(a) = 0 for a < 0."""
+    ages = np.asarray(ages_days, dtype=float)
+    if len(sorted_lags) == 0:
+        return np.ones_like(ages)
+    f = np.searchsorted(sorted_lags, ages, side='right') / len(sorted_lags)
+    return np.where(ages < 0, 0.0, f)
+
+
+def month_reported_fraction(year: int, month: int, extraction_date: date,
+                            sorted_lags: np.ndarray) -> float:
+    """Expected fraction of a month's incidents known by E.
+
+    Averages F(E - d) over every day d of the month (days after E contribute
+    0). This is the day-level version of "F(age from mid-month)": it agrees
+    with it for whole past months and also handles the month containing E,
+    where only the elapsed days can have produced anything yet.
+    """
+    days = _month_days(year, month)
+    ages = [(extraction_date - d).days for d in days]
+    return float(np.mean(lag_completeness(sorted_lags, ages)))
+
+
+def rate_months(extraction_date: date, n_months: int = BF_RATE_MONTHS,
+                min_age_days: int = BF_RATE_MIN_AGE_DAYS) -> List[Tuple[int, int]]:
+    """The ``n_months`` most recent complete months that ended >= min_age_days before E."""
+    cutoff = extraction_date - timedelta(days=min_age_days)
+    y, m = extraction_date.year, extraction_date.month
+    while _month_end(y, m) > cutoff:
+        y, m = _shift_month(y, m, -1)
+    return [_shift_month(y, m, -i) for i in range(n_months - 1, -1, -1)]
+
+
+def expected_monthly_rate(monthly_counts: Dict[Tuple[int, int], int],
+                          extraction_date: date,
+                          sorted_lags: np.ndarray,
+                          months: Optional[List[Tuple[int, int]]] = None) -> float:
+    """Expected events per month, R.
+
+    Choice: the 6 most recent complete calendar months that ended at least 90
+    days before E (rather than the 6 ending 180 days before E). They reflect
+    the current event rate, and at 90+ days old they are already ~80%+
+    reported, so dividing each month's count by its expected reported fraction
+    (``month_reported_fraction``) is a small, well-determined gross-up.
+    """
+    if months is None:
+        months = rate_months(extraction_date)
+    grossed = []
+    for (y, m) in months:
+        frac = month_reported_fraction(y, m, extraction_date, sorted_lags)
+        count = monthly_counts.get((y, m), 0)
+        grossed.append(count / frac if frac > 0 else float(count))
+    return float(np.mean(grossed)) if grossed else 0.0
+
+
+def bf_month_estimates(monthly_counts: Dict[Tuple[int, int], int],
+                       period_months: List[Tuple[int, int]],
+                       extraction_date: date,
+                       sorted_lags: np.ndarray,
+                       rate: float) -> List[Dict[str, Any]]:
+    """Per-month Bornhuetter-Ferguson estimates: O_m + R * (1 - reported fraction).
+
+    A month entirely after E has reported fraction 0, so its estimate is R; a
+    long-past, fully reported month keeps its observed count.
+    """
+    out = []
+    for (y, m) in period_months:
+        observed = int(monthly_counts.get((y, m), 0))
+        frac = month_reported_fraction(y, m, extraction_date, sorted_lags)
+        out.append({
+            'month': f"{y:04d}-{m:02d}",
+            'observed': observed,
+            'reported_fraction': frac,
+            'estimate': observed + rate * (1.0 - frac),
+        })
+    return out
+
+
+def bf_interval(monthly_counts: Dict[Tuple[int, int], int],
+                period_months: List[Tuple[int, int]],
+                extraction_date: date,
+                sorted_lags: np.ndarray,
+                months_for_rate: List[Tuple[int, int]],
+                n_boot: int = BF_BOOTSTRAP_SAMPLES,
+                seed: int = BF_BOOTSTRAP_SEED,
+                percentiles: Tuple[float, float] = BF_INTERVAL) -> Tuple[float, float]:
+    """Bootstrap interval for the period total.
+
+    Each replicate resamples (a) the lag sample behind F and (b) the months
+    behind R, both with replacement, then draws the still-unreported events
+    as Poisson(sum_m R* (1 - f*_m)) on top of the observed total. Fixed seed,
+    so the dashboard is reproducible.
+    """
+    rng = np.random.default_rng(seed)
+    observed_total = sum(int(monthly_counts.get(pm, 0)) for pm in period_months)
+    lags = np.asarray(sorted_lags, dtype=float)
+    # Day-level ages for each period month and each rate month, computed once.
+    period_ages = [np.array([(extraction_date - d).days for d in _month_days(y, m)], dtype=float)
+                   for (y, m) in period_months]
+    rate_ages = [np.array([(extraction_date - d).days for d in _month_days(y, m)], dtype=float)
+                 for (y, m) in months_for_rate]
+    rate_counts = np.array([monthly_counts.get(rm, 0) for rm in months_for_rate], dtype=float)
+
+    totals = np.empty(n_boot)
+    for b in range(n_boot):
+        lag_b = np.sort(rng.choice(lags, size=len(lags), replace=True)) if len(lags) else lags
+        idx = rng.integers(0, len(months_for_rate), size=len(months_for_rate))
+        fr = np.array([lag_completeness(lag_b, rate_ages[i]).mean() for i in idx])
+        rate_b = float(np.mean(np.where(fr > 0, rate_counts[idx] / np.where(fr > 0, fr, 1), rate_counts[idx])))
+        unreported = sum(rate_b * (1.0 - lag_completeness(lag_b, a).mean()) for a in period_ages)
+        totals[b] = observed_total + rng.poisson(max(unreported, 0.0))
+    low, high = np.percentile(totals, percentiles)
+    return float(low), float(high)
+
+
+def compute_partial_period_estimate(monthly_counts: Dict[Tuple[int, int], int],
+                                    events: List[Tuple[date, date]],
+                                    extraction_date: date,
+                                    collection_start: Optional[date] = None,
+                                    min_lag_sample: int = BF_MIN_LAG_SAMPLE) -> Dict[str, Any]:
+    """Estimate the full-period count of the half-year containing E.
+
+    Uses Bornhuetter-Ferguson when at least ``min_lag_sample`` fully developed
+    incidents are available to estimate the lag curve; otherwise falls back to
+    a straight pro-rata (observed / elapsed fraction of the half-year to E)
+    and says so in ``note``.
+
+    Args:
+        monthly_counts: {(year, month): active events with event_date in that
+            month and on/before E}.
+        events: (incident date, first-known date) per active event.
+        extraction_date: E, date part of the latest ingest.
+        collection_start: date continuous collection began (see
+            ``reporting_lag_sample``).
+    """
+    period, p_start, p_end = half_year_bounds(extraction_date)
+    period_months = [(p_start.year, p_start.month + i) for i in range(6)]
+    observed = sum(int(monthly_counts.get(pm, 0)) for pm in period_months)
+    result: Dict[str, Any] = {
+        'period': period,
+        'observed': observed,
+        'extraction_date': extraction_date.isoformat(),
+    }
+
+    lags = reporting_lag_sample(events, extraction_date, collection_start=collection_start)
+    if len(lags) < min_lag_sample:
+        elapsed = (extraction_date - p_start).days + 1
+        total = (p_end - p_start).days + 1
+        estimate = observed * total / elapsed if elapsed > 0 else float(observed)
+        result.update({
+            'method': 'pro_rata',
+            'estimate': round(estimate),
+            'low': None,
+            'high': None,
+            'lag_sample_size': int(len(lags)),
+            'note': (f'Only {len(lags)} fully developed incidents to estimate reporting lag '
+                     f'(need {min_lag_sample}); straight pro-rata used, likely biased low.'),
+        })
+        return result
+
+    months_for_rate = rate_months(extraction_date)
+    rate = expected_monthly_rate(monthly_counts, extraction_date, lags, months_for_rate)
+    months = bf_month_estimates(monthly_counts, period_months, extraction_date, lags, rate)
+    estimate = sum(m['estimate'] for m in months)
+    low, high = bf_interval(monthly_counts, period_months, extraction_date, lags, months_for_rate)
+    low, high = min(low, estimate), max(high, estimate)
+    result.update({
+        'method': 'bornhuetter_ferguson',
+        'estimate': round(estimate),
+        'estimate_exact': estimate,
+        'low': round(low),
+        'high': round(high),
+        'rate': rate,
+        'rate_months': [f"{y:04d}-{m:02d}" for (y, m) in months_for_rate],
+        'months': months,
+        'lag_sample_size': int(len(lags)),
+        'completeness': {str(a): float(lag_completeness(lags, [a])[0]) for a in (0, 30, 60, 90, 120, 180)},
+        'note': (f'Bornhuetter-Ferguson: observed {observed} to {extraction_date.isoformat()} plus '
+                 f'{rate:.1f}/month expected x share not yet reported (lag curve from '
+                 f'{len(lags)} incidents); 80% interval {round(low)}-{round(high)}.'),
+    })
+    return result
+
+
+def get_partial_period_estimate(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
+    """Load lag data from the database and estimate the current half-year.
+
+    E is the date of the latest ingest (``get_data_collection_timestamp``),
+    never the wall clock. First-known date of an event is the earliest
+    ``RawEvents.discovered_at`` among its member records.
+    """
+    extraction = _parse_collection_date(get_data_collection_timestamp(conn))
+    if extraction is None:
+        return None
+    try:
+        start_row = conn.execute("SELECT MIN(discovered_at) FROM RawEvents").fetchone()
+        collection_start = _parse_collection_date(start_row[0] if start_row else None)
+        rows = conn.execute("""
+            SELECT de.event_date, MIN(re.discovered_at)
+            FROM DeduplicatedEvents de
+            JOIN EventDeduplicationMap m ON m.deduplicated_event_id = de.deduplicated_event_id
+            JOIN EnrichedEvents ee ON ee.enriched_event_id = m.enriched_event_id
+            JOIN RawEvents re ON re.raw_event_id = ee.raw_event_id
+            WHERE de.status = 'Active' AND de.event_date IS NOT NULL
+            GROUP BY de.deduplicated_event_id
+        """).fetchall()
+        count_rows = conn.execute("""
+            SELECT CAST(strftime('%Y', event_date) AS INTEGER),
+                   CAST(strftime('%m', event_date) AS INTEGER),
+                   COUNT(DISTINCT deduplicated_event_id)
+            FROM DeduplicatedEvents
+            WHERE status = 'Active' AND event_date IS NOT NULL AND event_date <= ?
+            GROUP BY 1, 2
+        """, (extraction.isoformat(),)).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Partial-period estimate unavailable: %s", exc)
+        return None
+
+    events = []
+    for event_date, first_known in rows:
+        incident = _parse_collection_date(event_date)
+        known = _parse_collection_date(first_known)
+        if incident is not None and known is not None and incident <= extraction:
+            events.append((incident, known))
+    monthly_counts = {(int(y), int(m)): int(c) for y, m, c in count_rows if y and m}
+    return compute_partial_period_estimate(monthly_counts, events, extraction, collection_start)
+
+
+def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[Dict[str, Any]],
+                                 partial_estimate: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Prepare data for OAIC vs Database comparison chart.
 
-    If end_date is provided and the latest period is partial, calculates a pro-rata estimate
-    for the full 6-month period.
+    Args:
+        database_data: half-yearly database counts.
+        oaic_data: OAIC semester records.
+        partial_estimate: full-period estimate for the half-year containing the
+            extraction date (``get_partial_period_estimate``). Attached as
+            ``partial_estimate`` when that half-year is the latest period shown.
     """
-    from datetime import datetime
-
     # Create a mapping of OAIC data by period
     oaic_lookup = {}
     for record in oaic_data:
@@ -1133,46 +1451,17 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
             filtered_database.append(database_counts[i])
             filtered_oaic.append(oaic_counts[i])
 
-    # Calculate pro-rata estimate for partial periods
-    prorata_period = None
-    prorata_estimate = None
-    prorata_actual = None
-
-    if end_date and filtered_periods:
-        # Get the last period
-        last_period = filtered_periods[-1]
-        last_count = filtered_database[-1]
-
-        # Parse the period (e.g., "2025 H1")
-        parts = last_period.split()
-        if len(parts) == 2:
-            year = int(parts[0])
-            half = parts[1]  # H1 or H2
-
-            # Determine the period end date
-            if half == 'H1':
-                period_end = datetime(year, 6, 30)
-                period_start = datetime(year, 1, 1)
-            else:  # H2
-                period_end = datetime(year, 12, 31)
-                period_start = datetime(year, 7, 1)
-
-            # Parse the actual end date
-            actual_end = datetime.strptime(end_date, '%Y-%m-%d')
-
-            # Check if this is a partial period
-            if actual_end < period_end and actual_end >= period_start:
-                # Calculate months elapsed (as a fraction)
-                days_elapsed = (actual_end - period_start).days + 1
-                days_in_period = (period_end - period_start).days + 1
-                months_elapsed = (days_elapsed / days_in_period) * 6
-
-                # Calculate pro-rata estimate
-                if months_elapsed > 0 and last_count:
-                    prorata_factor = 6.0 / months_elapsed
-                    prorata_estimate = round(last_count * prorata_factor)
-                    prorata_actual = last_count
-                    prorata_period = last_period
+    # Full-period estimate for the half-year still in progress at extraction.
+    attached = None
+    if partial_estimate and partial_estimate.get('period'):
+        period = partial_estimate['period']
+        if filtered_periods and filtered_periods[-1] == period:
+            attached = partial_estimate
+        elif not filtered_periods or period > filtered_periods[-1]:
+            filtered_periods.append(period)
+            filtered_database.append(None)
+            filtered_oaic.append(None)
+            attached = partial_estimate
 
     return {
         'periods': filtered_periods,
@@ -1180,9 +1469,7 @@ def prepare_oaic_comparison_data(database_data: Dict[str, Any], oaic_data: List[
         'oaic_counts': filtered_oaic,
         'oaic_available': len([x for x in filtered_oaic if x is not None]),
         'database_available': len([x for x in filtered_database if x is not None]),
-        'prorata_period': prorata_period,
-        'prorata_estimate': prorata_estimate,
-        'prorata_actual': prorata_actual
+        'partial_estimate': attached,
     }
 
 
@@ -2876,38 +3163,50 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         });
       }
 
-      // Add pro-rata estimate if available
-      if (oaic.prorata_estimate && oaic.prorata_period) {
-        // Create array with null values except for the last period
-        const prorataData = oaic.periods.map((p, idx) =>
-          (p === oaic.prorata_period && idx === oaic.periods.length - 1) ? oaic.prorata_estimate : null
+      // Full-period estimate for the half-year in progress at extraction
+      // (Bornhuetter-Ferguson, or straight pro-rata when too little lag data).
+      const est = oaic.partial_estimate;
+      const ESTIMATE_LABEL = (est && est.method === 'bornhuetter_ferguson')
+        ? 'Estimated Full Period (Bornhuetter-Ferguson)'
+        : 'Estimated Full Period (Pro-rata)';
+      let estimateMax = null;
+      if (est && est.estimate !== null && est.estimate !== undefined) {
+        const lastIdx = oaic.periods.length - 1;
+        const estimateData = oaic.periods.map((p, idx) =>
+          (p === est.period && idx === lastIdx) ? est.estimate : null
         );
+        estimateMax = (est.high !== null && est.high !== undefined) ? est.high : est.estimate;
 
         datasets.push({
-          label: 'Estimated Full Period (Pro-rata)',
-          data: prorataData,
+          label: ESTIMATE_LABEL,
+          isPartialEstimate: true,
+          // Drawn as a vertical bar with caps by the errorBars plugin below.
+          errorBars: (est.low !== null && est.high !== null)
+            ? estimateData.map(v => v === null ? null : { low: est.low, high: est.high })
+            : null,
+          data: estimateData,
           borderColor: colors.secondary,
           backgroundColor: colors.secondary,
           fill: false,
           tension: 0,
           pointRadius: 8,
+          pointHoverRadius: 10,
           pointStyle: 'triangle',
           showLine: false  // Don't draw lines between points
         });
 
         // Dashed connector from the last complete half-year's database
-        // count to the pro-rata estimate, so the trend into the estimate is
+        // count to the estimate, so the trend into the estimate is
         // visible. Hidden from the legend and tooltips (isProrataConnector);
-        // toggling the pro-rata legend entry toggles it too.
-        const lastIdx = oaic.periods.length - 1;
+        // toggling the estimate legend entry toggles it too.
         const prevIdx = lastIdx - 1;
         const prevDb = prevIdx >= 0 ? oaic.database_counts[prevIdx] : null;
-        if (prorataData[lastIdx] !== null && prevDb !== null && prevDb !== undefined) {
+        if (estimateData[lastIdx] !== null && prevDb !== null && prevDb !== undefined) {
           const connectorData = oaic.periods.map(() => null);
           connectorData[prevIdx] = prevDb;
-          connectorData[lastIdx] = oaic.prorata_estimate;
+          connectorData[lastIdx] = est.estimate;
           datasets.push({
-            label: 'Estimated Full Period (Pro-rata) trend',
+            label: ESTIMATE_LABEL + ' trend',
             isProrataConnector: true,
             data: connectorData,
             borderColor: colors.secondary,
@@ -2924,12 +3223,43 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         }
       }
 
+      // Inline error-bar plugin: a vertical line with caps from low to high
+      // for any dataset carrying an errorBars array (no CDN plugin needed).
+      const errorBarsPlugin = {
+        id: 'oaicErrorBars',
+        afterDatasetsDraw(chart) {
+          const ctx = chart.ctx;
+          const yScale = chart.scales.y;
+          chart.data.datasets.forEach((ds, i) => {
+            if (!ds.errorBars || !chart.isDatasetVisible(i)) return;
+            const meta = chart.getDatasetMeta(i);
+            ds.errorBars.forEach((bar, j) => {
+              if (!bar || !meta.data[j]) return;
+              const x = meta.data[j].x;
+              const yLow = yScale.getPixelForValue(bar.low);
+              const yHigh = yScale.getPixelForValue(bar.high);
+              const cap = 7;
+              ctx.save();
+              ctx.strokeStyle = ds.borderColor;
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(x, yLow); ctx.lineTo(x, yHigh);
+              ctx.moveTo(x - cap, yLow); ctx.lineTo(x + cap, yLow);
+              ctx.moveTo(x - cap, yHigh); ctx.lineTo(x + cap, yHigh);
+              ctx.stroke();
+              ctx.restore();
+            });
+          });
+        }
+      };
+
       new Chart(document.getElementById('oaicComparisonChart').getContext('2d'), {
         type: 'line',
         data: {
           labels: oaic.periods,
           datasets: datasets
         },
+        plugins: [errorBarsPlugin],
         options: {
           responsive: true,
           maintainAspectRatio: false,
@@ -2943,7 +3273,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
                 Chart.defaults.plugins.legend.onClick.call(this, e, legendItem, legend);
                 const chart = legend.chart;
                 const clicked = chart.data.datasets[legendItem.datasetIndex];
-                if (clicked && clicked.label === 'Estimated Full Period (Pro-rata)') {
+                if (clicked && clicked.isPartialEstimate) {
                   const visible = chart.isDatasetVisible(legendItem.datasetIndex);
                   chart.data.datasets.forEach((ds, i) => {
                     if (ds.isProrataConnector) chart.setDatasetVisibility(i, visible);
@@ -2955,6 +3285,21 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             tooltip: {
               filter: (item) => !item.dataset.isProrataConnector,
               callbacks: {
+                label: function(item) {
+                  if (!item.dataset.isPartialEstimate || !est) {
+                    return `${item.dataset.label}: ${item.formattedValue}`;
+                  }
+                  const lines = [`${item.dataset.label}: ${est.estimate}`];
+                  if (est.low !== null && est.high !== null) {
+                    lines.push(`80% interval: ${est.low} - ${est.high}`);
+                  }
+                  lines.push(`Observed to date: ${est.observed}`);
+                  lines.push(`Extraction date: ${est.extraction_date}`);
+                  if (est.method !== 'bornhuetter_ferguson') {
+                    lines.push('Fallback: too few developed incidents for a lag curve');
+                  }
+                  return lines;
+                },
                 footer: function(tooltipItems) {
                   const dbCount = tooltipItems.find(item => item.datasetIndex === 0);
                   const oaicCount = tooltipItems.find(item => item.datasetIndex === 1);
@@ -2971,6 +3316,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           scales: {
             y: {
               beginAtZero: true,
+              suggestedMax: estimateMax !== null ? estimateMax : undefined,
               title: {
                 display: true,
                 text: 'Number of Events/Notifications'
@@ -3010,9 +3356,14 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         stats.push('OAIC: No data available');
       }
 
-      // Add pro-rata estimate information if available
-      if (oaic.prorata_estimate && oaic.prorata_period) {
-        stats.push(`${oaic.prorata_period} (partial): ${oaic.prorata_actual} → Est. ${oaic.prorata_estimate}`);
+      // Partial-period estimate: method and interval
+      if (est && est.estimate !== null && est.estimate !== undefined) {
+        let line = `${est.period} (partial to ${est.extraction_date}): ${est.observed} → Est. ${est.estimate}`;
+        if (est.low !== null && est.high !== null) line += ` (80%: ${est.low}-${est.high})`;
+        line += est.method === 'bornhuetter_ferguson'
+          ? ' [Bornhuetter-Ferguson, adjusts for reporting lag]'
+          : ' [pro-rata fallback: too few developed incidents for a lag curve; likely low]';
+        stats.push(line);
       }
 
       document.getElementById('oaicComparisonStats').textContent = stats.join(' • ');
@@ -4020,7 +4371,8 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
 
         # Get half-yearly database counts for OAIC comparison
         database_half_yearly = get_half_yearly_database_counts(conn, start_date, end_date)
-        oaic_comparison = prepare_oaic_comparison_data(database_half_yearly, oaic_data, end_date)
+        oaic_comparison = prepare_oaic_comparison_data(
+            database_half_yearly, oaic_data, get_partial_period_estimate(conn))
 
         # Prepare additional OAIC data for new charts
         oaic_cyber_incidents = prepare_oaic_cyber_incidents_data(oaic_data)
