@@ -3420,23 +3420,35 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     (function(){
       const d = oaicSourceSplit;
       if (!d.periods || !d.periods.length) return;
-      new Chart(document.getElementById('oaicSourceSplitChart').getContext('2d'), {
+      const canvas = document.getElementById('oaicSourceSplitChart');
+      // The DB side needs breach_source_category, filled by
+      // scripts/enrich_pii_and_source_category.py. When nothing is classified
+      // the DB stacks are all zero, so show OAIC only rather than empty bars.
+      const hasDb = [d.db_malicious, d.db_human, d.db_system]
+        .some(a => (a || []).some(v => v > 0));
+      const datasets = [
+        { label: 'OAIC: Malicious',  data: d.oaic_malicious, backgroundColor: 'rgba(220,38,38,0.7)',  stack: 'oaic' },
+        { label: 'OAIC: Human err',  data: d.oaic_human,     backgroundColor: 'rgba(245,158,11,0.7)', stack: 'oaic' },
+        { label: 'OAIC: System flt', data: d.oaic_system,    backgroundColor: 'rgba(107,114,128,0.7)', stack: 'oaic' },
+      ];
+      if (hasDb) {
+        datasets.push(
+          { label: 'DB: Malicious',    data: d.db_malicious,   backgroundColor: 'rgba(34,197,94,0.7)',   stack: 'db'   },
+          { label: 'DB: Human err',    data: d.db_human,       backgroundColor: 'rgba(34,197,94,0.4)',   stack: 'db'   },
+          { label: 'DB: System flt',   data: d.db_system,      backgroundColor: 'rgba(34,197,94,0.2)',   stack: 'db'   });
+      } else {
+        const t = canvas.parentElement.querySelector('.chart-title');
+        if (t) t.textContent = 'OAIC: Source of Breaches (per semester)';
+      }
+      new Chart(canvas.getContext('2d'), {
         type: 'bar',
-        data: {
-          labels: d.periods,
-          datasets: [
-            { label: 'OAIC: Malicious',  data: d.oaic_malicious, backgroundColor: 'rgba(220,38,38,0.7)',  stack: 'oaic' },
-            { label: 'OAIC: Human err',  data: d.oaic_human,     backgroundColor: 'rgba(245,158,11,0.7)', stack: 'oaic' },
-            { label: 'OAIC: System flt', data: d.oaic_system,    backgroundColor: 'rgba(107,114,128,0.7)', stack: 'oaic' },
-            { label: 'DB: Malicious',    data: d.db_malicious,   backgroundColor: 'rgba(34,197,94,0.7)',   stack: 'db'   },
-            { label: 'DB: Human err',    data: d.db_human,       backgroundColor: 'rgba(34,197,94,0.4)',   stack: 'db'   },
-            { label: 'DB: System flt',   data: d.db_system,      backgroundColor: 'rgba(34,197,94,0.2)',   stack: 'db'   },
-          ],
-        },
+        data: { labels: d.periods, datasets },
         options: { responsive: true, maintainAspectRatio: false,
           scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true,
                     title: { display: true, text: 'Notifications' } } },
-          plugins: { title: { display: true, text: 'OAIC stacks left, DB stacks right (DB classified by GPT-4o-mini)' } },
+          plugins: { title: { display: true, text: hasDb
+            ? 'OAIC stacks left, DB stacks right (DB classified by GPT-4o-mini)'
+            : 'OAIC notifications (database events not yet classified by breach source)' } },
         },
       });
     })();
@@ -3489,6 +3501,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       if (!d.periods || !d.periods.length || !d.series) return;
       const colors = ['#1d4ed8','#16a34a','#f59e0b','#dc2626','#7c3aed','#0891b2'];
       const cats = Object.keys(d.series);
+      // The DB side needs personal_info_types_json, filled by
+      // scripts/enrich_pii_and_source_category.py. When nothing is classified
+      // every DB line is zero, so plot OAIC only.
+      const hasDb = Object.values(d.db_series || {}).some(a => (a || []).some(v => v > 0));
+      const piCanvas = document.getElementById('oaicPersonalInfoChart');
+      if (!hasDb) {
+        const t = piCanvas.parentElement.querySelector('.chart-title');
+        if (t) t.textContent = 'OAIC: Personal Information Types over Time (2022+)';
+      }
       const datasets = [];
       cats.forEach((c, i) => {
         const color = colors[i % colors.length];
@@ -3500,7 +3521,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           backgroundColor: color + '33',
           fill: false, tension: 0.2,
         });
-        if (d.db_series && d.db_series[c]) {
+        if (hasDb && d.db_series && d.db_series[c]) {
           datasets.push({
             label: 'DB: ' + labelBase,
             data: d.db_series[c],
@@ -3511,11 +3532,13 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           });
         }
       });
-      new Chart(document.getElementById('oaicPersonalInfoChart').getContext('2d'), {
+      new Chart(piCanvas.getContext('2d'), {
         type: 'line',
         data: { labels: d.periods, datasets },
         options: { responsive: true, maintainAspectRatio: false,
-          plugins: { title: { display: true, text: 'Solid = OAIC, Dashed = DB (LLM-classified)' } },
+          plugins: { title: { display: true, text: hasDb
+            ? 'Solid = OAIC, Dashed = DB (LLM-classified)'
+            : 'OAIC notifications (database events not yet classified by information type)' } },
           scales: { y: { beginAtZero: true, title: { display: true, text: 'Breaches involving this category' } } },
         },
       });
