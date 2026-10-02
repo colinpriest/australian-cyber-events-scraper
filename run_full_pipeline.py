@@ -425,6 +425,7 @@ class UnifiedPipeline:
                         "Threshold may be too aggressive."
                     )
 
+            self.run_missed_merge_check(args)
             self.run_recurrence_check(args)
             self.run_entity_sizing(args)
 
@@ -436,6 +437,52 @@ class UnifiedPipeline:
             logger.error(f"Deduplication phase failed: {e}")
             self.results['deduplication']['errors'].append(str(e))
             return False
+
+    def run_missed_merge_check(self, args) -> None:
+        """Find and merge duplicates the incremental pass missed.
+
+        Incremental dedup compares each new record against existing events by
+        title and victim name only. Fragments with no usable victim name, a
+        different victim per report (supplier breaches), or a wrong date are
+        never matched - the May/June 2026 review found 21 such duplicates.
+        This runs the multi-key ``find-missed`` scoped to events created or
+        changed in the last ``--missed-merge-days`` days (older pairs were
+        judged by earlier runs) and applies findings at or above
+        ``--missed-merge-min-certainty``. Runs before the recurrence check,
+        which judges what remains.
+        """
+        if getattr(args, 'skip_missed_merge_check', False):
+            logger.info("Skipping missed-merge check (--skip-missed-merge-check)")
+            return
+        if not os.getenv('OPENAI_API_KEY'):
+            logger.warning("OPENAI_API_KEY not set; missed-merge check skipped")
+            return
+        from scripts import dedup_admin
+        days = getattr(args, 'missed_merge_days', 120)
+        certainty = getattr(args, 'missed_merge_min_certainty', 0.9)
+        base = ["--db", self.db_path]
+        logger.info("Checking for missed duplicates among events changed in the "
+                    "last %d days...", days)
+        try:
+            if dedup_admin.main(base + ["find-missed", "--recent-days", str(days),
+                                        "--min-certainty", str(certainty)]) != 0:
+                raise RuntimeError("find-missed failed")
+            # Report-only unless explicitly enabled. Measured on 2026-10-02
+            # (labelled May/June review set): pairwise adjudication at 0.9
+            # still accepted 11 of 22 known-wrong pairs - mostly roundup and
+            # guidance pages matched to the incidents they mention - and
+            # missed misdated fragments of one incident. Findings are written
+            # to instance/dedup_missed_merges.json for review instead.
+            if getattr(args, 'missed_merge_apply', False):
+                if dedup_admin.main(base + ["apply-missed", "--min-certainty", str(certainty)]) != 0:
+                    raise RuntimeError("apply-missed failed")
+            else:
+                logger.info("Missed-merge findings written for review (not applied; "
+                            "pass --missed-merge-apply to merge automatically)")
+            self.results['deduplication']['missed_merge_check'] = 'ok'
+        except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
+            logger.warning("Missed-merge check failed: %s", exc)
+            self.results['deduplication']['errors'].append(f"missed-merge: {exc}")
 
     def run_recurrence_check(self, args) -> None:
         """Re-check repeat attacks that follow the previous one within 90 days.
@@ -838,6 +885,18 @@ Examples:
     parser.add_argument('--recurrence-min-certainty', type=float, default=0.85,
                         help='Merge a suspected re-report only at or above this '
                              'certainty (default: 0.85)')
+    parser.add_argument('--skip-missed-merge-check', action='store_true',
+                        help='Skip the multi-key search for duplicates the '
+                             'incremental pass missed')
+    parser.add_argument('--missed-merge-apply', action='store_true',
+                        help='Merge missed-duplicate findings automatically '
+                             '(default: write them for review only)')
+    parser.add_argument('--missed-merge-days', type=int, default=120,
+                        help='Only judge candidate pairs touching events changed '
+                             'in the last N days (default: 120)')
+    parser.add_argument('--missed-merge-min-certainty', type=float, default=0.9,
+                        help='Merge a missed duplicate only at or above this '
+                             'certainty (default: 0.9)')
     parser.add_argument('--skip-entity-sizing', action='store_true',
                         help='Skip estimating an ordinal size band for new entities')
     parser.add_argument('--entity-size-limit', type=int, default=None,

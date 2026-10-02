@@ -111,8 +111,12 @@ class LLMPairAdjudication(BaseModel):
     is_same_event: bool = Field(
         description=(
             "True only if both records describe the SAME real-world security "
-            "incident at the SAME organisation. Coverage of a different "
-            "incident at the same organisation is NOT the same event."
+            "incident. Coverage of a different incident at the same "
+            "organisation is NOT the same event. A breach of one supplier's "
+            "own systems reported about several of its customers IS the same "
+            "event. The same gang or campaign hitting different organisations "
+            "is NOT. A roundup, review or guidance page is never the same "
+            "event as one incident."
         )
     )
     certainty: float = Field(

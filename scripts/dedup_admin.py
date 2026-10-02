@@ -129,36 +129,90 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def load_dedup_records(conn: sqlite3.Connection) -> List[EventRecord]:
+def load_dedup_records(conn: sqlite3.Connection,
+                       recent_days: Optional[int] = None) -> List[EventRecord]:
     """One EventRecord per active deduplicated event, keyed by its dedup id.
 
     ``enriched_event_id`` carries the *deduplicated* id here because the
     reconciliation pass compares whole deduplicated events, not raw members.
+
+    Each record carries every signal candidate generation keys on: all linked
+    organisations (entity links, vendor, and Perplexity's formal victim name for
+    every member record), all source URLs, and the members' enriched text.
+    Loading only the scalar victim and one URL surfaced 9 of 21 known
+    duplicates; this surfaces 20.
+
+    Args:
+        recent_days: When set, mark which events were created or updated in the
+            last N days (``_recent_ids`` on the returned list's records is not
+            used; callers filter pairs with :func:`recent_event_ids`).
     """
     rows = conn.execute(
         """
-        SELECT d.deduplicated_event_id AS did, d.title, d.summary,
+        SELECT d.deduplicated_event_id AS did, d.title, d.summary, d.description,
                d.event_date, d.records_affected,
                d.victim_organization_name AS entity,
-               (SELECT s.source_url FROM DeduplicatedEventSources s
-                WHERE s.deduplicated_event_id = d.deduplicated_event_id
-                LIMIT 1) AS source_url
+               d.vendor_organization_name AS vendor
         FROM DeduplicatedEvents d
         WHERE COALESCE(d.status, 'Active') = 'Active'
         """
     ).fetchall()
-    return [
-        EventRecord(
-            enriched_event_id=r["did"],
+    names: Dict[str, set] = {}
+    urls: Dict[str, set] = {}
+    texts: Dict[str, List[str]] = {}
+    for did, name in conn.execute(
+        """SELECT dee.deduplicated_event_id, v.entity_name
+           FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+           WHERE dee.relationship_type IN ('victim', 'vendor', 'affected_customer')"""):
+        names.setdefault(did, set()).add(name)
+    for did, pe, desc, summ, url in conn.execute(
+        """SELECT m.deduplicated_event_id, e.perplexity_enrichment_data, e.description,
+                  e.summary, r.source_url
+           FROM EventDeduplicationMap m
+           JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+           LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id"""):
+        try:
+            formal = json.loads(pe or "{}").get("formal_entity_name")
+        except (TypeError, ValueError, AttributeError):
+            formal = None
+        if formal and str(formal).strip().lower() not in ("none", "null", "unknown", "n/a"):
+            names.setdefault(did, set()).add(str(formal))
+        if url:
+            urls.setdefault(did, set()).add(url)
+        body = " ".join(x for x in (desc, summ) if x)
+        if body:
+            texts.setdefault(did, []).append(body[:600])
+    for did, url in conn.execute("SELECT deduplicated_event_id, source_url FROM DeduplicatedEventSources"):
+        if url:
+            urls.setdefault(did, set()).add(url)
+
+    records = []
+    for r in rows:
+        did = r["did"]
+        alt = sorted(n for n in names.get(did, set()) | ({r["vendor"]} if r["vendor"] else set())
+                     if n and n != r["entity"])
+        member_text = " ".join(texts.get(did, []))[:1500]
+        records.append(EventRecord(
+            enriched_event_id=did,
             title=r["title"] or "",
             summary=r["summary"],
+            description=" ".join(x for x in (r["description"], member_text) if x) or None,
             entity_name=r["entity"],
+            alt_entities=alt,
             event_date=str(r["event_date"]) if r["event_date"] else None,
-            source_url=r["source_url"],
+            source_urls=sorted(urls.get(did, set())),
             records_affected=r["records_affected"],
-        )
-        for r in rows
-    ]
+        ))
+    return records
+
+
+def recent_event_ids(conn: sqlite3.Connection, days: int) -> set:
+    """Active events created or updated in the last ``days`` days."""
+    return {row[0] for row in conn.execute(
+        """SELECT deduplicated_event_id FROM DeduplicatedEvents
+           WHERE COALESCE(status,'Active') = 'Active'
+             AND (created_at >= datetime('now', ?) OR updated_at >= datetime('now', ?))""",
+        (f"-{days} days", f"-{days} days"))}
 
 
 # ----------------------------------------------------------------------
@@ -229,6 +283,14 @@ def cmd_find_missed(args) -> int:
         print(f"Loaded {len(records)} active deduplicated event(s)")
 
         pairs = adjudicator.candidate_pairs(records)
+        if getattr(args, "recent_days", None):
+            # Routine refreshes only need pairs touching new or changed events;
+            # older pairs were already judged by an earlier run.
+            recent = recent_event_ids(conn, args.recent_days)
+            pairs = [(l, r) for l, r in pairs
+                     if l.enriched_event_id in recent or r.enriched_event_id in recent]
+            print(f"Scoped to {len(pairs)} pair(s) touching {len(recent)} event(s) "
+                  f"changed in the last {args.recent_days} day(s)")
         if args.limit:
             pairs = pairs[: args.limit]
         print(f"Adjudicating {len(pairs)} candidate pair(s)"
@@ -266,6 +328,8 @@ def cmd_find_missed(args) -> int:
                     "certainty": verdict.certainty,
                     "reasoning": verdict.reasoning,
                     "decided_by": verdict.decided_by.value,
+                    "candidate_reasons": sorted(adjudicator.pair_reasons.get(
+                        frozenset((left.enriched_event_id, right.enriched_event_id)), [])),
                     "evidence": verdict.evidence.model_dump(),
                 })
             if index % 25 == 0:
@@ -1306,6 +1370,7 @@ def cmd_reconcile_entities(args) -> int:
 
         settled: set = set()
         planned = 0
+        applied = 0
         for index, (entity, records) in enumerate(ordered, start=1):
             cluster = [r for r in records if r.enriched_event_id not in settled]
             if len(cluster) < 2:
@@ -1343,13 +1408,20 @@ def cmd_reconcile_entities(args) -> int:
                                     f"{group.label}: {group.reasoning}"),
                             actor="pipeline")
                         settled.add(source)
+                        applied += 1
                     except (sqlite3.Error, ValueError) as exc:
                         logger.warning("Reconcile merge %s -> %s failed: %s",
                                        source, target, exc)
             conn.commit()
 
-        print(f"\n{'DRY RUN: ' if args.dry_run else ''}{planned} event(s) "
-              f"{'would be ' if args.dry_run else ''}merged")
+        # "planned" counts every proposed grouping; only those at or above
+        # --min-certainty are applied. Reporting planned as "merged" made a run
+        # that changed nothing look like it had merged ten events.
+        if args.dry_run:
+            print(f"\nDRY RUN: {planned} merge(s) proposed")
+        else:
+            print(f"\n{planned} merge(s) proposed, {applied} applied "
+                  f"({planned - applied} below certainty {args.min_certainty})")
         print(f"cluster stats: {adjudicator.stats}")
     finally:
         _flush_refresher(conn, refresher)
@@ -2221,6 +2293,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p = sub.add_parser("find-missed")
     p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--recent-days", type=int, default=None,
+                   help="Only judge pairs where at least one event was created or "
+                        "updated in the last N days (routine refreshes).")
     p.add_argument("--min-certainty", type=float, default=0.80)
     p.add_argument("--no-llm", action="store_true",
                    help="Preview candidate pairs without calling the LLM.")
