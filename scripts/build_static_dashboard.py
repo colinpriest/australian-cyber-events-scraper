@@ -20,7 +20,7 @@ import re
 import sqlite3
 import json
 import glob
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
@@ -2087,8 +2087,124 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
     }
 
 
+def get_data_collection_timestamp(conn: sqlite3.Connection) -> Optional[str]:
+    """Return the time of the most recent data collection (latest ingest).
+
+    Uses ``MAX(RawEvents.discovered_at)``, the same definition of "last
+    ingest" as ``scripts/project_status.py``, so the dashboard and the status
+    report agree on when the data was collected.
+    """
+    try:
+        row = conn.execute("SELECT MAX(discovered_at) FROM RawEvents").fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row and row[0] else None
+
+
+def _parse_collection_date(collected_at: Optional[str]) -> Optional[date]:
+    """Parse the date part of an ISO-style timestamp ('YYYY-MM-DD[T ]...')."""
+    if not collected_at:
+        return None
+    try:
+        return date.fromisoformat(str(collected_at).strip()[:10])
+    except ValueError:
+        return None
+
+
+def _month_last_day(year: int, month: int) -> date:
+    """Return the last calendar day of the given month."""
+    if month == 12:
+        return date(year, 12, 31)
+    return date(year, month + 1, 1) - timedelta(days=1)
+
+
+def _format_month(month: str) -> str:
+    """Format 'YYYY-MM' as 'Mon YYYY' (e.g. 'Oct 2026')."""
+    return date(int(month[:4]), int(month[5:7]), 1).strftime('%b %Y')
+
+
+def compute_incomplete_month_cutoff(latest_month: Optional[str],
+                                    collected_at: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Decide whether the latest incident month(s) must be dropped from monthly series.
+
+    A month is incomplete if data collection happened before that month's
+    last day; collection *on* the last day counts as complete. Months after
+    the collection month (e.g. mis-dated future events) are incomplete too,
+    so every month from the first incomplete one through ``latest_month`` is
+    excluded.
+
+    Args:
+        latest_month: Latest incident month present in the series ('YYYY-MM'),
+            or None when there is no data.
+        collected_at: Data collection timestamp (latest ingest), ISO format.
+
+    Returns:
+        None when nothing needs excluding (no data, unknown collection time,
+        or the latest month was complete). Otherwise a dict with
+        ``excluded_months`` (list of 'YYYY-MM'), ``series_end_date`` (last day
+        of the last complete month, 'YYYY-MM-DD'), ``collected_on``
+        ('YYYY-MM-DD') and a human-readable ``note``.
+    """
+    if not latest_month:
+        return None
+    collected = _parse_collection_date(collected_at)
+    if collected is None:
+        return None
+    try:
+        latest_year, latest_mon = int(latest_month[:4]), int(latest_month[5:7])
+    except (TypeError, ValueError):
+        return None
+    if collected >= _month_last_day(latest_year, latest_mon):
+        return None  # the latest month was complete when the data was collected
+
+    # First incomplete month: the collection month, unless collection fell on
+    # its last day (then the month after it).
+    collection_month_end = _month_last_day(collected.year, collected.month)
+    if collected >= collection_month_end:
+        first_incomplete = collection_month_end + timedelta(days=1)
+    else:
+        first_incomplete = date(collected.year, collected.month, 1)
+    latest_first = date(latest_year, latest_mon, 1)
+    first_incomplete = min(first_incomplete, latest_first)
+
+    excluded: List[str] = []
+    cursor = first_incomplete
+    while cursor <= latest_first:
+        excluded.append(cursor.strftime('%Y-%m'))
+        cursor = _month_last_day(cursor.year, cursor.month) + timedelta(days=1)
+
+    series_end = first_incomplete - timedelta(days=1)
+    if len(excluded) == 1:
+        label = _format_month(excluded[0])
+    else:
+        label = f"{_format_month(excluded[0])} to {_format_month(excluded[-1])}"
+    collected_label = f"{collected.day} {collected.strftime('%b %Y')}"
+    return {
+        'excluded_months': excluded,
+        'series_end_date': series_end.strftime('%Y-%m-%d'),
+        'collected_on': collected.strftime('%Y-%m-%d'),
+        'note': f"Excludes {label} (incomplete at data collection, {collected_label})",
+    }
+
+
+def get_latest_incident_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Optional[str]:
+    """Return the latest active incident month ('YYYY-MM') within the date range."""
+    row = conn.execute(
+        """
+        SELECT MAX(strftime('%Y-%m', event_date))
+        FROM DeduplicatedEvents
+        WHERE status = 'Active' AND event_date >= ? AND event_date <= ?
+        """,
+        (start_date, end_date),
+    ).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     """Return full static HTML content embedding data and rendering charts."""
+    # Subtitle shown on the monthly trend charts when an incomplete latest
+    # month was dropped (see compute_incomplete_month_cutoff).
+    incomplete_note = json.dumps((data.get('incomplete_month') or {}).get('note') or '')
     mc = json.dumps(data['monthly_counts'])
     sev = json.dumps(data['severity_trends'])
     ra = json.dumps(data['records_affected'])
@@ -2357,6 +2473,16 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
   <script>
     // Embedded data (static)
+    const incompleteMonthNote = __INCOMPLETE_MONTH_NOTE__;
+    // Chart.js subtitle for the monthly trend charts that drop an incomplete
+    // latest month; drawn inside the chart so it never changes the layout.
+    const incompleteMonthSubtitle = {
+      display: !!incompleteMonthNote,
+      text: incompleteMonthNote,
+      color: '#6b7280',
+      font: { size: 12, style: 'italic' },
+      padding: { bottom: 6 }
+    };
     const monthlyCounts = __MC__;
     const severityTrends = __SEV__;
     const recordsAffected = __RA__;
@@ -2500,6 +2626,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
+            subtitle: incompleteMonthSubtitle,
             legend: {
               display: true,
               position: 'top'
@@ -2525,7 +2652,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       data: { labels: severityTrends.months, datasets: sevDatasets },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'top' } },
+        plugins: {
+          subtitle: incompleteMonthSubtitle, legend: { position: 'top' } },
         scales: {
           x: { stacked: true, title: { display: true, text: 'Month' }},
           y: { stacked: true, beginAtZero: true, title: { display: true, text: 'Events' }}
@@ -2564,6 +2692,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
+          subtitle: incompleteMonthSubtitle,
           legend: {
             display: true,
             position: 'top'
@@ -2608,7 +2737,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       data: { labels: eventTypeMix.months, datasets: etDatasets },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'top' }},
+        plugins: {
+          subtitle: incompleteMonthSubtitle, legend: { position: 'top' }},
         scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true }}
       }
     });
@@ -2748,6 +2878,34 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           pointStyle: 'triangle',
           showLine: false  // Don't draw lines between points
         });
+
+        // Dashed connector from the last complete half-year's database
+        // count to the pro-rata estimate, so the trend into the estimate is
+        // visible. Hidden from the legend and tooltips (isProrataConnector);
+        // toggling the pro-rata legend entry toggles it too.
+        const lastIdx = oaic.periods.length - 1;
+        const prevIdx = lastIdx - 1;
+        const prevDb = prevIdx >= 0 ? oaic.database_counts[prevIdx] : null;
+        if (prorataData[lastIdx] !== null && prevDb !== null && prevDb !== undefined) {
+          const connectorData = oaic.periods.map(() => null);
+          connectorData[prevIdx] = prevDb;
+          connectorData[lastIdx] = oaic.prorata_estimate;
+          datasets.push({
+            label: 'Estimated Full Period (Pro-rata) trend',
+            isProrataConnector: true,
+            data: connectorData,
+            borderColor: colors.secondary,
+            backgroundColor: colors.secondary,
+            borderDash: [6, 4],
+            borderWidth: 2,
+            fill: false,
+            tension: 0,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 0,
+            spanGaps: false
+          });
+        }
       }
 
       new Chart(document.getElementById('oaicComparisonChart').getContext('2d'), {
@@ -2761,9 +2919,25 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           maintainAspectRatio: false,
           plugins: {
             legend: {
-              position: 'top'
+              position: 'top',
+              labels: {
+                filter: (item, chartData) => !chartData.datasets[item.datasetIndex].isProrataConnector
+              },
+              onClick: function(e, legendItem, legend) {
+                Chart.defaults.plugins.legend.onClick.call(this, e, legendItem, legend);
+                const chart = legend.chart;
+                const clicked = chart.data.datasets[legendItem.datasetIndex];
+                if (clicked && clicked.label === 'Estimated Full Period (Pro-rata)') {
+                  const visible = chart.isDatasetVisible(legendItem.datasetIndex);
+                  chart.data.datasets.forEach((ds, i) => {
+                    if (ds.isProrataConnector) chart.setDatasetVisibility(i, visible);
+                  });
+                  chart.update();
+                }
+              }
             },
             tooltip: {
+              filter: (item) => !item.dataset.isProrataConnector,
               callbacks: {
                 footer: function(tooltipItems) {
                   const dbCount = tooltipItems.find(item => item.datasetIndex === 0);
@@ -3490,6 +3664,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
+            subtitle: incompleteMonthSubtitle,
             legend: { display: true, position: 'top' },
             tooltip: {
               callbacks: {
@@ -3552,6 +3727,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
+            subtitle: incompleteMonthSubtitle,
             legend: { display: false },
             tooltip: {
               callbacks: {
@@ -3726,6 +3902,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
     return (template
             .replace('__START__', start_date)
+            .replace('__INCOMPLETE_MONTH_NOTE__', incomplete_note)
             .replace('__END__', end_date)
             .replace('__MC__', mc)
             .replace('__SEV__', sev)
@@ -3813,17 +3990,39 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
 
         event_type_mix = get_monthly_event_type_mix(conn, start_date, end_date)
 
+        # Monthly time-series charts drop the latest incident month when it
+        # was still in progress at the time of data collection (latest
+        # ingest), otherwise a partial month reads as a sudden drop. Only the
+        # six monthly trend charts use the trimmed series; every other chart
+        # (including the monthly-count histogram and the event-type
+        # correlation matrix) keeps the full range.
+        incomplete_month = compute_incomplete_month_cutoff(
+            get_latest_incident_month(conn, start_date, end_date),
+            get_data_collection_timestamp(conn),
+        )
+        series_end_date = end_date
+        if incomplete_month:
+            series_end_date = min(end_date, incomplete_month['series_end_date'])
+            logger.info("Monthly trend charts: %s", incomplete_month['note'])
+        if series_end_date != end_date:
+            monthly_counts_series = get_monthly_event_counts(conn, start_date, series_end_date)
+            event_type_mix_series = get_monthly_event_type_mix(conn, start_date, series_end_date)
+        else:
+            monthly_counts_series = monthly_counts
+            event_type_mix_series = event_type_mix
+
         data = {
-            'monthly_counts': monthly_counts,
-            'severity_trends': get_monthly_severity_trends(conn, start_date, end_date),
-            'records_affected': get_monthly_records_affected(conn, start_date, end_date),
-            'event_type_mix': event_type_mix,
+            'incomplete_month': incomplete_month,
+            'monthly_counts': monthly_counts_series,
+            'severity_trends': get_monthly_severity_trends(conn, start_date, series_end_date),
+            'records_affected': get_monthly_records_affected(conn, start_date, series_end_date),
+            'event_type_mix': event_type_mix_series,
             'overall_event_type_mix': get_overall_event_type_mix(conn, start_date, end_date),
             'entity_types': get_entity_type_distribution(conn, start_date, end_date),
             'records_histogram': get_records_affected_histogram(conn, start_date, end_date),
-            'max_severity_per_month': get_maximum_severity_per_month(conn, start_date, end_date),
-            'median_severity_per_month': get_median_severity_per_month(conn, start_date, end_date),
-            'max_records_per_month': get_maximum_records_affected_per_month(conn, start_date, end_date),
+            'max_severity_per_month': get_maximum_severity_per_month(conn, start_date, series_end_date),
+            'median_severity_per_month': get_median_severity_per_month(conn, start_date, series_end_date),
+            'max_records_per_month': get_maximum_records_affected_per_month(conn, start_date, series_end_date),
             'severity_by_industry': get_severity_by_industry(conn, start_date, end_date),
             'severity_by_attack_type': get_severity_by_attack_type(conn, start_date, end_date),
             'records_by_attack_type': get_records_affected_by_attack_type(conn, start_date, end_date),
