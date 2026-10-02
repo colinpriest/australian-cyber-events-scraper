@@ -549,6 +549,17 @@ class DeduplicationMigration:
                         logger.error(f"❌ Storage failed: {len(storage_result.validation_errors)} errors")
                         return False
 
+                # Incremental storage writes DeduplicatedEvents and the map but
+                # not the per-event entity links, sources or counts - only the
+                # old full rebuild repopulated those, so once it was removed
+                # every new event was invisible to the entity dashboard, the
+                # recurrence check and the timing analysis (72 events by
+                # 2026-10-02). run_backfill is idempotent and only adds rows.
+                from cyber_data_collector.dedup.backfill import run_backfill
+                backfill = run_backfill(conn)
+                conn.commit()
+                logger.info(f"🔗 Provenance backfill: {backfill.summary()}")
+
                 logger.info(f"✅ Incremental dedup complete: {len(matched_ids)} merged into existing, "
                             f"{len(truly_new)} new events added")
                 self.migration_report['steps_completed'].append('incremental_dedup_completed')
