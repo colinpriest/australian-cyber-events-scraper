@@ -323,9 +323,36 @@ candidate generation fixed recall; precision needs (1) junk pages rejected
 before deduplication and (2) whole-cluster adjudication over the candidate
 graph, as `adjudicate-clusters` does, instead of pairwise judgement.
 
+**Stage 2 (2026-10-02) - measured, still report-only.** Whole-group
+adjudication (`adjudicate-candidates`, now the routine step) partitions groups
+of strongly-linked candidates instead of judging pairs. On the labelled set:
+
+| At certainty >= 0.9 | Wrong pairs accepted | Genuine kept | Known May/June fragments |
+|---|---|---|---|
+| Pairwise (`find-missed`) | 2/10 | 34/36 | 9/21 |
+| Whole-group, uncapped | 1/10 | 20/38 | 14/21 |
+| Whole-group, groups capped at 20 (current) | 3/10 | 31/38 | 11/21 |
+
+None is safe to merge unattended - each accepts some genuinely separate
+incidents (Mathspace/Tixel, MIFF/Hampr, two Sarcoma victims) - so the routine
+step proposes and a human confirms with `dedup_admin.py merge`. Uncapped
+groups chained 545 of 820 events together through shared articles and rare
+words, hence the size cap.
+
+Also in stage 2: suspect pages are classified (`classify-pages`, gpt-4o-mini,
+verdicts stored in `PageClassifications`) and confident roundup / guidance /
+profile / index verdicts count as non-incidents; merges and splits date an
+event by member consensus instead of earliest-wins, and a 1st-of-month
+placeholder gives way to a day the members agree on. Known open issue:
+*contaminated* events that contain a stray record about another incident
+(RACGP holding a Smoke Alarm Solutions record) pull the adjudicator toward
+wrong matches; `recheck-splits` / `split` are the current remedy.
+
 A full sweep is manual:
 
 ```bash
+python scripts/dedup_admin.py adjudicate-candidates --dry-run --verbose   # whole groups (routine step)
+python scripts/dedup_admin.py classify-pages && python scripts/dedup_admin.py reject-non-incidents
 python scripts/dedup_admin.py find-missed                  # all pairs
 python scripts/dedup_admin.py find-missed --recent-days 120
 python scripts/dedup_admin.py apply-missed --min-certainty 0.9

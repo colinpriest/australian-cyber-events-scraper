@@ -163,3 +163,62 @@ def content_pairs(
                     continue
                 _add(reasons, left, right, f"shared subject '{token}'")
     return reasons
+
+
+def candidate_components(
+    pair_reasons: PairReasons,
+    is_strong,
+    weight=None,
+    max_size: Optional[int] = None,
+) -> List[List[str]]:
+    """Groups of events joined by strong candidate edges, strongest first.
+
+    Pairwise judgement fails on fragmented incidents: shown two records at a
+    time - one misdated by years, or a supplier breach naming a different
+    victim - the model confidently answers "different". Shown the whole group,
+    the shared incident is obvious.
+
+    Plain connected components do not work here: shared articles and rare
+    words chain transitively, and on the live corpus one component swallowed
+    545 of 820 events, which then had to be cut into arbitrary slices. So edges
+    are applied strongest first and two groups are only joined if the result
+    stays within ``max_size`` - local, strongly-linked groups survive, chains
+    do not.
+
+    Args:
+        is_strong: ``(pair_key, reasons) -> bool`` - which edges may join groups.
+        weight: ``(pair_key, reasons) -> float`` - edge strength; higher joins
+            first. Defaults to equal weights.
+        max_size: Largest group allowed; None for unbounded.
+
+    Returns:
+        Groups of two or more event ids, largest first.
+    """
+    parent: Dict[str, str] = {}
+    size: Dict[str, int] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        size.setdefault(x, 1)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    edges = [(key, why) for key, why in pair_reasons.items() if is_strong(key, why)]
+    if weight is not None:
+        edges.sort(key=lambda e: (-weight(*e), sorted(e[0])))
+    else:
+        edges.sort(key=lambda e: sorted(e[0]))
+    for key, _ in edges:
+        left, right = (find(x) for x in sorted(key))
+        if left == right:
+            continue
+        if max_size is not None and size[left] + size[right] > max_size:
+            continue
+        parent[left] = right
+        size[right] += size[left]
+    groups: Dict[str, List[str]] = defaultdict(list)
+    for node in list(parent):
+        groups[find(node)].append(node)
+    return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=len, reverse=True)

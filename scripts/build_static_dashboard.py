@@ -2087,6 +2087,21 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
     }
 
 
+def dashboard_header_dates(end_date: str, incomplete_month: Optional[Dict[str, Any]],
+                           extraction_ts: Optional[str]) -> Dict[str, str]:
+    """Header dates: the incident range ends at the last complete month, and the
+    extraction (collection) date is shown separately.
+
+    "Date Range: ... to 2026-10-02" mixed the two: the end was the build date,
+    not the end of the incident data actually charted.
+    """
+    incident_end = end_date
+    if incomplete_month and incomplete_month.get('series_end_date'):
+        incident_end = min(end_date, incomplete_month['series_end_date'])
+    extraction = (str(extraction_ts)[:10] if extraction_ts else None) or end_date
+    return {'incident_end': incident_end, 'extraction_date': extraction}
+
+
 def get_data_collection_timestamp(conn: sqlite3.Connection) -> Optional[str]:
     """Return the time of the most recent data collection (latest ingest).
 
@@ -2205,6 +2220,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     # Subtitle shown on the monthly trend charts when an incomplete latest
     # month was dropped (see compute_incomplete_month_cutoff).
     incomplete_note = json.dumps((data.get('incomplete_month') or {}).get('note') or '')
+    header = dashboard_header_dates(end_date, data.get('incomplete_month'), data.get('extraction_date'))
     mc = json.dumps(data['monthly_counts'])
     sev = json.dumps(data['severity_trends'])
     ra = json.dumps(data['records_affected'])
@@ -2269,7 +2285,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       <div class="row align-items-center">
         <div class="col-md-8">
           <h1 class="mb-0">Australian Cyber Security Events Dashboard</h1>
-          <p class="mb-0 last-updated">Date Range: __START__ to __END__</p>
+          <p class="mb-0 last-updated">Incident Date Range: __START__ to __INCIDENT_END__ &nbsp;&middot;&nbsp; Extraction Date: __EXTRACTED__</p>
         </div>
       </div>
     </div>
@@ -3902,6 +3918,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
     return (template
             .replace('__START__', start_date)
+            .replace('__INCIDENT_END__', header['incident_end'])
+            .replace('__EXTRACTED__', header['extraction_date'])
             .replace('__INCOMPLETE_MONTH_NOTE__', incomplete_note)
             .replace('__END__', end_date)
             .replace('__MC__', mc)
@@ -4013,6 +4031,7 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
 
         data = {
             'incomplete_month': incomplete_month,
+            'extraction_date': get_data_collection_timestamp(conn),
             'monthly_counts': monthly_counts_series,
             'severity_trends': get_monthly_severity_trends(conn, start_date, series_end_date),
             'records_affected': get_monthly_records_affected(conn, start_date, series_end_date),

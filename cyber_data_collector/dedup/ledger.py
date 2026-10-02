@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from cyber_data_collector.dedup.date_selection import derive_event_date
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.dedup.title_selection import derive_title
 from cyber_data_collector.dedup.models import (
@@ -500,9 +501,8 @@ class DedupLedger:
     def _recompute_identity(self, dedup_id: str, exclude: Optional[str] = None) -> None:
         """Re-derive a group's title and event_date from its remaining members.
 
-        Applies the project's documented "earliest date wins" rule to the
-        members that are actually left, and takes the title from the master
-        event. Without this, a group keeps identity fields inherited from a
+        Dates the group by member consensus (:func:`derive_event_date`) over
+        the members that are actually left, and derives the title from them. Without this, a group keeps identity fields inherited from a
         record that is no longer part of it.
         """
         remaining = self.conn.execute(
@@ -540,13 +540,15 @@ class DedupLedger:
             incident_label=self.incident_label_for(dedup_id),
             current_title=current["title"] if current else None,
         )
-        dates = sorted(str(r["event_date"]) for r in remaining if r["event_date"])
-        earliest = dates[0] if dates else None
+        # Consensus, not earliest-wins: one stray early extraction used to
+        # decide the date of every merged event (date_selection explains why
+        # earliest-wins is wrong; merges and splits were never switched over).
+        event_date = derive_event_date([r["event_date"] for r in remaining], title=title)
 
         self.conn.execute(
             "UPDATE DeduplicatedEvents SET title = ?, event_date = ?, updated_at = ? "
             "WHERE deduplicated_event_id = ?",
-            (title, earliest, datetime.now(), dedup_id),
+            (title, event_date, datetime.now(), dedup_id),
         )
 
     def incident_label_for(self, dedup_id: str) -> Optional[str]:
