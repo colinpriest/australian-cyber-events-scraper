@@ -3981,12 +3981,12 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
         oaic_sectors = prepare_oaic_sectors_data(oaic_data, db_path)
         oaic_individuals_affected = prepare_oaic_individuals_affected_data(oaic_data, db_path)
         # New OAIC vs DB comparisons added 2026-05-03
-        oaic_monthly_comparison = prepare_oaic_monthly_comparison(oaic_data)
-        oaic_individuals_affected_distribution = prepare_individuals_affected_distribution_comparison(oaic_data)
-        oaic_source_split = prepare_source_split_comparison(oaic_data)
+        oaic_monthly_comparison = prepare_oaic_monthly_comparison(oaic_data, db_path=db_path)
+        oaic_individuals_affected_distribution = prepare_individuals_affected_distribution_comparison(oaic_data, db_path=db_path)
+        oaic_source_split = prepare_source_split_comparison(oaic_data, db_path=db_path)
         oaic_time_to_identify = prepare_oaic_time_distribution_series(oaic_data, 'time_to_identify_pct')
         oaic_time_to_notify = prepare_oaic_time_distribution_series(oaic_data, 'time_to_notify_pct')
-        oaic_personal_info_types = prepare_oaic_personal_info_series(oaic_data)
+        oaic_personal_info_types = prepare_oaic_personal_info_series(oaic_data, db_path=db_path)
 
         event_type_mix = get_monthly_event_type_mix(conn, start_date, end_date)
 
