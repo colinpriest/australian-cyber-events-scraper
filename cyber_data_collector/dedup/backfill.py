@@ -34,6 +34,7 @@ class BackfillReport(dict):
         return (
             f"master lineage rows added: {self.get('master_rows_added', 0)}; "
             f"source rows added: {self.get('source_rows_added', 0)}; "
+            f"stale source rows pruned: {self.get('stale_sources_pruned', 0)}; "
             f"entity links added: {self.get('entity_links_added', 0)}; "
             f"counts updated: {self.get('counts_updated', 0)}; "
             f"events still without lineage: {self.get('events_without_lineage', 0)}"
@@ -124,6 +125,31 @@ def backfill_sources(conn: sqlite3.Connection) -> int:
     logger.info("Backfilled %d source row(s)", added)
     return added
 
+
+
+def prune_stale_sources(conn: sqlite3.Connection) -> int:
+    """Delete source rows no current member of the event backs.
+
+    Source rows are derived from members' raw records (``backfill_sources``),
+    but a split moved the member and left its URLs behind, so the event kept
+    counting sources from records it no longer has ("Mackay Toyota" with one
+    record listed a 16-billion-credential leak and the Mackay Sugar tracker).
+    """
+    deleted = conn.execute(
+        """
+        DELETE FROM DeduplicatedEventSources
+        WHERE NOT EXISTS (
+            SELECT 1 FROM EventDeduplicationMap m
+            LEFT JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+            JOIN RawEvents r ON r.raw_event_id = COALESCE(m.raw_event_id, e.raw_event_id)
+                             OR r.raw_event_id = e.raw_event_id
+            WHERE m.deduplicated_event_id = DeduplicatedEventSources.deduplicated_event_id
+              AND r.source_url = DeduplicatedEventSources.source_url
+        )
+        """
+    ).rowcount
+    logger.info("Pruned %d stale source row(s)", deleted)
+    return deleted
 
 
 def backfill_event_entities(conn: sqlite3.Connection) -> int:
@@ -232,6 +258,7 @@ def run_backfill(conn: sqlite3.Connection, dry_run: bool = False) -> BackfillRep
 
     report["master_rows_added"] = backfill_master_lineage(conn)
     report["source_rows_added"] = backfill_sources(conn)
+    report["stale_sources_pruned"] = prune_stale_sources(conn)
     report["entity_links_added"] = backfill_event_entities(conn)
     report["counts_updated"] = refresh_source_counts(conn)
     report["events_without_lineage"] = count_events_without_lineage(conn)

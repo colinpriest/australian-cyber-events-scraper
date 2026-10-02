@@ -721,3 +721,19 @@ def test_group_split_refuses_to_empty_the_event(conn):
     run_backfill(conn)
     with pytest.raises(ValueError):
         DedupLedger(conn).split_members(d1, [e1], reason="x")
+
+
+def test_backfill_prunes_sources_left_behind_by_a_split(conn):
+    _, enr_a, ded_a = _add_event(conn, "a", "Mackay Toyota incident", "https://x/toyota")
+    _, enr_b, ded_b = _add_event(conn, "b", "Mackay Sugar ransomware", "https://x/sugar")
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    ledger.merge_events(ded_a, ded_b, reason="wrong")
+    run_backfill(conn)
+    ledger.split_member(ded_a, enr_b, reason="different entities")
+    run_backfill(conn)
+    urls = {r[0] for r in conn.execute(
+        "SELECT source_url FROM DeduplicatedEventSources WHERE deduplicated_event_id=?", (ded_a,))}
+    assert urls == {"https://x/toyota"}
+    assert conn.execute("SELECT total_data_sources FROM DeduplicatedEvents WHERE deduplicated_event_id=?",
+                        (ded_a,)).fetchone()[0] == 1
