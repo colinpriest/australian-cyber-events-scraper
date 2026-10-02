@@ -3045,11 +3045,17 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               // Sparse: OAIC only publishes the narrow "Cyber incident"
               // sub-source on data.gov.au (2025 H2 onward). spanGaps keeps
               // the line readable across periods where it is unavailable.
-              label: 'Cyber Incidents (OAIC sub-source)',
+              // Only one period is published so far, and a single value
+              // draws no line segment - it was invisible while still listed in
+              // the legend. Explicit markers make each published value show.
+              label: 'Cyber Incidents (OAIC sub-source, published from 2025 H2)',
               data: data.cyber_incident_only || [],
               borderColor: colors.warning || '#f0ad4e',
-              backgroundColor: 'transparent',
+              backgroundColor: colors.warning || '#f0ad4e',
               borderDash: [6, 4],
+              pointRadius: 6,
+              pointHoverRadius: 8,
+              pointStyle: 'rectRot',
               spanGaps: true,
               fill: false,
               tension: 0.3
