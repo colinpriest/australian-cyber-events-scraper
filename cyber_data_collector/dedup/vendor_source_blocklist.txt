@@ -1,0 +1,23 @@
+# Vendor service / product / marketing pages that are never a source of an
+# incident. One entry per line: a domain (blocks the whole site, including
+# subdomains) or a domain plus path prefix (blocks only that section).
+# "www." and the URL scheme are ignored; matching is case-insensitive.
+#
+# Prefer a path prefix for vendors whose blogs report real incidents - those
+# blogs are legitimate secondary sources (Bright Defense, Cyble, Fortian, Lean
+# Security ...). An event is only rejected when EVERY one of its source records
+# is blocked, so listing a page never removes a real incident that also has
+# news coverage.
+#
+# Applied by: dedup_admin.py reject-non-incidents (existing events) and
+# run_global_deduplication.py (new records, before incremental dedup).
+
+# Incident-response vendor; site has no incident reporting
+ausci.au
+
+# Service / practice / product pages
+insight.com/en_us/what-we-do/
+gtlaw.com.au/expertise/
+kwm.com/au/en/expertise/
+sophos.com/en-us/products/
+fortinet.com/solutions/

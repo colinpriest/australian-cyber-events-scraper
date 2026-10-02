@@ -8,9 +8,12 @@ import pytest
 
 from cyber_data_collector.dedup import schema
 from cyber_data_collector.dedup.non_incident import (
+    DEFAULT_BLOCKLIST_PATH,
     deactivate_unmapped_non_incidents,
     find_non_incident_events,
+    is_blocked_source,
     is_non_incident,
+    load_blocklist,
     reject_non_incident_events,
 )
 
@@ -72,6 +75,11 @@ def conn():
     # unmapped records awaiting incremental dedup
     c.execute("INSERT INTO EnrichedEvents VALUES ('new-junk', 't', 0, ?, 'Active', NULL)", (_JUNK,))
     c.execute("INSERT INTO EnrichedEvents VALUES ('new-real', 't', 1, ?, 'Active', NULL)", (_REAL,))
+    c.execute("ALTER TABLE EnrichedEvents ADD COLUMN raw_event_id TEXT")
+    c.execute("CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT)")
+    c.execute("UPDATE EnrichedEvents SET raw_event_id = enriched_event_id")
+    for (eid,) in c.execute("SELECT enriched_event_id FROM EnrichedEvents").fetchall():
+        c.execute("INSERT INTO RawEvents VALUES (?, ?)", (eid, f"https://news.example.com/{eid}"))
     c.commit()
     yield c
     c.close()
@@ -138,3 +146,74 @@ def test_merge_command_refuses_inactive_event(tmp_path, capsys):
                            "--reason", "same incident"])
     assert rc == 1
     assert "not Active" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Vendor source blocklist
+# --------------------------------------------------------------------------
+
+_BLOCK = [("ausci.au", "/"), ("gtlaw.com.au", "/expertise/")]
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://ausci.au/services/incident-response/", True),
+    ("https://www.ausci.au/", True),                                 # www ignored
+    ("https://blog.ausci.au/post", True),                             # subdomain
+    ("https://www.gtlaw.com.au/expertise/services/cyber-security", True),
+    ("https://www.gtlaw.com.au/insights/breach-case-note", False),    # other section
+    ("https://notausci.au/services/", False),                         # not a subdomain
+    ("https://www.abc.net.au/news/ausci.au", False),
+    (None, False),
+])
+def test_is_blocked_source(url, expected):
+    assert is_blocked_source(url, _BLOCK) is expected
+
+
+def test_shipped_blocklist_parses_and_blocks_ausci():
+    entries = load_blocklist(DEFAULT_BLOCKLIST_PATH)
+    assert entries, "blocklist file is empty or missing"
+    assert is_blocked_source("https://ausci.au/services/incident-response/", entries)
+    assert is_blocked_source("https://www.insight.com/en_US/what-we-do/expertise/cybersecurity.html", entries)
+    # A vendor blog that reports real incidents must not be blocked wholesale.
+    assert not is_blocked_source("https://www.brightdefense.com/resources/data-breach-australia/", entries)
+
+
+def _add_event(conn, did, members):
+    """members: [(enriched_id, is_au, perplexity_json, url)]"""
+    conn.execute("INSERT INTO DeduplicatedEvents (deduplicated_event_id, master_enriched_event_id, "
+                 "title, status) VALUES (?, ?, ?, 'Active')", (did, members[0][0], did))
+    for eid, au, pe, url in members:
+        conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, title, is_australian_event, "
+                     "perplexity_enrichment_data, status, raw_event_id) VALUES (?, ?, ?, ?, 'Active', ?)",
+                     (eid, eid, au, pe, eid))
+        conn.execute("INSERT INTO RawEvents VALUES (?, ?)", (eid, url))
+        conn.execute("INSERT INTO EventDeduplicationMap VALUES (?, NULL, ?, ?, 'merged')",
+                     (f"m-{eid}", eid, did))
+    conn.commit()
+
+
+def test_blocklisted_australian_vendor_page_is_rejected(conn):
+    """The AusCi case: Australian, so only the blocklist can catch it."""
+    _add_event(conn, "d-ausci", [("v1", 1, _pe("0.99", "None"),
+                                  "https://ausci.au/services/incident-response/")])
+    found = {e["deduplicated_event_id"] for e in find_non_incident_events(conn, _BLOCK)}
+    assert found == {"d-junk", "d-ausci"}
+
+
+def test_real_incident_citing_a_vendor_page_is_kept(conn):
+    _add_event(conn, "d-cited", [
+        ("n1", 1, _REAL, "https://www.abc.net.au/news/acme-breach"),
+        ("v2", 1, _REAL, "https://www.gtlaw.com.au/expertise/services/cyber-security"),
+    ])
+    found = {e["deduplicated_event_id"] for e in find_non_incident_events(conn, _BLOCK)}
+    assert "d-cited" not in found
+
+
+def test_unmapped_vendor_page_is_kept_out_of_dedup(conn):
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, title, is_australian_event, "
+                 "perplexity_enrichment_data, status, raw_event_id) VALUES "
+                 "('new-vendor', 't', 1, ?, 'Active', 'new-vendor')", (_REAL,))
+    conn.execute("INSERT INTO RawEvents VALUES ('new-vendor', 'https://www.ausci.au/services/')")
+    conn.commit()
+    assert sorted(deactivate_unmapped_non_incidents(conn, blocklist=_BLOCK)) == ["new-junk", "new-vendor"]
+    assert _status(conn, "EnrichedEvents", "enriched_event_id", "new-real") == "Active"
