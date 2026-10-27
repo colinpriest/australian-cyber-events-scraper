@@ -3,7 +3,8 @@
 Export deduplicated cyber events to Excel with LLM-summarized descriptions.
 
 This script:
-1. Reads all active deduplicated events from the database
+1. Reads the active deduplicated events (the shared reporting population:
+   status = 'Active', dated in the dashboard reporting period unless --all-dates)
 2. Collects all associated text from EnrichedEvents and RawEvents
 3. Uses OpenAI GPT to summarize each event
 4. Creates anonymized versions with entity names replaced by generic terms
@@ -22,6 +23,7 @@ Usage:
     python export_events_excel.py --limit 100  # Export only first 100 events
     python export_events_excel.py --no-llm     # Skip LLM summarization (use raw text)
     python export_events_excel.py --exclude-unknown-records  # Exclude events with unknown records affected
+    python export_events_excel.py --all-dates  # Include pre-2020 and undated incidents
 """
 
 from __future__ import annotations
@@ -40,6 +42,16 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import pandas as pd
 from tqdm import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from cyber_data_collector.reporting.population import (  # noqa: E402
+    ReconciliationCheck,
+    count_incidents,
+    dashboard_period,
+    incident_filter,
+    reconcile,
+)
 
 # Load environment variables
 load_dotenv()
@@ -339,9 +351,15 @@ def export_events_to_excel(
     use_llm: bool = True,
     max_words: int = 500,
     max_workers: int = 10,
-    exclude_unknown_records: bool = False
+    exclude_unknown_records: bool = False,
+    all_dates: bool = False,
 ) -> str:
-    """Export deduplicated events to Excel file with parallel LLM processing."""
+    """Export deduplicated events to Excel file with parallel LLM processing.
+
+    The rows are the reporting population: active incidents dated in the dashboard
+    reporting period (``all_dates`` lifts the date bound), so this workbook and the
+    dashboards count the same incidents.
+    """
 
     if output_path is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -370,7 +388,9 @@ def export_events_to_excel(
         print(f"Loaded {len(all_entity_names)} entity names for anonymization")
 
         # Build query with optional filter for unknown records
-        query = """
+        period = None if all_dates else dashboard_period()
+        where, where_params = incident_filter(period)
+        query = f"""
             SELECT
                 deduplicated_event_id,
                 title,
@@ -381,7 +401,7 @@ def export_events_to_excel(
                 description,
                 summary
             FROM DeduplicatedEvents
-            WHERE status = 'Active'
+            WHERE {where}
         """
 
         if exclude_unknown_records:
@@ -392,12 +412,19 @@ def export_events_to_excel(
         params: tuple
         if limit:
             query += " LIMIT ?"
-            params = (limit,)
+            params = (*where_params, limit)
         else:
-            params = ()
+            params = tuple(where_params)
 
         cursor.execute(query, params)
         events = cursor.fetchall()
+
+        # An unfiltered export must contain exactly the population.
+        if not limit and not exclude_unknown_records:
+            reconcile([ReconciliationCheck(
+                "Excel export rows", count_incidents(conn, period), len(events),
+                f"period: {period}" if period else "all dates")],
+                context="export_events_excel")
 
         print(f"Processing {len(events)} events...")
 
@@ -568,6 +595,11 @@ def main():
         action='store_true',
         help='Exclude events where the number of customer records affected is unknown'
     )
+    parser.add_argument(
+        '--all-dates',
+        action='store_true',
+        help='Do not limit to the dashboard reporting period (adds pre-2020 and undated incidents)'
+    )
 
     args = parser.parse_args()
 
@@ -586,7 +618,8 @@ def main():
         use_llm=not args.no_llm,
         max_words=args.max_words,
         max_workers=args.workers,
-        exclude_unknown_records=args.exclude_unknown_records
+        exclude_unknown_records=args.exclude_unknown_records,
+        all_dates=args.all_dates,
     )
     print(f"\nOutput file: {Path(output_file).resolve()}")
 
