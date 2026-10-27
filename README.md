@@ -517,7 +517,8 @@ labelled one way is never acted on the other way.
 | 3 | `check-victims` | Do the records name a different victim? (deterministic rule) | none | - | 8/9 reviewed | - | - |
 | 3b | `check-coherence --apply` (not yet wired into `run_full_pipeline.py`) | Is each suspect record about its event's incident? (splits strays out) | Jev + escalation | split below **0.15** | 1.00 (17/17) | 0.94 | 0.98 |
 | 4 | `check-duplicates --apply` | Are two events about one organisation the same incident? | Jev + escalation | merge at **0.81** | 1.00 (16/16) | 0.94 | 0.97 |
-| 5 | `check-victim-attribution` | Is the recorded victim really the affected organisation? | Jev | report only (no labels yet) | - | - | - |
+| 3b | `check-victim-attribution --apply` | Is the recorded victim really the affected organisation? Demote / replace from the evidence / flag | Jev + escalation | act below **0.15**; replace at choice **0.84** | 0.956 (43/45); replacements 23/25 | 0.38 | 0.94 |
+| 5 | `reconcile-timelines --queue-gaps` | Do events agree with the organisation's researched timeline? Resolved by steps 2 and 3b; re-dating report only (2 eligible conflicts, too few to calibrate) | Jev | - | - | - | - |
 
 \*Mean precision of the whole choose-then-test procedure on held-out labels
 (stratified bootstrap), the honest estimate - choosing a cut-off on the labels
@@ -529,16 +530,23 @@ python scripts/dedup_admin.py check-events [--apply]
 python scripts/dedup_admin.py check-victims [--dry-run]
 python scripts/dedup_admin.py check-coherence [--apply] [--event <dedup_id>]
 python scripts/dedup_admin.py check-duplicates [--apply]
-python scripts/dedup_admin.py check-victim-attribution
+python scripts/dedup_admin.py check-victim-attribution [--apply]
 python scripts/dedup_admin.py research-timelines
-python scripts/dedup_admin.py reconcile-timelines [--queue-gaps]
+python scripts/dedup_admin.py reconcile-timelines [--queue-gaps] [--apply]
 ```
+
+These commands fail (exit 2) rather than skip when Jev or Perplexity is
+needed and unavailable, and `--apply` refuses when its labels file is
+missing, unreadable or empty. A calibration measured on another model or
+question version makes the step report-only, and the log says so.
 
 **Labels** (all blind to the model being calibrated, each with a written
 reason; reviewed where flagged): `evaluation/source_gate_labels.csv` (170
 pages), `evaluation/event_reality_labels.csv` (168 events),
 `evaluation/duplicate_labels.csv` (157 pairs - every same-victim pair),
 `evaluation/coherence_labels.csv` (148 event members - every suspect).
+`evaluation/victim_attribution_labels.csv` (151 event-victim pairs; see
+[docs/10-victim-attribution-and-timelines.md](docs/10-victim-attribution-and-timelines.md)).
 Labellers were Claude Opus 5.5 subagents working from the stored evidence plus
 web searches; conventions worth reviewing are noted in each file's rationales
 (dark-web sale claims naming no victim = unsure; campaigns naming no victim,
@@ -616,12 +624,18 @@ incidents (2023, August 2024, January 2025, June 2025).
   its probability replaces Jev's and is stored with its rationale.
 - **Reconciliation** (`dedup/timeline_reconciliation.py`,
   `reconcile-timelines`): matches each event to its organisation's timeline
-  and reports what disagrees - events matching no incident (classified as a
-  gap in the research, the wrong organisation, or not an incident), incidents
-  with no event (coverage gaps; `--queue-gaps` queues reporting of them) and
-  date conflicts. Report-only: re-attribution, rejection and re-dating from it
-  need labelled outcomes first (see `docs/TODO.md`). Its verdicts appear on the
-  timeline dashboard.
+  and resolves what disagrees - wrong-organisation events through the
+  calibrated victim attribution, not-an-incident events through the calibrated
+  event-reality filter, date conflicts by calibrated re-dating (`--apply`),
+  incidents with no event by `--queue-gaps`; timeline gaps stay a report. Its
+  verdicts appear on the timeline dashboard.
+- **Timeline question v2**: aliases must be spellings of the same name (a
+  misfiled record once put "Aussie Fluid Power" into the AFP's question, and
+  the timeline then vouched for the misattribution); multinationals and
+  declined questions are asked about Australia only; supplier breaches get
+  their own instruction. A failed refresh is recorded and raises, and
+  judgements are told when a timeline may be incomplete. Details:
+  [docs/10-victim-attribution-and-timelines.md](docs/10-victim-attribution-and-timelines.md).
 
 Every Jev and escalation answer is stored in `ModelJudgements` with the
 question as sent, a hash of the input, the version that answered and the full

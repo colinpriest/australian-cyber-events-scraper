@@ -610,9 +610,16 @@ class UnifiedPipeline:
         # split, a re-enriched record - and nothing else refreshes them.
         # rescrape-short-pages first: pages with under 300 characters of text
         # cannot be judged by the source gate or the page classifier.
-        steps = [["rescrape-short-pages"], ["classify-pages"], sources, check,
-                 ["classify-entities", "--stale-only"],
-                 ["check-victims"], coherence, duplicates, ["check-victim-attribution"]]
+        # research-timelines: organisation histories are refreshed before any
+        # judgement reads them. check-victim-attribution re-attributes (calibrated)
+        # before strays and duplicates are judged by victim. reconcile-timelines
+        # last: it reports what still disagrees and queues reporting of gaps.
+        attribution = ["check-victim-attribution"]
+        if not getattr(args, 'report_event_rejections', False):
+            attribution.append("--apply")
+        steps = [["rescrape-short-pages"], ["research-timelines"], ["classify-pages"], sources, check,
+                 ["classify-entities", "--stale-only"], ["check-victims"], attribution,
+                 coherence, duplicates, ["reconcile-timelines", "--queue-gaps"]]
         for step in steps:
             try:
                 if dedup_admin.main(base + step) != 0:

@@ -6,39 +6,45 @@ names the evidence that showed the problem. Done items move to the README or
 
 ## In progress (2026-10-27, night)
 
-Being implemented on `claude/cyber-attack-recurrence-analysis-c22779`; each
-moves to the README when merged and run on the live database.
-
-- **Resolve event/timeline mismatches.** `reconcile-timelines` reports events
-  matching no researched incident (29 timeline gaps on the live data),
-  wrong-organisation and not-an-incident cases, and date conflicts. Each class
-  is being routed to a calibrated action (victim re-attribution, event-reality
-  rejection, re-research, re-dating with date provenance).
-- **Calibrate victim attribution.** `check-victim-attribution` is report-only
-  because nothing is labelled. Known wrong victims: UN Women Australia under
-  UWA, a NSW driver-licence exposure under Optus, Aussie Fluid Power under the
-  AFP, Ambulance Tasmania under Ambulance Victoria, TAFE SA under Melbourne TAFE.
-- **Scope timelines for multinationals to Australia, and ask for supplier
-  breaches.** Perplexity declined to list Microsoft's incidents and found none
-  for the Australian Digital Health Agency; UWA's timeline omits the 2020
-  ProctorU breach.
 - **Events that affect more than one organisation.** Supplier breaches
   (ProctorU: ten universities; Canvas/Instructure; Frontier payroll) are one
-  incident with several victims; nothing finds the other victims, and the
-  recurrence analysis must count such an incident once per victim.
-- **Citations must support accepted facts; affected counts need unit, basis
-  and scope.** A syntactically valid URL used to count as support. Counts need
-  to say what they count (people / accounts / records), whether confirmed, and
-  whether Australian or global.
-- **5,836 enriched records carry the constant 0.85 reliability** set by old
-  code; to be recomputed from their stored research.
-- **Exports, dashboards and OAIC** (reviewer fallback findings 18-21, 29,
-  33-37): anonymisation failures leaking original text, risk-matrix exports
-  overwriting good output, "insufficient information" defaulting to C6,
-  unknown severity counted as 0, contradictory OAIC statistics published, the
-  older OAIC scraper substituting dates and counts.
+  incident with several victims; being built (find, judge and attach each
+  victim; count once per victim in the recurrence analysis).
+
+## Done tonight (2026-10-27; timelines and victims: see `docs/10-victim-attribution-and-timelines.md`)
+
+- Timelines scoped to Australia for multinationals and refusals; aliases
+  limited to spellings of the same name; supplier-breach instruction
+  (`timeline-v2`). Failed refreshes are recorded and flagged to judgements.
+- Victim attribution calibrated; `check-victim-attribution --apply`
+  demotes / re-attributes from the evidence, else flags.
+- Timeline reconciliation resolves each mismatch class through a calibrated
+  step (victim attribution, event reality, calibrated re-dating) or reports it.
+
+- Citation support for enrichment facts; affected counts carry unit, basis
+  and scope; `PERPLEXITY_MODEL` everywhere (docs/05).
+- Stray records: `check-coherence` on Jev, calibrated, in the refresh
+  (docs/09 section 8j).
+- Exports, dashboards, OAIC and ASD-classifier fallbacks (reviewer findings
+  18-21, 29, 33-37); validated OAIC refresh in the pipeline.
 
 ## To do
+
+- **Apply the reliability recompute after labelling a sample.**
+  `perplexity_backfill_events.py --recompute-reliability` is merged and
+  tested but not applied to the live data: on a copy it withholds
+  unsupported facts on 3,707 records and would revert 2,486 event dates to
+  the raw (often publication) date, leaving 162 more records undated. A spot
+  check found most withheld entities wrong, but the date reversion feeds
+  reporting-lag artefacts back into the recurrence analysis. Label a sample
+  of withheld dates and counts first.
+- **Timeline recall of supplier breaches is still uneven.** After v2, UNSW's
+  timeline lists the 2020 ProctorU breach but UWA's does not, and Perplexity's
+  answers vary run to run. A second, supplier-only query per organisation
+  (or per known supplier) would be the next step.
+- **Victim re-attribution flags what it cannot replace.** Wrong sole victims
+  whose real victim is not named by the evidence are flagged
+  (`VictimAttributionActions.action = 'flagged'`), not changed.
 
 - **Strays at the same organisation.** `check-coherence` is calibrated
   (docs/09 section 8j) but splits only *suspects* - records naming another
