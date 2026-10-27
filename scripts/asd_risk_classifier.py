@@ -37,6 +37,9 @@ from tqdm import tqdm
 load_dotenv()
 
 from cyber_data_collector.utils import setup_logging
+from cyber_data_collector.utils.llm_models import (
+    add_model_arguments, apply_model_arguments, chat_params, openai_model,
+)
 
 # Configure logging
 setup_logging(log_file="logs/asd_risk_classifier.log")
@@ -177,13 +180,16 @@ class ASDRiskClassification(BaseModel):
 class ASDRiskClassifier:
     """Classify cyber events using ASD risk matrix framework."""
     
-    def __init__(self, db_path: str, model: str = "gpt-4o", api_key: Optional[str] = None):
-        """Initialize the classifier."""
+    def __init__(self, db_path: str, model: Optional[str] = None, api_key: Optional[str] = None):
+        """Initialize the classifier.
+
+        ``model`` defaults to the strong OpenAI model (see llm_models).
+        """
         self.db_path = Path(db_path)
         if not self.db_path.exists():
             raise FileNotFoundError(f"Database not found at {self.db_path}")
         
-        self.model = model
+        self.model = model or openai_model()
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY not found in environment variables or .env file")
@@ -205,7 +211,7 @@ class ASDRiskClassifier:
         # Prompt-level cache: hash(prompt+model+temperature) -> classification result
         # Ensures identical reruns skip the API call entirely
         self._prompt_cache: Dict[str, Dict[str, Any]] = {}
-        self._temperature = 0.3  # Default temperature for cache key
+        self._temperature = chat_params(self.model)["temperature"]  # for cache key
     
     def close(self):
         """Close database connection."""
@@ -434,7 +440,7 @@ Return your response as a JSON object with this exact structure:
                     logger.debug(f"Calling API for event {event_id} (attempt {attempt + 1})")
 
                     response = self.client.beta.chat.completions.parse(
-                        model=self.model,
+                        **chat_params(self.model),
                         messages=[
                             {
                                 "role": "system",
@@ -443,7 +449,6 @@ Return your response as a JSON object with this exact structure:
                             {"role": "user", "content": prompt}
                         ],
                         response_format=ASDRiskClassification,
-                        temperature=self._temperature
                     )
 
                     parsed_classification = response.choices[0].message.parsed
@@ -929,9 +934,10 @@ def main():
     parser.add_argument(
         '--model',
         type=str,
-        default='gpt-4o',
-        help='OpenAI model to use (default: gpt-4o)'
+        default=None,
+        help='OpenAI model to use (default: the strong model; same as --openai-model)'
     )
+    add_model_arguments(parser)
     
     parser.add_argument(
         '--limit',
@@ -954,6 +960,7 @@ def main():
     )
     
     args = parser.parse_args()
+    apply_model_arguments(args)
     
     try:
         # Initialize classifier

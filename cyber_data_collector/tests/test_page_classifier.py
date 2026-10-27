@@ -54,7 +54,8 @@ def conn():
         CREATE TABLE EnrichedEvents (enriched_event_id TEXT PRIMARY KEY, raw_event_id TEXT, title TEXT,
             summary TEXT, description TEXT, status TEXT, is_australian_event INTEGER,
             perplexity_enrichment_data TEXT, updated_at TEXT);
-        CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT);
+        CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT,
+            raw_content TEXT, raw_description TEXT);
         CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT PRIMARY KEY, title TEXT,
             event_date TEXT, status TEXT);
         CREATE TABLE EventDeduplicationMap (map_id TEXT PRIMARY KEY, enriched_event_id TEXT,
@@ -68,7 +69,7 @@ def conn():
     ]
     for did, rid, title, url in rows:
         c.execute("INSERT INTO EnrichedEvents VALUES (?, ?, ?, NULL, NULL, 'Active', 1, NULL, NULL)", (rid, rid, title))
-        c.execute("INSERT INTO RawEvents VALUES (?, ?)", (rid, url))
+        c.execute("INSERT INTO RawEvents VALUES (?, ?, ?, NULL)", (rid, url, title))
         c.execute("INSERT OR IGNORE INTO DeduplicatedEvents VALUES (?, ?, '2026-02-20', 'Active')", (did, did))
         c.execute("INSERT INTO EventDeduplicationMap VALUES (?, ?, ?)", ("m-" + rid, rid, did))
     c.commit()

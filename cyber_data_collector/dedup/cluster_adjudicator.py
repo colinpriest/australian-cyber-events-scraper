@@ -30,10 +30,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from cyber_data_collector.dedup.adjudicator import EventRecord
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 
 logger = logging.getLogger(__name__)
 
-CLUSTER_MODEL = "gpt-4o"
 # Above this many members the prompt gets unwieldy and the model starts losing
 # track of indices. Larger clusters are chunked.
 MAX_CLUSTER_SIZE = 20
@@ -136,13 +136,13 @@ class ClusterAdjudicator:
         self,
         resolver: Optional[EntityResolver] = None,
         openai_client=None,
-        model: str = CLUSTER_MODEL,
+        model: Optional[str] = None,
         max_cluster_size: int = MAX_CLUSTER_SIZE,
     ):
         self.resolver = resolver or EntityResolver()
         self._client = openai_client
         self._client_ready = openai_client is not None
-        self.model = model
+        self.model = model or openai_model()
         self.max_cluster_size = max_cluster_size
         self.stats: Dict[str, int] = {
             "clusters": 0, "llm_calls": 0, "llm_failures": 0,
@@ -271,13 +271,12 @@ class ClusterAdjudicator:
         try:
             self.stats["llm_calls"] += 1
             partition: ClusterPartition = client.chat.completions.create(
-                model=self.model,
+                **chat_params(self.model),
                 response_model=ClusterPartition,
                 messages=[
                     {"role": "system", "content": self._system_prompt()},
                     {"role": "user", "content": self._render_cluster(records)},
                 ],
-                temperature=0.0,
             )
         except Exception as exc:  # noqa: BLE001 - a failed cluster must not abort a run
             self.stats["llm_failures"] += 1

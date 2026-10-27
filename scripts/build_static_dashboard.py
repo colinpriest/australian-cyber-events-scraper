@@ -4044,7 +4044,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true,
                     title: { display: true, text: 'Notifications' } } },
           plugins: { title: { display: true, text: hasDb
-            ? 'OAIC stacks left, DB stacks right (DB classified by GPT-4o-mini)'
+            ? 'OAIC stacks left, DB stacks right (DB classified by LLM)'
             : 'OAIC notifications (database events not yet classified by breach source)' } },
         },
       });

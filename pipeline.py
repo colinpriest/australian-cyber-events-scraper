@@ -59,6 +59,7 @@ def _build_pipeline_args(
         # them off made the recurrence check and entity sizing fail silently.
         force_dedup=False,
         skip_data_hygiene=False,
+        hygiene_apply_rejections=False,
         skip_recurrence_check=False,
         recurrence_window=90,
         recurrence_min_certainty=0.85,

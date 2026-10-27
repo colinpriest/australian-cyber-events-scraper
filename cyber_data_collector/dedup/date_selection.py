@@ -32,6 +32,8 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
+
 logger = logging.getLogger(__name__)
 
 MONTHS = {
@@ -311,9 +313,8 @@ class DateResearcher:
 
         try:
             got = self._client.chat.completions.create(
-                model="gpt-4o",
+                **chat_params(openai_model()),
                 response_model=ResolvedDate,
-                temperature=0.0,
                 messages=[
                     {"role": "system",
                      "content": ("You establish when a cyber security incident "
@@ -372,9 +373,8 @@ class DateResearcher:
     def _ask_month(self, title: str, evidence: str) -> Optional[ResolvedDate]:
         try:
             return self._client.chat.completions.create(
-                model="gpt-4o",
+                **chat_params(openai_model()),
                 response_model=ResolvedDate,
-                temperature=0.0,
                 messages=[
                     {"role": "system",
                      "content": ("You establish the month a cyber security "

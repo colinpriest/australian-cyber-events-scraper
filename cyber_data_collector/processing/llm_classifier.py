@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from tqdm import tqdm
 
 from cyber_data_collector.utils.entity_scraper import is_blocked_domain
+from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from cyber_data_collector.models.events import (
     CyberEvent,
     CyberEventType,
@@ -222,12 +223,13 @@ CRITICAL REQUIREMENTS:
 """
 
         last_exc: Optional[BaseException] = None
+        model_name = openai_fast_model()
         for attempt in range(1, max_attempts + 1):
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
                         lambda: self.client.chat.completions.create(
-                            model="gpt-4o-mini",
+                            **chat_params(model_name),
                             response_model=EventEnhancement,
                             messages=[
                                 {
@@ -257,7 +259,7 @@ CRITICAL REQUIREMENTS:
                 raw = getattr(response, '_raw_response', None)
                 if raw and hasattr(raw, 'usage') and raw.usage:
                     tracker.record(
-                        "gpt-4o-mini", raw.usage.prompt_tokens,
+                        model_name, raw.usage.prompt_tokens,
                         raw.usage.completion_tokens, context="llm_classifier",
                     )
                 return response

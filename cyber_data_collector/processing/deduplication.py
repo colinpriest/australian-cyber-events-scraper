@@ -24,6 +24,7 @@ from difflib import SequenceMatcher
 from typing import Any, Dict, List
 
 from cyber_data_collector.models.events import AffectedEntity, CyberEvent
+from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 
 
 class DeduplicationEngine:
@@ -972,13 +973,11 @@ If uncertain or anchors are insufficient, return NO.
 
             client = openai.OpenAI(api_key=api_key)
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                **chat_params(openai_fast_model(), max_tokens=10),
                 messages=[
                     {"role": "system", "content": "You are an expert at identifying duplicate cyber security incidents from news reports."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=10,
-                temperature=0.1
             )
 
             result = response.choices[0].message.content.strip().upper()

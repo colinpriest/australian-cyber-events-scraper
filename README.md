@@ -54,6 +54,14 @@ OPENAI_API_KEY=your_openai_api_key
 # Recommended (for event discovery)
 PERPLEXITY_API_KEY=your_perplexity_api_key
 
+# Recommended (Jev judgements with probabilities; without it the fast OpenAI model is used)
+TYPESAFE_API_KEY=your_typesafe_api_key
+
+# Optional model overrides - defaults are pinned, dated snapshots (see "Language models")
+# OPENAI_MODEL=gpt-5.5-2026-04-23
+# OPENAI_FAST_MODEL=gpt-5.4-mini-2026-03-17
+# TYPESAFE_MODEL=jev-1.14.0
+
 # Optional (for Google Search source)
 GOOGLE_CUSTOMSEARCH_API_KEY=your_google_api_key
 GOOGLE_CUSTOMSEARCH_CX_KEY=your_cx_key
@@ -68,6 +76,46 @@ DATABASE_URL=sqlite:///instance/cyber_events.db
 # Processing
 MAX_THREADS=10
 BATCH_SIZE=20
+```
+
+---
+
+## Language models and replicability
+
+Every LLM call takes its model from
+[`cyber_data_collector/utils/llm_models.py`](cyber_data_collector/utils/llm_models.py),
+so three settings describe a run completely:
+
+| Setting | Default (dated snapshot) | Used for |
+|---|---|---|
+| `OPENAI_MODEL` / `--openai-model` | `gpt-5.5-2026-04-23` | adjudication, partitions, coherence, dates, ASD classification, OAIC vision extraction |
+| `OPENAI_FAST_MODEL` / `--openai-fast-model` | `gpt-5.4-mini-2026-03-17` | discovery filtering, entity extraction, summaries, page classification without Jev |
+| `TYPESAFE_MODEL` / `--jev-model` | `jev-1.14.0` | bounded judgements that return probabilities (page classification today) |
+
+The options are accepted by `run_full_pipeline.py`, `scripts/dedup_admin.py`,
+`scripts/run_global_deduplication.py`, `scripts/asd_risk_classifier.py` and
+the export scripts. Defaults are dated snapshots, never aliases (`gpt-5.5`,
+`jev-latest`), because an alias can change under the code. GPT-5 calls are made
+with `reasoning_effort="none"` and `temperature=0`, the most repeatable
+sampling those models allow. GPT-4o / GPT-4o-mini were used until 2026-10;
+GPT-4o-mini is withdrawn in January 2027.
+
+**Jev answers are stored, not re-asked.** Jev returns probabilities (a Choice's
+distribution, a Noul's probability, a Score's level distribution) and is not
+fully deterministic - the same question can return 0.99 and then 0.98. Every
+answer is written to `ModelJudgements` with the question exactly as sent, a
+hash of the input, the version that answered and the full distribution, and a
+re-run reuses the stored answer unless the question, the input or the model
+changes. The database is therefore the record of each decision: a replication
+with the published database reproduces the decisions; one from scratch
+reproduces them up to Jev's sampling variation, which the stored
+distributions let you measure. See
+[`cyber_data_collector/utils/jev.py`](cyber_data_collector/utils/jev.py).
+
+```sql
+-- Every page verdict with its distribution
+SELECT subject_id, answer, value, probabilities_json, model, created_at
+FROM ModelJudgements WHERE question_id = 'page_kind';
 ```
 
 ---
@@ -380,6 +428,45 @@ python scripts/dedup_admin.py merge <target> <source> --reason "..." --force
 Move a multi-record incident out with one `split` naming all its records:
 splitting them one at a time caches rulings *between* them, and the safeguard
 then (correctly) refuses to regroup them.
+
+### Automatic hygiene: non-incident pages and contradicted victims
+
+Two defects put false repeat attacks into the short-gap band of the
+recurrence analysis: an agency's own web pages stored as later "attacks" on it
+("Business - ACT Government", Service NSW's *Report identity theft* form), and
+incidents filed under the wrong organisation (TPG's December 2022 breach under
+Optus because the article mentions Optus; Sharp Office Systems under Sharp
+Motor Group because a canonicalisation rule folded them on "sharp").
+`run_full_pipeline.py` now corrects both after every deduplication, before the
+recurrence check (`--skip-data-hygiene` to opt out):
+
+```bash
+python scripts/dedup_admin.py classify-pages          # Jev (or fast model) on each suspect page
+python scripts/dedup_admin.py reject-non-incidents    # events made only of non-incident pages
+python scripts/dedup_admin.py check-victims --dry-run # deterministic, no API calls
+```
+
+- **Pages.** Government service pages and titles with no incident vocabulary
+  are now suspects. The classifier judges the page's **own scraped text**: the
+  enrichment summary it was shown before had been written by an earlier model
+  as if every page reported an incident, so every service page passed. Verdicts
+  carry a `question_version`; changing the question or the evidence re-asks.
+  **Rejection is report-only** (`--hygiene-apply-rejections` to apply): on
+  2026-10-27 it would have rejected 74 events, and many were real incidents
+  whose stored page is the victim's privacy policy or home page while the
+  incident came from Perplexity's research (LUSH, Nexia, Legal Aid ACT).
+  Perplexity's confidence does not separate the two (0.83 for the ACT business
+  page, 0.2 for LUSH). Deciding whether an *event* happened needs an
+  event-level judgement with corroboration, evaluated before it deletes.
+- **Victims.** When no record names the event's victim and two thirds of the
+  records name one other organisation (Perplexity's researched victim, found
+  in the records' own text), that organisation becomes the victim. Guarded
+  against legal and parent names (a title naming the current victim keeps
+  it), suppliers in supply-chain breaches, and parties the role pass labelled
+  vendor, product or regulator. The same rule runs inside role
+  reclassification, so a later pass cannot restore the wrong victim.
+- **Entities.** Names sharing a brand word across lines of business are no
+  longer folded together, directly or by chaining through a bare name.
 
 ### Stray records: event coherence
 

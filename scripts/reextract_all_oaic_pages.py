@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -225,7 +227,7 @@ async def call_vision(client: AsyncOpenAI, prompt: str, image_path: Path) -> Opt
     img_b64 = base64.b64encode(image_path.read_bytes()).decode("utf-8")
     try:
         resp = await client.chat.completions.create(
-            model="gpt-4o",
+            **chat_params(openai_model(), max_tokens=2048),
             messages=[{
                 "role": "user",
                 "content": [
@@ -234,8 +236,6 @@ async def call_vision(client: AsyncOpenAI, prompt: str, image_path: Path) -> Opt
                      "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
                 ],
             }],
-            max_tokens=2048,
-            temperature=0.0,
             response_format={"type": "json_object"},
         )
         return json.loads(resp.choices[0].message.content)

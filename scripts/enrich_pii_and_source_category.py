@@ -25,6 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
+from cyber_data_collector.utils.llm_models import (
+    add_model_arguments, apply_model_arguments, chat_params, openai_fast_model,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -133,13 +137,11 @@ async def classify(client: AsyncOpenAI, ev: dict) -> Optional[dict]:
     user_text = f"Title: {title}\n\nDescription: {description}\n\nSummary: {summary}"
     try:
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            **chat_params(openai_fast_model(), max_tokens=512),
             messages=[
                 {"role": "system", "content": PROMPT},
                 {"role": "user",   "content": user_text},
             ],
-            max_tokens=512,
-            temperature=0.0,
             response_format={"type": "json_object"},
         )
         data = json.loads(resp.choices[0].message.content)
@@ -211,7 +213,9 @@ def main():
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--concurrency", type=int, default=10)
     p.add_argument("--force", action="store_true")
+    add_model_arguments(p)
     args = p.parse_args()
+    apply_model_arguments(args)
     n = asyncio.run(enrich(args.db, args.limit, args.concurrency, args.force))
     print(f"Enriched {n} events.")
 

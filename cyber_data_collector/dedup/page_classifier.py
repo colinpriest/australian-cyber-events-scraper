@@ -20,6 +20,7 @@ event is rejected only when every one of its records is a non-incident (see
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -31,9 +32,30 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-PAGE_MODEL = "gpt-4o-mini"
 # A non-incident verdict below this confidence is ignored.
 MIN_CONFIDENCE = 0.8
+
+# Bumped whenever the question or the evidence shown changes; a stored verdict
+# from another version is re-asked. v1 showed the enrichment *summary*, which
+# an earlier model had written as if every page reported an incident ("A
+# cyber-attack targeted the ACT Government" for the ACT business-services
+# page), so every government service page was judged a specific incident. v2
+# shows the page's own scraped text.
+QUESTION_VERSION = "page-kind-v2-source-text"
+SOURCE_CHARS = 3000
+
+KIND_DESCRIPTIONS = {
+    "specific_incident": (
+        "The page reports ONE identifiable cyber incident at a named or clearly described "
+        "organisation - even if it is a roundup, a LinkedIn post or a law-firm note, as long as "
+        "this page is about that one incident."),
+    "roundup_or_list": "A weekly or monthly review, breach list, statistics or trends page covering many incidents.",
+    "guidance_or_marketing": (
+        "Advice, a toolkit, fact sheet, scam warning, a government or company service page, a "
+        "form, or vendor marketing - including pages ABOUT data breaches that report none."),
+    "profile_or_personal": "A person's profile, or a post that does not report an incident.",
+    "index_or_homepage": "A site home page, section page, or topic/tag index.",
+}
 
 SUSPECT_TITLE = re.compile(
     r"(week in review|news headlines|weekly (threat|cyber|security) (briefing|update|roundup|wrap)"
@@ -105,6 +127,9 @@ class PageVerdict(BaseModel):
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(SCHEMA)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(PageClassifications)")}
+    if "question_version" not in columns:
+        conn.execute("ALTER TABLE PageClassifications ADD COLUMN question_version TEXT")
 
 
 def is_suspect(title: Optional[str], url: Optional[str]) -> bool:
@@ -126,19 +151,25 @@ def is_non_incident_verdict(verdict: Optional[Tuple[str, float]]) -> bool:
     return bool(verdict) and verdict[0] in NON_INCIDENT_KINDS and verdict[1] >= MIN_CONFIDENCE
 
 
-def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False) -> List[Tuple[str, str, str, str]]:
-    """Active suspect records with no stored verdict: (id, title, url, text)."""
+def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False) -> List[Tuple[str, str, str, str, str]]:
+    """Active suspect records with no current verdict: (id, title, url, page text, summary).
+
+    A verdict from an earlier ``QUESTION_VERSION`` does not count as current.
+    """
     ensure_schema(conn)
     rows = conn.execute(
         f"""
         SELECT e.enriched_event_id, COALESCE(e.title, ''), COALESCE(r.source_url, ''),
+               SUBSTR(COALESCE(NULLIF(r.raw_content, ''), r.raw_description, ''), 1, {SOURCE_CHARS}),
                COALESCE(e.summary, e.description, '')
         FROM EnrichedEvents e
         LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
         WHERE e.status = 'Active'
-          AND NOT EXISTS (SELECT 1 FROM PageClassifications p WHERE p.enriched_event_id = e.enriched_event_id)
+          AND NOT EXISTS (SELECT 1 FROM PageClassifications p
+                          WHERE p.enriched_event_id = e.enriched_event_id
+                            AND p.question_version = ?)
           {"AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m WHERE m.enriched_event_id = e.enriched_event_id)" if only_unmapped else ""}
-        """
+        """, (QUESTION_VERSION,)
     ).fetchall()
     return [tuple(r) for r in rows if is_suspect(r[1], r[2])]
 
@@ -154,33 +185,69 @@ def _client():
         return None
 
 
-def classify_pages(conn: sqlite3.Connection, records: Sequence[Tuple[str, str, str, str]],
-                   client=None, dry_run: bool = False) -> Dict[str, PageVerdict]:
-    """Classify suspect records and store the verdicts.
+_INSTRUCTIONS = (
+    "Classify this scraped web page for an Australian cyber-incident database: does the page "
+    "itself report one specific, identifiable cyber incident, or is it something else? Judge "
+    "from `page_text`, the page's own scraped text, together with `title` and `url`. "
+    "`enrichment_summary` was written by an earlier model and often describes an incident the "
+    "page never reports; use it only to understand what was extracted, never as evidence that "
+    "the page reports an incident.")
 
-    Failures are skipped (no verdict stored), so a record is retried next run
-    and an outage never hardens into a rejection.
+
+def _state(title: str, url: str, page_text: str, summary: str) -> Dict[str, str]:
+    return {"title": title, "url": url, "page_text": page_text or "(no page text stored)",
+            "enrichment_summary": summary}
+
+
+def _side_probability(kind: str, probabilities: Dict[str, float]) -> float:
+    """Probability of the chosen side - incident or non-incident - not just the chosen kind.
+
+    The gate asks "is this a non-incident?", so a page split 0.5 guidance /
+    0.4 roundup is a confident non-incident (0.9), not an unsure one (0.5).
     """
-    client = client or _client()
-    if client is None:
-        logger.warning("No OpenAI client; %d suspect page(s) left unclassified", len(records))
-        return {}
-    ensure_schema(conn)
+    non_incident = sum(p for k, p in probabilities.items() if k in NON_INCIDENT_KINDS)
+    return non_incident if kind in NON_INCIDENT_KINDS else 1.0 - non_incident
+
+
+def _classify_with_jev(conn, records, dry_run: bool) -> Dict[str, PageVerdict]:
+    from typesafe_sdk import Choice
+    from cyber_data_collector.utils.jev import JevJudge
+
+    judge = JevJudge(conn)
+    question = Choice(instructions=_INSTRUCTIONS, criteria=KIND_DESCRIPTIONS)
     results: Dict[str, PageVerdict] = {}
-    for eid, title, url, text in records:
+    try:
+        for eid, title, url, page_text, summary in records:
+            try:
+                judgement = judge.ask("enriched_event", eid, QUESTION_VERSION,
+                                      _state(title, url, page_text, summary), {"page_kind": question})["page_kind"]
+            except Exception as exc:  # noqa: BLE001 - never let one page break a run
+                logger.warning("Jev page classification failed for %s: %s", eid, exc)
+                continue
+            confidence = _side_probability(judgement.answer, judgement.probabilities)
+            results[eid] = PageVerdict(kind=judgement.answer, confidence=round(confidence, 4),
+                                       reasoning="jev: " + json.dumps(judgement.probabilities))
+            if not dry_run:
+                _store(conn, eid, results[eid], judgement.model)
+    finally:
+        judge.close()
+    return results
+
+
+def _classify_with_openai(conn, records, client, dry_run: bool) -> Dict[str, PageVerdict]:
+    from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
+
+    model = openai_fast_model()
+    criteria = "\n".join(f"- {k}: {v}" for k, v in KIND_DESCRIPTIONS.items())
+    results: Dict[str, PageVerdict] = {}
+    for eid, title, url, page_text, summary in records:
         try:
             verdict: PageVerdict = client.chat.completions.create(
-                model=PAGE_MODEL,
+                **chat_params(model),
                 response_model=PageVerdict,
-                temperature=0.0,
                 messages=[
-                    {"role": "system", "content": (
-                        "You classify scraped web records for an Australian cyber incident "
-                        "database. Decide whether THIS record reports one specific, "
-                        "identifiable cyber incident, or is something else. A roundup page "
-                        "or social post can still be a specific_incident record if the "
-                        "record itself is about one incident at one organisation.")},
-                    {"role": "user", "content": f"Title: {title}\nURL: {url}\nText: {text[:700]}"},
+                    {"role": "system", "content": f"{_INSTRUCTIONS}\n\nKinds:\n{criteria}"},
+                    {"role": "user", "content": json.dumps(_state(title, url, page_text, summary))},
                 ],
             )
         except Exception as exc:  # noqa: BLE001 - never let one page break a run
@@ -188,11 +255,41 @@ def classify_pages(conn: sqlite3.Connection, records: Sequence[Tuple[str, str, s
             continue
         results[eid] = verdict
         if not dry_run:
-            conn.execute(
-                "INSERT OR REPLACE INTO PageClassifications VALUES (?, ?, ?, ?, ?, ?)",
-                (eid, verdict.kind, verdict.confidence, verdict.reasoning, PAGE_MODEL,
-                 datetime.now().isoformat()),
-            )
-    if not dry_run:
-        conn.commit()
+            _store(conn, eid, verdict, model)
     return results
+
+
+def _store(conn, eid: str, verdict: PageVerdict, model: Optional[str]) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO PageClassifications "
+        "(enriched_event_id, kind, confidence, reasoning, model, created_at, question_version) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (eid, verdict.kind, verdict.confidence, verdict.reasoning, model,
+         datetime.now().isoformat(), QUESTION_VERSION))
+    conn.commit()
+
+
+def classify_pages(conn: sqlite3.Connection, records: Sequence[Tuple[str, ...]],
+                   client=None, dry_run: bool = False) -> Dict[str, PageVerdict]:
+    """Classify suspect records and store the verdicts.
+
+    Jev answers when a TypeSafe key is configured, and its full distribution
+    is kept in ``ModelJudgements`` (see :mod:`cyber_data_collector.utils.jev`);
+    otherwise the fast OpenAI model does, or ``client`` when one is passed.
+    Records are ``(id, title, url, page_text, summary)``; a four-field record
+    is read as ``(id, title, url, summary)`` with no page text.
+
+    Failures are skipped (no verdict stored), so a record is retried next run
+    and an outage never hardens into a rejection.
+    """
+    from cyber_data_collector.utils import jev
+
+    ensure_schema(conn)
+    records = [r if len(r) == 5 else (r[0], r[1], r[2], "", r[3]) for r in records]
+    if client is None and jev.available():
+        return _classify_with_jev(conn, records, dry_run)
+    client = client or _client()
+    if client is None:
+        logger.warning("No Jev or OpenAI client; %d suspect page(s) left unclassified", len(records))
+        return {}
+    return _classify_with_openai(conn, records, client, dry_run)

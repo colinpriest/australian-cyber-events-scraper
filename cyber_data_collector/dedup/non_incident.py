@@ -2,7 +2,7 @@
 
 Search sources return vendor marketing and service pages that mention breaches
 in passing ("Cybersecurity Consulting Services | IT Security Services |
-Insight"). The RF filter and GPT-4o-mini pass can keep them, and incremental
+Insight"). The RF filter and the fast-model pass can keep them, and incremental
 deduplication then stores every Active enriched record as an event.
 
 Neither signal alone is safe to act on. ``is_australian_event = 0`` covers

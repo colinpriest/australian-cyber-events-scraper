@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.processing.deduplication_v2 import DeduplicationEngine, LLMArbiter, DeduplicationValidator
 from cyber_data_collector.storage.deduplication_storage import DeduplicationStorage
+from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments
 from cyber_data_collector.processing.deduplication_v2 import CyberEvent
 
 # Configure logging
@@ -874,8 +875,10 @@ def main():
         action='store_true',
         help='Enable verbose logging'
     )
+    add_model_arguments(parser)
     
     args = parser.parse_args()
+    apply_model_arguments(args)
     
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)

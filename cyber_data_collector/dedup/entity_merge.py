@@ -27,6 +27,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.dedup.entity_resolution import canonical_key
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 from cyber_data_collector.dedup.victim_selection import (
     is_descriptive_label,
     is_non_organisation,
@@ -408,9 +409,8 @@ class OrganisationResolver:
     def _ask(self, phrase: str, evidence: str) -> Optional[NamedOrganisation]:
         try:
             return self._client.chat.completions.create(
-                model="gpt-4o",
+                **chat_params(openai_model()),
                 response_model=NamedOrganisation,
-                temperature=0.0,
                 messages=[
                     {"role": "system",
                      "content": ("You identify the organisation a description "

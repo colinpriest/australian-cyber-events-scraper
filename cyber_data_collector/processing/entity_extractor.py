@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from tqdm import tqdm
 
 from cyber_data_collector.models.events import AffectedEntity, CyberEvent, EntityType
+from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from .llm_classifier import LLMClassifier
 
 
@@ -90,11 +91,12 @@ class EntityExtractor:
             existing_entities=[entity.name for entity in event.affected_entities],
         )
 
+        model_name = openai_fast_model()
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     lambda: self.llm_classifier.client.chat.completions.create(
-                        model="gpt-4o-mini",
+                        **chat_params(model_name),
                         response_model=ExtractedEntities,
                         messages=[
                             {
@@ -118,7 +120,7 @@ class EntityExtractor:
             raw = getattr(response, '_raw_response', None)
             if raw and hasattr(raw, 'usage') and raw.usage:
                 tracker.record(
-                    "gpt-4o-mini", raw.usage.prompt_tokens,
+                    model_name, raw.usage.prompt_tokens,
                     raw.usage.completion_tokens, context="entity_extraction",
                 )
         except asyncio.TimeoutError:
