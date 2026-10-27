@@ -77,8 +77,10 @@ class CyberEventDataV2:
             # Check if V2 tables exist
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='RawEvents'")
             if not cursor.fetchone():
-                self._logger.error("V2 schema not found. Please run database_migration_v2.py first.")
-                raise RuntimeError("Database schema V2 not found. Run migration script first.")
+                self._logger.error("Database schema not found in %s. Run: python pipeline.py init --db-path %s",
+                                   self._db_path, self._db_path)
+                raise RuntimeError(f"Database schema not found in {self._db_path}. "
+                                   f"Run: python pipeline.py init --db-path {self._db_path}")
             self._ensure_enrichment_tracking_columns(cursor)
 
     def _ensure_enrichment_tracking_columns(self, cursor: sqlite3.Cursor) -> None:

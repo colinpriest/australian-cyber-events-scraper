@@ -2692,6 +2692,8 @@ def cmd_restore_dedup_state(args) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from cyber_data_collector.utils.api_budget import ensure_configured
+    ensure_configured()   # API_BUDGET_<PROVIDER> limits when run on its own
     parser = argparse.ArgumentParser(description="Deduplication v3 administration")
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite database path")
     parser.add_argument("--verbose", action="store_true")

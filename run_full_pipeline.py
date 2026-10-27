@@ -292,7 +292,10 @@ class UnifiedPipeline:
             )
 
             # Get events needing enrichment (all events without Perplexity data)
-            events = processor.get_events_needing_enrichment(limit=None)
+            # Bounded per run: the backlog is not lost, it stays unvalidated
+            # and the next run continues it (fewest attempts first).
+            events = processor.get_events_needing_enrichment(
+                limit=getattr(args, 'enrich_limit', None) or None)
 
             if not events:
                 logger.info("No events need Perplexity enrichment")
@@ -864,6 +867,10 @@ class UnifiedPipeline:
             return "failed"
         if any(r.get('errors') for r in self.results.values()):
             return "degraded"
+        from cyber_data_collector.utils.api_budget import budget
+        if budget.exhausted():
+            # Work was left for the next run; the run did not finish its job.
+            return "degraded"
         return "ok"
 
     async def run_pipeline(self, args):
@@ -944,6 +951,11 @@ class UnifiedPipeline:
         # Print API token usage and cost report
         from cyber_data_collector.utils.token_tracker import tracker
         tracker.log_report()
+        from cyber_data_collector.utils.api_budget import budget
+        logger.info(budget.summary())
+        if budget.exhausted():
+            logger.warning("API budget exhausted (%s): unfinished work is left for the next run",
+                           ", ".join(f"{p} refused {n}" for p, n in budget.exhausted().items()))
 
         result = self.outcome(failed_phases)
         if result != "ok":
@@ -1039,9 +1051,19 @@ Examples:
     parser.add_argument('--db-path', default=None,
                         help='Path to SQLite database file (defaults to DATABASE_URL/.env setting)')
 
+    parser.add_argument('--api-budget', nargs='+', default=None, metavar='PROVIDER=N',
+                        help='Requests allowed this run per paid API, e.g. openai=3000 perplexity=1500 '
+                             'typesafe=20000 (default: API_BUDGET_<PROVIDER> env, else unlimited). '
+                             'Refused work is left for the next run.')
+    parser.add_argument('--enrich-limit', type=int, default=500,
+                        help='Most records the automatic Perplexity enrichment takes per run; '
+                             'the rest of the backlog waits for the next run (0 = no limit, default 500)')
+
     add_model_arguments(parser)
     args = parser.parse_args()
     apply_model_arguments(args)
+    from cyber_data_collector.utils.api_budget import configure as configure_api_budget
+    configure_api_budget(args.api_budget)
     from cyber_data_collector.utils.config_manager import resolve_db_path
     args.db_path = resolve_db_path(args.db_path)
     if args.source:

@@ -156,7 +156,9 @@ class PerplexityBackfillProcessor:
     def _record_failure(self, event: Dict, reason: str) -> None:
         """Record a failed attempt (or just log it on a dry run)."""
         logger.warning(f"Enrichment not accepted for '{(event.get('title') or '')[:60]}': {reason}")
-        if self.dry_run:
+        if self.dry_run or "API budget exhausted" in reason:
+            # A request refused by the run's API budget was never attempted:
+            # counting it would quarantine records for running out of budget.
             return
         try:
             status = self.db.record_enrichment_failure(event['enriched_event_id'], reason)

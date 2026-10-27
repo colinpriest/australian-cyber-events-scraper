@@ -6,6 +6,7 @@ Commands:
   refresh  - Run a 3-month rolling refresh (default 90 days)
   rebuild  - Wipe and reconstruct the entire database (requires --force)
   status   - Report last ingest and latest event
+  init     - Create or upgrade a database to the current schema
 """
 
 from __future__ import annotations
@@ -72,6 +73,7 @@ def _build_pipeline_args(
         missed_merge_days=120,
         missed_merge_min_certainty=0.9,
         continue_on_error=False,
+        enrich_limit=500,
         source=sources,
         max_events=max_events,
         days=days,
@@ -86,6 +88,8 @@ def _run_pipeline(args: SimpleNamespace) -> int:
     results. The summary itself is printed by ``__main__``, not here, to
     avoid double-printing.
     """
+    from cyber_data_collector.utils.api_budget import configure as configure_api_budget
+    configure_api_budget()   # API_BUDGET_<PROVIDER> limits from the environment
     pipeline = UnifiedPipeline(args.db_path)
     args._pipeline_results = pipeline.results  # picked up by main()
     result = asyncio.run(pipeline.run_pipeline(args))
@@ -147,6 +151,14 @@ def _run_rebuild(parsed: argparse.Namespace) -> int:
     return _run_pipeline(args)
 
 
+def _run_init(parsed: argparse.Namespace) -> int:
+    from cyber_data_collector.storage.schema_init import initialize_database
+    db_path = _resolve_db_path(parsed.db_path)
+    report = initialize_database(db_path)
+    print(f"{db_path}: {report.summary()}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Simplified CLI for the Australian Cyber Events pipeline."
@@ -180,6 +192,10 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--dry-run", action="store_true", help="Preview the wipe without deleting data.")
     rebuild.add_argument("--force", action="store_true", help="Confirm destructive wipe.")
     rebuild.set_defaults(func=_run_rebuild)
+
+    init = subparsers.add_parser("init", help="Create or upgrade a database to the current schema.")
+    init.add_argument("--db-path", default=None, help="Path to SQLite database file.")
+    init.set_defaults(func=_run_init)
 
     status = subparsers.add_parser("status", help="Show last ingest and latest event.")
     status.add_argument("--db-path", default=None, help="Path to SQLite database file.")

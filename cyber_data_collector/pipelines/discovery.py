@@ -2403,7 +2403,7 @@ Examples:
         if not cursor.fetchone():
             print("[ERROR] Database V2 schema not found!")
             print("[QUEUE] Please run the migration script first:")
-            print("   python database_migration_v2.py")
+            print("   python pipeline.py init")
             return 1
         conn.close()
     except Exception as e:
