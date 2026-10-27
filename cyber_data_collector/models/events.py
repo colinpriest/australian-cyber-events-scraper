@@ -8,7 +8,24 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class CyberEventType(str, Enum):
+class _ValueEnum(str, Enum):
+    """A string enum that stringifies to its value.
+
+    On Python 3.11+ ``str()`` and ``format()`` of a ``(str, Enum)`` member give
+    the qualified name (``"EventSeverity.MEDIUM"``), and every writer that
+    stringified a member stored that name instead of ``"Medium"``. Stringifying
+    to the value makes ``str(member)``, ``f"{member}"`` and the member itself
+    store the same text. See :mod:`cyber_data_collector.utils.enum_values`.
+    """
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, format_spec: str) -> str:
+        return format(str(self.value), format_spec)
+
+
+class CyberEventType(_ValueEnum):
     """Standardized cyber event categories."""
 
     RANSOMWARE = "Ransomware"
@@ -26,7 +43,7 @@ class CyberEventType(str, Enum):
     OTHER = "Other"
 
 
-class EventSeverity(str, Enum):
+class EventSeverity(_ValueEnum):
     """Event severity levels."""
 
     CRITICAL = "Critical"
@@ -36,7 +53,7 @@ class EventSeverity(str, Enum):
     UNKNOWN = "Unknown"
 
 
-class EntityType(str, Enum):
+class EntityType(_ValueEnum):
     """Types of entities affected by cyber events."""
 
     GOVERNMENT = "Government"

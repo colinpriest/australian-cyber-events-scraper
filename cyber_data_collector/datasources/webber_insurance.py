@@ -32,6 +32,8 @@ class WebberInsuranceDataSource(DataSource):
     def __init__(self, config: DataSourceConfig, rate_limiter: RateLimiter, env_config: Dict[str, Optional[str]]):
         super().__init__(config, rate_limiter)
         self.env_config = env_config
+        # Detail pages that could not be scraped in the last collect_events run.
+        self.failed_detail_pages: List[Dict[str, str]] = []
         self.base_url = "https://www.webberinsurance.com.au/data-breaches-list"
 
     def validate_config(self) -> bool:
@@ -57,6 +59,7 @@ class WebberInsuranceDataSource(DataSource):
             self.logger.info(f"Found {len(event_links)} total potential event links.")
 
             all_events: List[CyberEvent] = []
+            self.failed_detail_pages = []
             for link_info in event_links:
                 # Check if the section date is within our range first (much more efficient)
                 section_date = link_info.get('section_date')
@@ -77,6 +80,11 @@ class WebberInsuranceDataSource(DataSource):
                     all_events.append(event)
 
             self.logger.info(f"Collected {len(all_events)} events from Webber Insurance within the date range.")
+            if self.failed_detail_pages:
+                self.logger.warning(
+                    "Webber Insurance: %d detail page(s) could not be scraped and were skipped: %s",
+                    len(self.failed_detail_pages),
+                    ", ".join(f["url"] for f in self.failed_detail_pages[:10]))
             return all_events
 
         except Exception as exc:
@@ -241,99 +249,11 @@ class WebberInsuranceDataSource(DataSource):
             return self._convert_details_to_event(url, title, description, event_date, entity_name)
 
         except Exception as e:
+            # A failed detail page is a failure. It used to be replaced by
+            # Perplexity-written prose about whatever the URL seemed to be, stored
+            # as if it were Webber's page with Webber's credibility.
             self.logger.warning(f"Failed to scrape detail page {url}: {e}")
-
-            # Try Perplexity fallback for URL errors
-            try:
-                alternative_content = self._perplexity_fallback(url, section_date)
-                if alternative_content:
-                    self.logger.info(f"Perplexity fallback successful for {url}")
-                    # Extract basic info from alternative content
-                    lines = alternative_content.split('\n')
-                    title = lines[0] if lines else url.split('/')[-1]
-                    description = alternative_content[:500] + "..." if len(alternative_content) > 500 else alternative_content
-
-                    # Extract entity name from title
-                    entity_name_match = re.match(r'([^-–]+)', title)
-                    entity_name = entity_name_match.group(1).strip() if entity_name_match else title
-
-                    return self._convert_details_to_event(url, title, description, section_date, entity_name)
-            except Exception as fallback_e:
-                self.logger.warning(f"Perplexity fallback also failed for {url}: {fallback_e}")
-
-            return None
-
-    def _perplexity_fallback(self, failed_url: str, section_date: Optional[datetime] = None) -> Optional[str]:
-        """Use Perplexity to find alternative content when original URL fails."""
-        try:
-            import openai
-
-            # Get Perplexity API key from env_config (stored at init time)
-            api_key = self.env_config.get('PERPLEXITY_API_KEY') if self.env_config else None
-            if not api_key:
-                self.logger.debug("Perplexity API key not found, skipping fallback")
-                return None
-
-            client = openai.OpenAI(
-                api_key=api_key,
-                base_url="https://api.perplexity.ai"
-            )
-
-            # Format date context from section_date
-            date_context = ""
-            if section_date:
-                date_context = f"This incident occurred around {section_date.strftime('%B %Y')}"
-
-            # Create a comprehensive query with exact URL and date context
-            query = f"""Find information about the cybersecurity incident that was originally reported at this URL: {failed_url}
-
-{date_context}
-
-I need you to:
-1. Identify what specific cybersecurity/data breach story this URL was about
-2. Find information about the SAME incident from reliable sources
-3. Provide a summary of the incident including company name, what happened, and impact
-4. Focus on factual details about the breach/incident
-
-The original URL is inaccessible, so I need the actual story content."""
-
-            response = client.chat.completions.create(
-                model="sonar-pro",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a cybersecurity news specialist. When given an inaccessible URL about a cybersecurity incident, you research and provide detailed information about that incident.
-
-IMPORTANT:
-- Analyze the URL to understand what incident it was covering
-- Use any date context provided to help identify the specific incident
-- Provide factual information about the cybersecurity incident
-- Include company name, type of breach, impact, and timeline if available
-- Focus on verified information from reputable sources
-
-Return a comprehensive summary of the incident in paragraph form."""
-                    },
-                    {
-                        "role": "user",
-                        "content": query
-                    }
-                ],
-                max_tokens=800,
-                temperature=0.1
-            )
-
-            if response.choices and response.choices[0].message.content:
-                content = response.choices[0].message.content.strip()
-                self.logger.debug(f"Perplexity fallback provided content for {failed_url}")
-                return content
-
-            return None
-
-        except ImportError:
-            self.logger.debug("OpenAI library not available for Perplexity fallback")
-            return None
-        except Exception as e:
-            self.logger.warning(f"Perplexity fallback failed for {failed_url}: {e}")
+            self.failed_detail_pages.append({"url": url, "error": f"{type(e).__name__}: {e}"})
             return None
 
     def _convert_details_to_event(self, url: str, title: str, description: str, event_date: Optional[datetime], entity_name: str) -> CyberEvent:
