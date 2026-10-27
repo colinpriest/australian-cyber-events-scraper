@@ -18,6 +18,28 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+#: Columns added to EnrichedEvents to track Perplexity enrichment attempts.
+#: Timestamps are TEXT, not TIMESTAMP: the connection uses PARSE_DECLTYPES,
+#: whose timestamp converter rejects the ISO 'T' separator we write.
+ENRICHMENT_TRACKING_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("perplexity_attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("perplexity_last_attempt_at", "TEXT"),
+    ("perplexity_last_error", "TEXT"),
+    # NULL (never attempted) | 'retrying' | 'validated' | 'quarantined'
+    ("perplexity_status", "TEXT"),
+)
+
+STATUS_RETRYING = "retrying"
+STATUS_VALIDATED = "validated"
+STATUS_QUARANTINED = "quarantined"
+
+# Columns an accepted enrichment may promote; guards the dynamic UPDATE.
+_PROMOTABLE_COLUMNS = frozenset({
+    "event_date", "date_confidence", "entity_confidence",
+    "attacking_entity_name", "attack_method", "records_affected",
+})
+
+
 class CyberEventDataV2:
     """
     Thread-safe library for managing cyber event data with separated raw and enriched schemas.
@@ -57,6 +79,27 @@ class CyberEventDataV2:
             if not cursor.fetchone():
                 self._logger.error("V2 schema not found. Please run database_migration_v2.py first.")
                 raise RuntimeError("Database schema V2 not found. Run migration script first.")
+            self._ensure_enrichment_tracking_columns(cursor)
+
+    def _ensure_enrichment_tracking_columns(self, cursor: sqlite3.Cursor) -> None:
+        """Add the Perplexity attempt-tracking columns if they are missing.
+
+        Idempotent: checks ``PRAGMA table_info`` first, so it is safe on every
+        connect and on a database that already has them.  A database without an
+        EnrichedEvents table (a bare test schema) is left alone.
+        """
+        cursor.execute("PRAGMA table_info(EnrichedEvents)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if not existing:
+            return
+        added = False
+        for name, ddl in ENRICHMENT_TRACKING_COLUMNS:
+            if name not in existing:
+                cursor.execute(f"ALTER TABLE EnrichedEvents ADD COLUMN {name} {ddl}")
+                added = True
+        if added:
+            self._conn.commit()
+            self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
 
     # =========================================================================
     # RAW EVENT OPERATIONS
@@ -350,6 +393,210 @@ class CyberEventDataV2:
                 self._logger.error("Error creating enriched event: %s", e)
                 self._conn.rollback()
                 raise
+
+    # =========================================================================
+    # PERPLEXITY ENRICHMENT ATTEMPTS
+    # =========================================================================
+
+    def get_enrichment_row(self, enriched_event_id: str) -> Optional[Dict[str, Any]]:
+        """Return the enrichment-related columns of one EnrichedEvents row."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT enriched_event_id, CAST(event_date AS TEXT) AS event_date, date_confidence, entity_confidence, "
+                "attacking_entity_name, attack_method, records_affected, perplexity_validated, "
+                "perplexity_enrichment_data, data_source_reliability, perplexity_attempt_count, "
+                "perplexity_last_attempt_at, perplexity_last_error, perplexity_status "
+                "FROM EnrichedEvents WHERE enriched_event_id = ?",
+                (enriched_event_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def record_enrichment_success(
+        self,
+        enriched_event_id: str,
+        gate: Any,
+        min_apply_confidence: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Store an enrichment that passed the acceptance gate.
+
+        The stored row is read and updated inside one lock so the "never
+        replace stronger information" decision is made against current state.
+
+        Args:
+            enriched_event_id: Row to update.
+            gate: An accepted ``GateResult`` (see processing.enrichment_gate).
+            min_apply_confidence: Confidence needed to promote a fact to a
+                typed column.
+
+        Returns:
+            ``{'applied': [...], 'reliability': float | None}``.
+
+        Raises:
+            ValueError: If the gate result is not accepted or the row is missing.
+        """
+        from cyber_data_collector.processing.enrichment_gate import (
+            MIN_APPLY_CONFIDENCE,
+            plan_enrichment_update,
+        )
+
+        threshold = MIN_APPLY_CONFIDENCE if min_apply_confidence is None else min_apply_confidence
+        now = datetime.now().isoformat()
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT date_confidence, entity_confidence, attacking_entity_name, "
+                "attack_method, records_affected, perplexity_enrichment_data, "
+                "data_source_reliability FROM EnrichedEvents WHERE enriched_event_id = ?",
+                (enriched_event_id,),
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise ValueError(f"EnrichedEvents row {enriched_event_id} not found")
+
+            plan = plan_enrichment_update(dict(current), gate, threshold)
+            assignments = ["perplexity_enrichment_data = ?", "data_source_reliability = ?",
+                           "perplexity_validated = ?", "perplexity_validated_at = ?",
+                           "perplexity_attempt_count = COALESCE(perplexity_attempt_count, 0) + 1",
+                           "perplexity_last_attempt_at = ?", "perplexity_last_error = NULL",
+                           "perplexity_status = ?", "updated_at = ?"]
+            values: List[Any] = [
+                json.dumps(plan.merged, default=str), plan.reliability,
+                True, now, now, STATUS_VALIDATED, now,
+            ]
+            for column, value in plan.columns.items():
+                if column not in _PROMOTABLE_COLUMNS:
+                    raise ValueError(f"refusing to write unexpected column {column!r}")
+                assignments.append(f"{column} = ?")
+                values.append(value)
+            values.append(enriched_event_id)
+            try:
+                cursor.execute(
+                    f"UPDATE EnrichedEvents SET {', '.join(assignments)} WHERE enriched_event_id = ?",
+                    values,
+                )
+                self._conn.commit()
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        return {"applied": plan.applied, "reliability": plan.reliability}
+
+    def record_enrichment_failure(
+        self,
+        enriched_event_id: str,
+        error: str,
+        max_attempts: Optional[int] = None,
+    ) -> str:
+        """Record a failed Perplexity attempt; quarantine after *max_attempts*.
+
+        Touches only the attempt-tracking columns.  In particular it never sets
+        ``perplexity_validated`` or ``data_source_reliability``, and never
+        writes the failed payload over a stored enrichment.
+
+        Returns:
+            The new status: ``'retrying'`` or ``'quarantined'``.
+        """
+        from cyber_data_collector.processing.enrichment_gate import MAX_ENRICHMENT_ATTEMPTS
+
+        limit = MAX_ENRICHMENT_ATTEMPTS if max_attempts is None else max_attempts
+        now = datetime.now().isoformat()
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(perplexity_attempt_count, 0) FROM EnrichedEvents "
+                "WHERE enriched_event_id = ?",
+                (enriched_event_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError(f"EnrichedEvents row {enriched_event_id} not found")
+            attempts = int(row[0]) + 1
+            status = STATUS_QUARANTINED if attempts >= limit else STATUS_RETRYING
+            try:
+                cursor.execute(
+                    "UPDATE EnrichedEvents SET perplexity_attempt_count = ?, "
+                    "perplexity_last_attempt_at = ?, perplexity_last_error = ?, "
+                    "perplexity_status = ?, updated_at = ? WHERE enriched_event_id = ?",
+                    (attempts, now, (error or "unknown error")[:500], status, now, enriched_event_id),
+                )
+                self._conn.commit()
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        if status == STATUS_QUARANTINED:
+            self._logger.warning(
+                "Enrichment quarantined after %d failed attempts: %s (%s)",
+                attempts, enriched_event_id, (error or "")[:120],
+            )
+        return status
+
+    def get_quarantined_enrichments(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """List records that exhausted their enrichment attempts."""
+        query = (
+            "SELECT enriched_event_id, title, perplexity_attempt_count, "
+            "perplexity_last_attempt_at, perplexity_last_error FROM EnrichedEvents "
+            "WHERE perplexity_status = ? ORDER BY perplexity_last_attempt_at DESC"
+        )
+        params: List[Any] = [STATUS_QUARANTINED]
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def release_quarantined_enrichments(self) -> int:
+        """Put quarantined records back in the retry queue (attempts reset)."""
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "UPDATE EnrichedEvents SET perplexity_status = NULL, perplexity_attempt_count = 0 "
+                "WHERE perplexity_status = ?",
+                (STATUS_QUARANTINED,),
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def requeue_empty_validations(self) -> int:
+        """Un-validate records whose stored "enrichment" contains no facts.
+
+        Before the acceptance gate, an empty or unparseable Perplexity answer
+        was stored as validated with a constant reliability of 0.85, which
+        removed the record from the retry queue for good.  This clears that
+        state so the record is enriched again.  Idempotent: a second call finds
+        nothing.
+
+        Returns:
+            Number of records re-queued.
+        """
+        fact_keys = ("earliest_event_date", "formal_entity_name", "threat_actor",
+                     "attack_method", "victim_count", "victim_industry")
+        requeued = 0
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT enriched_event_id, perplexity_enrichment_data FROM EnrichedEvents "
+                "WHERE perplexity_validated = 1"
+            )
+            for row in cursor.fetchall():
+                try:
+                    data = json.loads(row["perplexity_enrichment_data"]) if row["perplexity_enrichment_data"] else {}
+                except (TypeError, ValueError):
+                    data = {}
+                if isinstance(data, dict) and any(data.get(key) not in (None, "") for key in fact_keys):
+                    continue
+                cursor.execute(
+                    "UPDATE EnrichedEvents SET perplexity_validated = 0, perplexity_validated_at = NULL, "
+                    "perplexity_enrichment_data = NULL, data_source_reliability = NULL, "
+                    "perplexity_status = NULL, perplexity_attempt_count = 0, perplexity_last_error = NULL "
+                    "WHERE enriched_event_id = ?",
+                    (row["enriched_event_id"],),
+                )
+                requeued += 1
+            self._conn.commit()
+        return requeued
 
     def _link_entities_to_enriched_event(self, enriched_event_id: str, entities: List[Dict[str, Any]]):
         """Link entities to an enriched event"""

@@ -177,6 +177,12 @@ LLM-processed events with extracted metadata, entity names, and confidence score
 | `enrichment_confidence` | REAL | Yes | NULL | Confidence from the enrichment pipeline (0.0–1.0) |
 | `enrichment_method` | VARCHAR(50) | No | `'regex'` | Enrichment method: `regex`, `gpt4o`, `perplexity` |
 | `last_enrichment_audit_id` | TEXT | Yes | NULL | Reference to EnrichmentAuditTrail.audit_id |
+| `perplexity_attempt_count` | INTEGER | No | `0` | Perplexity enrichment attempts so far (added idempotently by `CyberEventDataV2` on connect) |
+| `perplexity_last_attempt_at` | TEXT | Yes | NULL | ISO timestamp of the last attempt |
+| `perplexity_last_error` | TEXT | Yes | NULL | Why the last attempt was not accepted; cleared on success |
+| `perplexity_status` | TEXT | Yes | NULL | `retrying`, `validated`, or `quarantined` (3 failed attempts; no longer retried) |
+
+`data_source_reliability` is computed from the accepted Perplexity facts and is `NULL` when none carries a confidence.
 
 **Indexes:**
 - `idx_enriched_perplexity_validated` on `(perplexity_validated)`

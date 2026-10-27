@@ -45,6 +45,16 @@ from cyber_data_collector.utils.validation import (
     validate_enrichment_data_for_storage,
 )
 from cyber_data_collector.filtering.rf_event_filter import RfEventFilter
+from cyber_data_collector.processing.enrichment_gate import validate_count, validate_iso_date
+from cyber_data_collector.processing.record_evidence import (
+    STAGE_DOMAIN_BLOCKLIST,
+    STAGE_RF_CONTENT_FILTER,
+    STAGE_RF_URL_PREFILTER,
+    AcceptanceLedger,
+    RecordEvidence,
+    persist_rejections,
+    prepare_records_for_processing,
+)
 
 
 def _enum_value_or_str(value: Any) -> Optional[str]:
@@ -390,15 +400,26 @@ class EventDiscoveryEnrichmentPipeline:
                         'title': event.title[:100]
                     })
 
-            # Step 3: Scrape URL content for raw events
+            # Step 3: Scrape URL content for raw events.  A filter that rejects a
+            # record writes that decision to the ledger; it is persisted so it
+            # holds for every later stage, run and entry point.
+            ledger = AcceptanceLedger()
             logger.info(f"[PIPELINE] Scraping URLs for {year}-{month:02d}")
-            scraped_count = await self._scrape_raw_events_for_month(raw_event_ids)
+            scraped_count = await self._scrape_raw_events_for_month(raw_event_ids, ledger)
             logger.info(f"[SCRAPED] Successfully scraped {scraped_count} URLs for {year}-{month:02d}")
 
-            # Step 4: Process events (entity extraction, LLM classification)
+            # Step 4: Process events (entity extraction, LLM classification) from
+            # what scraping persisted - not the pre-scrape in-memory objects.
             logger.info(f"[PIPELINE] Processing events for {year}-{month:02d}")
-            processed_events = await collector._process_events(all_raw_events)
+            processed_events = await self._process_persisted_records(collector, all_raw_events, ledger)
             logger.info(f"[PROCESSED] Enhanced {len(processed_events)} events for {year}-{month:02d}")
+            if len(ledger):
+                logger.info(f"[ACCEPTANCE] {len(ledger)} record(s) rejected before classification for {year}-{month:02d}")
+
+            # An LLM error is not an acceptance: those records are neither stored
+            # nor marked processed, so a later run retries them.
+            classification_failed = [e for e in processed_events if e.classification_status == "failed"]
+            processed_events = [e for e in processed_events if e.classification_status != "failed"]
 
             # Step 5: Store enriched events
             logger.info(f"[PIPELINE] Starting to store {len(processed_events)} enriched events for {year}-{month:02d}")
@@ -407,7 +428,14 @@ class EventDiscoveryEnrichmentPipeline:
             enriched_event_map = {}
             processed_raw_event_ids = set()
             successful_raw_event_ids = set()
-            failed_raw_event_ids = set()
+            failed_raw_event_ids = {
+                e.raw_event_id for e in classification_failed if getattr(e, "raw_event_id", None)
+            }
+            if classification_failed:
+                logger.warning(
+                    "[WARNING] %d event(s) could not be classified (LLM error); they stay unprocessed for retry",
+                    len(classification_failed),
+                )
             failed_stores = 0
             
             for i, event in enumerate(processed_events):
@@ -427,7 +455,8 @@ class EventDiscoveryEnrichmentPipeline:
                     if raw_event_id:
                         await self._log_processing_success(raw_event_id, 'enrichment', {
                             'enriched_event_id': enriched_event_id,
-                            'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7
+                            'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
+                            'evidence_basis': event.evidence_basis,
                         })
                 else:
                     failed_stores += 1
@@ -444,7 +473,13 @@ class EventDiscoveryEnrichmentPipeline:
                     logger.error(f"[CRITICAL] High failure rate ({failure_rate:.1%}) - stopping pipeline")
                     raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%})")
 
-            filtered_raw_event_ids = set(raw_event_ids) - processed_raw_event_ids
+            # Records the ledger rejected were already marked processed with the
+            # stage and reason; re-marking them here would overwrite that with a
+            # generic message.  Classification failures stay unprocessed.
+            ledger_rejected_ids = {d.raw_event_id for d in ledger.rejected()}
+            filtered_raw_event_ids = (
+                set(raw_event_ids) - processed_raw_event_ids - ledger_rejected_ids - failed_raw_event_ids
+            )
             raw_events_to_mark = successful_raw_event_ids | filtered_raw_event_ids
 
             logger.info(f"[PIPELINE] Marking {len(raw_events_to_mark)} raw events as processed for {year}-{month:02d}")
@@ -559,6 +594,36 @@ class EventDiscoveryEnrichmentPipeline:
             raise
 
         return events_for_month
+
+    async def _process_persisted_records(
+        self,
+        collector: Any,
+        events: List[Any],
+        ledger: AcceptanceLedger,
+    ) -> List[Any]:
+        """Classify and extract entities from the *persisted* record.
+
+        Scraping writes the fetched article to ``RawEvents.raw_content``, but
+        the events discovery holds in memory still carry only the search
+        snippet.  Handing those to the classifier made it judge a Google
+        snippet that quoted a site menu as if it were the article.  Here every
+        event is re-read from the database after scraping: rejected records
+        are dropped and the rest carry the stored article (or an explicit
+        marker that there is none).
+        """
+        records = prepare_records_for_processing(self.db, events, ledger)
+        # Persist before the (slow, fallible) LLM calls so a crash mid-batch
+        # does not forget what was already rejected.
+        persist_rejections(self.db, ledger)
+        logger.info(
+            "[EVIDENCE] %d of %d records continue; basis: %s",
+            len(records), len(events),
+            ", ".join(f"{basis}={sum(1 for r in records if r.evidence_basis == basis)}"
+                      for basis in ("article", "snippet_only", "none")),
+        )
+        if not records:
+            return []
+        return await collector._process_events(records)
 
     def _build_collection_config(self, source_types: List[str], max_events: int, date_range: DateRange) -> CollectionConfig:
         """Build collection configuration for specified sources"""
@@ -695,6 +760,14 @@ class EventDiscoveryEnrichmentPipeline:
             # Convert date to ISO format string for SQLite
             event_date_str = event_date.isoformat() if hasattr(event_date, 'isoformat') else None
 
+            # Acceptance gate: an event cannot be in the future or absurdly old.
+            # A bad date is dropped (stored as NULL), not "corrected" by guessing.
+            if event_date_str:
+                valid_date, date_problem = validate_iso_date(event_date_str)
+                if date_problem:
+                    logger.warning(f"[GATE] Dropping event date for '{event.title[:50]}': {date_problem}")
+                    event_date_str = None
+
             # Ensure title is not empty (NOT NULL constraint)
             title = event.title if event.title and event.title.strip() else "Untitled Event"
 
@@ -724,7 +797,9 @@ class EventDiscoveryEnrichmentPipeline:
                 'event_type': _enum_value_or_str(getattr(event, 'event_type', None)),
                 'severity': _enum_value_or_str(getattr(event, 'severity', None)),
                 'event_date': event_date_str,
-                'records_affected': event.financial_impact.customers_affected if event.financial_impact else None,
+                'records_affected': self._valid_count_or_none(
+                    event.financial_impact.customers_affected if event.financial_impact else None, title
+                ),
                 'is_australian_event': is_australian,  # NOT NULL - guaranteed boolean
                 'is_specific_event': is_specific,  # NOT NULL - guaranteed boolean
                 'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
@@ -760,6 +835,16 @@ class EventDiscoveryEnrichmentPipeline:
                 logger.error(f"[CRITICAL] Database constraint violation - stopping pipeline")
                 raise RuntimeError(f"Critical database error storing enriched event: {e}") from e
             return None
+
+    @staticmethod
+    def _valid_count_or_none(value: Any, title: str) -> Optional[int]:
+        """Acceptance gate for a count: non-negative whole number, else NULL."""
+        if value is None:
+            return None
+        count, problem = validate_count(value)
+        if problem:
+            logger.warning(f"[GATE] Dropping records_affected for '{title[:50]}': {problem}")
+        return count
 
     async def _store_deduplicated_events(self, deduplicated_events, enriched_event_ids, raw_event_ids) -> tuple[int, list]:
         """Store deduplicated events and create mapping tables"""
@@ -1360,11 +1445,18 @@ class EventDiscoveryEnrichmentPipeline:
     # SCRAPING PHASE
     # =========================================================================
 
-    async def _scrape_raw_events_for_month(self, raw_event_ids: List[str]) -> int:
+    async def _scrape_raw_events_for_month(
+        self, raw_event_ids: List[str], ledger: Optional[AcceptanceLedger] = None
+    ) -> int:
         """
         Scrape URLs for specific raw events from the current month.
+
+        Every record a filter rejects (blocked domain, RF pre-filter, RF content
+        filter) is recorded in *ledger* so later stages do not process it.
         Returns the number of events successfully scraped.
         """
+        if ledger is None:
+            ledger = AcceptanceLedger()
         if not raw_event_ids:
             return 0
 
@@ -1412,6 +1504,8 @@ class EventDiscoveryEnrichmentPipeline:
             # Hard-skip blocked domains (LinkedIn, Facebook, X, YouTube, etc.)
             if is_blocked_domain(url):
                 prefilter_blocked += 1
+                ledger.reject(event['raw_event_id'], STAGE_DOMAIN_BLOCKLIST,
+                              'social/profile/marketplace domain - not a news article')
                 failed_scrapes.append({
                     'title': title[:50] if title else 'Unknown',
                     'url': url or 'No URL',
@@ -1428,6 +1522,8 @@ class EventDiscoveryEnrichmentPipeline:
                 events_after_prefilter.append(event)
             else:
                 prefilter_rf_filtered += 1
+                ledger.reject(event['raw_event_id'], STAGE_RF_URL_PREFILTER,
+                              'title+URL classified as non-cyber before scraping')
                 failed_scrapes.append({
                     'title': title[:50] if title else 'Unknown',
                     'url': url or 'No URL',
@@ -1469,7 +1565,11 @@ class EventDiscoveryEnrichmentPipeline:
                     if scrape_result['success']:
                         # Apply Random Forest content filtering for all events
                         if not self._apply_rf_content_filter(scrape_result['event']):
-                            # Content was filtered out - mark as failed
+                            # Content was filtered out.  Record the rejection so
+                            # the record stops here instead of being classified
+                            # and stored as if it had passed.
+                            ledger.reject(scrape_result['event']['raw_event_id'], STAGE_RF_CONTENT_FILTER,
+                                          'scraped content classified as non-cyber (Random Forest filter)')
                             failed_scrapes.append({
                                 'title': scrape_result['event']['raw_title'][:50] if scrape_result['event'].get('raw_title') else 'Unknown',
                                 'url': scrape_result['event'].get('source_url', 'No URL'),
@@ -1670,12 +1770,15 @@ class EventDiscoveryEnrichmentPipeline:
         events_with_urls = [e for e in events_to_scrape if e.get('source_url')]
 
         # Pre-scrape filter: drop blocked domains and obvious non-cyber URLs
-        # before paying Playwright + Perplexity round-trips.
+        # before paying Playwright + Perplexity round-trips.  Rejections are
+        # persisted: otherwise the later enrich_events() phase, which reads
+        # every unprocessed raw event, would classify them anyway.
         scraped_count = 0
         failed_scrapes = []
         events_after_prefilter = []
         prefilter_blocked = 0
         prefilter_rf_filtered = 0
+        ledger = AcceptanceLedger()
 
         for event in events_with_urls:
             url = event.get('source_url') or ''
@@ -1683,6 +1786,8 @@ class EventDiscoveryEnrichmentPipeline:
 
             if is_blocked_domain(url):
                 prefilter_blocked += 1
+                ledger.reject(event['raw_event_id'], STAGE_DOMAIN_BLOCKLIST,
+                              'social/profile/marketplace domain - not a news article')
                 failed_scrapes.append({
                     'title': title[:50] if title else 'Unknown',
                     'url': url or 'No URL',
@@ -1694,11 +1799,15 @@ class EventDiscoveryEnrichmentPipeline:
                 events_after_prefilter.append(event)
             else:
                 prefilter_rf_filtered += 1
+                ledger.reject(event['raw_event_id'], STAGE_RF_URL_PREFILTER,
+                              'title+URL classified as non-cyber before scraping')
                 failed_scrapes.append({
                     'title': title[:50] if title else 'Unknown',
                     'url': url or 'No URL',
                     'reason': 'Pre-scrape RF filter rejected (title+URL non-cyber)',
                 })
+
+        persist_rejections(self.db, ledger)
 
         if prefilter_blocked or prefilter_rf_filtered:
             logger.info(
@@ -2063,18 +2172,22 @@ class EventDiscoveryEnrichmentPipeline:
             Combined content string or None if insufficient content
         """
         content_parts = []
+        evidence = RecordEvidence.from_row(raw_event)
 
         # Add title
         if raw_event.get('raw_title'):
             content_parts.append(f"Title: {raw_event['raw_title']}")
 
-        # Add description
-        if raw_event.get('raw_description'):
-            content_parts.append(f"Description: {raw_event['raw_description']}")
-
-        # Add scraped content (most important for GDELT events)
-        if raw_event.get('raw_content'):
-            content_parts.append(f"Article Content: {raw_event['raw_content']}")
+        # Say what the text is.  Presenting a search snippet as "Description"
+        # beside no article invited the model to treat it as the article.
+        if evidence.has_article:
+            if raw_event.get('raw_description'):
+                content_parts.append(f"Discovery summary: {raw_event['raw_description']}")
+            content_parts.append(f"Article Content: {evidence.article_text}")
+        elif evidence.snippet:
+            content_parts.append(
+                f"Search-result snippet (NO article text was retrieved - {evidence.reason}): {evidence.snippet}"
+            )
 
         # Add metadata context
         if raw_event.get('source_metadata'):
