@@ -784,6 +784,148 @@ evidence on hover.
 
 ---
 
+## 8j. Stray records: a calibrated coherence check (2026-10-27)
+
+`check-coherence` (`dedup/coherence.py`) finds records that sit inside an event
+but describe another incident, and splits them out. It used to ask GPT-4o about
+each suspect event and split at a hand-set certainty of 0.99; it was not in the
+refresh. Labellers then found strays it had left: Western Sydney University
+holding two WA Health pager-leak records, the University of Tasmania holding
+University of Sydney and Canvas/Instructure records, NT Health holding an
+Updoc record.
+
+### How it decides
+
+1. **Suspects (free, unchanged).** A member whose Perplexity organisation
+   shares no distinctive name key with the event's victim, vendor or majority
+   organisation. 92 of the 2,161 members of the 321 multi-member events.
+   Only suspects can be split on a model score.
+2. **Jev, per suspect** (`member_same_incident`, version
+   `member-coherence-v2`, `subject_type='event_member'`,
+   subject `<dedup_id>|<enriched_id>`): the record's title, its enrichment
+   summary, its Perplexity research and its stored page; the event's title,
+   date, victim, vendor and other records; and the victim's researched timeline
+   (`org_timeline.timeline_for_event`). Stored and reused while the input is
+   unchanged; a membership change changes the input, so the remaining members
+   are re-judged next run.
+3. **Escalation.** Jev scores in 0.1-0.7 (fixed before calibration) go to
+   GPT-5.5 with reasoning; its score is final. 13 of the 92 suspects.
+4. **Decision.** Split when the final P(same) is below the calibrated cut-off;
+   labels override in both directions.
+
+### Calibration
+
+`scripts/calibrate_coherence.py` (`sample`, `packet`, `judge`, `calibrate`) on
+`calibration_coherence.db`, a verified backup of the live database taken
+2026-10-27 22:08.
+
+- **Sample** (`evaluation/coherence_sample.csv`, seed 20261027): stratum S,
+  every suspect (92, weight 1) - any cut-off acts only here, so it is a
+  census; stratum F, 28 of the 112 non-suspects dated more than 180 days from
+  their event (weight 4.0); stratum N, 28 of the other 1,957 non-suspects
+  (weight 69.9). F and N measure what the suspect gate keeps; they are never
+  acted on by score.
+- **Labels** (`evaluation/coherence_labels.csv`, 148 rows: 122 same, 25
+  different, 1 unsure): four Claude Opus 5.5 subagents, each given a quarter of
+  a packet built without scores or strata, labelling from the stored evidence
+  plus web searches, each row with a rationale. Conventions given: the event's
+  incident is the one its victim suffered that its title and most records
+  describe (titles can be wrong); misdated copies, follow-ups and the
+  supplier-customer convention are `same`; a record whose title or research
+  points to the incident is `same` even when its stored page is unhelpful.
+  The `incident` column, naming where a `different` record belongs, was
+  transcribed from the rationales afterwards and is used only to keep strays
+  about one incident together.
+- **v1 failed.** Question v1 read the stored page as the record's subject. On
+  the 92 suspects no cut-off reached 0.95: 4/5 at 0.02, 10/14 at 0.03,
+  bootstrap mean 0.32. Most of its confident "strays" were records whose page
+  is a *different article stored by mistake* (Scouts Victoria's notice with a
+  UTAS page; Suncorp Bank's, HWL Ebsworth's and Optus/Huawei's with
+  unrelated pages) while title and research name the event's incident - which
+  the labelling convention, fixed before any score was seen, keeps.
+- **v2** states that convention (title, summary and research say what a record
+  is about; the page is supporting evidence) and adds the record's own
+  summary. Result, precision target 0.95, at least 5 splits:
+
+  | Cut-off | Splits (labelled) | Correct | Precision | Recall | Wilson 95% CI | Bootstrap out-of-sample |
+  |---|---|---|---|---|---|---|
+  | 0.15 | 17 | 17 | 1.00 | 0.94 | 0.82-1.00 | mean 0.985, median 1.00, p05 1.00 |
+
+  No labelled `same` scores below 0.70, so the margin is wide; the one stray
+  missed (OpenAI's Hugging Face episode filed in the Services Australia /
+  OpenAI event) scored 0.74. Two strays score exactly 0.15, at the cut-off:
+  Jev's sampling variation can put them on either side on a fresh database
+  (they are labelled, so they leave regardless).
+- **Caveat.** v2 was written after v1 was scored against these labels, so the
+  bootstrap (which resamples labels, not question wordings) does not cover
+  that choice. The change restates a convention rather than fitting items,
+  and the score gap is large, but the next labelling round should check v2 on
+  fresh suspects.
+
+Calibration identity: `member-coherence-v2+member-coherence-escalation-v2`,
+`jev-1.14.0+gpt-5.5-2026-04-23` (`evaluation/coherence_calibration.json`).
+A different model or question version makes model-judged splits report-only
+(logged at WARNING as `REPORT ONLY`); labelled strays still split.
+
+### Guards: kept, and what the labels say about them
+
+| Guard | Past error it encodes | Labels |
+|---|---|---|
+| Only suspects leave on a score (same organisation never does) | misdated copies, follow-ups (Partnered Health, Latitude, OpenAI) | Keeps real strays: 7 of 28 far-dated non-suspects are labelled `different` (Optus's 2019 White Pages record in its 2022 breach, AFP's HWL Ebsworth exposure in its 2022 leak, Okta's 2023 support breach in its 2022 Sitel event, a Hudson Rock bank-credential finding in two events) - about 28 of 112 far-dated non-suspects when weighted, 1.4% of all non-suspects. 21 of the 28 far-dated ones are `same` (misdated copies), so dropping the gate would expose those to the score unmeasured. **Kept**; the misses are a different-incident-at-the-same-organisation problem (see `docs/TODO.md`). Labelled ones are split regardless. |
+| An organisation named in the event title stays | youX / Vroom by YouX | Correct in principle but wrong on the mislabelled UTas event titled "University of Sydney third-party Canvas cyber incident": it would hold both University of Sydney strays. Labels override it there. Kept. |
+| Majority of strays naming one organisation = mislabelled event, split nothing | 12 youX records judged foreign to "Vroom by YouX" | Not triggered on current data. The youX event is now labelled the other way: most records are the Feb 2026 MongoDB breach and the one Vroom (March 2025) record is the stray. Kept. |
+| Supplier-customer rule in the question; vendor counts as the event's organisation | Frontier / NSW Health, Canvas customers | About 20 supplier-customer suspects labelled `same` (Canvas: nine universities, DECYP, Queensland education; Pareto Phone: Amnesty, ACF; Latitude / Coles; Frontier: SA Government, NSW Health; OracleCMS / Ballarat) all score >= 0.70. Kept. |
+| Never strip an event bare | - | Kept. |
+
+Dropped: folding a split-off record into "the single event for its
+organisation within 90 days". That merge was never measured; the calibrated
+`check-duplicates`, run straight after, decides re-homing instead.
+
+Grouping: labelled strays naming one incident leave as one event; model strays
+group only when they share an organisation key **and** lie within 90 days,
+because one organisation can have two incidents among one event's strays (the
+University of Sydney's December 2025 code-library breach and its 2026 Canvas
+exposure, both in the UTas event). Groups leaving separately get no ruling
+between them, so `check-duplicates` can still join them.
+
+### On a copy of the live database (2026-10-27)
+
+`check-coherence --apply` on a verified copy: 92 suspects judged in 77 events
+(13 escalated); 25 stray records split out of 19 events into 21 new events;
+305 `different` rulings cached; 36 events' roles refreshed automatically.
+Every split was a labelled stray - the score splits nothing more on current
+data, because every current suspect is labelled. A second run judged the 76
+suspects of the changed events (all >= 0.30) and split nothing.
+
+### Failure behaviour (no fallback)
+
+- Missing `TYPESAFE_API_KEY`, `typesafe-sdk` or `OPENAI_API_KEY`: exit 2,
+  nothing judged.
+- A Jev error after the SDK's retries: `CoherenceJudgementError`, exit 1,
+  nothing split (judging finishes before any split).
+- A failed escalation: that member is *undecided* - not split on Jev's
+  un-escalated score, not kept as decided; model-judged splits in its event are
+  deferred; the run exits 1 and retries next time.
+- Under `--apply`, a missing, unreadable or empty labels or calibration file:
+  `CoherenceConfigError`, exit 1, nothing split. Without `--apply` the run
+  reports and logs why.
+
+### In the refresh
+
+After `check-victims` (suspects are found against the corrected victim) and
+before `check-duplicates` (which re-homes the split-off records):
+
+```
+check-sources --apply, check-events --apply, classify-entities --stale-only,
+check-victims, check-coherence --apply, check-duplicates --apply,
+check-victim-attribution
+```
+
+Split-off events get their entity roles from the ledger's automatic refresh,
+and their reality judgement from the next refresh's `check-events`.
+
+---
+
 ## 9. Known limitations
 
 - **HWL Ebsworth remains in 13 active events, Regis Resources in 3.** Not a

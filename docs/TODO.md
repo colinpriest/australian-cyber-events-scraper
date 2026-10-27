@@ -37,11 +37,25 @@ names the evidence that showed the problem. Done items move to the README or
 - **Timelines miss supplier breaches.** UWA's timeline omits the 2020 ProctorU
   breach although the prompt asks for supplier breaches. Check recall of
   supplier incidents and strengthen the prompt or add a second query.
-- **Stray records inside events.** Labellers found events holding records
-  about other incidents: WSU with WA Health and Instacart records, University
-  of Tasmania with University of Sydney Canvas records, NT Health with an
-  Updoc record. `check-coherence` exists but is not in the refresh and is not
-  calibrated.
+- **Strays at the same organisation.** `check-coherence` is calibrated
+  (docs/09 section 8j) but splits only *suspects* - records naming another
+  organisation. Labels show the gate keeps real strays: 7 of 28 non-suspects
+  dated over 180 days from their event are another incident at the same
+  organisation (Optus's 2019 White Pages record in its 2022 breach, Okta's
+  2023 support breach in its 2022 Sitel event, AFP's HWL Ebsworth exposure in
+  its 2022 leak) - about 28 records when weighted - while 21 of the 28 are
+  misdated copies the gate rightly protects. Needed: score far-dated
+  same-organisation members too, label them, and calibrate a separate cut-off
+  before letting them leave. The "Instacart record in WSU" a labeller
+  mentioned is not in the database (no record names Instacart).
+- **Check coherence question v2 on fresh labels.** v2 was written after v1
+  failed on the same 92 labelled suspects (it restates the labelling
+  convention about mismatched stored pages); the next labelling round should
+  measure it on suspects it has not seen.
+- **Mismatched stored pages.** Labellers found many records whose stored page
+  is a different article from the record's own title and research (Scouts
+  Victoria with a UTAS page, Suncorp Bank with an HTW page, Service NSW with
+  an IN SPORT page). Find out where the scraper attaches the wrong page.
 - **Re-scrape pages with no usable text.** 113 Google records the source gate
   would have judged have under 300 characters of stored page text, so the gate
   leaves them alone. Re-scraping them would let the gate (and the labellers)
