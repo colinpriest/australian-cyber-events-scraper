@@ -439,6 +439,29 @@ Maps variant entity names (subsidiaries, brands, aliases) to canonical names for
 
 ### Audit and Tracking Tables
 
+#### QualityRuns / QualityMetrics
+
+Written by `scripts/quality_report.py` and `cyber_data_collector.quality.publication_allowed`
+(see [10-quality-gate.md](10-quality-gate.md)). One `QualityRuns` row per quality run; one
+`QualityMetrics` row per metric per run.
+
+| Table | Column | Type | Description |
+|-------|--------|------|-------------|
+| QualityRuns | `run_id` | TEXT **PK** | `qr-<timestamp>-<hex>` |
+| QualityRuns | `created_at` | TEXT | ISO timestamp of the run |
+| QualityRuns | `db_path` | TEXT | Database the run measured |
+| QualityRuns | `thresholds_version`, `thresholds_sha256` | TEXT | Which `thresholds.json` judged it |
+| QualityRuns | `publication_allowed` | INTEGER | 1 when no blocking metric failed or went unmeasured |
+| QualityRuns | `blocking_failures`, `failed`, `warned`, `not_measured` | INTEGER | Counts by status |
+| QualityRuns | `reasons_json` | TEXT | JSON list of blocking reasons |
+| QualityMetrics | `run_id`, `metric` | TEXT **PK** | Run and metric name (e.g. `dates.future_active`) |
+| QualityMetrics | `metric_group` | TEXT | coverage / evidence / backlog / duplicates / dates / staleness / integrity / labels / synthetic |
+| QualityMetrics | `value` | REAL | NULL when the check has a verdict instead of a value, or was not measured |
+| QualityMetrics | `threshold` | TEXT | e.g. `<= 0.05`, `must pass`; empty for info metrics |
+| QualityMetrics | `status` | TEXT | `pass` / `fail` / `warn` / `not_measured` / `info` |
+| QualityMetrics | `blocking` | INTEGER | 1 when a failure blocks publication |
+| QualityMetrics | `detail`, `examples_json` | TEXT | What was found (or why it could not be measured), and up to 10 examples |
+
 #### EnrichmentAuditTrail
 
 Complete audit trail for the 5-stage enrichment pipeline. One row per enrichment attempt.
