@@ -135,7 +135,8 @@ def test_labels_override_the_model(conn, tmp_path):
 
 
 def test_no_replacement_when_the_incident_is_already_covered(conn):
-    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('ev-lush', 'Lush breach', '2024-02-01', 'Lush Retail', "
+    # The event carries the trading name; research gave the formal name ("Lush Retail").
+    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('ev-lush', 'Lush breach', '2024-02-01', 'Lush', "
                  "'Active', NULL)")
     calls = []
     assert sg.replace_evidence(conn, "policy", None, search=_found(calls)) is None
