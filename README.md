@@ -526,6 +526,16 @@ stratified bootstrap of the whole choose-then-test procedure gives an
 slightly under, the target. Expect roughly 3-5 of the 70 rejections to be real
 incidents; every rejection is snapshotted and reversible.
 
+**Applied 2026-10-27:** 72 events fell below the cut-off and were rejected.
+Three of them were labelled `real`, so they were restored: an event the
+labelled set calls real is never rejected, whatever Jev scores, and one this
+filter already rejected is restored from its snapshot on the next run. Of the
+three, only one was otherwise lost (an NBN Co infrastructure-data sale claim);
+the April 2025 superannuation attacks are covered by four other events, and
+the UK Electoral Commission breach is not an Australian incident. Net: 69
+events rejected, 721 active. The rejections are listed in
+`instance/event_reality_findings.json`.
+
 Labelling conventions worth reviewing: dark-web sale claims with no named
 victim were `unsure`; campaigns naming no targeted organisation, physical
 security incidents and non-cyber fraud were `not_incident`; real incidents
@@ -888,28 +898,38 @@ shows any run left stale. Rebuild the page alone with
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
 
-Current headline result (data to 2026-10-02, after `check-victims`; 58
-entities with more than one event, 97 observed repeats):
+Current headline result (data to 2026-10-02, after `check-victims` and the
+calibrated event-reality filter; 623 victim entities, 54 with more than one
+event, 86 observed repeats):
 
 - The broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460` adjusted model does
-  not reject constant elapsed-time risk (`p = 0.2029`).
+  not reject constant elapsed-time risk (`p = 0.098`).
 - The sensitivity model that splits the first six months into `0-90` and
-  `91-180` does (`p = 0.0408`).
-- The delayed early peak holds: `91-180` days runs at about 10 repeats per 100
-  entity-years against about 4 in `0-90` and 4-5 after six months. Adjusted,
-  that is `2.74x` the first 90 days (`95% CI 1.14-6.61`) and `1.75x` the
-  pooled post-180 period (`95% CI 1.02-3.02`, two-sided `p = 0.043`).
-- How fragile that is: before wrong-victim attributions were corrected
-  (TPG's December 2022 breach filed under Optus, Henning Harders under Toll,
-  Sharp Office Systems under Sharp Motor Group) the `0-90` band held 11
-  repeats and the split was not significant (`p = 0.147`). The short-gap band
-  is where false repeats create signal rather than noise.
-- Three of the 7 remaining `0-90` repeats are still artefacts - government
-  pages stored as second "attacks" (ACT Government's business and preschool
-  pages, Service NSW's *Report identity theft* form, Services Australia's
-  data-matching notice under Spectrum Medical Imaging) - because rejection is
-  report-only until an event-level judgement is calibrated (see *Automatic
-  hygiene*). Removing them would lower the `0-90` rate further.
+  `91-180` does (`p = 0.029`).
+- The delayed early peak is now clearer: `91-180` days runs at about 10
+  repeats per 100 entity-years, against about 4 in `0-90` and 3.3-4.3 after
+  six months. Adjusted, that is `2.53x` the first 90 days (`95% CI 1.04-6.16`)
+  and `2.13x` the pooled post-180 period (`95% CI 1.21-3.75`, two-sided
+  `p = 0.009`).
+- How the cleaning moved it:
+
+  | Data state | Repeats | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
+  |---|---|---|---|
+  | 2026-10-02 refresh, before cleaning | 102 | 0.147 | 1.74x (1.01-2.98) |
+  | + victim corrections (`check-victims`) | 97 | 0.041 | 1.75x (1.02-3.02) |
+  | + 69 non-incident events rejected | 86 | 0.029 | 2.13x (1.21-3.75) |
+
+  The short-gap band is where false repeats create signal rather than noise:
+  wrong victims (TPG's breach filed under Optus, Henning Harders under Toll,
+  Sharp Office Systems under Sharp Motor Group) had put 4 false repeats there.
+- Three of the 7 remaining `0-90` repeats are still artefacts, but now of a
+  different kind: an agency's own web page attached to its **real** incident
+  as a second event (ACT Government pages beside its June 2023 Barracuda
+  breach, Service NSW's *Report identity theft* page beside its March 2020
+  breach, a Services Australia notice beside Spectrum Medical Imaging's
+  breach). The corroboration search correctly finds that the incident
+  happened, so the reality filter keeps them; they are duplicates, and merging
+  them is deduplication's job (`check-recurrences`), not the filter's.
 - The explanatory story - attackers returning, incomplete remediation, later
   training and eventual complacency - is plausible data storytelling, not
   proven mechanism. The analysis tests timing patterns, not causality.

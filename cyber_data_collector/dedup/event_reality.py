@@ -210,6 +210,53 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     return cal
 
 
+def protected_events(path: Path = LABELS_PATH) -> set:
+    """Events the labelled set says are real: never rejected, whatever Jev scores.
+
+    The labels are ground truth reviewed by people (or by labellers whose
+    reasons are recorded for review); a calibrated filter that still errs on a
+    known event should not be allowed to delete it. 2026-10-27: an NBN Co
+    infrastructure-data sale claim was rejected at 0.20 although labelled real,
+    and no other event recorded it.
+    """
+    import csv
+    try:
+        with Path(path).open(encoding="utf-8") as fh:
+            return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "real"}
+    except OSError:
+        return set()
+
+
+def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
+    """Undo this filter's rejection of any protected event (latest snapshot)."""
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    if not protected or not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'DedupSnapshots'").fetchone():
+        return []
+    ledger = DedupLedger(conn)
+    restored = []
+    for did in sorted(protected):
+        snap = conn.execute(
+            """SELECT s.snapshot_id FROM DedupSnapshots s
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = s.deduplicated_event_id
+               WHERE s.deduplicated_event_id = ? AND d.status = 'Rejected'
+                 AND s.batch_id LIKE 'reject-event-reality-%'
+               ORDER BY s.batch_id DESC LIMIT 1""", (did,)).fetchone()
+        if snap is None:
+            continue
+        ledger.restore_snapshot(snap[0])
+        conn.execute(
+            "UPDATE EnrichedEvents SET status = 'Active', updated_at = ? WHERE enriched_event_id IN "
+            "(SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?)",
+            (datetime.now(), did))
+        restored.append(did)
+    conn.commit()
+    if restored:
+        logger.info("Restored %d labelled-real event(s) this filter had rejected", len(restored))
+    return restored
+
+
 def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) -> None:
     """Reject events judged not to be incidents; snapshotted, so reversible."""
     from cyber_data_collector.dedup.ledger import DedupLedger
@@ -235,7 +282,8 @@ def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) 
 
 
 def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
-                 calibration_path: Path = CALIBRATION_PATH, search=None) -> Dict[str, Any]:
+                 calibration_path: Path = CALIBRATION_PATH, search=None,
+                 labels_path: Path = LABELS_PATH) -> Dict[str, Any]:
     """Screen, corroborate the low scorers, judge again, reject below the calibrated cut-off.
 
     Without an active calibration, or without ``apply``, nothing is rejected:
@@ -248,11 +296,15 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
+    protected = protected_events(labels_path)
     below = [] if cutoff is None else [
         {"deduplicated_event_id": did, "title": titles.get(did), "p_real": p}
-        for did, p in sorted(probabilities.items(), key=lambda kv: kv[1]) if p < cutoff]
+        for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
+        if p < cutoff and did not in protected]
     applied = bool(apply and cal and below)
     if applied:
         reject_events(conn, below)
+    restored = restore_protected(conn, protected) if apply else []
     return {"judged": len(probabilities), "corroborated": corroborated, "cutoff": cutoff,
-            "calibrated": cal is not None, "applied": applied, "rejections": below}
+            "calibrated": cal is not None, "applied": applied, "rejections": below,
+            "restored_protected": restored}
