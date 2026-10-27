@@ -746,8 +746,9 @@ Return your response as a JSON object with this exact structure:
         Returns list of Excel file paths (overall + per year).
         """
         excel_files = []
-        
-        # Compile overall risk matrix (all years)
+        Path(output_path).mkdir(parents=True, exist_ok=True)
+
+        # Compile overall risk matrix (the dashboard window, 2020 to date)
         overall_file = self._compile_risk_matrix_for_year(output_path, "risk_matrix.xlsx", None)
         if overall_file:
             excel_files.append(str(overall_file))
@@ -773,33 +774,27 @@ Return your response as a JSON object with this exact structure:
             # Get all classifications from database, optionally filtered by year
             cursor = self.conn.cursor()
             
-            if year is not None:
-                # Join with DeduplicatedEvents to filter by event_date year
-                query = """
-                    SELECT 
-                        arc.impact_type,
-                        arc.primary_stakeholder_category,
-                        COUNT(*) as count
-                    FROM ASDRiskClassifications arc
-                    JOIN DeduplicatedEvents de ON arc.deduplicated_event_id = de.deduplicated_event_id
-                    WHERE CAST(strftime('%Y', de.event_date) AS INTEGER) = ?
-                    GROUP BY arc.impact_type, arc.primary_stakeholder_category
-                    ORDER BY arc.impact_type, arc.primary_stakeholder_category
-                """
-                cursor.execute(query, (year,))
-            else:
-                # Get all classifications (no year filter)
-                query = """
-                    SELECT 
-                        impact_type,
-                        primary_stakeholder_category,
-                        COUNT(*) as count
-                    FROM ASDRiskClassifications
-                    GROUP BY impact_type, primary_stakeholder_category
-                    ORDER BY impact_type, primary_stakeholder_category
-                """
-                cursor.execute(query)
-            
+            # The dashboard's reporting population: classifications of active
+            # incidents only (merged, rejected and orphaned ones used to be
+            # counted - 1,201 classifications against 665 active incidents),
+            # in the year asked for or the dashboard window.
+            from cyber_data_collector.reporting.population import (
+                ASD_POPULATION_FROM, calendar_year, dashboard_period, incident_filter,
+            )
+            period = calendar_year(year) if year is not None else dashboard_period()
+            where, params = incident_filter(period, alias="de")
+            query = f"""
+                SELECT
+                    arc.impact_type,
+                    arc.primary_stakeholder_category,
+                    COUNT(*) as count
+                FROM {ASD_POPULATION_FROM}
+                WHERE {where}
+                GROUP BY arc.impact_type, arc.primary_stakeholder_category
+                ORDER BY arc.impact_type, arc.primary_stakeholder_category
+            """
+            cursor.execute(query, params)
+
             rows = cursor.fetchall()
             
             if not rows:
