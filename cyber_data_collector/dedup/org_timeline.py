@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 from collections import Counter
 from datetime import datetime
@@ -192,6 +193,37 @@ def research_all(conn: sqlite3.Connection, search=None) -> int:
     done = sum(1 for o in orgs if research(conn, o["entity_id"], o["entity_name"], search=search))
     logger.info("%d of %d organisations with several events have a timeline", done, len(orgs))
     return done
+
+
+_ITEM = re.compile(r"^\s*(\d+)[.)]\s*(.+)$")
+_URL = re.compile(r"https?://\S+")
+
+
+def parse_timeline(text: str) -> List[Dict[str, str]]:
+    """Split a researched answer into incidents: date | what | how it became public | source.
+
+    The answer is free text in a requested format, so a continuation line is
+    appended to the incident above it rather than dropped, and an answer with
+    no numbered list ("NONE FOUND", a refusal) parses to no incidents.
+    """
+    items: List[Dict[str, str]] = []
+    for line in (text or "").splitlines():
+        m = _ITEM.match(line)
+        if not m:
+            if items and line.strip():
+                items[-1]["what"] += " " + line.strip()
+            continue
+        body = m.group(2).replace("**", "").strip()
+        parts = [p.strip() for p in body.split("|")]
+        urls = _URL.findall(body)
+        items.append({
+            "number": m.group(1),
+            "date": parts[0] if len(parts) > 1 else "",
+            "what": parts[1] if len(parts) > 1 else body,
+            "public": parts[2] if len(parts) > 3 else "",
+            "source": urls[-1].rstrip(").,") if urls else "",
+        })
+    return items
 
 
 def timeline_for_event(conn: sqlite3.Connection, dedup_id: str) -> Optional[Dict[str, Any]]:

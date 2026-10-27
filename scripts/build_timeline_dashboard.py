@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import logging
-import re
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -41,37 +41,22 @@ DEFAULT_DB = "instance/cyber_events.db"
 DEFAULT_OUT = "dashboard/timelines.html"
 DEFAULT_TOP = 20
 
-_ITEM = re.compile(r"^\s*(\d+)[.)]\s*(.+)$")
-_URL = re.compile(r"https?://\S+")
+parse_timeline = org_timeline.parse_timeline
 
 
-def parse_timeline(text: str) -> List[Dict[str, str]]:
-    """Split the researched answer into incidents: date | what | how it became public | source.
-
-    The answer is free text in a requested format, so anything that does not
-    parse is kept as a single 'what' line rather than dropped.
-    """
-    items: List[Dict[str, str]] = []
-    for line in (text or "").splitlines():
-        m = _ITEM.match(line)
-        if not m:
-            if items and line.strip():
-                items[-1]["what"] += " " + line.strip()
-            continue
-        body = m.group(2).replace("**", "").strip()
-        parts = [p.strip() for p in body.split("|")]
-        urls = _URL.findall(body)
-        items.append({
-            "date": parts[0] if len(parts) > 1 else "",
-            "what": parts[1] if len(parts) > 1 else body,
-            "public": parts[2] if len(parts) > 3 else "",
-            "source": urls[-1].rstrip(").,") if urls else "",
-        })
-    return items
+def load_reconciliation(path: Path) -> Dict[int, Dict[str, Any]]:
+    """Reconciliation findings per entity id, from ``dedup_admin.py reconcile-timelines``."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {o["entity_id"]: o for o in data.get("organisations", [])}
 
 
-def load(conn: sqlite3.Connection, top: int) -> List[Dict[str, Any]]:
-    """The ``top`` organisations by active victim events, with timeline and events."""
+def load(conn: sqlite3.Connection, top: int, reconciliation: Optional[Dict[int, Dict[str, Any]]] = None
+         ) -> List[Dict[str, Any]]:
+    """The ``top`` organisations by active victim events, with timeline, events and reconciliation."""
+    reconciliation = reconciliation or {}
     org_timeline.ensure_schema(conn)
     has_size = any(r[1] == "size_estimate" for r in conn.execute("PRAGMA table_info(EntitiesV2)"))
     orgs = conn.execute(
@@ -85,7 +70,7 @@ def load(conn: sqlite3.Connection, top: int) -> List[Dict[str, Any]]:
     out = []
     for entity_id, name, size, n in orgs:
         events = conn.execute(
-            """SELECT d.event_date, d.title,
+            """SELECT d.event_date, d.title, d.deduplicated_event_id,
                       (SELECT COUNT(*) FROM EventDeduplicationMap m
                         WHERE m.deduplicated_event_id = d.deduplicated_event_id)
                FROM DeduplicatedEventEntities dee
@@ -93,9 +78,15 @@ def load(conn: sqlite3.Connection, top: int) -> List[Dict[str, Any]]:
                WHERE dee.entity_id = ? AND dee.relationship_type = 'victim' AND d.status = 'Active'
                ORDER BY d.event_date""", (entity_id,)).fetchall()
         timeline = org_timeline.stored(conn, entity_id)
+        rec = reconciliation.get(entity_id, {})
+        verdicts = {e["deduplicated_event_id"]: e for e in rec.get("events", [])}
+        conflicts = {c["deduplicated_event_id"] for c in rec.get("date_conflicts", [])}
+        gaps = {g["incident"]["number"] for g in rec.get("gaps", [])}
         out.append({
             "name": name, "size": size or "UNKNOWN", "events": [
-                {"date": e[0] or "", "title": e[1] or "", "records": e[2]} for e in events],
+                {"date": e[0] or "", "title": e[1] or "", "records": e[3], "verdict": verdicts.get(e[2]),
+                 "date_conflict": e[2] in conflicts} for e in events],
+            "gaps": gaps, "reconciled": bool(rec),
             "timeline": timeline,
             "incidents": parse_timeline(timeline["timeline"]) if timeline else [],
             "stale": org_timeline.is_stale(conn, entity_id) if timeline else None,
@@ -192,8 +183,31 @@ def _card(org: Dict[str, Any]) -> str:
         status = ('<span class="badge stale">stale - newer evidence since research</span>' if org["stale"]
                   else '<span class="badge fresh">current</span>')
         meta = f'researched {e(str(tl["researched_at"])[:16].replace("T", " "))} by {e(tl["model"])}'
+    def incident_flag(i: Dict[str, str]) -> str:
+        if not org.get("reconciled"):
+            return ""
+        return ('<span class="badge stale">no event - coverage gap</span>' if i.get("number") in org["gaps"]
+                else '<span class="badge fresh">matched</span>')
+
+    def event_flags(ev: Dict[str, Any]) -> str:
+        v = ev.get("verdict")
+        if not v:
+            return ""
+        flags = []
+        if v["match"] and v["match"] != "none":
+            flags.append(f'<span class="badge fresh">= incident {e(v["match"].split("_", 1)[1])}</span>')
+        else:
+            kind = (v.get("unmatched_kind") or "unmatched").replace("_", " ")
+            flags.append(f'<span class="badge stale">matches nothing: {e(kind)}</span>')
+        if v.get("low_confidence"):
+            flags.append('<span class="badge">low confidence</span>')
+        if ev.get("date_conflict"):
+            flags.append('<span class="badge stale">date conflicts with timeline</span>')
+        return " ".join(flags)
+
     incidents = "".join(
-        f'<li><div class="date">{e(i["date"]) or "&mdash;"}</div><div class="what">{e(i["what"])}</div>'
+        f'<li><div class="date">{(e(i.get("number", "")) + ". ") if i.get("number") else ""}'
+        f'{e(i["date"]) or "&mdash;"} {incident_flag(i)}</div><div class="what">{e(i["what"])}</div>'
         + (f'<div class="public">{e(i["public"])}</div>' if i["public"] else "")
         + (f'<a href="{e(i["source"])}" target="_blank" rel="noopener">{e(i["source"])}</a>' if i["source"] else "")
         + "</li>" for i in org["incidents"]) or (
@@ -201,7 +215,7 @@ def _card(org: Dict[str, Any]) -> str:
             # to list a multinational's incidents) - that is itself informative.
             f'<div class="none">No incident list. Research answered: {e((tl or {}).get("timeline") or "nothing")}</div>')
     events = "".join(
-        f'<li><div class="date">{e(ev["date"])}</div><div class="what">{e(ev["title"])}</div>'
+        f'<li><div class="date">{e(ev["date"])} {event_flags(ev)}</div><div class="what">{e(ev["title"])}</div>'
         f'<div class="public">{ev["records"]} record{"s" if ev["records"] != 1 else ""}</div></li>'
         for ev in org["events"]) or '<div class="none">No active events.</div>'
     sources = ""
@@ -233,7 +247,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     conn = sqlite3.connect(args.db)
-    orgs = load(conn, args.top)
+    orgs = load(conn, args.top, load_reconciliation(Path(args.db).parent / "timeline_reconciliation.json"))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(build_html(orgs), encoding="utf-8")

@@ -2542,6 +2542,30 @@ def cmd_check_sources(args) -> int:
     return 0
 
 
+def cmd_reconcile_timelines(args) -> int:
+    """Reconcile events against organisation timelines; see timeline_reconciliation. Report-only
+    except --queue-gaps, which only adds evidence."""
+    from cyber_data_collector.dedup.timeline_reconciliation import reconcile_all
+    from cyber_data_collector.utils import jev
+
+    if not jev.available():
+        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing reconciled.")
+        return 0
+    conn = _connect(args.db)
+    try:
+        result = reconcile_all(conn, queue_gaps=args.queue_gaps)
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "timeline_reconciliation.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    s = result["summary"]
+    print(f"{s['organisations']} organisations, {s['events']} events: {s['matched']} matched a timeline incident "
+          f"({s['low_confidence_matches']} with low confidence); unmatched: {s['unmatched']}; "
+          f"{s['coverage_gaps']} coverage gap(s); {s['date_conflicts']} date conflict(s). Findings in {out}")
+    return 0
+
+
 def cmd_research_timelines(args) -> int:
     """Research each multi-event organisation's incident history once; see org_timeline."""
     from cyber_data_collector.dedup.org_timeline import organisations_with_several_events, research_all
@@ -2941,6 +2965,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--unmapped-only", action="store_true",
                    help="Only records not yet in an event (the ingestion gate)")
     p.set_defaults(func=cmd_check_sources)
+
+    p = sub.add_parser("reconcile-timelines",
+                       help="Match each organisation's events to its researched timeline; report "
+                            "unmatched events (gap / wrong organisation / not an incident), coverage "
+                            "gaps and date conflicts")
+    p.add_argument("--queue-gaps", action="store_true",
+                   help="Search for and queue reporting of incidents no event covers (adds evidence only)")
+    p.set_defaults(func=cmd_reconcile_timelines)
 
     p = sub.add_parser("research-timelines",
                        help="Research (or reuse) the incident timeline of every organisation "
