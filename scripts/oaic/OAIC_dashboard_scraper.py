@@ -38,6 +38,8 @@ from cyber_data_collector.utils.llm_models import (
     add_model_arguments, apply_model_arguments, chat_params, openai_fast_model,
     openai_model,
 )
+from scripts.oaic.oaic_consistency import find_contradictions
+from scripts.oaic.oaic_dataset import promote_records, write_json_atomically
 from scripts.oaic.oaic_validators import (
     OAICValidationError,
     quarantine_extraction,
@@ -575,34 +577,16 @@ class OAICDashboardController:
         """
         logger.info("Detecting available semesters from dropdown...")
 
-        # Known semesters available in OAIC dashboard (from Jan 2020 onwards)
-        known_semesters = [
-            "Jan-Jun 2025",
-            "Jul-Dec 2024",
-            "Jan-Jun 2024",
-            "Jul-Dec 2023",
-            "Jan-Jun 2023",
-            "Jul-Dec 2022",
-            "Jan-Jun 2022",
-            "Jul-Dec 2021",
-            "Jan-Jun 2021",
-            "Jul-Dec 2020",
-            "Jan-Jun 2020",
-        ]
+        # The dropdown's option text is not read (the slicer is a Power BI
+        # visual, not a DOM <select>). Return the semesters the dashboard is
+        # documented to hold - derived, Jan-Jun 2020 to its last period - and
+        # say so, rather than presenting a fixed list as discovered.
+        known_semesters = generate_known_semesters()
 
-        # Try to read from actual dropdown
         try:
             frame = self.powerbi_frame or self.page
-
-            # Look for dropdown/slicer elements
-            dropdown_selectors = [
-                '[class*="slicer"]',
-                '[class*="dropdown"]',
-                '[role="listbox"]',
-                '[aria-label*="Semester"]'
-            ]
-
-            for selector in dropdown_selectors:
+            for selector in ('[class*="slicer"]', '[class*="dropdown"]',
+                             '[role="listbox"]', '[aria-label*="Semester"]'):
                 try:
                     elements = await frame.query_selector_all(selector)
                     if elements:
@@ -610,10 +594,14 @@ class OAICDashboardController:
                         break
                 except Exception:
                     continue
-
         except Exception as e:
-            logger.warning(f"Could not read dropdown, using known semesters: {e}")
+            logger.warning(f"Could not inspect the semester slicer: {e}")
 
+        logger.info(
+            f"Semesters the Power BI dashboard holds (derived, not read from the "
+            f"dropdown; it stopped at {POWER_BI_LAST_SEMESTER} - later periods come "
+            f"from oaic_datagov_scraper.py): {known_semesters}")
+        return known_semesters
         logger.info(f"Available semesters: {known_semesters}")
         return known_semesters
 
@@ -2645,11 +2633,10 @@ CRITICAL:
             year = int(semester_match.group(3))
             period = 'H1' if start_month == 1 else 'H2'
         else:
-            # Fallback
-            year = datetime.now().year
-            period = 'H1'
-            start_month = 1
-            end_month = 6
+            # Used to fall back to the current year's H1, filing the data under
+            # a period it does not describe.
+            raise ValueError(f"Malformed semester {semester!r}: expected 'Jan-Jun YYYY' or "
+                             "'Jul-Dec YYYY'")
 
         # Start with base structure
         result = {
@@ -2709,44 +2696,24 @@ CRITICAL:
                 (result["malicious_attacks"] / result["total_notifications"]) * 100, 1
             )
 
-        # Attack type breakdowns - calculate counts from percentages.
-        #
-        # KNOWN OVERSTATEMENT: these percentages partition CYBER INCIDENTS, not
-        # malicious attacks - they sum to ~100% on every semester observed
-        # (2025 H1: 28+21+21+17+6+4 = 97). Multiplying them by malicious_attacks
-        # therefore inflates every per-method count by the malicious/cyber ratio,
-        # which is 405/253 = 1.6x on the only period where both are published.
-        # Correcting this needs the narrow cyber count per period, which the
-        # Power BI dashboard does not expose - so the scaling base is left as-is
-        # rather than swapped for a guess. Treat phishing/ransomware/hacking/
-        # brute_force/malware/compromised_credentials as upper bounds.
-        malicious_count = result.get("malicious_attacks") or 0
-        if malicious_count and cyber:
-            # Calculate absolute counts from percentages
-            phishing_pct = cyber.get("phishing_pct")
-            result["phishing"] = round(malicious_count * phishing_pct / 100) if phishing_pct else None
-
-            ransomware_pct = cyber.get("ransomware_pct")
-            result["ransomware"] = round(malicious_count * ransomware_pct / 100) if ransomware_pct else None
-
-            hacking_pct = cyber.get("hacking_pct")
-            result["hacking"] = round(malicious_count * hacking_pct / 100) if hacking_pct else None
-
-            brute_force_pct = cyber.get("brute_force_pct")
-            result["brute_force"] = round(malicious_count * brute_force_pct / 100) if brute_force_pct else None
-
-            malware_pct = cyber.get("malware_pct")
-            result["malware"] = round(malicious_count * malware_pct / 100) if malware_pct else None
-
-            compromised_pct = cyber.get("compromised_credentials_pct")
-            result["compromised_credentials"] = round(malicious_count * compromised_pct / 100) if compromised_pct else None
-        else:
-            result["phishing"] = None
-            result["ransomware"] = None
-            result["hacking"] = None
-            result["brute_force"] = None
-            result["malware"] = None
-            result["compromised_credentials"] = None
+        # Attack-method breakdown: NOT converted to counts. The dashboard only
+        # gives per-method percentages, and they partition CYBER INCIDENTS (they
+        # sum to ~100%), whose count the dashboard does not publish. Multiplying
+        # them by malicious attacks - as this code used to - overstated every
+        # method count (~1.6x where both bases are known). The percentages are
+        # kept as published; the counts are unknown (None).
+        result["phishing"] = None
+        result["ransomware"] = None
+        result["hacking"] = None
+        result["brute_force"] = None
+        result["malware"] = None
+        result["compromised_credentials"] = None
+        result["cyber_incident_method_pct"] = {
+            k: cyber.get(f"{k}_pct")
+            for k in ("phishing", "ransomware", "hacking", "brute_force", "malware",
+                      "compromised_credentials")
+            if isinstance(cyber.get(f"{k}_pct"), (int, float))
+        } if cyber else {}
 
         # Top sectors. Page 2's snapshot is the AUTHORITATIVE source -
         # it lists the top-5 sectors with real per-sector notification
@@ -2983,6 +2950,10 @@ def merge_with_existing_oaic_data(new_data: List[Dict], existing_file: str = Non
 
 # Earliest semester present on the OAIC dashboard.
 EARLIEST_SEMESTER_YEAR = 2020
+# The Power BI dashboard was discontinued after this period; July-December 2025
+# onward is published on data.gov.au (scripts/oaic/oaic_datagov_scraper.py).
+POWER_BI_LAST_SEMESTER = "Jan-Jun 2025"
+_POWER_BI_LAST = (2025, 1)  # (year, half) of POWER_BI_LAST_SEMESTER
 
 
 async def _discover_available_semesters(browser: Browser, headless: bool) -> set:
@@ -3036,6 +3007,10 @@ def generate_known_semesters(today: Optional[datetime] = None) -> List[str]:
     conservative availability cutoff so we don't waste a browser session
     trying to select a semester that hasn't been published yet.
 
+    Capped at :data:`POWER_BI_LAST_SEMESTER`: the dashboard was discontinued
+    after it, so later periods are not "missing" here - they come from
+    ``oaic_datagov_scraper.py``.
+
     Returns semesters newest-first.
     """
     today = today or datetime.now()
@@ -3050,9 +3025,9 @@ def generate_known_semesters(today: Optional[datetime] = None) -> List[str]:
 
     semesters: List[str] = []
     for year in range(today.year, EARLIEST_SEMESTER_YEAR - 1, -1):
-        if h2_available(year):
+        if h2_available(year) and (year, 2) <= _POWER_BI_LAST:
             semesters.append(f"Jul-Dec {year}")
-        if h1_available(year):
+        if h1_available(year) and (year, 1) <= _POWER_BI_LAST:
             semesters.append(f"Jan-Jun {year}")
     return semesters
 
@@ -3131,26 +3106,25 @@ async def process_semester(
 
         period_data = vision_extractor.consolidate_period_data(extractions, semester)
 
+        # Every validation problem blocks the period: it used to be logged as
+        # a warning and published anyway. The extraction is quarantined for
+        # review and the period keeps its last valid record.
         is_valid, errors = validate_extracted_data(period_data)
-        if not is_valid:
-            logger.warning(f"[{semester}] Validation warnings: {errors}")
-
-        # Rank 7: cross-page total_notifications consistency. Soft-warns
-        # at 10% deviation; raises at 25%, in which case we drop the
-        # period rather than persist garbage.
+        problems = [] if is_valid else list(errors)
         try:
-            cross_warnings = validate_cross_page_totals(period_data, semester)
-            for w in cross_warnings:
-                logger.warning(f"[{semester}] cross-page check: {w}")
+            # Cross-page total consistency: a deviation past the warn band is
+            # a contradiction between pages, not a note.
+            problems += validate_cross_page_totals(period_data, semester)
         except OAICValidationError as exc:
-            logger.error(
-                f"[{semester}] cross-page consistency failed: {exc.errors}; "
-                "discarding period."
-            )
+            problems += list(exc.errors)
+        problems += [c.message for c in find_contradictions(period_data)]
+        if problems:
+            logger.error(f"[{semester}] extraction contradicts itself; discarding period "
+                         f"(quarantined): {problems}")
             quarantine_extraction(
                 QUARANTINE_DIR, semester, page=0,
                 image_bytes=None, payload=period_data,
-                errors=exc.errors,
+                errors=problems,
             )
             return None
 
@@ -3346,10 +3320,12 @@ async def main():
                     )
                 if not semesters:
                     logger.error(
-                        "No requested semesters are available on the dashboard. "
+                        "No requested semesters are available on the dashboard "
+                        f"(its last period is {POWER_BI_LAST_SEMESTER}; later periods "
+                        "come from scripts/oaic/oaic_datagov_scraper.py). "
                         "Try a different --from-year or --semester."
                     )
-                    return
+                    sys.exit(1)
 
             max_concurrent = max(1, min(args.max_concurrent, len(semesters)))
             if max_concurrent > 1:
@@ -3406,9 +3382,17 @@ async def main():
     timestamp_out = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_file = args.output or f'oaic_cyber_statistics_{timestamp_out}.json'
 
-    with open(output_file, 'w') as f:
-        json.dump(merged_data, f, indent=2, default=str)
+    write_json_atomically(Path(output_file), merged_data)
     logger.info(f"Saved merged data to: {output_file}")
+
+    # Publish: each new semester replaces its period in the validated dataset
+    # only if it passes the shared consistency checks.
+    promotion = promote_records(
+        all_period_data, "power-bi",
+        errors=[f"{s}: not scraped or failed validation"
+                for s, r in semester_outcomes if r is None])
+    logger.info(f"Published dataset: promoted {promotion.accepted}; "
+                f"rejected {sorted(promotion.rejected)}")
 
     if comparison:
         comparison_file = f'oaic_pdf_vs_dashboard_comparison_{timestamp_out}.json'
@@ -3439,6 +3423,9 @@ async def main():
                        "'Visible options' log lines.)")
     logger.info(f"  Output file: {output_file}")
     logger.info(f"  Screenshots: {screenshot_dir}")
+    if failed or not promotion.ok:
+        # Never report success after a failure.
+        sys.exit(1)
 
 
 if __name__ == '__main__':

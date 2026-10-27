@@ -37,6 +37,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from openpyxl import load_workbook
 
+# Make the project root importable when run as a script (the dataset module).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 logger = logging.getLogger(__name__)
 
 CKAN_PACKAGE_URL = "https://data.gov.au/data/api/3/action/package_show"
@@ -608,18 +611,72 @@ def merge_into_existing(
     return sorted(merged.values(), key=lambda r: (r.get("year", 0), r.get("period", "")))
 
 
+def ingest_datagov(cache_dir: Path) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, str]]:
+    """Discover, download and parse every data.gov.au NDB resource.
+
+    Returns ``(records, errors, skipped)``: one record per recognised period,
+    the run-level errors (discovery, download or parse failures - each one
+    makes the run a failure), and resources deliberately not ingested with the
+    reason. Nothing here filters on consistency; :func:`verify_record` and the
+    shared checks do that at promotion.
+    """
+    errors: List[str] = []
+    skipped: Dict[str, str] = {}
+    try:
+        resources = discover_resources()
+    except OAICDataGovError as exc:
+        return [], [str(exc)], skipped
+    if not resources:
+        # The dataset has published XLSX resources since mid-2026; none at all
+        # means the dataset moved or the API answered oddly - not "no news".
+        return [], ["no XLSX resources found on data.gov.au"], skipped
+
+    records: List[Dict[str, Any]] = []
+    for resource in resources:
+        name = resource.get("name") or ""
+        parsed_period = parse_period_from_name(name)
+        if not parsed_period:
+            skipped[name or resource.get("url", "?")] = "resource name has no recognisable period"
+            logger.warning("Skipping resource with unrecognised period: %r", name)
+            continue
+
+        year, period, start_month, end_month = parsed_period
+        url = resource.get("url") or ""
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(url).name or f"{year}_{period}.xlsx")
+        dest = cache_dir / safe_name
+
+        try:
+            download_resource(url, dest)
+            sections = parse_workbook(dest)
+        except (requests.RequestException, OSError, ValueError) as exc:
+            errors.append(f"{year} {period}: failed to ingest {name!r}: {exc}")
+            logger.error("Failed to ingest %r: %s", name, exc)
+            continue
+
+        record = build_record(sections, year, period, start_month, end_month, url)
+        logger.info(
+            "[%s %s] total=%s malicious=%s human_error=%s system_faults=%s sectors=%d",
+            year, period, record["total_notifications"], record["malicious_attacks"],
+            record["human_error"], record["system_faults"], len(record["top_sectors"]),
+        )
+        records.append(record)
+    return records, errors, skipped
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Ingest OAIC NDB statistics published as XLSX on data.gov.au"
+        description="Ingest OAIC NDB statistics published as XLSX on data.gov.au into the "
+                    "published OAIC dataset (same as scripts/oaic/refresh_oaic_statistics.py)."
     )
     parser.add_argument("--existing-data", type=Path, default=None,
-                        help="Existing oaic_cyber_statistics JSON to merge into.")
+                        help="Also write a legacy oaic_cyber_statistics_<ts>.json merging the "
+                             "accepted records into this file.")
     parser.add_argument("--output", type=Path, default=None,
-                        help="Output filename (default: oaic_cyber_statistics_<timestamp>.json).")
+                        help="Legacy output filename (with --existing-data).")
     parser.add_argument("--cache-dir", type=Path, default=Path("instance/oaic_datagov"),
                         help="Where downloaded workbooks are stored.")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Parse and report without writing an output file.")
+                        help="Parse, check and report without writing anything.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     args = parser.parse_args(argv)
 
@@ -628,68 +685,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    try:
-        resources = discover_resources()
-    except OAICDataGovError as exc:
-        logger.error("%s", exc)
-        return 1
+    from scripts.oaic.oaic_dataset import promote_records, write_json_atomically
 
-    if not resources:
-        logger.warning("No XLSX resources found on data.gov.au; nothing to ingest.")
-        return 0
-
-    records: List[Dict[str, Any]] = []
-    for resource in resources:
-        name = resource.get("name") or ""
-        parsed_period = parse_period_from_name(name)
-        if not parsed_period:
-            logger.warning("Skipping resource with unrecognised period: %r", name)
-            continue
-
-        year, period, start_month, end_month = parsed_period
-        url = resource.get("url") or ""
-        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(url).name or f"{year}_{period}.xlsx")
-        dest = args.cache_dir / safe_name
-
-        try:
-            download_resource(url, dest)
-            sections = parse_workbook(dest)
-        except (requests.RequestException, OSError, ValueError) as exc:
-            logger.error("Failed to ingest %r: %s", name, exc)
-            continue
-
-        record = build_record(sections, year, period, start_month, end_month, url)
-        problems = verify_record(record)
-        if problems:
-            for problem in problems:
-                logger.warning("[%s %s] %s", year, period, problem)
-        else:
-            logger.info("[%s %s] all internal consistency checks passed", year, period)
-
-        logger.info(
-            "[%s %s] total=%s malicious=%s human_error=%s system_faults=%s sectors=%d",
-            year, period, record["total_notifications"], record["malicious_attacks"],
-            record["human_error"], record["system_faults"], len(record["top_sectors"]),
-        )
-        records.append(record)
-
-    if not records:
-        logger.error("No records could be built from data.gov.au resources.")
-        return 1
+    records, errors, skipped = ingest_datagov(args.cache_dir)
+    for error in errors:
+        logger.error("%s", error)
 
     if args.dry_run:
+        for record in records:
+            problems = verify_record(record)
+            logger.info("[%s %s] %s", record["year"], record["period"],
+                        "; ".join(problems) if problems else "all consistency checks passed")
         print(json.dumps(records, indent=2, ensure_ascii=False))
-        logger.info("Dry run - no output written.")
-        return 0
+        logger.info("Dry run - nothing written.")
+        return 1 if errors or any(verify_record(r) for r in records) else 0
 
-    merged = merge_into_existing(records, args.existing_data)
+    result = promote_records(records, "data.gov.au", errors=errors, skipped=skipped,
+                             extra_checks=verify_record)
+    logger.info("Published dataset: promoted %s; rejected %s", result.accepted,
+                sorted(result.rejected))
 
-    output = args.output or Path(
-        f"oaic_cyber_statistics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    )
-    output.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Wrote %d period(s) to %s", len(merged), output)
-    return 0
+    if args.existing_data:
+        accepted = [r for r in records if f"{r['year']} {r['period']}" in result.accepted]
+        merged = merge_into_existing(accepted, args.existing_data)
+        output = args.output or Path(
+            f"oaic_cyber_statistics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        write_json_atomically(output, merged)
+        logger.info("Wrote %d period(s) to %s", len(merged), output)
+
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":

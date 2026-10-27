@@ -24,7 +24,7 @@ import json
 import glob
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, Any, Iterator, List, Optional, Tuple
+from typing import Dict, Any, Iterable, Iterator, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -54,26 +54,10 @@ from cyber_data_collector.reporting.population import (  # noqa: E402
     span_of,
     sum_counts,
 )
-from scripts.oaic.oaic_validators import sanitize_top_sectors
-
-# Match the YYYYMMDD_HHMMSS scrape stamp embedded in OAIC output filenames.
-_OAIC_TS_RE = re.compile(r"(\d{8})_(\d{6})")
-
-
-def _oaic_files_newest_first() -> List[str]:
-    """Return OAIC stat files newest-scrape-first by their embedded timestamp.
-
-    Sorts on the YYYYMMDD_HHMMSS stamp in the filename rather than
-    os.path.getmtime: mtime is reset by any copy/backup/rewrite and can
-    silently promote stale data for a period. Mirrors the selection used by
-    check_data_integrity so the dashboard and the integrity check agree on
-    which file is authoritative per period.
-    """
-    def _key(path: str) -> str:
-        m = _OAIC_TS_RE.search(os.path.basename(path))
-        return m.group(1) + m.group(2) if m else "0"
-
-    return sorted(glob.glob('oaic_cyber_statistics_*.json'), key=_key, reverse=True)
+from scripts.oaic.oaic_dataset import (  # noqa: E402
+    legacy_files_newest_first as _oaic_files_newest_first,
+    load_for_dashboard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +109,10 @@ ASD_STAKEHOLDER_GROUPS = {
         "Systems of National Significance"
     ]
 }
+
+# An ASD classification the evidence could not decide (asd_risk_classifier
+# PROMPT_VERSION asd-v2). Never placed in a cell; reported under the matrix.
+ASD_INSUFFICIENT_INFORMATION = "Insufficient information"
 
 ASD_VALID_IMPACT_TYPES = [
     "Sustained disruption of essential systems and associated services",
@@ -523,15 +511,47 @@ def get_records_affected_histogram(conn: sqlite3.Connection, start_date: str, en
     return {'bins': bins, 'frequencies': freqs}
 
 
-def _severity_to_numeric(severity: str) -> int:
-    """Convert severity string to numeric value."""
-    mapping = {
-        'Critical': 4, 'EventSeverity.CRITICAL': 4,
-        'High': 3, 'EventSeverity.HIGH': 3,
-        'Medium': 2, 'EventSeverity.MEDIUM': 2,
-        'Low': 1, 'EventSeverity.LOW': 1,
-    }
-    return mapping.get(severity, 0)
+_SEVERITY_NUMERIC = {
+    'Critical': 4, 'EventSeverity.CRITICAL': 4,
+    'High': 3, 'EventSeverity.HIGH': 3,
+    'Medium': 2, 'EventSeverity.MEDIUM': 2,
+    'Low': 1, 'EventSeverity.LOW': 1,
+}
+
+
+def _severity_to_numeric(severity: Optional[str]) -> Optional[int]:
+    """Numeric severity (Low=1 .. Critical=4), or None when it is not known.
+
+    Unknown, missing and unrecognised severities are None, never 0: a 0 counted
+    in an average drags it below Low and reads as "less severe than any known
+    incident". Callers exclude None from averages and report how many they
+    excluded.
+    """
+    return _SEVERITY_NUMERIC.get(severity) if severity else None
+
+
+def _average_severity_by(rows: Iterable[Any], label_of) -> Tuple[Dict[str, Dict[str, int]], int]:
+    """Weighted severity totals per label, keeping unknown severities apart.
+
+    Returns ``({label: {'total_severity', 'rated', 'unknown'}}, unknown_total)``
+    where only rated (known-severity) events enter ``total_severity``/``rated``.
+    """
+    data: Dict[str, Dict[str, int]] = {}
+    unknown_total = 0
+    for row in rows:
+        label = label_of(row)
+        if label is None:
+            continue
+        bucket = data.setdefault(label, {'total_severity': 0, 'rated': 0, 'unknown': 0})
+        numeric = _severity_to_numeric(row['severity'])
+        count = int(row['event_count'])
+        if numeric is None:
+            bucket['unknown'] += count
+            unknown_total += count
+        else:
+            bucket['total_severity'] += numeric * count
+            bucket['rated'] += count
+    return data, unknown_total
 
 
 def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -608,6 +628,8 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
         if not month:
             continue
 
+        if _severity_to_numeric(row['severity']) is None:
+            continue  # unrecognised severity: excluded, never plotted as 0
         if month not in monthly_max:
             monthly_max[month] = {
                 'severity': row['severity'],
@@ -621,7 +643,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
     monthly_avg = {}
     for row in avg_rows:
         month = row['month']
-        if month:
+        if month and row['avg_severity_numeric'] is not None:
             monthly_avg[month] = round(row['avg_severity_numeric'], 2)
 
     months = sorted(monthly_max.keys())
@@ -629,7 +651,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
     titles = [monthly_max[month]['title'] for month in months]
     entities = [monthly_max[month]['entity_name'] for month in months]
     severity_numeric = [monthly_max[month]['severity_numeric'] for month in months]
-    avg_severity_numeric = [monthly_avg.get(month, 0) for month in months]
+    avg_severity_numeric = [monthly_avg.get(month) for month in months]
 
     return {
         'months': months,
@@ -668,11 +690,14 @@ def get_median_severity_per_month(conn: sqlite3.Connection, start_date: str, end
             monthly_severities[month] = []
         
         severity_numeric = _severity_to_numeric(row['severity'])
+        if severity_numeric is None:
+            continue  # unrecognised severity: excluded, never counted as 0
         monthly_severities[month].append(severity_numeric)
 
     months = sorted(monthly_severities.keys())
     median_severities = []
     
+    months = [m for m in months if monthly_severities[m]]
     for month in months:
         severities = monthly_severities[month]
         if severities:
@@ -778,7 +803,8 @@ def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date
         keywords = json.loads(keywords_json) if keywords_json else []
         category_mapping[group_name] = keywords
 
-    # Query for severity data by raw industry
+    # Query for severity data by raw industry. NULL severity is selected too:
+    # it is counted as unknown, not silently left out of the totals.
     where, params = _incidents(start_date, end_date)
     query = f"""
         SELECT
@@ -787,67 +813,22 @@ def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date
             COUNT(*) as event_count
         FROM DeduplicatedEvents
         WHERE {where}
-            AND severity IS NOT NULL
         GROUP BY victim_organization_industry, severity
         ORDER BY victim_organization_industry
     """
     rows = conn.execute(query, params).fetchall()
 
-    # Map raw industries to categories and calculate weighted average severity
-    category_data = {}
-    unknown_count = 0
-
-    for row in rows:
+    def category_of(row) -> Optional[str]:
         industry = row['industry']
-        severity_numeric = _severity_to_numeric(row['severity'])
-        count = row['event_count']
-
         if industry == 'Unknown' or not industry:
-            unknown_count += count
-            continue
-
-        # Find matching category
-        matched = False
+            return None  # unknown industry: no category to average into
         for category, keywords in category_mapping.items():
             if any(keyword.lower() in industry.lower() for keyword in keywords):
-                if category not in category_data:
-                    category_data[category] = {'total_severity': 0, 'total_count': 0}
+                return category
+        return 'Others'
 
-                category_data[category]['total_severity'] += severity_numeric * count
-                category_data[category]['total_count'] += count
-                matched = True
-                break
-
-        if not matched:
-            # Add to "Others" category
-            if 'Others' not in category_data:
-                category_data['Others'] = {'total_severity': 0, 'total_count': 0}
-            category_data['Others']['total_severity'] += severity_numeric * count
-            category_data['Others']['total_count'] += count
-
-    # If all data is "Unknown", return empty lists to indicate no data
-    if len(category_data) == 0 and unknown_count > 0:
-        return {
-            'industries': [],
-            'avg_severities': [],
-            'no_data': True
-        }
-
-    industries = []
-    avg_severities = []
-
-    # Calculate average severity for each category
-    for category, data in sorted(category_data.items(), key=lambda x: x[1]['total_count'], reverse=True):
-        if data['total_count'] > 0:
-            avg_severity = data['total_severity'] / data['total_count']
-            industries.append(category)
-            avg_severities.append(avg_severity)
-
-    return {
-        'industries': industries,
-        'avg_severities': avg_severities,
-        'no_data': len(industries) == 0
-    }
+    category_data, unknown_severity = _average_severity_by(rows, category_of)
+    return _severity_average_payload(category_data, unknown_severity, 'industries')
 
 
 def get_severity_by_attack_type(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
@@ -860,41 +841,42 @@ def get_severity_by_attack_type(conn: sqlite3.Connection, start_date: str, end_d
             COUNT(*) as event_count
         FROM DeduplicatedEvents
         WHERE {where}
-            AND severity IS NOT NULL
         GROUP BY event_type, severity
         ORDER BY event_type
     """
     rows = conn.execute(query, params).fetchall()
 
-    # Calculate weighted average severity by attack type
-    attack_type_data = {}
-    for row in rows:
+    def attack_type_of(row) -> str:
         attack_type = row['attack_type']
-        # Clean up enum strings
         if attack_type.startswith('CyberEventType.'):
             attack_type = attack_type.replace('CyberEventType.', '').replace('_', ' ').title()
-        
-        severity_numeric = _severity_to_numeric(row['severity'])
-        count = row['event_count']
-        
-        if attack_type not in attack_type_data:
-            attack_type_data[attack_type] = {'total_severity': 0, 'total_count': 0}
-        
-        attack_type_data[attack_type]['total_severity'] += severity_numeric * count
-        attack_type_data[attack_type]['total_count'] += count
+        return attack_type
 
-    attack_types = []
-    avg_severities = []
-    
-    for attack_type, data in attack_type_data.items():
-        if data['total_count'] > 0:
-            avg_severity = data['total_severity'] / data['total_count']
-            attack_types.append(attack_type)
-            avg_severities.append(avg_severity)
+    attack_type_data, unknown_severity = _average_severity_by(rows, attack_type_of)
+    return _severity_average_payload(attack_type_data, unknown_severity, 'attack_types')
 
+
+def _severity_average_payload(data: Dict[str, Dict[str, int]], unknown_severity: int,
+                              label_key: str) -> Dict[str, Any]:
+    """Chart payload: averages over known severities only, plus what was excluded.
+
+    A label whose events all have unknown severity has no average and is not
+    plotted; its events are still counted in ``unknown_severity_total``.
+    """
+    labels, averages, rated, unknown = [], [], [], []
+    for label, d in sorted(data.items(), key=lambda x: x[1]['rated'], reverse=True):
+        if d['rated'] > 0:
+            labels.append(label)
+            averages.append(d['total_severity'] / d['rated'])
+            rated.append(d['rated'])
+            unknown.append(d['unknown'])
     return {
-        'attack_types': attack_types,
-        'avg_severities': avg_severities
+        label_key: labels,
+        'avg_severities': averages,
+        'rated_counts': rated,
+        'unknown_severity_counts': unknown,
+        'unknown_severity_total': unknown_severity,
+        'no_data': len(labels) == 0,
     }
 
 
@@ -940,127 +922,60 @@ def get_records_affected_by_attack_type(conn: sqlite3.Connection, start_date: st
     }
 
 
-def _validate_oaic_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate and clean OAIC record, nullifying obviously incorrect values.
-
-    Rules:
-    - Sector notification counts should not exceed total_notifications
-    - Attack type counts should not exceed total_notifications
-    - Percentages should be between 0 and 100
-    """
-    total = record.get('total_notifications') or 0
-
-    # Null implausible per-sector counts (> period total, or > the plausibility
-    # cap). Uses the shared sanitizer so the dashboard, scraper, cleanup and
-    # integrity check all agree. The old `count <= total * 1.1` guard kept
-    # counts that were ~80-90% of the total, which is impossible for one of
-    # five top sectors.
-    if record.get('top_sectors'):
-        record['top_sectors'] = sanitize_top_sectors(
-            record['top_sectors'], total if total > 0 else None
-        ) or None
-
-    # Validate attack type counts - should not exceed total_notifications
-    attack_fields = ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']
-    for field in attack_fields:
-        value = record.get(field)
-        if value is not None and total > 0 and value > total * 1.1:
-            record[field] = None  # Nullify impossible values
-
-    return record
+_OAIC_LOAD_REPORT: Dict[str, Any] = {}
 
 
 def load_oaic_data() -> List[Dict[str, Any]]:
-    """Load OAIC data from JSON files, merging data from multiple sources.
+    """OAIC semester records for the charts (see ``scripts/oaic/oaic_dataset.py``).
 
-    Combines PDF-scraped data (has individuals_affected_average/median) with
-    dashboard-scraped data (has individuals_affected_distribution) to get the
-    most complete dataset. Validates data to filter out obviously incorrect values.
+    Reads the published, validated dataset written by
+    ``scripts/oaic/refresh_oaic_statistics.py``; before the first refresh, merges
+    the legacy ``oaic_cyber_statistics_*.json`` files and says so. Every record is
+    screened for internal contradictions: a contradicting figure is withheld (a
+    whole period if it contradicts its own total) and listed in the OAIC notes
+    shown on the page - it is never charted. An unreadable file raises instead
+    of being skipped.
 
-    Files are processed **newest-first** (by the timestamp embedded in the
-    filename, not mtime) so a fresh re-scrape automatically supersedes any
-    stale or corrupt fields from older runs; older files only contribute
-    fields the newest run left blank.
+    The freshness line and withheld-figure notes of the last call are available
+    from :func:`oaic_load_report`.
     """
-    oaic_files = _oaic_files_newest_first()
+    load = load_for_dashboard()
+    _OAIC_LOAD_REPORT.clear()
+    _OAIC_LOAD_REPORT.update({
+        'origin': load.origin,
+        'status_line': load.status_line,
+        'notes': [n.as_dict() for n in load.notes],
+    })
+    if load.notes:
+        logger.warning("OAIC: %d figure(s) withheld or flagged as contradictory (listed on the "
+                       "dashboard)", len(load.notes))
+    for n in load.notes:
+        logger.debug("OAIC %s: %s - %s", n.period, ", ".join(n.fields) or "flagged", n.reason)
+    logger.info("OAIC: %s", load.status_line)
+    return load.records
 
-    if not oaic_files:
-        logger.warning("No OAIC data files found. Run oaic_data_scraper.py first.")
-        return []
-    logger.info(f"Loading OAIC data from {len(oaic_files)} file(s), newest first: {oaic_files[0]}")
 
-    # Load all OAIC files and merge by period
-    all_records: Dict[str, Dict[str, Any]] = {}  # key: "year period" -> record
+def oaic_load_report() -> Dict[str, Any]:
+    """Freshness line and withheld-figure notes from the last :func:`load_oaic_data`."""
+    return dict(_OAIC_LOAD_REPORT)
 
-    for filepath in oaic_files:
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                file_data = json.load(f)
 
-            for record in file_data:
-                year = record.get('year')
-                period = record.get('period')
-                if not year or not period:
-                    continue
-
-                # Validate the record
-                record = _validate_oaic_record(record)
-                period_key = f"{year} {period}"
-
-                if period_key not in all_records:
-                    all_records[period_key] = record
-                else:
-                    # Merge: keep fields with actual values
-                    existing = all_records[period_key]
-
-                    # Prefer records with individuals_affected_average/median (PDF-scraped)
-                    if record.get('individuals_affected_average') and not existing.get('individuals_affected_average'):
-                        existing['individuals_affected_average'] = record['individuals_affected_average']
-                    if record.get('individuals_affected_median') and not existing.get('individuals_affected_median'):
-                        existing['individuals_affected_median'] = record['individuals_affected_median']
-
-                    # Prefer records with individuals_affected_distribution (dashboard-scraped)
-                    if record.get('individuals_affected_distribution') and not existing.get('individuals_affected_distribution'):
-                        existing['individuals_affected_distribution'] = record['individuals_affected_distribution']
-
-                    # For top_sectors, prefer records with VALID sectors -
-                    # i.e. at least one entry has a populated `notifications`
-                    # count. The older code only checked truthiness of the
-                    # array, which misclassified an array of "all-null
-                    # notifications" entries (a regression introduced by an
-                    # earlier scraper bug) as valid and refused to fall
-                    # through to older files that DID have counts.
-                    def _has_any_notifications(rec):
-                        ts = rec.get('top_sectors') or []
-                        return any(
-                            isinstance(s, dict) and isinstance(s.get('notifications'), (int, float))
-                            for s in ts
-                        )
-                    if record.get('top_sectors') and not _has_any_notifications(existing):
-                        existing['top_sectors'] = record['top_sectors']
-
-                    # For attack types, prefer valid (non-null) values
-                    for field in ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']:
-                        if record.get(field) is not None and existing.get(field) is None:
-                            existing[field] = record[field]
-
-                    # For other fields, prefer non-null values
-                    for key, value in record.items():
-                        if key not in existing or existing[key] is None:
-                            existing[key] = value
-
-        except Exception as e:
-            logger.warning("Could not load %s: %s", filepath, e)
-            continue
-
-    # Sort by year and period
-    merged_data = sorted(
-        all_records.values(),
-        key=lambda x: (x.get('year', 0), 0 if x.get('period') == 'H1' else 1)
-    )
-
-    logger.info("Loaded and merged OAIC data from %d files, %d periods", len(oaic_files), len(merged_data))
-    return merged_data
+def oaic_status_html(report: Dict[str, Any]) -> str:
+    """The OAIC freshness line plus every withheld figure, as escaped HTML."""
+    if not report:
+        return ''
+    notes = report.get('notes') or []
+    html = f'<div><strong>{html_escape(report.get("status_line") or "")}</strong></div>'
+    if notes:
+        items = ''.join(
+            f'<li>{html_escape(n.get("period", ""))}: '
+            f'{html_escape(", ".join(n.get("fields") or []) or "note")} - '
+            f'{html_escape(n.get("reason", ""))}</li>'
+            for n in notes)
+        html += (f'<details class="mt-1"><summary>{len(notes)} OAIC figure(s) withheld or '
+                 f'flagged because they contradict other figures</summary>'
+                 f'<ul class="mb-0 small">{items}</ul></details>')
+    return html
 
 
 def _oaic_record_period(record: Dict[str, Any]) -> Optional[ReportingPeriod]:
@@ -2344,67 +2259,115 @@ def prepare_oaic_time_distribution_series(
     }
 
 
+PII_CATEGORIES = ['contact_information', 'identity_information', 'financial_details',
+                  'health_information', 'tax_file_numbers', 'other_sensitive_information']
+
+
+def _parse_pii_classification(raw: Any) -> Optional[Dict[str, bool]]:
+    """A ``personal_info_types_json`` value as {category: bool}, or None if malformed.
+
+    Well-formed means a JSON object whose category values are booleans (or
+    absent / null, read as not involved). Anything else - unparseable text, a
+    list, "yes" - is malformed: the incident's exposure is unknown.
+    """
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    out: Dict[str, bool] = {}
+    for c in PII_CATEGORIES:
+        v = data.get(c)
+        if v is None:
+            out[c] = False
+        elif isinstance(v, bool):
+            out[c] = v
+        else:
+            return None
+    return out
+
+
 def prepare_oaic_personal_info_series(
     oaic_data: List[Dict[str, Any]],
     db_path: str = 'instance/cyber_events.db',
 ) -> Dict[str, Any]:
-    """OAIC personal-info-types counts per semester PLUS DB-side counts
-    derived from the LLM-classified personal_info_types_json column added
-    by scripts/enrich_pii_and_source_category.py.
-    """
-    import json
-    import sqlite3
+    """Share of breaches involving each personal-information type, per semester.
 
-    periods, series = [], {}
+    OAIC side: the category count over the semester's total notifications.
+    Database side: incidents classified as involving the category over the
+    incidents with a *well-formed* classification
+    (``personal_info_types_json``, from scripts/enrich_pii_and_source_category.py).
+    Incidents with a malformed classification, or none yet, are excluded from
+    the denominator as well as the numerator - counting them as "not involved"
+    understated every rate - and how many were excluded is returned per period
+    (``db_malformed``, ``db_unclassified``) and shown on the chart.
+
+    Counts are returned too (``series`` / ``db_series``). A database error
+    raises; it is never turned into a series of zeros.
+    """
+    periods: List[str] = []
+    series: Dict[str, List[Optional[float]]] = {c: [] for c in PII_CATEGORIES}
+    series_pct: Dict[str, List[Optional[float]]] = {c: [] for c in PII_CATEGORIES}
     relevant = [r for r in oaic_data
                 if (r.get('year') or 0) >= OAIC_DETAIL_FIRST_YEAR and r.get('personal_info_types')]
     relevant.sort(key=lambda r: (r['year'], r['period']))
-    cats = ['contact_information', 'identity_information', 'financial_details',
-            'health_information', 'tax_file_numbers', 'other_sensitive_information']
-    for c in cats:
-        series[c] = []
     for r in relevant:
         periods.append(f"{r['year']} {r['period']}")
         pi = r.get('personal_info_types') or {}
-        for c in cats:
+        total = r.get('total_notifications')
+        for c in PII_CATEGORIES:
             v = pi.get(c)
-            series[c].append(v if isinstance(v, (int, float)) else None)
+            v = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+            series[c].append(v)
+            series_pct[c].append(round(100.0 * v / total, 1)
+                                 if v is not None and isinstance(total, (int, float)) and total > 0
+                                 else None)
 
-    # DB-side per-semester counts of each PII category. Aggregates the
-    # boolean classification across all Active dedup events whose
-    # event_date falls in the semester window.
-    db_series: Dict[str, List[int]] = {c: [] for c in cats}
-    try:
-        conn = sqlite3.connect(db_path)
-        for label in periods:
-            where, params = incident_filter(half_year_from_label(label))
-            tally = {c: 0 for c in cats}
-            for row in conn.execute(
-                "SELECT personal_info_types_json FROM DeduplicatedEvents "
-                f"WHERE {where} "
-                "AND personal_info_types_json IS NOT NULL",
-                params,
-            ):
-                try:
-                    d = json.loads(row[0])
-                except Exception:
-                    continue
-                for c in cats:
-                    if d.get(c):
-                        tally[c] += 1
-            for c in cats:
-                db_series[c].append(tally[c])
-        conn.close()
-    except Exception as e:
-        logger.warning("Personal-info DB aggregation failed: %s", e)
-        if not any(db_series.values()):
-            for c in cats:
-                db_series[c] = [0] * len(periods)
+    db_series: Dict[str, List[int]] = {c: [] for c in PII_CATEGORIES}
+    db_series_pct: Dict[str, List[Optional[float]]] = {c: [] for c in PII_CATEGORIES}
+    db_classified: List[int] = []
+    db_malformed: List[int] = []
+    db_unclassified: List[int] = []
+    if periods:
+        with sqlite3.connect(db_path) as conn:
+            for label in periods:
+                where, params = incident_filter(half_year_from_label(label))
+                tally = {c: 0 for c in PII_CATEGORIES}
+                classified = malformed = unclassified = 0
+                for (raw,) in conn.execute(
+                        f"SELECT personal_info_types_json FROM DeduplicatedEvents WHERE {where}",
+                        params):
+                    if raw is None:
+                        unclassified += 1
+                        continue
+                    parsed = _parse_pii_classification(raw)
+                    if parsed is None:
+                        malformed += 1
+                        continue
+                    classified += 1
+                    for c in PII_CATEGORIES:
+                        tally[c] += int(parsed[c])
+                db_classified.append(classified)
+                db_malformed.append(malformed)
+                db_unclassified.append(unclassified)
+                for c in PII_CATEGORIES:
+                    db_series[c].append(tally[c])
+                    db_series_pct[c].append(
+                        round(100.0 * tally[c] / classified, 1) if classified else None)
+        if sum(db_malformed):
+            logger.warning("Personal-info chart: %d incident(s) with a malformed "
+                           "personal_info_types_json excluded from the rates", sum(db_malformed))
 
     return {
-        'periods':    periods,
-        'series':     series,
-        'db_series':  db_series,
+        'periods': periods,
+        'series': series,
+        'series_pct': series_pct,
+        'db_series': db_series,
+        'db_series_pct': db_series_pct,
+        'db_classified': db_classified,
+        'db_malformed': db_malformed,
+        'db_unclassified': db_unclassified,
     }
 
 
@@ -2553,6 +2516,7 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
             'total_classifications': 0,
             'population_classifications': population,
             'unmapped_classifications': unmapped,
+            'insufficient_information': 0,
             'max_value': 0,
             'year': year,
             'period_label': window.label if window else '',
@@ -2564,17 +2528,14 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
         # The requested year lies wholly outside the reporting window.
         return empty_matrix()
 
-    try:
-        where, params = incident_filter(window, "de")
-        query = (
-            "SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count "
-            f"FROM {ASD_POPULATION_FROM} WHERE {where} "
-            "GROUP BY arc.impact_type, arc.primary_stakeholder_category"
-        )
-        rows = conn.cursor().execute(query, params).fetchall()
-    except Exception as e:
-        logger.error("Error in get_asd_risk_matrix: %s", e)
-        return empty_matrix()
+    # A query error propagates: an unreadable population is not an empty matrix.
+    where, params = incident_filter(window, "de")
+    query = (
+        "SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count "
+        f"FROM {ASD_POPULATION_FROM} WHERE {where} "
+        "GROUP BY arc.impact_type, arc.primary_stakeholder_category"
+    )
+    rows = conn.cursor().execute(query, params).fetchall()
 
     if not rows:
         return empty_matrix()
@@ -2582,6 +2543,7 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
     valid_stakeholders = {cat for cats in ASD_STAKEHOLDER_GROUPS.values() for cat in cats}
     count_map: Dict[tuple, int] = {}
     unmapped = 0
+    insufficient = 0
     population = 0
     for row in rows:
         impact = row['impact_type']
@@ -2590,6 +2552,8 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
         population += count
         if impact not in ASD_VALID_IMPACT_TYPES or stakeholder not in valid_stakeholders:
             unmapped += count
+            if ASD_INSUFFICIENT_INFORMATION in (impact, stakeholder):
+                insufficient += count
             continue
         count_map[(impact, stakeholder)] = count
 
@@ -2613,6 +2577,7 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
         'total_classifications': total_classifications,
         'population_classifications': population,
         'unmapped_classifications': unmapped,
+        'insufficient_information': insufficient,
         'max_value': max_value,
         'year': year,
         'period_label': window.label,
@@ -2799,6 +2764,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     asd_all_start = ((data.get('asd_risk_all') or {}).get('period_start') or '')[:4]
     asd_all_label = f"{asd_all_start} to date" if asd_all_start else "All Years"
     sector_period = html_escape((data.get('oaic_sectors') or {}).get('period_label') or '')
+    oaic_status = oaic_status_html(data.get('oaic_status') or {})
 
     template = """<!DOCTYPE html>
 <html lang="en">
@@ -2916,6 +2882,9 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           </div>
           <div id="monthlyCountsStats" class="mt-2" style="font-size: 0.9rem; color: #374151;"></div>
         </div>
+      </div>
+      <div class="col-12">
+        <div class="alert alert-secondary py-2 mb-3" id="oaicStatus" style="font-size: 0.9rem;">__OAIC_STATUS__</div>
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
@@ -3123,6 +3092,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       });
 
       html += '</tbody></table></div>';
+      const unmapped = matrixData.unmapped_classifications || 0;
+      if (unmapped > 0) {
+        const insufficient = matrixData.insufficient_information || 0;
+        const other = unmapped - insufficient;
+        const parts = [];
+        if (insufficient) parts.push(`${insufficient.toLocaleString()} with insufficient information to classify`);
+        if (other) parts.push(`${other.toLocaleString()} with values outside the ASD vocabulary`);
+        html += `<p class="text-muted small mb-0">Not placed in the matrix: ${parts.join('; ')}.</p>`;
+      }
       container.innerHTML = html;
 
       if (totalElement) {
@@ -4226,11 +4204,24 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       // The DB side needs personal_info_types_json, filled by
       // scripts/enrich_pii_and_source_category.py. When nothing is classified
       // every DB line is zero, so plot OAIC only.
-      const hasDb = Object.values(d.db_series || {}).some(a => (a || []).some(v => v > 0));
+      const hasDb = (d.db_classified || []).some(v => v > 0);
       const piCanvas = document.getElementById('oaicPersonalInfoChart');
       if (!hasDb) {
         const t = piCanvas.parentElement.querySelector('.chart-title');
         if (t) t.textContent = 'OAIC: Personal Information Types over Time (2022+)';
+      } else {
+        // Rates use only incidents with a well-formed classification; say how
+        // many were left out of numerator and denominator alike.
+        const sum = a => (a || []).reduce((x, y) => x + (y || 0), 0);
+        const malformed = sum(d.db_malformed), unclassified = sum(d.db_unclassified);
+        if (malformed || unclassified) {
+          const note = document.createElement('div');
+          note.className = 'text-muted small text-center';
+          note.textContent = `Database rates exclude ${malformed.toLocaleString()} incident(s) with a ` +
+            `malformed classification and ${unclassified.toLocaleString()} not yet classified ` +
+            `(of ${(sum(d.db_classified) + malformed + unclassified).toLocaleString()} in these semesters).`;
+          piCanvas.parentElement.insertBefore(note, piCanvas);
+        }
       }
       const datasets = [];
       cats.forEach((c, i) => {
@@ -4238,15 +4229,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         const labelBase = c.replace(/_/g, ' ');
         datasets.push({
           label: 'OAIC: ' + labelBase,
-          data: d.series[c] || [],
+          data: (d.series_pct || {})[c] || [],
           borderColor: color,
           backgroundColor: color + '33',
           fill: false, tension: 0.2,
         });
-        if (hasDb && d.db_series && d.db_series[c]) {
+        if (hasDb && d.db_series_pct && d.db_series_pct[c]) {
           datasets.push({
             label: 'DB: ' + labelBase,
-            data: d.db_series[c],
+            data: d.db_series_pct[c],
             borderColor: color,
             backgroundColor: color + '11',
             borderDash: [6, 4],
@@ -4261,7 +4252,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           plugins: { title: { display: true, text: hasDb
             ? 'Solid = OAIC, Dashed = DB (LLM-classified)'
             : 'OAIC notifications (database events not yet classified by information type)' } },
-          scales: { y: { beginAtZero: true, title: { display: true, text: 'Breaches involving this category' } } },
+          scales: { y: { beginAtZero: true, title: { display: true, text: '% of breaches involving this category' } } },
         },
       });
     })();
@@ -4460,7 +4451,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               max: 4,
               ticks: {
                 callback: function(value) {
-                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  const severityMap = {0: '', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
                   return severityMap[value] || value;
                 }
               },
@@ -4527,6 +4518,17 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       });
     })();
 
+    // Averages use known severities only; say how many unknown ones were left out.
+    function addUnknownSeverityNote(canvasId, d) {
+      const n = (d && d.unknown_severity_total) || 0;
+      if (!n) return;
+      const note = document.createElement('div');
+      note.className = 'text-muted small text-center';
+      note.textContent = `${n.toLocaleString()} event(s) with unknown severity excluded from the averages`;
+      const canvas = document.getElementById(canvasId);
+      canvas.parentElement.insertBefore(note, canvas);
+    }
+
     // Severity by Industry Radar Chart
     (() => {
       const severityByIndustry = __SBI__;
@@ -4543,6 +4545,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         return;
       }
 
+      addUnknownSeverityNote('severityByIndustryChart', severityByIndustry);
       new Chart(document.getElementById('severityByIndustryChart').getContext('2d'), {
         type: 'radar',
         data: {
@@ -4567,7 +4570,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               max: 4,
               ticks: {
                 callback: function(value) {
-                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  const severityMap = {0: '', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
                   return severityMap[value] || value;
                 }
               }
@@ -4580,6 +4583,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     // Severity by Attack Type Radar Chart
     (() => {
       const severityByAttackType = __SBAT__;
+      addUnknownSeverityNote('severityByAttackTypeChart', severityByAttackType);
       new Chart(document.getElementById('severityByAttackTypeChart').getContext('2d'), {
         type: 'radar',
         data: {
@@ -4604,7 +4608,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               max: 4,
               ticks: {
                 callback: function(value) {
-                  const severityMap = {0: 'Unknown', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
+                  const severityMap = {0: '', 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Critical'};
                   return severityMap[value] || value;
                 }
               }
@@ -4706,6 +4710,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__ASD_ALL__', asd_all)
             .replace('__ASD_CURR__', asd_current)
             .replace('__ASD_PREV__', asd_previous)
+            # Last: escaped free text must not be scanned for later placeholders.
+            .replace('__OAIC_STATUS__', oaic_status)
            )
 
 
@@ -4915,8 +4921,10 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
     if not os.path.exists(db_path):
         raise FileNotFoundError(f'Database not found: {db_path}')
 
-    # Load OAIC data
+    # Load OAIC data (screened; the report says what was withheld and how fresh it is)
+    _OAIC_LOAD_REPORT.clear()
     oaic_data = load_oaic_data()
+    oaic_status = oaic_load_report()
 
     with get_connection(db_path) as conn:
         monthly_counts = get_monthly_event_counts(conn, start_date, end_date)
@@ -4994,6 +5002,7 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             'oaic_time_to_identify': oaic_time_to_identify,
             'oaic_time_to_notify': oaic_time_to_notify,
             'oaic_personal_info_types': oaic_personal_info_types,
+            'oaic_status': oaic_status,
             'asd_risk_all': get_asd_risk_matrix(conn, period=reporting_period),
             'asd_risk_current': get_asd_risk_matrix(
                 conn, reporting_period.end.year, period=reporting_period),
