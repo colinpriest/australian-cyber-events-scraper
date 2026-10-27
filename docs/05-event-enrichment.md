@@ -429,7 +429,7 @@ written (`cyber_data_collector/processing/enrichment_gate.py`), fact by fact:
 | Date | not a real ISO `YYYY-MM-DD`, after the day the record was discovered (or today), or before 1990-01-01 |
 | Confidence | not a finite number in [0, 1] (an invalid *overall* confidence rejects the whole answer) |
 | Count | not a non-negative whole number |
-| Attribution | the answer cites no real http(s) source **and** the value does not appear in the record's own persisted text |
+| Support | the value is not stated in the record's own persisted text **nor** in the retrieved text of a cited page about the same incident (see *Citation support* below). A cited URL on its own supports nothing. |
 
 An answer with no fact left (empty, unparseable, or everything rejected) is a
 **failed attempt**, not a success. Only an accepted answer sets:
@@ -462,6 +462,118 @@ python scripts/perplexity_backfill_events.py --report-quarantine
 python scripts/perplexity_backfill_events.py --release-quarantine   # try again
 python scripts/perplexity_backfill_events.py --requeue-empty        # old empty "validated" rows
 ```
+
+<a id="citation-support"></a>
+#### Citation support (since 2026-10-27)
+
+**Why.** A review found the gate treated any syntactically valid cited URL as
+support: an answer citing an unrelated page carried invented dates,
+organisation names and a 275-million records-affected count into the typed
+columns at high reliability.
+
+**Retrieval** (`processing/cited_documents.py`). Every valid URL an answer
+cites is fetched with `requests` (5 s connect / 15 s read timeout, 5 MB
+download cap), its visible text extracted with BeautifulSoup (scripts,
+navigation, headers, footers and forms dropped; PDFs via pdfplumber, first 40
+pages; 200,000-character cap) and its own publication date read from page
+metadata (`article:published_time`, `datePublished`, `<time datetime>`).
+Results are cached in `CitedDocuments(url PK, fetched_at, status, http_status,
+content_type, final_url, text, error, published_date)`. Failures (`http_error`,
+`fetch_error`, `unsupported_type`, `empty`) are cached too and retried after 7
+days; a page read successfully is never fetched again. Fetching public pages
+is not a paid API and is not counted by the API budget. A dry run still caches
+the pages it reads (a copy of the web, not enrichment data).
+
+**Which pages count.** A cited page is *about the incident* only if it names
+an organisation the record itself names - the claimed victim name or an
+organisation linked to the record as victim / primary target / affected /
+affected customer / vendor (`EnrichedEventEntities`), in each case only if the
+record's own text names it. Names match as a whole phrase or on all their
+distinctive words ("Police & Nurses Limited" -> police, nurses); a name made
+only of generic words ("P&N Bank") must match as a phrase. If the record names
+no known organisation, only the record's own text can support facts.
+
+**What counts as support**, per fact:
+
+| Fact | Supported when a source... | Stored with it |
+|------|----------------------------|----------------|
+| Date | states that day ("14 March 2025", "March 14, 2025", "14/03/2025", the ISO date, or "14 March" in a text naming 2025). A month-only statement ("March 2025") supports only a `YYYY-MM-01` claim, at month precision - never an invented exact day. A date found only in a byline / update stamp ("Published 2 April 2025"), or only in the first 300 characters of a page published that day, is the page's date and supports nothing. | `date_precision` (`day` / `month`), `date_basis` (`stated`, or `stated (same day as the source's publication date)`) |
+| Victim name, threat actor | names it (whole phrase or all distinctive words) | - |
+| Attack method | names every category the claim names (ransomware, phishing, DDoS, malware, credentials, brute force, injection, vulnerability, misconfiguration, insider, third party, unauthorised access, data breach, fraud, defacement - each with its synonyms); a method outside the vocabulary must appear in its own words | - |
+| Records affected | states that number ("120,000", "9.7 million", "100k") | `unit` (records / accounts / customers / people, from the words after the number), `basis` (`stated`, `estimate` for "up to / about / an estimated...", `at_least` for "more than / over..."), `scope` (`australian` / `global` when the sentence frames it). Anything unclear is NULL, never guessed. |
+| Industry | - (a classification, not a quote): kept only with a supported victim name | - |
+
+The record's own text is tried first, then the relevant pages; for a date a
+day-precise statement anywhere beats a month-only one.
+
+**Provenance.** Every claimed fact gets a row in `EnrichmentFactSupport
+(enriched_event_id, fact, status, value_json, confidence, source_kind,
+source_url, reason, details_json, checked_at)`: `supported` with its source
+(`record`, `cited_document` + URL, or `entity` for industry) and details, or
+`withheld` with the claim and the reason. Withheld values are kept only there,
+never in `perplexity_enrichment_data`, which downstream code reads. The
+supported count is also described on the record itself:
+
+| Column | Values |
+|--------|--------|
+| `records_affected_unit` | records / accounts / customers / people / NULL |
+| `records_affected_basis` | stated / estimate / at_least / NULL |
+| `records_affected_scope` | australian / global / NULL |
+| `records_affected_source` | the cited URL, or `record` |
+
+They describe `records_affected` only while it holds the supported count
+(other writers of `records_affected` do not set them; the recheck clears them
+when the value no longer matches).
+
+**Withheld claims and retries.** If the answer has no supported fact it is a
+failed attempt as before. If some facts are supported, they are stored; if a
+withheld claim was confident enough to have been promoted (>= 0.6) and the
+fact is not already stored with support, the record is **not** marked
+validated: the attempt counts, the reason goes to `perplexity_last_error`, and
+the record stays in the retry queue (quarantined after 3 attempts).
+
+**A corrupt stored answer** (unparseable `perplexity_enrichment_data`) leaves
+no confidence baseline, so a new answer could only overwrite blindly. Such a
+record is quarantined before any API call, with the reason, and nothing is
+written; repair or clear the JSON, then `--release-quarantine`.
+
+**Outcome counts.** `PerplexityBackfillProcessor.enrich_events_concurrent`
+returns (and keeps as `processor.last_counts`) `attempted`, `enriched`
+(= `validated` + `partially_supported`), `validated`, `partially_supported`,
+`failed` (gate rejection, request failure, failed write, corrupt baseline),
+`storage_failed`, `corrupt_baseline`, `budget_refused` (not attempted - neither
+success nor failure) and `dry_run`. A failed database write is a failed
+attempt, never a success.
+
+**Re-judging stored answers.** Older code stored a constant
+`data_source_reliability = 0.85` for every validated record and let any cited
+URL through.
+
+```bash
+python scripts/perplexity_backfill_events.py --recompute-reliability --dry-run [--limit N]
+python scripts/perplexity_backfill_events.py --recompute-reliability [--fetch-workers 8] [--db-path PATH]
+```
+
+For every record with stored enrichment JSON it rebuilds the claims (the JSON
+plus the withheld claims), reads the cited pages, applies the gate above and:
+recomputes reliability (mean confidence of the accepted facts, averaged with
+the overall confidence when > 0; NULL when no accepted fact has a confidence);
+removes withheld facts from the JSON; clears a typed column that holds a
+withheld value (`records_affected`, `attacking_entity_name`, `attack_method`,
+`entity_confidence`, `date_confidence`; a withheld `event_date` reverts to the
+record's own `RawEvents.event_date`); and re-queues the record when a withheld
+claim was confident, counting the stored answer as one attempt. A fact
+withheld because its page could not be read is restored once the page reads.
+An unreadable JSON is quarantined and left untouched. Idempotent: a second run
+judges the same claims against the same cached pages and writes nothing.
+Typed-column changes reach events through the record-fingerprint refresh on
+the next deduplication.
+
+**Model.** Every Perplexity call takes its model from `PERPLEXITY_MODEL`
+(`cyber_data_collector.utils.llm_models.perplexity_model()`, default
+`sonar-pro`), and token use is recorded under that name. The engine refuses to
+start without `PERPLEXITY_API_KEY` or the `openai` package, and a request
+refused by the API budget is not retried.
 
 ### 4.7 Rate Limiting and Retry Logic
 

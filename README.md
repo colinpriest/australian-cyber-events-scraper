@@ -772,6 +772,26 @@ python scripts/perplexity_backfill_events.py --release-quarantine
 python scripts/perplexity_backfill_events.py --requeue-empty   # old empty "validated" rows
 ```
 
+#### Citations must support the facts
+
+A cited URL is not support until its page has been read. The gate retrieves
+every cited page (cached in `CitedDocuments`, failures too) and accepts a fact
+only if the record's own text, or a cited page naming an organisation the
+record names, states it: a date to the precision claimed and not merely as a
+page's publication date, a count with its unit, basis (stated / estimate /
+at least) and scope (Australian / global). Unsupported claims are withheld
+from the typed columns and the JSON (kept in `EnrichmentFactSupport` with the
+reason; accepted facts keep their source there), and a confident one keeps
+the record in the retry queue. `--recompute-reliability` re-judges every
+stored answer the same way, replacing the old constant 0.85 reliability;
+idempotent. The Perplexity model is `PERPLEXITY_MODEL` (default `sonar-pro`).
+Details: [docs/05-event-enrichment.md](docs/05-event-enrichment.md#citation-support).
+
+```bash
+python scripts/perplexity_backfill_events.py --recompute-reliability --dry-run   # report
+python scripts/perplexity_backfill_events.py --recompute-reliability             # apply
+```
+
 ### Random Forest filter: versioned bundles
 
 The discovery filter loads an immutable bundle from

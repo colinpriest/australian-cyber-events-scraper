@@ -27,7 +27,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.dedup.entity_resolution import canonical_key
-from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.utils.llm_models import chat_params, openai_model, perplexity_model
 from cyber_data_collector.dedup.victim_selection import (
     is_descriptive_label,
     is_non_organisation,
@@ -369,7 +369,7 @@ class OrganisationResolver:
                 "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {self.perplexity_key}",
                          "Content-Type": "application/json"},
-                json={"model": "sonar-pro",
+                json={"model": perplexity_model(),
                       "messages": [{"role": "user", "content": query}],
                       "max_tokens": 400, "temperature": 0.0},
                 timeout=60)

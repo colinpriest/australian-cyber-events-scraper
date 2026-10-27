@@ -9,8 +9,13 @@ This script:
 4. Updates the database with enriched information
 5. Triggers re-deduplication after enrichment
 
+Every answer passes the acceptance gate (processing/enrichment_gate.py): each
+fact must be stated in the record's own text or in a cited page about the same
+incident, which is retrieved and cached first (processing/cited_documents.py).
+
 Usage:
     python scripts/perplexity_backfill_events.py [--limit N] [--priority-only] [--dry-run]
+    python scripts/perplexity_backfill_events.py --recompute-reliability [--dry-run] [--limit N]
 """
 
 import argparse
@@ -21,17 +26,25 @@ import os
 import sys
 from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+# Runnable as a script from the project root (python scripts/...).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.processing.cited_documents import CitedDocumentStore
 from cyber_data_collector.processing.enrichment_gate import (
     MAX_ENRICHMENT_ATTEMPTS,
+    CorruptStoredEnrichment,
     GateResult,
     evaluate_enrichment,
+    read_stored_blob,
+    valid_source_urls,
 )
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.processing.record_evidence import RecordEvidence
 from cyber_data_collector.utils import ConfigManager
+from cyber_data_collector.utils.api_budget import is_budget_refusal
 
 # Configure logging
 logging.basicConfig(
@@ -39,6 +52,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# Per-record outcomes of one enrichment attempt.
+OUTCOME_VALIDATED = 'validated'            # facts stored, record validated
+OUTCOME_PARTIAL = 'partially_supported'    # supported facts stored; confident unsupported claims withheld, record re-queued
+OUTCOME_REJECTED = 'rejected'              # answer failed the gate (failed attempt)
+OUTCOME_REQUEST_FAILED = 'request_failed'  # the API call failed (failed attempt)
+OUTCOME_BUDGET_REFUSED = 'budget_refused'  # refused by the run's API budget: not attempted, not a failure
+OUTCOME_STORAGE_FAILED = 'storage_failed'  # accepted, but writing it failed (failed attempt)
+OUTCOME_CORRUPT_BASELINE = 'corrupt_baseline'  # stored enrichment unreadable: quarantined, nothing written
+OUTCOME_DRY_RUN = 'dry_run'                # accepted; dry run wrote nothing
+
+FAILURE_OUTCOMES = frozenset({OUTCOME_REJECTED, OUTCOME_REQUEST_FAILED, OUTCOME_STORAGE_FAILED,
+                              OUTCOME_CORRUPT_BASELINE})
+
+
+def _publication_day(source_metadata: Optional[str]) -> Optional[str]:
+    """``publication_date`` from a RawEvents.source_metadata JSON, if any."""
+    if not source_metadata:
+        return None
+    try:
+        meta = json.loads(source_metadata)
+    except (TypeError, ValueError):
+        return None
+    value = meta.get('publication_date') if isinstance(meta, dict) else None
+    return str(value)[:10] if value else None
 
 
 def _parse_day(value: Optional[str]) -> Optional[date]:
@@ -58,15 +97,25 @@ class PerplexityBackfillProcessor:
         self,
         db: CyberEventDataV2,
         perplexity_engine: PerplexityEnrichmentEngine,
-        dry_run: bool = False
+        dry_run: bool = False,
+        cited_documents: Optional[CitedDocumentStore] = None,
     ):
         self.db = db
         self.perplexity_engine = perplexity_engine
         self.dry_run = dry_run
+        # Cited pages are read (and cached) so each fact can be checked
+        # against what its sources actually say.  A dry run still caches the
+        # pages it reads: they are a copy of the web, not enrichment data.
+        self.cited_documents = cited_documents or CitedDocumentStore(db._conn, db._lock)
+        #: Counts from the last enrich_events_concurrent call (see its docstring).
+        self.last_counts: Dict[str, int] = {}
         self.stats = {
             'total_candidates': 0,
             'enriched_successfully': 0,
             'enriched_failed': 0,
+            'partially_supported': 0,
+            'storage_failures': 0,
+            'bookkeeping_failures': 0,
             'quarantined': 0,
             'skipped': 0,
             'updated_fields': {
@@ -103,6 +152,7 @@ class PerplexityBackfillProcessor:
                     ee.attacking_entity_name,
                     ee.attack_method,
                     ee.raw_event_id,
+                    ee.perplexity_enrichment_data,
                     COALESCE(ee.perplexity_attempt_count, 0) AS perplexity_attempt_count,
                     -- The persisted record: enrichment reads the scraped article
                     -- stored here, not the processed description above.
@@ -111,6 +161,7 @@ class PerplexityBackfillProcessor:
                     re.raw_content,
                     re.source_url,
                     re.source_type,
+                    re.source_metadata,
                     CAST(re.discovered_at AS TEXT) AS discovered_at
                 FROM EnrichedEvents ee
                 LEFT JOIN RawEvents re ON re.raw_event_id = ee.raw_event_id
@@ -153,10 +204,11 @@ class PerplexityBackfillProcessor:
             logger.info(f"Found {len(events)} events needing enrichment")
             return events
 
-    def _record_failure(self, event: Dict, reason: str) -> None:
+    def _record_failure(self, event: Dict, reason: str, exc: Optional[BaseException] = None) -> None:
         """Record a failed attempt (or just log it on a dry run)."""
         logger.warning(f"Enrichment not accepted for '{(event.get('title') or '')[:60]}': {reason}")
-        if self.dry_run or "API budget exhausted" in reason:
+        refused = is_budget_refusal(exc) if exc is not None else is_budget_refusal(RuntimeError(reason))
+        if self.dry_run or refused:
             # A request refused by the run's API budget was never attempted:
             # counting it would quarantine records for running out of budget.
             return
@@ -164,22 +216,39 @@ class PerplexityBackfillProcessor:
             status = self.db.record_enrichment_failure(event['enriched_event_id'], reason)
             if status == 'quarantined':
                 self.stats['quarantined'] += 1
-        except Exception as exc:  # bookkeeping must not abort the batch
+        except Exception as exc:  # bookkeeping must not abort the batch - but it is counted
+            self.stats['bookkeeping_failures'] += 1
             logger.error(f"Could not record failed attempt for {event.get('enriched_event_id')}: {exc}")
 
     async def enrich_event(self, event: Dict) -> Optional[Dict]:
         """Enrich a single event with Perplexity and gate the answer.
 
-        The answer is judged against the record's *persisted* text, and only an
-        answer that passes the acceptance gate is returned.  Anything else is
-        recorded as a failed attempt (retried on later runs, quarantined after
+        The answer is judged against the record's *persisted* text and the
+        retrieved text of the pages it cites, and only an answer that passes
+        the acceptance gate is returned.  Anything else is recorded as a
+        failed attempt (retried on later runs, quarantined after
         MAX_ENRICHMENT_ATTEMPTS) and None is returned.
         """
+        _, data = await self._enrich(event)
+        return data
+
+    async def _enrich(self, event: Dict) -> Tuple[str, Optional[Dict]]:
+        """Like :meth:`enrich_event`, also returning the outcome (``OUTCOME_*``)."""
 
         logger.info(f"Enriching event: {event['title'][:60]}...")
 
-        # Extract current entity name from title or description
-        current_entity = self._extract_entity_name(event)
+        # A stored enrichment that cannot be read leaves no baseline to weigh
+        # a new answer against: flag the record for a human instead of paying
+        # for an answer that could only overwrite blindly.
+        try:
+            read_stored_blob(event.get('perplexity_enrichment_data'))
+        except CorruptStoredEnrichment as exc:
+            self._quarantine(event, f"{exc}; baseline unknown - repair or clear it, then --release-quarantine")
+            return OUTCOME_CORRUPT_BASELINE, None
+
+        # The organisations already linked to the record (never a guess).
+        organisations = self.db.get_record_organisations(event['enriched_event_id'])
+        current_entity = self._extract_entity_name(event, organisations)
 
         # What is actually stored for this record: the scraped article if
         # there is one, otherwise a snippet that the prompt labels as such.
@@ -195,31 +264,42 @@ class PerplexityBackfillProcessor:
                 evidence=evidence,
             )
         except Exception as exc:
-            self._record_failure(event, f"request failed: {str(exc)[:300]}")
-            return None
+            self._record_failure(event, f"request failed: {str(exc)[:300]}", exc)
+            return (OUTCOME_BUDGET_REFUSED if is_budget_refusal(exc) else OUTCOME_REQUEST_FAILED), None
+        if enrichment is not None and enrichment.parse_failed and is_budget_refusal(
+                RuntimeError(enrichment.failure_reason or "")):
+            self._record_failure(event, enrichment.failure_reason)
+            return OUTCOME_BUDGET_REFUSED, None
 
-        if enrichment is None:
-            # No attempt was made (client unavailable); nothing to count.
-            logger.warning(f"Perplexity made no attempt for event: {event['title'][:60]}...")
-            return None
+        # Read the pages the answer cites (cached; failures are cached too).
+        urls = [] if enrichment is None or enrichment.parse_failed else valid_source_urls(
+            enrichment.sources_consulted)
+        loop = asyncio.get_running_loop()
+        documents = await loop.run_in_executor(None, self.cited_documents.get_documents, urls)
 
         gate = evaluate_enrichment(
             enrichment,
             record_text=evidence.match_text(),
+            cited_documents=documents,
+            organisations=organisations,
             reference_date=_parse_day(evidence.discovered_at),
+            record_published=_publication_day(event.get('source_metadata')),
         )
         if not gate.is_accepted:
             self._record_failure(event, gate.failure_reason or "enrichment rejected by the acceptance gate")
-            return None
+            return OUTCOME_REJECTED, None
 
         for fact, why in gate.rejected_facts.items():
-            logger.info(f"  Dropped {fact}: {why}")
+            logger.info(f"  Withheld {fact}: {why}")
+        for fact in gate.accepted_facts:
+            decision = gate.decisions[fact]
+            logger.debug(f"  {fact} supported by {decision.source_kind} {decision.source_url or ''}")
         logger.info(
             f"Enriched successfully (overall confidence: {gate.sanitized.overall_confidence:.2f}, "
             f"reliability: {gate.reliability})"
         )
 
-        return {
+        return OUTCOME_VALIDATED, {
             'enriched_event_id': event['enriched_event_id'],
             'enrichment': gate.sanitized,
             'gate': gate,
@@ -227,20 +307,22 @@ class PerplexityBackfillProcessor:
             'original_event': event
         }
 
-    def _extract_entity_name(self, event: Dict) -> Optional[str]:
-        """Extract entity name from event data."""
-        # Simple extraction - could be enhanced
-        title = event.get('title', '')
-        # Check if there's an entity in attacking_entity_name
-        if event.get('attacking_entity_name'):
-            return None  # This is the attacker, not the victim
+    def _quarantine(self, event: Dict, reason: str) -> None:
+        logger.error(f"Quarantining '{(event.get('title') or '')[:60]}': {reason}")
+        if self.dry_run:
+            return
+        self.db.quarantine_enrichment(event['enriched_event_id'], reason)
+        self.stats['quarantined'] += 1
 
-        # Try to extract from title - very basic approach
-        parts = title.split(' ')
-        if len(parts) > 0:
-            return parts[0]  # First word as a guess
+    def _extract_entity_name(self, event: Dict, organisations: Optional[List[str]] = None) -> Optional[str]:
+        """The organisations already linked to the record, for the prompt.
 
-        return None
+        None when none is linked: the prompt then says no entity is
+        identified.  (This used to send the title's first word as "currently
+        identified entity" - a guess presented to Perplexity as a fact.)
+        """
+        names = [n for n in (organisations or []) if n]
+        return "; ".join(names[:5]) if names else None
 
     def apply_enrichment_to_database(self, enriched_data: Dict) -> bool:
         """Store an enrichment that has already passed the acceptance gate.
@@ -248,12 +330,20 @@ class PerplexityBackfillProcessor:
         Facts are written only if they do not weaken what is stored, and the
         record is marked validated with a reliability computed from the
         accepted facts - never a default.
+
+        Returns:
+            True only when the write succeeded (or on a dry run).  A failed
+            write is recorded as a failed attempt and returns False.
         """
+        return self._apply(enriched_data) not in FAILURE_OUTCOMES
+
+    def _apply(self, enriched_data: Dict) -> str:
+        """Store an accepted enrichment; returns the outcome (``OUTCOME_*``)."""
 
         if self.dry_run:
             logger.info(f"[DRY RUN] Would update event: {enriched_data['original_event']['title'][:60]}...")
             self._log_enrichment_changes(enriched_data)
-            return True
+            return OUTCOME_DRY_RUN
 
         event_id = enriched_data['enriched_event_id']
         original_event = enriched_data['original_event']
@@ -261,9 +351,13 @@ class PerplexityBackfillProcessor:
 
         try:
             outcome = self.db.record_enrichment_success(event_id, gate)
+        except CorruptStoredEnrichment as exc:
+            self._quarantine(original_event, f"{exc}; baseline unknown - nothing written")
+            return OUTCOME_CORRUPT_BASELINE
         except Exception as exc:
+            self.stats['storage_failures'] += 1
             self._record_failure(original_event, f"storage error: {str(exc)[:300]}")
-            return False
+            return OUTCOME_STORAGE_FAILED
 
         field_for_group = {
             'date': 'event_date', 'entity': 'entity_name', 'threat_actor': 'threat_actor',
@@ -271,6 +365,14 @@ class PerplexityBackfillProcessor:
         }
         for group in outcome['applied']:
             self.stats['updated_fields'][field_for_group[group]] += 1
+        if outcome.get('pending'):
+            # Supported facts are stored; the unsupported confident claims keep
+            # the record in the retry queue.
+            self.stats['partially_supported'] += 1
+            if outcome.get('status') == 'quarantined':
+                self.stats['quarantined'] += 1
+            logger.info(f"  Not validated - unsupported claims withheld: {', '.join(outcome['pending'])} "
+                        f"(status {outcome.get('status')})")
         if gate.sanitized and gate.sanitized.formal_entity_name:
             logger.info(
                 f"  Formal entity name: {gate.sanitized.formal_entity_name} "
@@ -278,7 +380,7 @@ class PerplexityBackfillProcessor:
             )
 
         logger.info(f"  Updated {len(outcome['applied'])} fields for event: {original_event['title'][:60]}...")
-        return True
+        return OUTCOME_PARTIAL if outcome.get('pending') else OUTCOME_VALIDATED
 
     def _log_enrichment_changes(self, enriched_data: Dict):
         """Log what changes would be made (for dry run)."""
@@ -307,47 +409,69 @@ class PerplexityBackfillProcessor:
 
         Perplexity tolerates ~10 concurrent calls comfortably; this is the same
         semaphore size used by llm_classifier.py and entity_extractor.py.
-        Replaces a serial loop that took ~3-6 sec per event.
 
-        Returns counts dict: {'enriched': N, 'failed': M}
+        Returns:
+            Counts (also kept as ``self.last_counts``):
+
+            * ``attempted`` - records processed (``len(events)``);
+            * ``enriched`` - facts written: ``validated`` + ``partially_supported``;
+            * ``validated`` - written and marked validated;
+            * ``partially_supported`` - supported facts written, confident
+              unsupported claims withheld, record left in the retry queue;
+            * ``failed`` - rejected by the gate, request failed, write failed,
+              or quarantined because the stored enrichment is unreadable;
+            * ``storage_failed`` / ``corrupt_baseline`` - subsets of ``failed``;
+            * ``budget_refused`` - not attempted (API budget spent); neither
+              a success nor a failure;
+            * ``dry_run`` - accepted on a dry run (nothing written).
         """
+        counts: Dict[str, int] = {
+            'attempted': len(events), 'enriched': 0, 'validated': 0, 'partially_supported': 0,
+            'failed': 0, 'storage_failed': 0, 'corrupt_baseline': 0, 'budget_refused': 0, 'dry_run': 0,
+        }
         if not events:
-            return {'enriched': 0, 'failed': 0}
+            self.last_counts = counts
+            return counts
 
         semaphore = asyncio.Semaphore(max_concurrent)
-        enriched_count = 0
-        failed_count = 0
         completed = 0
         total = len(events)
 
-        async def _enrich_one(event: Dict) -> bool:
+        async def _enrich_one(event: Dict) -> str:
             async with semaphore:
                 try:
-                    enriched_data = await self.enrich_event(event)
-                    if enriched_data:
-                        # apply_enrichment_to_database is sync but uses self.db._lock
-                        # internally, so it is safe to call from async tasks.
-                        self.apply_enrichment_to_database(enriched_data)
-                        return True
-                    return False
+                    outcome, enriched_data = await self._enrich(event)
+                    if enriched_data is None:
+                        return outcome
+                    # _apply is sync but uses self.db._lock internally, so it
+                    # is safe to call from async tasks.
+                    return self._apply(enriched_data)
                 except Exception as exc:
                     logger.warning(f"Failed to enrich event {event.get('enriched_event_id')}: {exc}")
-                    self._record_failure(event, f"unexpected error: {str(exc)[:300]}")
-                    return False
+                    self._record_failure(event, f"unexpected error: {str(exc)[:300]}", exc)
+                    return OUTCOME_BUDGET_REFUSED if is_budget_refusal(exc) else OUTCOME_REQUEST_FAILED
 
         tasks = [asyncio.create_task(_enrich_one(event)) for event in events]
         for task in asyncio.as_completed(tasks):
-            success = await task
+            outcome = await task
             completed += 1
-            if success:
-                enriched_count += 1
+            if outcome in (OUTCOME_VALIDATED, OUTCOME_PARTIAL):
+                counts['enriched'] += 1
+                counts['validated' if outcome == OUTCOME_VALIDATED else 'partially_supported'] += 1
+            elif outcome == OUTCOME_BUDGET_REFUSED:
+                counts['budget_refused'] += 1
+            elif outcome == OUTCOME_DRY_RUN:
+                counts['dry_run'] += 1
             else:
-                failed_count += 1
+                counts['failed'] += 1
+                if outcome in (OUTCOME_STORAGE_FAILED, OUTCOME_CORRUPT_BASELINE):
+                    counts[outcome] += 1
             if progress_log_every and completed % progress_log_every == 0:
-                logger.info(f"Progress: {completed}/{total} events processed ({enriched_count} enriched)")
+                logger.info(f"Progress: {completed}/{total} events processed ({counts['enriched']} enriched)")
 
+        self.last_counts = counts
         self.report_quarantined()
-        return {'enriched': enriched_count, 'failed': failed_count}
+        return counts
 
     def report_quarantined(self, limit: int = 20) -> List[Dict]:
         """Log the records that have used up their enrichment attempts."""
@@ -424,6 +548,7 @@ class PerplexityBackfillProcessor:
         logger.info(f"Total candidates: {self.stats['total_candidates']}")
         logger.info(f"Successfully enriched: {self.stats['enriched_successfully']}")
         logger.info(f"Failed to enrich: {self.stats['enriched_failed']}")
+        logger.info(f"Stored but not validated (unsupported claims withheld): {self.stats['partially_supported']}")
         logger.info(f"Quarantined this run: {self.stats['quarantined']}")
         logger.info(f"Skipped: {self.stats['skipped']}")
         logger.info("\nFields updated:")
@@ -445,6 +570,14 @@ async def main():
                         help="List quarantined records and exit")
     parser.add_argument("--release-quarantine", action="store_true",
                         help="Put quarantined records back in the retry queue")
+    parser.add_argument("--recompute-reliability", action="store_true",
+                        help="Re-judge every stored enrichment with the current gate (cited pages are read "
+                             "and cached), recompute data_source_reliability and withhold unsupported facts; "
+                             "with --dry-run, report only. Needs no Perplexity key.")
+    parser.add_argument("--fetch-workers", type=int, default=8,
+                        help="Concurrent cited-page fetches for --recompute-reliability (default 8)")
+    parser.add_argument("--db-path", default="instance/cyber_events.db",
+                        help="Database file (default: instance/cyber_events.db)")
 
     args = parser.parse_args()
 
@@ -453,7 +586,20 @@ async def main():
     env_config = config_manager.load()
     
     # Initialize database
-    db = CyberEventDataV2()
+    db = CyberEventDataV2(args.db_path)
+
+    if args.recompute_reliability:
+        from cyber_data_collector.processing.reliability_recheck import recheck_stored_enrichments
+
+        store = CitedDocumentStore(db._conn, db._lock, max_workers=args.fetch_workers)
+        try:
+            report = recheck_stored_enrichments(db._conn, store, dry_run=args.dry_run, limit=args.limit)
+        finally:
+            db.close()
+        logger.info("%sRecompute reliability:", "[DRY RUN] " if args.dry_run else "")
+        for line in report.lines():
+            logger.info("  %s", line)
+        return 0
 
     # Maintenance actions that need no Perplexity key.
     if args.requeue_empty:
@@ -474,11 +620,8 @@ async def main():
         logger.error("Perplexity API not configured. Set PERPLEXITY_API_KEY in .env file.")
         return 1
     
+    # Raises (naming what is missing) if the client cannot be created.
     perplexity_engine = PerplexityEnrichmentEngine(api_key=api_key)
-
-    if not perplexity_engine.client:
-        logger.error("Failed to initialize Perplexity client. Check your API key.")
-        return 1
 
     # Initialize processor
     processor = PerplexityBackfillProcessor(

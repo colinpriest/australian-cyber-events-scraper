@@ -6,6 +6,8 @@ import time
 from typing import Optional, List, Dict, Any
 import logging
 
+from cyber_data_collector.utils.llm_models import perplexity_model
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 try:
@@ -568,7 +570,7 @@ I need you to:
 The original URL is broken/inaccessible, so I need alternative sources covering the identical incident."""
 
             response = client.chat.completions.create(
-                model="sonar-pro",
+                model=perplexity_model(),
                 messages=[
                     {
                         "role": "system",
