@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from tqdm import tqdm
 
 from cyber_data_collector.datasources import (
+    CyberDailyDataSource,
     DataSource,
     GDELTDataSource,
     GoogleSearchDataSource,
@@ -90,6 +91,14 @@ class CyberDataCollector:
             self.rate_limiter.set_limit("oaic", per_minute=self.config.oaic_config.rate_limit)
             self.data_sources["oaic"] = OAICDataSource(
                 self.config.oaic_config,
+                self.rate_limiter,
+                self.env_config,
+            )
+
+        if self.config.cyberdaily_config.enabled:
+            self.rate_limiter.set_limit("cyberdaily", per_minute=self.config.cyberdaily_config.rate_limit)
+            self.data_sources["cyberdaily"] = CyberDailyDataSource(
+                self.config.cyberdaily_config,
                 self.rate_limiter,
                 self.env_config,
             )

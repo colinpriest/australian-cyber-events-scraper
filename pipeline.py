@@ -35,7 +35,7 @@ from scripts.wipe_database import DatabaseRecordWiper
 install_run_summary()
 
 
-DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance"]
+DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance", "CyberDaily"]
 
 
 def _resolve_db_path(db_path: Optional[str]) -> str:

@@ -17,7 +17,7 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -64,6 +64,7 @@ SOURCE_TYPES_BY_COLLECTOR = {
     "webber": "WebberInsurance",
     "oaic": "OAIC",
     "gdelt": "GDELT",
+    "cyberdaily": "CyberDaily",
 }
 
 
@@ -254,13 +255,14 @@ class EventDiscoveryEnrichmentPipeline:
         Discover new events from configured data sources, processing month by month.
 
         Args:
-            source_types: List of sources to use ('GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance')
+            source_types: List of sources to use ('GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance',
+                'OAIC', 'CyberDaily')
             date_range_days: How many days back to search (limits the month range to process)
             max_events: Maximum events per source per month
         """
         # Default to all sources if none specified
         if not source_types:
-            source_types = ['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC']
+            source_types = ['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC', 'CyberDaily']
 
         # Fail before any paid discovery call if a required model is missing.
         self.require_prerequisites()
@@ -367,10 +369,52 @@ class EventDiscoveryEnrichmentPipeline:
         # every routine refresh (observed 2026-09-15: 762 curated events
         # rebuilt as 1,087, MediSecure fragmented back into 10).
 
-    async def _discover_events_for_month(self, year: int, month: int, source_types: List[str], max_events: int) -> int:
+    async def backfill_source(self, source_type: str, months: List[Tuple[int, int]],
+                              max_events: int = 1000) -> Dict[str, List[Tuple[int, int]]]:
+        """Search already-processed months with one source added after they were processed.
+
+        ``MonthProcessed`` is per month, not per source, so a source added later
+        (Cyber Daily, 2026-10) is only ever run for the rolling three-month
+        window. This runs it alone over earlier months, through the same path
+        as discovery (storage, retry queue, page gate, classification).
+
+        Idempotent: a month the source has already searched completely
+        (``SourceMonthDiscovery``) is skipped, so an interrupted backfill
+        resumes. A month nothing has processed yet is skipped too - normal
+        discovery covers it with every source, and recording it as processed
+        after one source would stop the others from ever searching it.
+
+        Returns:
+            ``{'searched': [...], 'already_done': [...], 'not_processed': [...],
+            'failed': [...]}`` of ``(year, month)``.
+        """
+        self.require_prerequisites()
+        await self.drain_retry_queue()
+        result: Dict[str, List[Tuple[int, int]]] = {
+            "searched": [], "already_done": [], "not_processed": [], "failed": []}
+        for year, month in months:
+            if not self.db.is_month_processed(year, month):
+                result["not_processed"].append((year, month))
+                continue
+            if self.retry_queue.discovery_status(source_type, year, month) == "complete":
+                result["already_done"].append((year, month))
+                continue
+            logger.info("[BACKFILL] %s %d-%02d", source_type, year, month)
+            await self._discover_events_for_month(year, month, [source_type], max_events, mark_processed=False)
+            status = self.retry_queue.discovery_status(source_type, year, month)
+            result["searched" if status == "complete" else "failed"].append((year, month))
+        self.report_incomplete_months()
+        return result
+
+    async def _discover_events_for_month(self, year: int, month: int, source_types: List[str], max_events: int,
+                                         mark_processed: bool = True) -> int:
         """
         Discover events for a specific month.
         Returns the number of events discovered.
+
+        ``mark_processed=False`` (a backfill of an already-processed month with
+        one source) leaves ``MonthProcessed`` as it is, so its totals and notes
+        keep describing the full run.
         """
         # Calculate month boundaries
         from calendar import monthrange
@@ -400,6 +444,10 @@ class EventDiscoveryEnrichmentPipeline:
                 collector.data_sources['oaic'].known_urls = known
                 if known:
                     logger.info(f"[OAIC] {len(known)} already-known URLs will be skipped")
+            # A Cyber Daily article already stored by any source (Webber,
+            # Google and Perplexity cite it too) is not stored a second time.
+            if 'cyberdaily' in collector.data_sources:
+                collector.data_sources['cyberdaily'].known_urls = self.db.get_source_urls_containing("cyberdaily.au")
 
             # Step 1: Raw collection (same as collector.collect_all_events but broken down)
             valid_sources = {}
@@ -474,7 +522,14 @@ class EventDiscoveryEnrichmentPipeline:
             if pending:
                 notes += f"; {pending} record(s) pending retry"
                 logger.warning(f"[RETRY] Month {year}-{month:02d} is incomplete: {pending} record(s) pending retry")
-            if failed_sources:
+            if not mark_processed:
+                if failed_sources:
+                    self.stats['source_months_failed'] += len(failed_sources)
+                    for source_type, failures in sorted(failed_sources.items()):
+                        logger.error("[BACKFILL] %s search of %d-%02d lost results (%d failure(s), first: %s); "
+                                     "run the backfill again", source_type, year, month, len(failures),
+                                     failures[0] if failures else "?")
+            elif failed_sources:
                 # Never record an empty or partial search as the month's answer.
                 self.stats['source_months_failed'] += len(failed_sources)
                 for source_type, failures in sorted(failed_sources.items()):
@@ -888,6 +943,11 @@ class EventDiscoveryEnrichmentPipeline:
             enabled='OAIC' in source_types
         )
 
+        cyberdaily_config = DataSourceConfig(
+            enabled='CyberDaily' in source_types,
+            rate_limit=30,
+        )
+
         return CollectionConfig(
             date_range=date_range,
             max_threads=4,
@@ -898,7 +958,8 @@ class EventDiscoveryEnrichmentPipeline:
             perplexity_config=perplexity_config,
             google_search_config=google_search_config,
             webber_config=webber_config,
-            oaic_config=oaic_config
+            oaic_config=oaic_config,
+            cyberdaily_config=cyberdaily_config,
         )
 
     async def _store_raw_event(self, event, month_start: Optional[datetime] = None):
@@ -1571,6 +1632,16 @@ class EventDiscoveryEnrichmentPipeline:
                     'data_frequency': 'As reported',
                     'coverage_scope': 'Australia',
                     'reliability_score': 0.95
+                },
+                'CyberDaily': {
+                    'source_name': 'Cyber Daily',
+                    'source_type': 'News Publication',
+                    'base_url': 'https://www.cyberdaily.au',
+                    'api_endpoint': 'https://www.cyberdaily.au/security?format=feed&type=rss',
+                    'description': 'Australian cyber security news (Momentum Media), section RSS feeds',
+                    'data_frequency': 'Daily',
+                    'coverage_scope': 'Australia',
+                    'reliability_score': 0.75
                 }
             }
 
@@ -1624,6 +1695,8 @@ class EventDiscoveryEnrichmentPipeline:
                     return 'WebberInsurance'
                 elif 'OAIC' in source.source_type:
                     return 'OAIC'
+                elif 'Cyber Daily' in source.source_type:
+                    return 'CyberDaily'
 
             # Check URLs as fallback
             if hasattr(source, 'url') and source.url:
@@ -2408,7 +2481,7 @@ Examples:
                         help='Run scraping phase to get full content')
     parser.add_argument('--enrich', action='store_true',
                         help='Run enrichment phase using LLM analysis')
-    parser.add_argument('--source', choices=['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC'],
+    parser.add_argument('--source', choices=['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC', 'CyberDaily'],
                         help='Run only specific source (can be used multiple times)', action='append')
     parser.add_argument('--max-events', type=int, default=0,
                         help='Maximum events to process per phase (0 or negative for unlimited; default: unlimited for scraping/enrichment, 1000 for discovery)')

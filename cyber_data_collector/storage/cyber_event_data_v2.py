@@ -215,6 +215,24 @@ class CyberEventDataV2:
                 self._logger.error("Error fetching known source URLs: %s", e)
                 return set()
 
+    def get_source_urls_containing(self, fragment: str) -> Set[str]:
+        """Return every stored source_url containing ``fragment``, whatever the source type.
+
+        Raises:
+            sqlite3.Error: the query failed. An empty answer would make a
+                source store every article again, so a failure is not one.
+        """
+        if not self._conn:
+            raise ConnectionError("Database not connected")
+
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT source_url FROM RawEvents WHERE source_url LIKE ?",
+                (f"%{fragment}%",),
+            )
+            return {row["source_url"] for row in cursor.fetchall()}
+
     def get_unprocessed_raw_events(self, source_types: List[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get raw events that haven't been processed yet.
