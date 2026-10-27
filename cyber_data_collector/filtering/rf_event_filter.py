@@ -4,19 +4,24 @@ Random Forest Event Filter
 
 This module provides a Random Forest-based filter for cyber events that replaces
 the existing 3-stage progressive filtering system with a machine learning approach.
+
+The model is loaded from a versioned bundle (``rf_bundle``) named by
+``machine_learning_filter/ACTIVE_BUNDLE``. A bundle drops records only if it
+passed acceptance on organisation-separated labelled data; otherwise the filter
+is report-only - it logs what it would have filtered and keeps everything.
 """
 
 from __future__ import annotations
 
-import pickle
 import logging
 import re
-import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+
+from cyber_data_collector.filtering import rf_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -35,167 +40,61 @@ class RfEventFilter:
     whether raw events should be kept for enrichment.
     """
     
-    def __init__(self, model_dir: Optional[str] = None):
+    def __init__(self, model_dir: Optional[str] = None, bundle_id: Optional[str] = None):
         """
         Initialize the Random Forest filter.
 
         Args:
-            model_dir: Directory containing the trained models. Defaults to the
-                ``machine_learning_filter`` directory at the project root.
+            model_dir: Directory holding ``ACTIVE_BUNDLE`` and ``bundles/``. Defaults to
+                the ``machine_learning_filter`` directory at the project root.
+            bundle_id: Load this bundle instead of the active one.
         """
-        if model_dir is None:
-            model_dir = str(Path(__file__).resolve().parent.parent.parent / "machine_learning_filter")
-        self.model_dir = Path(model_dir)
+        self.model_dir = Path(model_dir) if model_dir else rf_bundle.MODEL_DIR
+        self.bundle_id = bundle_id or rf_bundle.active_bundle_id(self.model_dir)
         self.model = None
         self.source_type_encoder = None
         self.text_vectorizer = None
         self.is_loaded = False
+        self.enforcing = False
         
         # Statistics
         self.stats = {
             'events_processed': 0,
             'events_kept': 0,
             'events_filtered': 0,
+            'would_filter': 0,
             'prediction_errors': 0
         }
-        
+
         # Load models
         self._load_models()
     
-    # Validation callables keyed by filename.  Each receives the unpickled
-    # object and returns True when the object looks usable.
-    _VALIDATORS: Dict[str, Any] = {
-        'random_forest_filter.pkl': lambda obj: (
-            callable(getattr(obj, 'predict', None))
-            and callable(getattr(obj, 'predict_proba', None))
-            and hasattr(obj, 'estimators_')
-        ),
-        'source_type_encoder.pkl': lambda obj: (
-            callable(getattr(obj, 'transform', None))
-            and hasattr(obj, 'classes_')
-        ),
-        'text_vectorizer.pkl': lambda obj: (
-            callable(getattr(obj, 'transform', None))
-            and hasattr(obj, 'vocabulary_')
-        ),
-    }
-
-    def _load_pickle(self, path: Path) -> Any:
-        """Load a pickle file, re-pickling it when a sklearn version mismatch is detected.
-
-        If the warning fires the loaded object is validated via ``_VALIDATORS``.
-        A valid object is re-pickled to silence the warning on future runs.
-        An invalid object raises ``RuntimeError`` and stops the script.
-        """
-        from sklearn.exceptions import InconsistentVersionWarning
-
-        caught_version_warnings: list = []
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always", InconsistentVersionWarning)
-            with open(path, 'rb') as f:
-                obj = pickle.load(f)
-            caught_version_warnings = [
-                w for w in caught
-                if issubclass(w.category, InconsistentVersionWarning)
-            ]
-
-        if not caught_version_warnings:
-            return obj
-
-        # Version mismatch detected — validate before trusting the object.
-        validator = self._VALIDATORS.get(path.name)
-        is_valid = validator(obj) if validator is not None else True
-
-        if not is_valid:
-            raise RuntimeError(
-                f"Model file '{path}' failed validation after a sklearn version mismatch. "
-                f"The loaded object appears corrupt or incompatible. "
-                f"Re-train the model and re-save it with the current sklearn version. "
-                f"Original warning: {caught_version_warnings[0].message}"
-            )
-
-        # Valid — re-pickle to silence the warning on future runs.
-        with open(path, 'wb') as f:
-            pickle.dump(obj, f)
-        logger.info(
-            "Re-pickled '%s' to the current sklearn version (mismatch: %s)",
-            path.name, caught_version_warnings[0].message,
-        )
-        return obj
-
     def _load_models(self):
-        """Load the trained Random Forest model and preprocessing components."""
+        """Load the active bundle: hashes verified, predictions checked against its
+        reference after any library change, and nothing ever rewritten."""
+        if not self.bundle_id:
+            raise FileNotFoundError(f"No ACTIVE_BUNDLE in {self.model_dir}; "
+                                    "run scripts/train_rf_filter.py")
         try:
-            model_path = self.model_dir / 'random_forest_filter.pkl'
-            encoder_path = self.model_dir / 'source_type_encoder.pkl'
-            vectorizer_path = self.model_dir / 'text_vectorizer.pkl'
-
-            if not all(path.exists() for path in [model_path, encoder_path, vectorizer_path]):
-                raise FileNotFoundError(f"Model files not found in {self.model_dir}")
-
-            logger.info("Loading Random Forest filter models...")
-
-            self.model = self._load_pickle(model_path)
-            self.source_type_encoder = self._load_pickle(encoder_path)
-            self.text_vectorizer = self._load_pickle(vectorizer_path)
-
-            self.is_loaded = True
-            logger.info("Random Forest filter models loaded successfully")
-
+            bundle = rf_bundle.load_bundle(self.bundle_id, self.model_dir / "bundles")
         except Exception as e:
-            logger.error(f"Failed to load Random Forest models: {e}")
+            logger.error(f"Failed to load Random Forest bundle {self.bundle_id}: {e}")
             self.is_loaded = False
             raise
-    
+        self.model = bundle.model
+        self.text_vectorizer = bundle.vectorizer
+        self.source_type_encoder = bundle.encoder
+        self.enforcing = bundle.enforcing
+        self.is_loaded = True
+        logger.info("Random Forest filter bundle %s loaded (%s)", self.bundle_id,
+                    "enforcing" if self.enforcing else "report-only: not accepted on labelled data")
+
     def preprocess_url(self, url: str) -> str:
-        """
-        Preprocess URL by removing protocol and replacing separators with spaces.
-        
-        Args:
-            url: Original URL
-            
-        Returns:
-            Preprocessed URL text
-        """
-        if pd.isna(url) or not url:
-            return ""
-        
-        # Remove protocol
-        url = re.sub(r'^https?://', '', str(url))
-        
-        # Replace separators with spaces
-        url = re.sub(r'[-_]', ' ', url)
-        
-        # Remove common URL patterns that don't add meaning
-        url = re.sub(r'\.(com|org|net|edu|gov|au|uk|us)/?', ' ', url)
-        url = re.sub(r'www\.', '', url)
-        
-        # Clean up multiple spaces
-        url = re.sub(r'\s+', ' ', url).strip()
-        
-        return url
-    
+        return rf_bundle.preprocess_url(url)
+
     def preprocess_text(self, text: str) -> str:
-        """
-        Basic text preprocessing for NLP features.
-        
-        Args:
-            text: Original text
-            
-        Returns:
-            Preprocessed text
-        """
-        if pd.isna(text) or not text:
-            return ""
-        
-        # Convert to string and lowercase
-        text = str(text).lower()
-        
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
+        return rf_bundle.preprocess_text(text)
+
     def _prepare_features(self, source_type: str, title: str, description: str, 
                          content: str, url: str) -> np.ndarray:
         """
@@ -279,8 +178,11 @@ class RfEventFilter:
             # Get confidence score (probability of positive class)
             confidence_score = float(prediction_proba[1]) if len(prediction_proba) > 1 else 0.5
             
-            # Determine if event should be kept
-            is_cyber_relevant = bool(prediction)
+            # Determine if event should be kept. A bundle that did not pass
+            # acceptance only reports: on labelled data the 2025-09 model
+            # dropped real incidents about as often as junk.
+            would_keep = bool(prediction)
+            is_cyber_relevant = would_keep or not self.enforcing
             
             # Generate reasoning
             combined_text = (
@@ -291,7 +193,9 @@ class RfEventFilter:
             )
             
             reasoning = [
-                f"Random Forest prediction: {'KEEP' if is_cyber_relevant else 'FILTER'}",
+                f"Random Forest prediction: {'KEEP' if would_keep else 'FILTER'}"
+                + ("" if self.enforcing or would_keep else
+                   f" (report-only: bundle {self.bundle_id} not accepted, record kept)"),
                 f"Confidence score: {confidence_score:.3f}",
                 f"Source type: {source_type}",
                 f"Text length: {len(combined_text)}"
@@ -299,6 +203,8 @@ class RfEventFilter:
             
             # Update statistics
             self.stats['events_processed'] += 1
+            if not would_keep:
+                self.stats['would_filter'] += 1
             if is_cyber_relevant:
                 self.stats['events_kept'] += 1
             else:
@@ -342,6 +248,7 @@ class RfEventFilter:
             'events_processed': 0,
             'events_kept': 0,
             'events_filtered': 0,
+            'would_filter': 0,
             'prediction_errors': 0
         }
         logger.debug("[RF_FILTER] Statistics reset for new run")
@@ -371,5 +278,7 @@ class RfEventFilter:
         logger.info(f"Events processed: {stats['events_processed']}")
         logger.info(f"Events kept: {stats['events_kept']} ({stats['keep_rate']:.1%})")
         logger.info(f"Events filtered: {stats['events_filtered']} ({stats['filter_rate']:.1%})")
+        if not self.enforcing:
+            logger.info(f"Would have filtered (report-only bundle {self.bundle_id}): {stats['would_filter']}")
         logger.info(f"Prediction errors: {stats['prediction_errors']} ({stats['error_rate']:.1%})")
         logger.info("="*60)

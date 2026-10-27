@@ -1,0 +1,110 @@
+{
+  "kind": "legacy",
+  "params": {
+    "tfidf": {
+      "analyzer": "word",
+      "binary": false,
+      "decode_error": "strict",
+      "dtype": "<class 'numpy.float64'>",
+      "encoding": "utf-8",
+      "input": "content",
+      "lowercase": true,
+      "max_df": 0.95,
+      "max_features": 1000,
+      "min_df": 2,
+      "ngram_range": [
+        1,
+        2
+      ],
+      "norm": "l2",
+      "preprocessor": null,
+      "smooth_idf": true,
+      "stop_words": "english",
+      "strip_accents": null,
+      "sublinear_tf": false,
+      "token_pattern": "(?u)\\b\\w\\w+\\b",
+      "tokenizer": null,
+      "use_idf": true,
+      "vocabulary": null
+    },
+    "forest": {
+      "bootstrap": true,
+      "ccp_alpha": 0.0,
+      "class_weight": "balanced",
+      "criterion": "gini",
+      "max_depth": 5,
+      "max_features": "sqrt",
+      "max_leaf_nodes": null,
+      "max_samples": null,
+      "min_impurity_decrease": 0.0,
+      "min_samples_leaf": 5,
+      "min_samples_split": 10,
+      "min_weight_fraction_leaf": 0.0,
+      "monotonic_cst": null,
+      "n_estimators": 100,
+      "n_jobs": -1,
+      "oob_score": false,
+      "random_state": 42,
+      "verbose": 0,
+      "warm_start": false
+    }
+  },
+  "provenance": "2025-09 model trained by the deleted train_rf_filter.py on event_training_data.xlsx; scikit-learn version at training unknown. Files copied unchanged.",
+  "versions": {
+    "scikit_learn": "unknown"
+  },
+  "evaluation": {
+    "held_out": {
+      "records": 458,
+      "real": 238,
+      "not_incident": 220,
+      "dropped": 30,
+      "drop_precision": 0.5333333333333333,
+      "real_loss": 0.058823529411764705,
+      "junk_caught": 0.07272727272727272,
+      "by_origin": {
+        "event_reality": {
+          "records": 289,
+          "real": 186,
+          "not_incident": 103,
+          "dropped": 14,
+          "drop_precision": 0.42857142857142855,
+          "real_loss": 0.043010752688172046,
+          "junk_caught": 0.05825242718446602
+        },
+        "source_gate": {
+          "records": 169,
+          "real": 52,
+          "not_incident": 117,
+          "dropped": 16,
+          "drop_precision": 0.625,
+          "real_loss": 0.11538461538461539,
+          "junk_caught": 0.08547008547008547
+        }
+      }
+    }
+  },
+  "acceptance": {
+    "min_drop_precision": 0.9,
+    "max_real_loss": 0.02
+  },
+  "accepted": false,
+  "bundle_id": "rf-legacy-2025-09",
+  "feature_version": "rf-features-v1",
+  "created_at": "2026-10-27T21:25:48",
+  "files": {
+    "model": {
+      "name": "model.pkl",
+      "sha256": "e57fd1388318fc2dde2ea1a4248aea8e1353dde1ccd104fe37ce8fa6863d9388"
+    },
+    "vectorizer": {
+      "name": "vectorizer.pkl",
+      "sha256": "fde305ab8855c2565fe6e6429f9357c69c807ff7a78bc927692b50560847430a"
+    },
+    "encoder": {
+      "name": "encoder.pkl",
+      "sha256": "a48266baba12a219782552cdcd0eaab1379e2c3a3c12a44887e61d17d5624952"
+    }
+  },
+  "reference_sha256": "1d46644453a73607d4eb85a26b8406c6d5d66dbe6bf5a80acb9135e726b0176d"
+}
