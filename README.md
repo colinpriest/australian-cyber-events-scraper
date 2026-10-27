@@ -1073,7 +1073,33 @@ python scripts/analyze_recurrent_timing.py \
   --elapsed-bounds 0,90,180,365,730,1460,inf \
   --out-dir analysis/recurrent_timing_90_180_peak \
   --bootstrap 500
+
+# Extended timing, linkage, transition and observation-bias analyses
+python scripts/analyze_recurrence_extensions.py \
+  --db instance/cyber_events.db --bootstrap 500 --date-draws 100
+
+# Or run the existing report and the extended analyses together
+python scripts/analyze_recurrent_timing.py --extended --bootstrap 500 --date-draws 100
 ```
+
+The standalone command writes `extended_recurrence_report.md`, a JSON summary,
+and detailed CSVs under `analysis/recurrent_timing_extended/`. With `--extended`,
+they are written to an `extended/` subdirectory of the main report output. Each
+extended run analyses a consistent read-only SQLite snapshot. The original and
+extended analyses take separate snapshots when run together.
+
+The extended report compares timing bands and a smoothed rate, date-precision
+scenarios, alternative recorded merge and victim decisions, first and later
+repeats, attack-type transitions, shared-incident dependence, and reporting and
+missing-history scenarios. A first-of-month date is not assumed to be imprecise;
+the report labels hypothetical date assumptions separately. Its prospective
+peak test requires a cohort frozen by the fixed registration date and sufficient
+future observations; historical data alone cannot establish confirmation.
+Keep `timing_peak_registration.json` in the output directory across reruns;
+it contains the frozen cohort needed for future validation and cannot be
+recreated retrospectively after the registration date.
+Results describe recorded incidents, and historical cutoffs cannot reconstruct
+the database's earlier linkage and classification state.
 
 Main outputs are written under `analysis/recurrent_timing/`:
 

@@ -1,0 +1,159 @@
+{
+  "source_database": "D:\\dev\\australian-cyber-events-scraper\\instance\\cyber_events.db",
+  "snapshot_sha256": "e057fb6d6fa3ba7cbac9c35fee530097d86a597342e3395924488e3f98edde55",
+  "censor_date": "2026-10-27",
+  "seed": 20261027,
+  "bootstrap_replicates": 200,
+  "date_draws": 100,
+  "observation_coverage": {
+    "input_attributions": 635,
+    "excluded_after_incident_cutoff": 0,
+    "excluded_first_discovered_after_cutoff": 0,
+    "retained_unknown_discovery_date": 0,
+    "retained_attributions": 635
+  },
+  "analyses": {
+    "timing_and_date_precision": {
+      "section": "## Timing-band and date-precision sensitivity\n\nFour fixed banding schemes and a kernel-smoothed rate with entity-bootstrap intervals are in `timing_band_sensitivity.csv` and `timing_smooth_hazard.csv`. These are unadjusted, descriptive rates for recorded incidents; the kernel interval reflects entity resampling.\n\n| Days | Repeat events | Exposure days | Rate per 100 entity-years |\n|---|---:|---:|---:|\n| 1-90 | 4 | 56281 | 2.60 |\n| 91-180 | 10 | 51777 | 7.05 |\n| 181-270 | 4 | 46841 | 3.12 |\n\nPrecision evidence among victim-event attributions: {'unknown': 436, 'ambiguous_first_of_month': 199}. An initial day of a month is ambiguous, not proof that the date was imputed. `timing_date_precision_sensitivity.csv` compares explicit month/year intervals, two separately labelled ambiguous-first scenarios, and complete histories with explicitly day-precise metadata (0 entities, 0 with observed repeats). Insufficient explicit date precision for a reliable precisely dated subset. Imputation percentiles show sensitivity to date assumptions, not confidence intervals for incidence.\n\n| Date scenario | 91\u2013180-day median rate | 2.5\u201397.5% of date draws |\n|---|---:|---:|\n| stored dates | 7.05 | 7.05\u20137.05 |\n| known intervals | 7.05 | 7.05\u20137.05 |\n| ambiguous firsts as month | 7.06 | 4.94\u20138.47 |\n| ambiguous firsts as month or year | 7.06 | 4.94\u20138.85 |\n| explicit day only complete histories | \u2014 | \u2014\u2013\u2014 |\n\nThe pre-specified prospective comparison is 91\u2013180 days versus the combined adjacent 1\u201390 and 181\u2013270 day windows, with a fixed end of 2028-10-27 and at least 20 observed comparison events required before its conditional Poisson approximation. Current status: **pending**. The approximation assumes independent Poisson counts; mutable records may have changed since registration, and events between an older snapshot and registration may be missing. The frozen cohort is never recreated retrospectively; see `timing_peak_validation.json`.\n",
+      "precision_counts": {
+        "unknown": 436,
+        "ambiguous_first_of_month": 199
+      },
+      "precise_entities": 0,
+      "precise_repeating_entities": 0,
+      "validation": {
+        "status": "pending",
+        "registered_on": "2026-10-27",
+        "validation_end": "2028-10-27",
+        "frozen_entities": 574,
+        "snapshot_cutoff": "2026-10-27",
+        "events_by_band": [
+          0,
+          0,
+          0
+        ],
+        "exposure_days_by_band": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "minimum_events": 20,
+        "one_sided_p_value": null,
+        "interpretation": "Conditional Poisson approximation for recorded incidents assumes independent Poisson counts. Current mutable records may have changed since registration; if the snapshot predates registration, unobserved intervening events may be missed."
+      },
+      "band_schemes": [
+        "pre_specified",
+        "60_day_boundaries",
+        "shifted_boundary",
+        "wide_first_band"
+      ],
+      "date_imputations": 100,
+      "outputs": [
+        "timing_band_sensitivity.csv",
+        "timing_smooth_hazard.csv",
+        "timing_date_precision_sensitivity.csv",
+        "timing_date_precision_coverage.csv",
+        "timing_peak_validation.json",
+        "timing_smooth_hazard.png"
+      ]
+    },
+    "linkage_and_shared_incidents": {
+      "section": "### Linkage and shared-incident sensitivity\n\nThe scenarios below are independent alternatives to the baseline. Rates are recorded repeat events per 100 entity-years at risk; rate ratios compare days 91\u2013180 with days 0\u201390.\n\n| Scenario | Status | Decisions applied | Victim attributions | Incidents | 0\u201390 events / days | 91\u2013180 events / days | Rate ratio |\n|---|---|---:|---:|---:|---:|---:|---:|\n| baseline | observed cohort | 0 | 635 | 558 | 4 / 56281 | 10 / 51777 | 2.72 |\n| active_same_overrides | evaluated | 2 | 635 | 556 | 4 / 56296 | 10 / 51831 | 2.72 |\n| model_same_probability_ge_0.9 | no applicable candidate decisions | 0 | 635 | 558 | 4 / 56281 | 10 / 51777 | 2.72 |\n| model_victim_probability_lt_0.5_excluded | evaluated | 25 | 610 | 547 | 2 / 54062 | 5 / 49967 | 2.70 |\n\nStored scores cover 97 in-cohort incident pairs and 110 victim attributions. Active different-incident overrides vetoed 0 override merges and 0 model-candidate merges, including conflicts created transitively. 0 current incident(s) contain an active different-incident override; these cannot be split reliably without per-report victim and date attribution.\nModel scores are uncalibrated stored judgments, not confirmed truth; thresholds 0.9 and 0.5 define sensitivity scenarios, not validation. A merged incident uses the earliest observed date and the union of attributed victims. Evidence can be stale. Missing judgment or override tables are reported as unavailable. These scenarios cannot identify missing judgments or unrecorded victims.\n\n41 recorded incidents have multiple attributed victims, involving 109 distinct victims and 163 event-level victim pairs; 14 shared incidents have a supplier name recorded. Supplier names alone are not counted as victims. The observed network has 498 components, largest 20 organisations.\nThe bootstrap compares resampling organisations with resampling connected components (200 requested replicates):\n\n| Resampling unit | Metric | Estimate | 95% percentile interval | Valid replicates |\n|---|---|---:|---:|---:|\n| entity | rate_0_90_per_100_years | 2.60 | 0.00\u20136.45 | 200 |\n| entity | rate_91_180_per_100_years | 7.05 | 2.16\u201312.22 | 200 |\n| entity | rate_ratio | 2.72 | 0.87\u201312.97 | 191 |\n| shared_incident_component | rate_0_90_per_100_years | 2.60 | 0.00\u20137.13 | 200 |\n| shared_incident_component | rate_91_180_per_100_years | 7.05 | 0.78\u201313.14 | 200 |\n| shared_incident_component | rate_ratio | 2.72 | 1.24\u20139.51 | 168 |\n\nComponents connect organisations through any recorded shared incident, not only incidents with a named supplier. Percentile intervals reflect observed linkage only; few or dominant components and invalid ratio replicates limit inference. Missing shared incidents are not corrected.",
+      "outputs": [
+        "linkage_sensitivity.csv",
+        "shared_incident_dependencies.csv",
+        "recurrence_cluster_bootstrap.csv"
+      ],
+      "scenarios": [
+        {
+          "scenario": "baseline",
+          "status": "observed cohort",
+          "decisions_applied": 0,
+          "victim_attributions": 635,
+          "incidents": 558,
+          "entities": 574,
+          "repeat_intervals_0_180": 14,
+          "days_0_90": 56281,
+          "days_91_180": 51777,
+          "events_0_90": 4,
+          "events_91_180": 10,
+          "rate_0_90_per_100_years": 2.5959027025106165,
+          "rate_91_180_per_100_years": 7.054290515093574,
+          "rate_ratio": 2.7174710778917275
+        },
+        {
+          "scenario": "active_same_overrides",
+          "status": "evaluated",
+          "decisions_applied": 2,
+          "victim_attributions": 635,
+          "incidents": 556,
+          "entities": 574,
+          "repeat_intervals_0_180": 14,
+          "days_0_90": 56296,
+          "days_91_180": 51831,
+          "events_0_90": 4,
+          "events_91_180": 10,
+          "rate_0_90_per_100_years": 2.59521102742646,
+          "rate_91_180_per_100_years": 7.046941019852984,
+          "rate_ratio": 2.7153633925642953
+        },
+        {
+          "scenario": "model_same_probability_ge_0.9",
+          "status": "no applicable candidate decisions",
+          "decisions_applied": 0,
+          "victim_attributions": 635,
+          "incidents": 558,
+          "entities": 574,
+          "repeat_intervals_0_180": 14,
+          "days_0_90": 56281,
+          "days_91_180": 51777,
+          "events_0_90": 4,
+          "events_91_180": 10,
+          "rate_0_90_per_100_years": 2.5959027025106165,
+          "rate_91_180_per_100_years": 7.054290515093574,
+          "rate_ratio": 2.7174710778917275
+        },
+        {
+          "scenario": "model_victim_probability_lt_0.5_excluded",
+          "status": "evaluated",
+          "decisions_applied": 25,
+          "victim_attributions": 610,
+          "incidents": 547,
+          "entities": 570,
+          "repeat_intervals_0_180": 7,
+          "days_0_90": 54062,
+          "days_91_180": 49967,
+          "events_0_90": 2,
+          "events_91_180": 5,
+          "rate_0_90_per_100_years": 1.3512263697236506,
+          "rate_91_180_per_100_years": 3.6549122420797726,
+          "rate_ratio": 2.7048852242480037
+        }
+      ],
+      "shared_incidents": 41,
+      "shared_victims": 109,
+      "components": 498,
+      "largest_component": 20,
+      "within_incident_different_overrides": 0,
+      "blocked_merges": {
+        "active_same_overrides": 0,
+        "model_same_probability_ge_0.9": 0
+      }
+    },
+    "event_order_transitions_and_observation_bias": {
+      "section": "## Event order and attack-type transitions\n\nRates compare observed incident histories. Spells end at the next recorded incident or the censor date; censored spells contribute exposure. Exact Poisson intervals are descriptive and do not account for dependence between repeated incidents at one organisation.\n\n| event order | spells | organisations | repeats | censored | exposure days | rate per 100 entity years | poisson ci low | poisson ci high |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| After first observed incident | 574 | 574 | 41 | 533 | 617380.00 | 2.43 | 1.74 | 3.29 |\n| After second or later observed incident | 61 | 41 | 20 | 41 | 42737.00 | 17.09 | 10.44 | 26.40 |\n\nThe next table is conditional on a subsequent observed incident. Unknown types remain Unknown; different or unknown types on the same day are labelled Multiple or ambiguous rather than ordered.\n\n| prior attack type | next attack type | transitions | organisations | share of prior type |\n| --- | --- | --- | --- | --- |\n| Data Breach | Data Breach | 26 | 22 | 0.59 |\n| Data Breach | Denial of Service | 3 | 3 | 0.07 |\n| Data Breach | Financial Fraud | 1 | 1 | 0.02 |\n| Data Breach | Infrastructure Attack | 1 | 1 | 0.02 |\n| Data Breach | Other | 3 | 3 | 0.07 |\n| Data Breach | Phishing | 2 | 2 | 0.05 |\n| Data Breach | Ransomware | 4 | 4 | 0.09 |\n| Data Breach | State-Sponsored Attack | 2 | 2 | 0.05 |\n| Data Breach | Supply Chain Attack | 1 | 1 | 0.02 |\n| Data Breach | Vulnerability Exploit | 1 | 1 | 0.02 |\n| Denial of Service | Data Breach | 1 | 1 | 0.33 |\n| Denial of Service | State-Sponsored Attack | 2 | 2 | 0.67 |\n| Financial Fraud | Data Breach | 1 | 1 | 1.00 |\n| Other | Data Breach | 2 | 2 | 0.67 |\n| Other | Ransomware | 1 | 1 | 0.33 |\n| Ransomware | Data Breach | 3 | 3 | 0.75 |\n| Ransomware | Ransomware | 1 | 1 | 0.25 |\n| State-Sponsored Attack | Data Breach | 4 | 3 | 0.80 |\n| State-Sponsored Attack | Other | 1 | 1 | 0.20 |\n| Vulnerability Exploit | Data Breach | 1 | 1 | 1.00 |\n\n## Reporting and observation bias\n\nSource history: available; 0 event IDs with all known discovery dates after the cutoff excluded; 0 source records lack discovery dates. Organisation sizes are current recorded estimates and may not describe their size at the incident date.\n\nSource groups refer to the prior incident, are mutually exclusive, and show source availability\u2014not the chance that an incident was reported. Calendar groups are the prior incident's cohort, not calendar-time-adjusted rate ratios. Missing source history is Unknown.\n\n| dimension | group | spells | organisations | repeats | censored | exposure days | rate per 100 entity years | poisson ci low | poisson ci high |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| Source of prior incident | GoogleSearch | 88 | 88 | 3 | 85 | 63054.00 | 1.74 | 0.36 | 5.08 |\n| Source of prior incident | Multiple sources | 253 | 231 | 37 | 216 | 259922.00 | 5.20 | 3.66 | 7.17 |\n| Source of prior incident | OAIC | 6 | 6 | 0 | 6 | 12860.00 | 0.00 | 0.00 | 10.48 |\n| Source of prior incident | Perplexity | 145 | 141 | 10 | 135 | 124595.00 | 2.93 | 1.41 | 5.39 |\n| Source of prior incident | WebberInsurance | 143 | 141 | 11 | 132 | 199686.00 | 2.01 | 1.00 | 3.60 |\n| Calendar cohort of prior incident | 2019\u20132021 | 131 | 126 | 22 | 109 | 264965.00 | 3.03 | 1.90 | 4.59 |\n| Calendar cohort of prior incident | 2022\u20132023 | 128 | 126 | 15 | 113 | 164278.00 | 3.34 | 1.87 | 5.50 |\n| Calendar cohort of prior incident | 2024 onward | 358 | 341 | 17 | 341 | 171105.00 | 3.63 | 2.11 | 5.81 |\n| Calendar cohort of prior incident | Through 2018 | 18 | 18 | 7 | 11 | 59769.00 | 4.28 | 1.72 | 8.81 |\n| Recorded organisation size | HUGE | 169 | 136 | 33 | 136 | 223598.00 | 5.39 | 3.71 | 7.57 |\n| Recorded organisation size | LARGE | 189 | 172 | 17 | 172 | 193144.00 | 3.21 | 1.87 | 5.15 |\n| Recorded organisation size | MEDIUM | 170 | 166 | 4 | 166 | 130771.00 | 1.12 | 0.30 | 2.86 |\n| Recorded organisation size | SMALL | 52 | 51 | 1 | 51 | 53914.00 | 0.68 | 0.02 | 3.77 |\n| Recorded organisation size | UNKNOWN | 55 | 49 | 6 | 49 | 58690.00 | 3.73 | 1.37 | 8.13 |\n\nThe following simulations remove some already recorded follow-ups under stated hypothetical observation probabilities: 75% for all follow-ups, or 50% for small and medium organisations and 100% for other recorded sizes, including Unknown. First observed incidents are retained. They illustrate sensitivity and do not estimate or reconstruct unreported attacks.\n\n| scenario | replicates | median recorded repeats | p05 recorded repeats | p95 recorded repeats | median rate per 100 entity years | p05 rate | p95 rate |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| uniform 75% follow-up observation | 100 | 46.00 | 39.95 | 51.05 | 2.55 | 2.21 | 2.82 |\n| lower observation for small organisations | 100 | 59.00 | 57.00 | 61.00 | 3.26 | 3.15 | 3.38 |\n\nThe prior-history scenarios hypothetically assign an unobserved earlier incident to a fraction of organisations; they relabel existing spells without fabricating dates or exposure. They are not corrections or estimates of the true unobserved history.\n\n| scenario | replicates | order group | median repeats | p05 repeats | p95 repeats | median rate per 100 entity years | p05 rate | p95 rate |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| 0% of organisations had an unobserved earlier incident | 1 | First | 41.00 | 41.00 | 41.00 | 2.43 | 2.43 | 2.43 |\n| 0% of organisations had an unobserved earlier incident | 1 | Later | 20.00 | 20.00 | 20.00 | 17.09 | 17.09 | 17.09 |\n| 25% of organisations had an unobserved earlier incident | 100 | First | 31.00 | 25.95 | 35.00 | 2.42 | 2.02 | 2.74 |\n| 25% of organisations had an unobserved earlier incident | 100 | Later | 30.00 | 26.00 | 35.05 | 5.74 | 4.79 | 6.92 |\n| 50% of organisations had an unobserved earlier incident | 100 | First | 21.00 | 15.00 | 26.00 | 2.47 | 1.72 | 3.04 |\n| 50% of organisations had an unobserved earlier incident | 100 | Later | 40.00 | 35.00 | 46.00 | 4.15 | 3.64 | 4.97 |\n\nThese are associations in a selected, publicly reported dataset, conditional on an observed first incident. They do not establish causal effects or population attack risk. Sparse groups and reporting changes can be important.",
+      "outputs": [
+        "analysis\\recurrent_timing_extended\\event_order_rates.csv",
+        "analysis\\recurrent_timing_extended\\attack_type_transitions.csv",
+        "analysis\\recurrent_timing_extended\\observation_bias_strata.csv",
+        "analysis\\recurrent_timing_extended\\observation_bias_thinning.csv",
+        "analysis\\recurrent_timing_extended\\prior_history_sensitivity.csv"
+      ],
+      "source_history_status": "available",
+      "future_only_events_excluded": 0,
+      "undated_source_records": 0,
+      "same_day_type_ambiguities": 0,
+      "bias_replicates": 100
+    }
+  }
+}
