@@ -11,12 +11,40 @@ from __future__ import annotations
 import pytest
 
 from cyber_data_collector.dedup.entity_merge import (
+    canonical_groups,
     distinctive_core,
     initialism,
     is_acronym_of,
+    lines_of_business_conflict,
     preferred_name,
     same_organisation_by_structure,
 )
+
+
+@pytest.mark.parametrize("left,right", [
+    # A shared brand word across different lines of business.
+    ("Sharp Motor Group", "Sharp Office Systems Pty Ltd"),
+    ("Apex Bank", "Apex Airlines"),
+])
+def test_line_of_business_conflict_blocks_merge(left, right):
+    assert lines_of_business_conflict(left, right)
+    assert not same_organisation_by_structure(left, right)
+
+
+def test_line_of_business_conflict_cannot_chain_through_a_bare_name():
+    """'Sharp Office' matches both sides; the union must still keep them apart."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY, entity_name TEXT, entity_kind TEXT);
+        CREATE TABLE EnrichedEventEntities (enriched_event_id TEXT, entity_id INTEGER);
+    """)
+    conn.executemany("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES (?, 'organisation')",
+                     [("Sharp Motor Group",), ("Sharp Office",), ("Sharp Office Systems",)])
+    for keep, drop in canonical_groups(conn):
+        group = {keep, *drop}
+        assert not {"Sharp Motor Group", "Sharp Office Systems"} <= group
 
 
 @pytest.mark.parametrize("left,right", [

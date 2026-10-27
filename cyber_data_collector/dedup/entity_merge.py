@@ -197,6 +197,13 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
     # which is needed because "Genea Fertility" and "Genea IVF" match only
     # through the shared "Genea".
     parent: Dict[str, str] = {k: k for k in buckets}
+    # Lines of business seen in each group. Pairwise checks alone are not
+    # enough, because transitivity chains around them: "Sharp Office" matches
+    # both "Sharp Motor Group" and "Sharp Office Systems", which conflict.
+    lines: Dict[str, set] = {
+        k: {_LINE_OF_BUSINESS[t] for n in buckets[k] for t in _tokens(n) if t in _LINE_OF_BUSINESS}
+        for k in buckets
+    }
 
     def find(x: str) -> str:
         while parent[x] != x:
@@ -206,8 +213,12 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
 
     def union(x: str, y: str) -> None:
         rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[ry] = rx
+        if rx == ry:
+            return
+        if lines[rx] and lines[ry] and not lines[rx] & lines[ry]:
+            return
+        parent[ry] = rx
+        lines[rx] |= lines[ry]
 
     keys = list(buckets)
     # Compare one representative per bucket; the rest already agree with it.
@@ -477,6 +488,38 @@ _JURISDICTION_BLOCKERS = {
 # separates Western Sydney University from the University of Sydney.
 _CONTAINMENT_EXTRAS = _NEUTRAL_EXTRAS | {"of", "for", "in", "at", "the"}
 
+# Neutral sector words, grouped by line of business. Within a group they are
+# interchangeable ("Epworth Hospital" / "Epworth HealthCare"); across groups they
+# name different businesses that happen to share a brand word. "Sharp Motor
+# Group" (car dealer) and "Sharp Office Systems" (office equipment) both reduce
+# to {sharp}, and folding them filed Sharp Office's ransomware attack as a second
+# attack on the dealer fifteen days after its own.
+_LINE_OF_BUSINESS = {
+    **dict.fromkeys(("lawyers", "legal", "solicitors"), "legal"),
+    **dict.fromkeys(("healthcare", "health", "hospital", "hospitals", "medical", "clinic",
+                     "clinics", "fertility", "ivf", "pharmacy", "pharmacies", "pathology",
+                     "labs", "laboratories"), "health"),
+    **dict.fromkeys(("systems", "technologies", "technology", "software", "network",
+                     "telecom", "telecommunications"), "technology"),
+    **dict.fromkeys(("bank", "banking", "insurance", "financial", "finance"), "finance"),
+    **dict.fromkeys(("motor", "motors", "motoring", "automotive"), "automotive"),
+    **dict.fromkeys(("airlines", "airways"), "aviation"),
+    **dict.fromkeys(("hotel", "hotels", "resorts", "resort"), "hospitality"),
+    **dict.fromkeys(("foods", "retail", "stores"), "retail"),
+    **dict.fromkeys(("mining", "resources", "energy"), "resources"),
+    **dict.fromkeys(("university", "college", "school", "schools"), "education"),
+    **dict.fromkeys(("recruiting", "recruitment"), "recruitment"),
+    "logistics": "logistics",
+}
+
+
+def lines_of_business_conflict(left: str, right: str) -> bool:
+    """True when both names state a line of business and the lines differ."""
+    lines_a = {_LINE_OF_BUSINESS[t] for t in _tokens(left) if t in _LINE_OF_BUSINESS}
+    lines_b = {_LINE_OF_BUSINESS[t] for t in _tokens(right) if t in _LINE_OF_BUSINESS}
+    return bool(lines_a and lines_b and not lines_a & lines_b)
+
+
 # Three, not four: "PwC" and "IBM" are brands, and the neutral/place filters
 # already remove the short tokens that would otherwise be noise.
 _MIN_DISTINCTIVE = 3
@@ -639,6 +682,9 @@ def same_organisation_by_structure(
 
     if is_acronym_of(left, right) or is_acronym_of(right, left):
         return True
+
+    if lines_of_business_conflict(left, right):
+        return False
 
     core_a, core_b = distinctive_core(left), distinctive_core(right)
     if core_a and core_a == core_b:

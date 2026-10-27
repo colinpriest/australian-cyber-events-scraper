@@ -683,6 +683,15 @@ def resolve_victim(
     victim, vendor = result.victim(), result.vendor()
     victim, vendor = localise_victim(conn, victim, vendor, deduplicated_event_id)
 
+    # The records' own researched victim outranks the role pass when none of
+    # them names the role pass's choice (TPG's breach labelled Optus because
+    # the article mentions Optus). See victim_agreement for the guards.
+    from cyber_data_collector.dedup.victim_agreement import apply_victim, proposed_victim
+    proposal = proposed_victim(conn, deduplicated_event_id, victim, vendor)
+    if proposal:
+        victim = (proposal["name"] if dry_run else
+                  apply_victim(conn, deduplicated_event_id, victim, proposal["name"]))
+
     proposed = victim
     victim, vendor = foreign_vendor_not_victim(conn, victim, vendor,
                                                deduplicated_event_id)

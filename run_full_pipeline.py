@@ -426,6 +426,7 @@ class UnifiedPipeline:
                     )
 
             self.run_missed_merge_check(args)
+            self.run_data_hygiene(args)
             self.run_recurrence_check(args)
             self.run_entity_sizing(args)
 
@@ -483,6 +484,42 @@ class UnifiedPipeline:
         except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
             logger.warning("Missed-merge check failed: %s", exc)
             self.results['deduplication']['errors'].append(f"missed-merge: {exc}")
+
+    def run_data_hygiene(self, args) -> None:
+        """Reject non-incident pages and correct victims the records contradict.
+
+        Both defects put false repeat attacks into the short-gap band of the
+        recurrence analysis: an agency's own service pages stored as later
+        "attacks" on it, and TPG's breach filed under Optus because the
+        article mentions Optus. Run before the recurrence check, which groups
+        events by victim.
+
+        1. ``classify-pages`` - every unclassified suspect page, not only new
+           ones, since the suspect patterns widen over time (gpt-4o-mini, one
+           call per page, each verdict stored and never paid for twice).
+        2. ``reject-non-incidents`` - events made only of confident
+           non-incident pages.
+        3. ``check-victims`` - deterministic, no API calls.
+
+        Never fails the phase.
+        """
+        if getattr(args, 'skip_data_hygiene', False):
+            logger.info("Skipping data hygiene (--skip-data-hygiene)")
+            return
+        from scripts import dedup_admin
+        base = ["--db", self.db_path]
+        steps = [["reject-non-incidents"], ["check-victims"]]
+        if os.getenv('OPENAI_API_KEY'):
+            steps.insert(0, ["classify-pages"])
+        else:
+            logger.warning("OPENAI_API_KEY not set; new suspect pages left unclassified")
+        for step in steps:
+            try:
+                if dedup_admin.main(base + step) != 0:
+                    raise RuntimeError(f"{step[0]} failed")
+            except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
+                logger.warning("Data hygiene step %s failed: %s", step[0], exc)
+                self.results['deduplication']['errors'].append(f"{step[0]}: {exc}")
 
     def run_recurrence_check(self, args) -> None:
         """Re-check repeat attacks that follow the previous one within 90 days.
@@ -876,6 +913,9 @@ Examples:
                         help='Limit number of events to classify (default: all unclassified events)')
     parser.add_argument('--force-dedup', action='store_true',
                         help='Force full deduplication rebuild (skip incremental mode)')
+    parser.add_argument('--skip-data-hygiene', action='store_true',
+                        help='Skip rejecting non-incident pages and correcting victims '
+                             'that the event\'s own records contradict')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')

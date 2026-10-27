@@ -51,7 +51,25 @@ SUSPECT_URL = re.compile(
     re.I,
 )
 
-NON_INCIDENT_KINDS = {"roundup_or_list", "guidance_or_marketing", "profile_or_personal", "index_or_homepage"}
+# Government service and information pages ("Business - ACT Government", Service
+# NSW's "Report identity theft" form, Services Australia's data-matching notice)
+# named no roundup or guidance pattern, so they were never classified and stood
+# as events - several of them as second "attacks" on the agency within weeks of
+# its real one. News and media-release paths are left out; everything else on a
+# .gov.au host is a suspect for the model to decide, incident words included,
+# because a service page about breaches is still not a breach.
+SUSPECT_GOV_URL = re.compile(r"\.gov\.au/(?!.*(news|media|release|statement))", re.I)
+# A title with no incident vocabulary at all is a page title, not a report of an
+# incident: "Free three-year-old preschool - ACT Government", "Deloitte -
+# Wikipedia", "Untitled Event".
+INCIDENT_VOCABULARY = re.compile(
+    r"breach|hack|attack|ransom|cyber|incident|leak|expos|compromis|stol|theft|scam|fraud"
+    r"|malware|phish|ddos|outage|vulnerab|exploit|intrusion|unauthori|espionage|extort"
+    r"|threat|disrupt|data",
+    re.I,
+)
+
+NON_INCIDENT_KINDS ={"roundup_or_list", "guidance_or_marketing", "profile_or_personal", "index_or_homepage"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS PageClassifications (
@@ -90,7 +108,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def is_suspect(title: Optional[str], url: Optional[str]) -> bool:
-    return bool(SUSPECT_TITLE.search(title or "")) or bool(SUSPECT_URL.search(url or ""))
+    return (bool(SUSPECT_TITLE.search(title or "")) or bool(SUSPECT_URL.search(url or ""))
+            or bool(SUSPECT_GOV_URL.search(url or ""))
+            or not INCIDENT_VOCABULARY.search(title or ""))
 
 
 def load_verdicts(conn: sqlite3.Connection) -> Dict[str, Tuple[str, float]]:
