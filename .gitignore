@@ -29,6 +29,8 @@ instance/
 *.csv
 # ...except the committed statistical analysis outputs, which are results, not exports
 !analysis/**/*.csv
+# ...and the labelled evaluation sets that calibrate model cut-offs
+!evaluation/**/*.csv
 PHASE1_TEST_REPORT_*.txt
 batch_enrichment_*.json
 migration_report_*.json
