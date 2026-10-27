@@ -1,0 +1,1212 @@
+{
+  "question_version": "victim-attribution-v2+victim-attribution-escalation-v1+victim-replacement-v1",
+  "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+  "escalate_band": [
+    0.1,
+    0.7
+  ],
+  "calibrated_on_database": "work.db",
+  "cutoff": 0.150001,
+  "precision_target": 0.95,
+  "min_actions": 10,
+  "at_cutoff": {
+    "cutoff": 0.150001,
+    "rejected_labelled": 45,
+    "correct_labelled": 43,
+    "weighted_precision": 0.9555555555555556,
+    "weighted_recall": 0.3747818856584046,
+    "unweighted_precision_ci95": [
+      0.8517222081611939,
+      0.9877261309595557
+    ]
+  },
+  "bootstrap_out_of_sample_precision": {
+    "replicates": 1000,
+    "median": 0.9444444444444444,
+    "mean": 0.9438499165271023,
+    "p05": 0.8333333333333334
+  },
+  "replacement_threshold": 0.84,
+  "min_replacements": 5,
+  "replacement_at_threshold": {
+    "threshold": 0.84,
+    "replaced_labelled": 25,
+    "correct_labelled": 23,
+    "weighted_precision": 0.95704061380371,
+    "unweighted_precision_ci95": [
+      0.7503348787704218,
+      0.977780066308908
+    ]
+  },
+  "replacement_bootstrap_out_of_sample_precision": {
+    "replicates": 959,
+    "median": 0.9518717092281185,
+    "mean": 0.9435634806097415,
+    "p05": 0.8333333333333334
+  },
+  "labelled_used": 145,
+  "labelled_wrong": 60,
+  "excluded": {
+    "unsure": 3,
+    "not_incident": 3,
+    "missing": 0
+  },
+  "labels_file": "evaluation\\victim_attribution_labels.csv",
+  "sample_file": "evaluation\\victim_attribution_sample.csv",
+  "generated": "2026-10-27T22:59:31.684888",
+  "curve": [
+    {
+      "cutoff": 0.010001,
+      "rejected_labelled": 2,
+      "correct_labelled": 2,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.017431715612018818,
+      "unweighted_precision_ci95": [
+        0.34237195288961925,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.020001,
+      "rejected_labelled": 10,
+      "correct_labelled": 10,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.0871585780600941,
+      "unweighted_precision_ci95": [
+        0.7224598312333834,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.030001,
+      "rejected_labelled": 19,
+      "correct_labelled": 19,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.16560129831417877,
+      "unweighted_precision_ci95": [
+        0.8318156346315496,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.040001,
+      "rejected_labelled": 20,
+      "correct_labelled": 20,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.1743171561201882,
+      "unweighted_precision_ci95": [
+        0.8388698745050667,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.050001,
+      "rejected_labelled": 27,
+      "correct_labelled": 27,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.23532816076225405,
+      "unweighted_precision_ci95": [
+        0.8754409628553641,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.060001,
+      "rejected_labelled": 30,
+      "correct_labelled": 30,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.2614757341802823,
+      "unweighted_precision_ci95": [
+        0.8864829086095221,
+        1.0
+      ]
+    },
+    {
+      "cutoff": 0.070001,
+      "rejected_labelled": 32,
+      "correct_labelled": 31,
+      "weighted_precision": 0.96875,
+      "weighted_recall": 0.27019159198629167,
+      "unweighted_precision_ci95": [
+        0.8425539219962727,
+        0.9944622826374491
+      ]
+    },
+    {
+      "cutoff": 0.080001,
+      "rejected_labelled": 40,
+      "correct_labelled": 39,
+      "weighted_precision": 0.975,
+      "weighted_recall": 0.33991845443436697,
+      "unweighted_precision_ci95": [
+        0.8711834051199223,
+        0.9955732825922052
+      ]
+    },
+    {
+      "cutoff": 0.090001,
+      "rejected_labelled": 41,
+      "correct_labelled": 39,
+      "weighted_precision": 0.9512195121951219,
+      "weighted_recall": 0.33991845443436697,
+      "unweighted_precision_ci95": [
+        0.8386073303764864,
+        0.9865193377174265
+      ]
+    },
+    {
+      "cutoff": 0.120001,
+      "rejected_labelled": 42,
+      "correct_labelled": 40,
+      "weighted_precision": 0.9523809523809523,
+      "weighted_recall": 0.3486343122403764,
+      "unweighted_precision_ci95": [
+        0.8420986468452026,
+        0.9868427513607937
+      ]
+    },
+    {
+      "cutoff": 0.150001,
+      "rejected_labelled": 45,
+      "correct_labelled": 43,
+      "weighted_precision": 0.9555555555555556,
+      "weighted_recall": 0.3747818856584046,
+      "unweighted_precision_ci95": [
+        0.8517222081611939,
+        0.9877261309595557
+      ]
+    },
+    {
+      "cutoff": 0.160001,
+      "rejected_labelled": 46,
+      "correct_labelled": 43,
+      "weighted_precision": 0.9347826086956522,
+      "weighted_recall": 0.3747818856584046,
+      "unweighted_precision_ci95": [
+        0.8249699089621865,
+        0.9775725455336564
+      ]
+    },
+    {
+      "cutoff": 0.180001,
+      "rejected_labelled": 49,
+      "correct_labelled": 45,
+      "weighted_precision": 0.9183673469387755,
+      "weighted_recall": 0.39221360127042343,
+      "unweighted_precision_ci95": [
+        0.8081061295851387,
+        0.9677977037582878
+      ]
+    },
+    {
+      "cutoff": 0.200001,
+      "rejected_labelled": 51,
+      "correct_labelled": 47,
+      "weighted_precision": 0.9215686274509803,
+      "weighted_recall": 0.40964531688244227,
+      "unweighted_precision_ci95": [
+        0.8149980177513917,
+        0.9690783038730685
+      ]
+    },
+    {
+      "cutoff": 0.220001,
+      "rejected_labelled": 52,
+      "correct_labelled": 48,
+      "weighted_precision": 0.9230769230769231,
+      "weighted_recall": 0.41836117468845163,
+      "unweighted_precision_ci95": [
+        0.8182618931787533,
+        0.9696811457026542
+      ]
+    },
+    {
+      "cutoff": 0.250001,
+      "rejected_labelled": 55,
+      "correct_labelled": 50,
+      "weighted_precision": 0.9090909090909091,
+      "weighted_recall": 0.43579289030047047,
+      "unweighted_precision_ci95": [
+        0.8042226375086602,
+        0.9605424266636261
+      ]
+    },
+    {
+      "cutoff": 0.320001,
+      "rejected_labelled": 56,
+      "correct_labelled": 50,
+      "weighted_precision": 0.8928571428571429,
+      "weighted_recall": 0.43579289030047047,
+      "unweighted_precision_ci95": [
+        0.7853131324833861,
+        0.9499613254188092
+      ]
+    },
+    {
+      "cutoff": 0.680001,
+      "rejected_labelled": 57,
+      "correct_labelled": 50,
+      "weighted_precision": 0.7987220447284344,
+      "weighted_recall": 0.43579289030047047,
+      "unweighted_precision_ci95": [
+        0.7675331041107074,
+        0.939220169964925
+      ]
+    },
+    {
+      "cutoff": 0.700001,
+      "rejected_labelled": 59,
+      "correct_labelled": 50,
+      "weighted_precision": 0.6596306068601583,
+      "weighted_recall": 0.43579289030047047,
+      "unweighted_precision_ci95": [
+        0.7348177673118977,
+        0.9176162891093264
+      ]
+    },
+    {
+      "cutoff": 0.710001,
+      "rejected_labelled": 61,
+      "correct_labelled": 50,
+      "weighted_precision": 0.5617977528089888,
+      "weighted_recall": 0.43579289030047047,
+      "unweighted_precision_ci95": [
+        0.7052560663212193,
+        0.8962096593857343
+      ]
+    },
+    {
+      "cutoff": 0.720001,
+      "rejected_labelled": 63,
+      "correct_labelled": 51,
+      "weighted_precision": 0.5538160469667319,
+      "weighted_recall": 0.4933175518201326,
+      "unweighted_precision_ci95": [
+        0.6959297958482789,
+        0.8875391815550149
+      ]
+    },
+    {
+      "cutoff": 0.730001,
+      "rejected_labelled": 66,
+      "correct_labelled": 51,
+      "weighted_precision": 0.4639344262295082,
+      "weighted_recall": 0.4933175518201326,
+      "unweighted_precision_ci95": [
+        0.6583031596442961,
+        0.8571489491275532
+      ]
+    },
+    {
+      "cutoff": 0.740001,
+      "rejected_labelled": 67,
+      "correct_labelled": 52,
+      "weighted_precision": 0.4914463452566097,
+      "weighted_recall": 0.5508422133397947,
+      "unweighted_precision_ci95": [
+        0.6629280717766178,
+        0.8593639148527074
+      ]
+    },
+    {
+      "cutoff": 0.750001,
+      "rejected_labelled": 69,
+      "correct_labelled": 53,
+      "weighted_precision": 0.4922425952045134,
+      "weighted_recall": 0.6083668748594567,
+      "unweighted_precision_ci95": [
+        0.6560292969473013,
+        0.8519222032943189
+      ]
+    },
+    {
+      "cutoff": 0.760001,
+      "rejected_labelled": 70,
+      "correct_labelled": 53,
+      "weighted_precision": 0.47035040431266845,
+      "weighted_recall": 0.6083668748594567,
+      "unweighted_precision_ci95": [
+        0.6450473904731996,
+        0.8424826738807688
+      ]
+    },
+    {
+      "cutoff": 0.770001,
+      "rejected_labelled": 72,
+      "correct_labelled": 53,
+      "weighted_precision": 0.4319306930693069,
+      "weighted_recall": 0.6083668748594567,
+      "unweighted_precision_ci95": [
+        0.6242391943879235,
+        0.8240635840344728
+      ]
+    },
+    {
+      "cutoff": 0.780001,
+      "rejected_labelled": 76,
+      "correct_labelled": 54,
+      "weighted_precision": 0.4063829787234043,
+      "weighted_recall": 0.6658915363791189,
+      "unweighted_precision_ci95": [
+        0.6004023269144307,
+        0.8003912443566861
+      ]
+    },
+    {
+      "cutoff": 0.800001,
+      "rejected_labelled": 78,
+      "correct_labelled": 54,
+      "weighted_precision": 0.37972166998011936,
+      "weighted_recall": 0.6658915363791189,
+      "unweighted_precision_ci95": [
+        0.5828795777564898,
+        0.7836821707919256
+      ]
+    },
+    {
+      "cutoff": 0.810001,
+      "rejected_labelled": 80,
+      "correct_labelled": 54,
+      "weighted_precision": 0.3563432835820896,
+      "weighted_recall": 0.6658915363791189,
+      "unweighted_precision_ci95": [
+        0.5664032172496735,
+        0.7675598750577254
+      ]
+    },
+    {
+      "cutoff": 0.820001,
+      "rejected_labelled": 85,
+      "correct_labelled": 56,
+      "weighted_precision": 0.3621665319320938,
+      "weighted_recall": 0.780940859418443,
+      "unweighted_precision_ci95": [
+        0.5531293986319203,
+        0.7507822823823793
+      ]
+    },
+    {
+      "cutoff": 0.830001,
+      "rejected_labelled": 86,
+      "correct_labelled": 56,
+      "weighted_precision": 0.352755905511811,
+      "weighted_recall": 0.780940859418443,
+      "unweighted_precision_ci95": [
+        0.5459335479566195,
+        0.7434646818166705
+      ]
+    },
+    {
+      "cutoff": 0.840001,
+      "rejected_labelled": 87,
+      "correct_labelled": 56,
+      "weighted_precision": 0.34382194934765925,
+      "weighted_recall": 0.780940859418443,
+      "unweighted_precision_ci95": [
+        0.5389300856293024,
+        0.7362742260516895
+      ]
+    },
+    {
+      "cutoff": 0.850001,
+      "rejected_labelled": 90,
+      "correct_labelled": 56,
+      "weighted_precision": 0.3195435092724679,
+      "weighted_recall": 0.780940859418443,
+      "unweighted_precision_ci95": [
+        0.5189957287533067,
+        0.7154418767436157
+      ]
+    },
+    {
+      "cutoff": 0.860001,
+      "rejected_labelled": 95,
+      "correct_labelled": 56,
+      "weighted_precision": 0.2858966177409062,
+      "weighted_recall": 0.780940859418443,
+      "unweighted_precision_ci95": [
+        0.4889523520569727,
+        0.6830400074353867
+      ]
+    },
+    {
+      "cutoff": 0.870001,
+      "rejected_labelled": 97,
+      "correct_labelled": 57,
+      "weighted_precision": 0.2945499081445193,
+      "weighted_recall": 0.8384655209381052,
+      "unweighted_precision_ci95": [
+        0.488152877328067,
+        0.6804283431206368
+      ]
+    },
+    {
+      "cutoff": 0.880001,
+      "rejected_labelled": 99,
+      "correct_labelled": 57,
+      "weighted_precision": 0.2831077104178929,
+      "weighted_recall": 0.8384655209381052,
+      "unweighted_precision_ci95": [
+        0.4773648481449719,
+        0.6684905255559431
+      ]
+    },
+    {
+      "cutoff": 0.890001,
+      "rejected_labelled": 100,
+      "correct_labelled": 57,
+      "weighted_precision": 0.27771362586605086,
+      "weighted_recall": 0.8384655209381052,
+      "unweighted_precision_ci95": [
+        0.4721521169586435,
+        0.6626686099947162
+      ]
+    },
+    {
+      "cutoff": 0.900001,
+      "rejected_labelled": 107,
+      "correct_labelled": 57,
+      "weighted_precision": 0.2468916546001151,
+      "weighted_recall": 0.8384655209381052,
+      "unweighted_precision_ci95": [
+        0.43868515616637266,
+        0.6244680281976206
+      ]
+    },
+    {
+      "cutoff": 0.910001,
+      "rejected_labelled": 111,
+      "correct_labelled": 57,
+      "weighted_precision": 0.23216762019501117,
+      "weighted_recall": 0.8384655209381052,
+      "unweighted_precision_ci95": [
+        0.42164528410960095,
+        0.6044776539198238
+      ]
+    },
+    {
+      "cutoff": 0.920001,
+      "rejected_labelled": 117,
+      "correct_labelled": 58,
+      "weighted_precision": 0.22678926575674324,
+      "weighted_recall": 0.89231034729207,
+      "unweighted_precision_ci95": [
+        0.40671622435748067,
+        0.5850084797179371
+      ]
+    },
+    {
+      "cutoff": 0.930001,
+      "rejected_labelled": 122,
+      "correct_labelled": 60,
+      "weighted_precision": 0.23788231508427332,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.4047046149214587,
+        0.5794023894395793
+      ]
+    },
+    {
+      "cutoff": 0.940001,
+      "rejected_labelled": 124,
+      "correct_labelled": 60,
+      "weighted_precision": 0.2319405855088027,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.3977251649074819,
+        0.570986115301777
+      ]
+    },
+    {
+      "cutoff": 0.950001,
+      "rejected_labelled": 130,
+      "correct_labelled": 60,
+      "weighted_precision": 0.2157721718001858,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.3781769959668404,
+        0.547107818321094
+      ]
+    },
+    {
+      "cutoff": 0.960001,
+      "rejected_labelled": 135,
+      "correct_labelled": 60,
+      "weighted_precision": 0.2039258970927246,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.36331238690531265,
+        0.5286508287303471
+      ]
+    },
+    {
+      "cutoff": 0.970001,
+      "rejected_labelled": 142,
+      "correct_labelled": 60,
+      "weighted_precision": 0.1893704169029669,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.34438016814018835,
+        0.5047712399628493
+      ]
+    },
+    {
+      "cutoff": 0.980001,
+      "rejected_labelled": 144,
+      "correct_labelled": 60,
+      "weighted_precision": 0.18558572373214074,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.33933121516324877,
+        0.4983328793811826
+      ]
+    },
+    {
+      "cutoff": 0.990001,
+      "rejected_labelled": 145,
+      "correct_labelled": 60,
+      "weighted_precision": 0.183749545564469,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.336862322438135,
+        0.4951738824938194
+      ]
+    }
+  ],
+  "replacement_curve": [
+    {
+      "threshold": 0.61,
+      "replaced_labelled": 27,
+      "correct_labelled": 24,
+      "weighted_precision": 0.9382151595284581,
+      "unweighted_precision_ci95": [
+        0.7194181745602705,
+        0.9614803521050127
+      ]
+    },
+    {
+      "threshold": 0.72,
+      "replaced_labelled": 26,
+      "correct_labelled": 23,
+      "weighted_precision": 0.9369159468075263,
+      "unweighted_precision_ci95": [
+        0.7102370691310166,
+        0.959968281788505
+      ]
+    },
+    {
+      "threshold": 0.84,
+      "replaced_labelled": 25,
+      "correct_labelled": 23,
+      "weighted_precision": 0.95704061380371,
+      "unweighted_precision_ci95": [
+        0.7503348787704218,
+        0.977780066308908
+      ]
+    },
+    {
+      "threshold": 0.86,
+      "replaced_labelled": 24,
+      "correct_labelled": 22,
+      "weighted_precision": 0.9560976038072158,
+      "unweighted_precision_ci95": [
+        0.741507847985494,
+        0.9768416721570266
+      ]
+    },
+    {
+      "threshold": 0.87,
+      "replaced_labelled": 23,
+      "correct_labelled": 22,
+      "weighted_precision": 0.9775561321135839,
+      "unweighted_precision_ci95": [
+        0.7900841350594088,
+        0.9922835330378734
+      ]
+    },
+    {
+      "threshold": 0.89,
+      "replaced_labelled": 22,
+      "correct_labelled": 21,
+      "weighted_precision": 0.9770408397542452,
+      "unweighted_precision_ci95": [
+        0.7820151050048196,
+        0.9919307806988522
+      ]
+    },
+    {
+      "threshold": 0.9,
+      "replaced_labelled": 21,
+      "correct_labelled": 20,
+      "weighted_precision": 0.9765013300247206,
+      "unweighted_precision_ci95": [
+        0.7733018341376452,
+        0.9915442305280766
+      ]
+    },
+    {
+      "threshold": 0.91,
+      "replaced_labelled": 20,
+      "correct_labelled": 19,
+      "weighted_precision": 0.9759358546140592,
+      "unweighted_precision_ci95": [
+        0.7638641064874331,
+        0.9911187805671268
+      ]
+    },
+    {
+      "threshold": 0.92,
+      "replaced_labelled": 18,
+      "correct_labelled": 17,
+      "weighted_precision": 0.9747191295290679,
+      "unweighted_precision_ci95": [
+        0.7424220019799247,
+        0.9901250641690756
+      ]
+    },
+    {
+      "threshold": 0.93,
+      "replaced_labelled": 16,
+      "correct_labelled": 15,
+      "weighted_precision": 0.9733728125765532,
+      "unweighted_precision_ci95": [
+        0.7167073163197013,
+        0.9888809426916687
+      ]
+    },
+    {
+      "threshold": 0.94,
+      "replaced_labelled": 14,
+      "correct_labelled": 13,
+      "weighted_precision": 0.9718750351562061,
+      "unweighted_precision_ci95": [
+        0.6853073044604219,
+        0.9872781138877085
+      ]
+    },
+    {
+      "threshold": 0.96,
+      "replaced_labelled": 13,
+      "correct_labelled": 12,
+      "weighted_precision": 0.9710611304679994,
+      "unweighted_precision_ci95": [
+        0.6668546607175265,
+        0.9862899336203037
+      ]
+    },
+    {
+      "threshold": 0.97,
+      "replaced_labelled": 12,
+      "correct_labelled": 11,
+      "weighted_precision": 0.9642289916868176,
+      "unweighted_precision_ci95": [
+        0.6461140782014047,
+        0.9851352905492264
+      ]
+    },
+    {
+      "threshold": 0.98,
+      "replaced_labelled": 11,
+      "correct_labelled": 10,
+      "weighted_precision": 0.9629019572927332,
+      "unweighted_precision_ci95": [
+        0.6226353745137962,
+        0.9837682477371741
+      ]
+    },
+    {
+      "threshold": 0.99,
+      "replaced_labelled": 7,
+      "correct_labelled": 7,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.6456611570247934,
+        1.0
+      ]
+    },
+    {
+      "threshold": 1.0,
+      "replaced_labelled": 4,
+      "correct_labelled": 4,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.5100999795960008,
+        1.0
+      ]
+    }
+  ],
+  "replacement_rows": [
+    {
+      "id": "007f723f-baec-4a4d-9658-df8fc511f7e4|23875",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "The Banyans Medical Centre and Specialist Clinics",
+      "prob": 0.99,
+      "right": true,
+      "labelled_victim": "The Banyans Medical Centre and Specialist Clinics",
+      "candidates": [
+        "The Banyans Medical Centre and Specialist Clinics"
+      ]
+    },
+    {
+      "id": "04500fc7-497d-4458-8fbd-1dc1ac73e55d|203",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Henning Harders (Australia) Pty Ltd",
+      "prob": 0.98,
+      "right": true,
+      "labelled_victim": "Henning Harders (Australia) Pty Ltd",
+      "candidates": [
+        "Henning Harders (Australia) Pty Ltd"
+      ]
+    },
+    {
+      "id": "086c2b36-0bc5-4532-a5a3-2c9577c9c330|7366",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Sold RE PTY LTD",
+      "prob": 0.98,
+      "right": false,
+      "labelled_victim": "none",
+      "candidates": [
+        "Sold RE PTY LTD",
+        "Malibu Boats Australia"
+      ]
+    },
+    {
+      "id": "0d3a11f9-9555-450e-b1c0-7706ddd807d4|23247",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.55,
+      "right": false,
+      "labelled_victim": "none",
+      "candidates": [
+        "A C Small Maxwell & Co"
+      ]
+    },
+    {
+      "id": "119bfaa4-2e76-4ce3-98e5-a8537f70b9b6|1071",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Australian Capital Territory Government",
+      "prob": 0.72,
+      "right": false,
+      "labelled_victim": "ACT Government",
+      "candidates": [
+        "Australian Capital Territory Government",
+        "ACT Government",
+        "Community and Public Sector Union",
+        "The Canberra Times",
+        "United Firefighters\u2019 Union"
+      ]
+    },
+    {
+      "id": "174c8b17-caf6-4c43-951f-e1e5c80c0479|389",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "UN Women Australia",
+      "prob": 0.92,
+      "right": true,
+      "labelled_victim": "UN Women Australia",
+      "candidates": [
+        "UN Women Australia",
+        "Cloudflare"
+      ]
+    },
+    {
+      "id": "1e9a1cfe-8599-46c9-beda-c7c9f18100eb|317",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Singtel Optus Pty Limited",
+      "prob": 0.84,
+      "right": true,
+      "labelled_victim": "Singtel Optus Pty Limited",
+      "candidates": [
+        "Singtel Optus Pty Limited",
+        "Bloomberg News",
+        "University of Sydney"
+      ]
+    },
+    {
+      "id": "1f09c2f7-0aab-4b99-9ffc-57d5cef6d11c|5476",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Cariad SE",
+      "prob": 0.98,
+      "right": true,
+      "labelled_victim": "Cariad SE",
+      "candidates": [
+        "Cariad SE"
+      ]
+    },
+    {
+      "id": "2403a2a2-6c05-476e-bdb7-7de3a5565f65|3463",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Top Health Doctors West End",
+      "prob": 0.87,
+      "right": true,
+      "labelled_victim": "Top Health Doctors West End",
+      "candidates": [
+        "Top Health Doctors West End"
+      ]
+    },
+    {
+      "id": "29aec421-ae03-47cb-8c84-fe096cae8b2c|5",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "labelled_victim": "Tonga Ministry of Health",
+      "candidates": []
+    },
+    {
+      "id": "35dee222-1f32-4ef1-807f-6d02e60600bd|5912",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "labelled_victim": "none",
+      "candidates": []
+    },
+    {
+      "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|629",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.63,
+      "right": false,
+      "labelled_victim": "Hugging Face",
+      "candidates": [
+        "OpenAI"
+      ]
+    },
+    {
+      "id": "3acea829-63fe-44c7-9415-23797e5c1a34|4141",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "labelled_victim": "Diabetes And Health Solutions",
+      "candidates": []
+    },
+    {
+      "id": "3eab98fa-985a-4f83-bd0c-2ea404d7dd96|7646",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Legal Practice Board of Western Australia",
+      "prob": 0.86,
+      "right": false,
+      "labelled_victim": "WA Health",
+      "candidates": [
+        "Legal Practice Board of Western Australia"
+      ]
+    },
+    {
+      "id": "519e3671-d272-487f-aec0-b9e115d4b8c8|311",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.69,
+      "right": false,
+      "labelled_victim": "none",
+      "candidates": [
+        "Alphabet Inc.",
+        "Awake Security",
+        "Reuters"
+      ]
+    },
+    {
+      "id": "550e1cd3-534c-4fc4-99ea-c2c70c72edb1|39",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Manheim Auctions (Manheim, Inc.)",
+      "prob": 0.91,
+      "right": true,
+      "labelled_victim": "Manheim Auctions (Manheim, Inc.)",
+      "candidates": [
+        "Manheim Auctions (Manheim, Inc.)",
+        "Toll Group"
+      ]
+    },
+    {
+      "id": "5df656f6-f134-4c35-8685-71eab147346a|23242",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "CubePilot Pty Ltd",
+      "prob": 1.0,
+      "right": true,
+      "labelled_victim": "CubePilot Pty Ltd",
+      "candidates": [
+        "CubePilot Pty Ltd",
+        "Australian Aviation"
+      ]
+    },
+    {
+      "id": "874e5d47-3bda-45c8-ac0e-e4a06c56f73b|2907",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Australian sole trader",
+      "prob": 1.0,
+      "right": true,
+      "labelled_victim": "Australian sole trader",
+      "candidates": [
+        ".au Domain Administration Limited",
+        "Australian sole trader",
+        "Department of Home Affairs",
+        "FalconFeedsio"
+      ]
+    },
+    {
+      "id": "8a30f0de-9298-4bca-b7ad-3530af34e801|111",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Talman Pty Ltd",
+      "prob": 0.91,
+      "right": true,
+      "labelled_victim": "Talman Pty Ltd",
+      "candidates": [
+        "Talman Pty Ltd",
+        "Australian Cyber Security",
+        "Australian Wool Exchange (AWEX)",
+        "Cooperative",
+        "Sheep Central",
+        "iTnews"
+      ]
+    },
+    {
+      "id": "938493fc-1f43-43db-8879-516c880d43a0|349",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Department of Health (Western Australia)",
+      "prob": 0.92,
+      "right": true,
+      "labelled_victim": "Department of Health (Western Australia)",
+      "candidates": [
+        "Department of Health (Western Australia)",
+        "Mandurah"
+      ]
+    },
+    {
+      "id": "b615bf7a-6b07-4453-9763-a4382d70371c|23218",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Origin Energy Limited",
+      "prob": 0.93,
+      "right": true,
+      "labelled_victim": "Origin Energy Limited",
+      "candidates": [
+        "Origin Energy Limited",
+        "Australian electricity retailer"
+      ]
+    },
+    {
+      "id": "b8246512-0f87-4fb5-8767-ebb9d92c5b7a|22700",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "labelled_victim": "VIQ Solutions",
+      "candidates": []
+    },
+    {
+      "id": "c2fdb00e-f9d3-4133-bc18-e59cc61c5c37|122",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Technical and Further Education South Australia",
+      "prob": 1.0,
+      "right": true,
+      "labelled_victim": "Technical and Further Education South Australia",
+      "candidates": [
+        "Technical and Further Education South Australia",
+        "ABC",
+        "SA Police",
+        "South Australian Government"
+      ]
+    },
+    {
+      "id": "c640c6f1-24a6-45e2-9414-87ecd58653b3|5446",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Cyberhaven, Inc.",
+      "prob": 0.93,
+      "right": true,
+      "labelled_victim": "Cyberhaven, Inc.",
+      "candidates": [
+        "Cyberhaven, Inc."
+      ]
+    },
+    {
+      "id": "caae55c5-3ca8-4a9f-9a5e-e8907178b2c8|358",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Aussie Fluid Power Pty Ltd",
+      "prob": 1.0,
+      "right": true,
+      "labelled_victim": "Aussie Fluid Power Pty Ltd",
+      "candidates": [
+        "Aussie Fluid Power Pty Ltd"
+      ]
+    },
+    {
+      "id": "d597ee9b-f7cf-43a2-a8b6-59ba7607c04a|4637",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Iluka Resources Limited",
+      "prob": 0.9,
+      "right": true,
+      "labelled_victim": "Iluka Resources Limited",
+      "candidates": [
+        "Iluka Resources Limited"
+      ]
+    },
+    {
+      "id": "e2bda4ed-84e7-4a1c-9574-560aad2a2af5|3463",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "Power Diary",
+      "prob": 0.89,
+      "right": true,
+      "labelled_victim": "Power Diary",
+      "candidates": [
+        "Power Diary"
+      ]
+    },
+    {
+      "id": "e7b08df9-24c1-4b7a-8796-539d6d75f5f4|5188",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "City of Stonnington",
+      "prob": 0.97,
+      "right": true,
+      "labelled_victim": "City of Stonnington",
+      "candidates": [
+        "City of Stonnington"
+      ]
+    },
+    {
+      "id": "ed67b757-bdf2-4bfa-83d9-4fbc402d91b7|23143",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": null,
+      "prob": 0.92,
+      "right": false,
+      "labelled_victim": "Uniting Communities",
+      "candidates": [
+        "Homeless Connect SA",
+        "Lifeline Australia",
+        "SA COVID Mental Health support line",
+        "UnitingCare Queensland"
+      ]
+    },
+    {
+      "id": "f0304297-eb38-4307-a99f-8817b2320ff7|1",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "P&N Bank",
+      "prob": 0.61,
+      "right": true,
+      "labelled_victim": "P&N Bank",
+      "candidates": [
+        "Police & Nurses Limited",
+        "P&N Bank",
+        "WAPOL",
+        "Western Australian Police Force"
+      ]
+    },
+    {
+      "id": "f82c0e12-a93c-4485-8328-bf8c4009d1e5|1695",
+      "stratum": "A",
+      "weight": 1.0,
+      "choice": "HBS Group Pty Ltd",
+      "prob": 0.94,
+      "right": true,
+      "labelled_victim": "HBS Group Pty Ltd",
+      "candidates": [
+        "HBS Group Pty Ltd"
+      ]
+    },
+    {
+      "id": "558131cb-93dc-427e-a9a0-8d6befa32673|22895",
+      "stratum": "B",
+      "weight": 6.6,
+      "choice": "Heritage Financial Corporation",
+      "prob": 0.99,
+      "right": true,
+      "labelled_victim": "Heritage Financial Corporation",
+      "candidates": [
+        "Heritage Financial Corporation"
+      ]
+    },
+    {
+      "id": "62f6731c-e246-4d28-96ef-1fe0f27440dd|3580",
+      "stratum": "B",
+      "weight": 6.6,
+      "choice": "Quantum Radiology Group",
+      "prob": 0.96,
+      "right": true,
+      "labelled_victim": "Quantum Radiology Group",
+      "candidates": [
+        "Quantum Radiology Group",
+        "Company"
+      ]
+    },
+    {
+      "id": "8bbd23c2-c8b9-4bfc-bab1-0ffa8941f62a|4310",
+      "stratum": "B",
+      "weight": 6.6,
+      "choice": null,
+      "prob": 1.0,
+      "right": false,
+      "labelled_victim": "Outabox",
+      "candidates": [
+        "Brisbane Broncos",
+        "Daily Mail Online",
+        "Myer"
+      ]
+    },
+    {
+      "id": "9eef9089-ad64-4bb0-aafe-e5a182730190|112",
+      "stratum": "B",
+      "weight": 6.6,
+      "choice": null,
+      "prob": 0.98,
+      "right": false,
+      "labelled_victim": "none",
+      "candidates": [
+        "FBI",
+        "Mackay Sugar",
+        "Marks & Spencer Group PLC"
+      ]
+    },
+    {
+      "id": "2db9044a-e329-4c15-a096-3d3d51c82f60|691",
+      "stratum": "C",
+      "weight": 6.1778,
+      "choice": "Northern Sydney Local Health District",
+      "prob": 0.99,
+      "right": true,
+      "labelled_victim": "Northern Sydney Local Health District",
+      "candidates": [
+        "Northern Sydney Local Health District"
+      ]
+    },
+    {
+      "id": "f267c6d2-d2e6-4735-b4cc-0b17c06c33e3|22301",
+      "stratum": "C",
+      "weight": 6.1778,
+      "choice": "Ministry of Finance, Planning, and Economic Development",
+      "prob": 0.98,
+      "right": true,
+      "labelled_victim": "Ministry of Finance, Planning, and Economic Development",
+      "candidates": [
+        "Ministry of Finance, Planning, and Economic Development"
+      ]
+    }
+  ]
+}

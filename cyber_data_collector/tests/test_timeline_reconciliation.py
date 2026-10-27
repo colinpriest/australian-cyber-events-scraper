@@ -74,6 +74,12 @@ def conn():
     ("11 August 2025", (date(2025, 8, 11), "day")),
     ("January–February 2025", (date(2025, 1, 1), "month")),
     ("9 July 2023–16 March 2024", (date(2023, 7, 9), "day")),
+    ("27 February–11 August 2020", (date(2020, 2, 27), "day")),
+    ("28 January–25 February 2025; publicised later", (date(2025, 1, 28), "day")),
+    ("2016-02", (date(2016, 2, 1), "month")),
+    ("2018–2019 (reported 25 May 2021)", (date(2018, 1, 1), "year")),
+    ("Late 2018 (reported 11 March 2020)", (date(2018, 1, 1), "year")),
+    ("May 12, 2014", (date(2014, 5, 12), "day")),
     ("2019", (date(2019, 1, 1), "year")),
     ("unknown", (None, "none")),
 ])
@@ -106,3 +112,69 @@ def test_without_queue_gaps_nothing_is_added(conn):
     before = conn.execute("SELECT COUNT(*) FROM RawEvents").fetchone()[0]
     tr.reconcile_organisation(conn, 1, "University of Western Australia", JevJudge(conn, client=FakeJev()))
     assert conn.execute("SELECT COUNT(*) FROM RawEvents").fetchone()[0] == before
+
+
+def test_gap_search_without_a_key_fails_loudly(conn, monkeypatch):
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    incident = {"date": "July 2022", "what": "Callista exposure", "source": "", "number": "3"}
+    with pytest.raises(RuntimeError, match="PERPLEXITY_API_KEY"):
+        tr.queue_gap(conn, 1, "University of Western Australia", incident)
+
+
+@pytest.mark.parametrize("incident_precision, stored, expected", [
+    ("day", {"rank": 2, "precision": "month only", "lagging": False, "carried_by_no_record": False}, True),
+    ("month", {"rank": 1, "precision": "year only", "lagging": False, "carried_by_no_record": False}, True),
+    ("day", {"rank": 3, "precision": "day", "lagging": True, "carried_by_no_record": False}, True),
+    ("day", {"rank": 3, "precision": "day", "lagging": False, "carried_by_no_record": False}, False),
+    ("month", {"rank": 2, "precision": "month only", "lagging": False, "carried_by_no_record": False}, False),
+    ("none", {"rank": 0, "precision": "unknown", "lagging": False, "carried_by_no_record": True}, False),
+])
+def test_only_a_more_precise_incident_date_can_redate(incident_precision, stored, expected):
+    assert tr.redate_eligible(incident_precision, stored)[0] is expected
+
+
+def _redate_files(tmp_path, labels, cutoff=0.8):
+    from cyber_data_collector.utils.llm_models import typesafe_model
+    cal = tmp_path / "redate_cal.json"
+    cal.write_text(json.dumps({"question_version": tr.MATCH_VERSION, "model": typesafe_model(), "cutoff": cutoff}),
+                   encoding="utf-8")
+    lab = tmp_path / "redate_labels.csv"
+    lab.write_text("deduplicated_event_id,label,correct_date,rationale,labeller\n"
+                   + "".join(f"{d},{label},,r,test\n" for d, label in labels), encoding="utf-8")
+    return cal, lab
+
+
+def _reconcile(conn, tmp_path, labels, apply=True):
+    cal, lab = _redate_files(tmp_path, labels)
+    conn.execute("CREATE TABLE IF NOT EXISTS DedupSnapshots (snapshot_id TEXT PRIMARY KEY, batch_id TEXT, "
+                 "deduplicated_event_id TEXT, payload_json TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    return tr.reconcile_all(conn, judge=JevJudge(conn, client=FakeJev()), apply=apply,
+                            timeline_search=lambda q, m: {"answer": TIMELINE, "citations": []},
+                            redate_calibration_path=cal, redate_labels_path=lab)
+
+
+def test_a_calibrated_date_conflict_is_redated_and_audited(conn, tmp_path):
+    out = _reconcile(conn, tmp_path, [("other", "unsure")])
+    assert out["redate_calibrated"] and out["redates_applied"]
+    assert [r["deduplicated_event_id"] for r in out["redates"]] == ["e2"]
+    assert conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
+                        ).fetchone()[0] == "2026-06-11"
+    row = conn.execute("SELECT old_date, new_date FROM TimelineRedates").fetchone()
+    assert tuple(row) == ("2026-02-01", "2026-06-11")
+    # The unmatched UN Women event is handed to the calibrated victim step, not resolved here.
+    e3 = next(e for o in out["organisations"] for e in o["events"] if e["deduplicated_event_id"] == "e3")
+    assert e3["resolution"]["step"] == "check-victim-attribution"
+
+
+def test_a_conflict_labelled_otherwise_is_never_redated(conn, tmp_path):
+    out = _reconcile(conn, tmp_path, [("e2", "stored_date_right")])
+    assert out["redates"] == []
+    assert conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
+                        ).fetchone()[0] == "2026-02-01"
+
+
+def test_redating_refuses_without_labels(conn, tmp_path):
+    with pytest.raises(RuntimeError, match="refusing"):
+        tr.reconcile_all(conn, judge=JevJudge(conn, client=FakeJev()), apply=True,
+                         timeline_search=lambda q, m: {"answer": TIMELINE, "citations": []},
+                         redate_labels_path=tmp_path / "missing.csv")

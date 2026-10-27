@@ -2543,17 +2543,27 @@ def cmd_check_sources(args) -> int:
 
 
 def cmd_reconcile_timelines(args) -> int:
-    """Reconcile events against organisation timelines; see timeline_reconciliation. Report-only
-    except --queue-gaps, which only adds evidence."""
+    """Reconcile events against organisation timelines and resolve the mismatches; see timeline_reconciliation.
+
+    Wrong-organisation and not-an-incident findings are resolved by
+    check-victim-attribution and check-events (their outcome is shown);
+    --apply re-dates date conflicts at the calibrated cut-off; --queue-gaps
+    queues reporting of incidents no event covers. Fails (exit 2) when Jev or
+    Perplexity is needed and unavailable, or --apply lacks its labels.
+    """
     from cyber_data_collector.dedup.timeline_reconciliation import reconcile_all
     from cyber_data_collector.utils import jev
 
     if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing reconciled.")
-        return 0
+        print("ERROR: TYPESAFE_API_KEY not set or typesafe-sdk missing; timelines cannot be reconciled.",
+              file=sys.stderr)
+        return 2
     conn = _connect(args.db)
     try:
-        result = reconcile_all(conn, queue_gaps=args.queue_gaps)
+        result = reconcile_all(conn, queue_gaps=args.queue_gaps, apply=args.apply)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     out = Path(args.db).parent / "timeline_reconciliation.json"
@@ -2562,44 +2572,88 @@ def cmd_reconcile_timelines(args) -> int:
     s = result["summary"]
     print(f"{s['organisations']} organisations, {s['events']} events: {s['matched']} matched a timeline incident "
           f"({s['low_confidence_matches']} with low confidence); unmatched: {s['unmatched']}; "
-          f"{s['coverage_gaps']} coverage gap(s); {s['date_conflicts']} date conflict(s). Findings in {out}")
+          f"{s['coverage_gaps']} coverage gap(s); {s['date_conflicts']} date conflict(s), "
+          f"{s['redate_eligible']} with a more precise incident date.")
+    for o in result["organisations"]:
+        for e in o["events"]:
+            if e.get("resolution") and e["resolution"]["step"] != "none":
+                print(f"  {e['unmatched_kind']:18} {o['organisation'][:26]:26} {e['resolution']['outcome'][:60]:60} "
+                      f"{(e['title'] or '')[:40]}")
+    if not result["redate_calibrated"]:
+        print("Re-dating is REPORT ONLY: no calibration for this model and question "
+              "(scripts/calibrate_timeline_redates.py).")
+    else:
+        verb = "Re-dated" if result["redates_applied"] else "Would re-date (pass --apply)"
+        for r in result["redates"]:
+            print(f"  {str(r['stored_date'])[:10]} -> {r['new_date']}  ({r['match_probability']:.2f})  "
+                  f"{(r['title'] or '')[:60]}")
+        print(f"{verb} {len(result['redates'])} event(s) at match cut-off {result['redate_cutoff']}.")
+    print(f"Findings in {out}")
     return 0
 
 
 def cmd_research_timelines(args) -> int:
-    """Research each multi-event organisation's incident history once; see org_timeline."""
-    from cyber_data_collector.dedup.org_timeline import organisations_with_several_events, research_all
+    """Research each multi-event organisation's incident history; see org_timeline.
+
+    Re-researches only stale timelines (new evidence, or a changed question).
+    Fails - non-zero exit - when research is needed and Perplexity is
+    unavailable, rather than leaving stale timelines in use.
+    """
+    from cyber_data_collector.dedup.org_timeline import organisations_to_research, research_all
 
     conn = _connect(args.db)
     try:
-        done = research_all(conn)
-        total = len(organisations_with_several_events(conn))
+        try:
+            done = research_all(conn)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        total = len(organisations_to_research(conn))
     finally:
         conn.close()
-    print(f"{done} of {total} organisations with several events have a stored timeline.")
+    print(f"{done} of {total} organisations have a current timeline.")
     return 0
 
 
 def cmd_check_victim_attribution(args) -> int:
-    """Report events whose recorded victim Jev doubts; see victim_judgement. Changes nothing."""
+    """Judge every event's recorded victim; with --apply, re-attribute below the calibrated cut-off.
+
+    See :mod:`cyber_data_collector.dedup.victim_judgement`. Fails (exit 2)
+    when Jev is unavailable or, with --apply, when the labels are missing.
+    Without a calibration matching the current models and questions it
+    reports only, and says so. Findings: ``instance/victim_attribution_findings.json``.
+    """
     from cyber_data_collector.dedup.victim_judgement import check_victim_attribution
     from cyber_data_collector.utils import jev
 
     if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
-        return 0
+        print("ERROR: TYPESAFE_API_KEY not set or typesafe-sdk missing; victim attribution cannot run.",
+              file=sys.stderr)
+        return 2
     conn = _connect(args.db)
     try:
-        result = check_victim_attribution(conn)
+        result = check_victim_attribution(conn, apply=args.apply)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     finally:
         conn.close()
     out = Path(args.db).parent / "victim_attribution_findings.json"
     out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
                    encoding="utf-8")
-    for f in result["reported"]:
-        print(f"  {f['p_recorded_victim']:.3f}  {f['victim'][:30]:30}  {(f['title'] or '')[:60]}")
-    print(f"Judged {result['judged']} event(s); {len(result['reported'])} reported (not calibrated: "
-          f"nothing changed); findings in {out}")
+    if not result["calibrated"]:
+        for f in result["reported"]:
+            print(f"  {f['p_recorded_victim']:.3f}  {f['victim'][:30]:30}  {(f['title'] or '')[:60]}")
+        print(f"REPORT ONLY - no calibration for these models and questions (run "
+              f"scripts/calibrate_victim_attribution.py). Judged {result['judged']} event-victim pair(s); "
+              f"{len(result['reported'])} below {0.5}; findings in {out}")
+        return 0
+    for a in result["actions"]:
+        print(f"  {a['p_recorded_victim']:.3f}  {a['action']:12} {a['victim'][:28]:28} -> "
+              f"{(a.get('new_victim') or a.get('candidate') or '-')[:28]:28} {(a['title'] or '')[:50]}")
+    verb = "Applied" if result["applied"] else "Would apply (dry run; pass --apply)"
+    print(f"{verb}: {result['counts']} at cut-off {result['cutoff']} (replacement threshold "
+          f"{result['replacement_threshold']}); judged {result['judged']} pair(s); findings in {out}")
     return 0
 
 
@@ -2974,6 +3028,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "gaps and date conflicts")
     p.add_argument("--queue-gaps", action="store_true",
                    help="Search for and queue reporting of incidents no event covers (adds evidence only)")
+    p.add_argument("--apply", action="store_true",
+                   help="Re-date date conflicts at the calibrated match cut-off (only with a matching "
+                        "calibration and readable labels)")
     p.set_defaults(func=cmd_reconcile_timelines)
 
     p = sub.add_parser("research-timelines",
@@ -2982,8 +3039,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_research_timelines)
 
     p = sub.add_parser("check-victim-attribution",
-                       help="Ask Jev whether each event's recorded victim (with a researched "
-                            "timeline) is really the organisation affected; report only")
+                       help="Ask Jev whether each event's recorded victim is really the organisation "
+                            "affected; re-attribute below the calibrated cut-off")
+    p.add_argument("--apply", action="store_true",
+                   help="Demote / re-attribute (only with a calibration matching the current models and "
+                        "questions, and readable labels; otherwise refuses or reports)")
     p.set_defaults(func=cmd_check_victim_attribution)
 
     p = sub.add_parser("check-duplicates",

@@ -4,18 +4,25 @@ Open work found while building the calibrated filters (2026-10-27). Each item
 names the evidence that showed the problem. Done items move to the README or
 `docs/` with the commit that closed them.
 
-## In progress
+## Done (2026-10-27, see `docs/10-victim-attribution-and-timelines.md`)
 
-- **Reconcile events against organisation timelines.** The timeline dashboard
-  shows events that match no researched incident and researched incidents with
-  no event. At least one side is wrong each time - e.g. University of Western
-  Australia: the timeline lists 2 incidents, the database holds 6 events; the
-  timeline missed the 2020 ProctorU and 2022 Callista breaches, while the
-  database holds UN Women Australia's attack under UWA and dates the June 2026
-  Callista breach as February 2026. Needs a script that matches each event to
-  a timeline incident and resolves every mismatch (see `reconcile-timelines`).
+- Timelines scoped to Australia for multinationals and refusals; aliases
+  limited to spellings of the same name; supplier-breach instruction
+  (`timeline-v2`). Failed refreshes are recorded and flagged to judgements.
+- Victim attribution calibrated; `check-victim-attribution --apply`
+  demotes / re-attributes from the evidence, else flags.
+- Timeline reconciliation resolves each mismatch class through a calibrated
+  step (victim attribution, event reality, calibrated re-dating) or reports it.
 
 ## To do
+
+- **Timeline recall of supplier breaches is still uneven.** After v2, UNSW's
+  timeline lists the 2020 ProctorU breach but UWA's does not, and Perplexity's
+  answers vary run to run. A second, supplier-only query per organisation
+  (or per known supplier) would be the next step.
+- **Victim re-attribution flags what it cannot replace.** Wrong sole victims
+  whose real victim is not named by the evidence are flagged
+  (`VictimAttributionActions.action = 'flagged'`), not changed.
 
 - **Find events that affect more than one organisation.** A supplier breach
   (ProctorU 2020: ten Australian universities; Canvas/Instructure; Frontier
@@ -24,19 +31,6 @@ names the evidence that showed the problem. Done items move to the README or
   splits a vendor breach recorded under one customer. Needed: detect
   supplier-breach events, research the affected customers, attach each as a
   victim, and make sure the recurrence analysis counts it once per victim.
-- **Calibrate victim attribution.** `check-victim-attribution` (Jev + timeline)
-  is report-only because no victim attributions are labelled. Wrong victims
-  still in the data: UN Women Australia under UWA, a NSW driver-licence
-  exposure under Optus, Aussie Fluid Power under the AFP, Ambulance Tasmania
-  under Ambulance Victoria, TAFE SA under Melbourne TAFE. Label a stratified
-  sample, calibrate, then let it re-attribute.
-- **Scope timelines for multinationals to Australia.** Perplexity declined to
-  list Microsoft's incidents (too many, worldwide) and found none for the
-  Australian Digital Health Agency. For global organisations ask for incidents
-  affecting Australian customers, data or operations.
-- **Timelines miss supplier breaches.** UWA's timeline omits the 2020 ProctorU
-  breach although the prompt asks for supplier breaches. Check recall of
-  supplier incidents and strengthen the prompt or add a second query.
 - **Stray records inside events.** Labellers found events holding records
   about other incidents: WSU with WA Health and Instacart records, University
   of Tasmania with University of Sydney Canvas records, NT Health with an
