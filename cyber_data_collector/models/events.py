@@ -136,6 +136,16 @@ class CyberEvent(BaseModel):
     processed_at: Optional[datetime] = Field(None, description="Processing completion timestamp")
     duplicate_of: Optional[str] = Field(None, description="ID of master event if duplicate")
     merged_events: List[str] = Field(default_factory=list, description="IDs of events merged into this one")
+    evidence_basis: str = Field(
+        "unscraped",
+        description="What the persisted record holds: 'article' (scraped text), 'snippet_only', 'none', or "
+                    "'unscraped' if the event never went through the persisted-evidence path",
+    )
+    evidence_text: Optional[str] = Field(None, description="Persisted scraped article text, when there is any")
+    classification_status: str = Field(
+        "unclassified",
+        description="'classified' once the LLM judged it, 'failed' if the LLM call errored (not an acceptance)",
+    )
 
     model_config = ConfigDict(json_encoders={datetime: lambda value: value.isoformat()})
 

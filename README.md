@@ -522,6 +522,31 @@ python scripts/dedup_admin.py resolve-band --dry-run
 python scripts/dedup_admin.py recheck-splits --dry-run
 ```
 
+### Enrichment acceptance and evidence
+
+Classification and Perplexity enrichment read the **persisted** record
+(`RawEvents.raw_content`, written by scraping) through one path,
+`processing/record_evidence.py`, not the snippet-bearing objects built at
+discovery. A record with no usable scraped text (under 200 characters) is
+passed on explicitly labelled as snippet-only, and its confidence is capped.
+A record rejected by a filter (blocked domain, Random Forest pre- or
+post-scrape) is marked processed with `Rejected at <stage>` and goes no
+further, in this run or later ones.
+
+Perplexity answers pass `processing/enrichment_gate.py` before anything is
+written: ISO dates not after discovery, confidences in [0, 1], non-negative
+integer counts, and facts that are attributable to a cited source or to the
+record's own text. A failed or empty answer is not marked validated and gets no
+reliability; it is retried on later runs and quarantined after 3 attempts. A
+weaker answer never overwrites a stronger stored fact. See
+[docs/05-event-enrichment.md](docs/05-event-enrichment.md).
+
+```bash
+python scripts/perplexity_backfill_events.py --report-quarantine
+python scripts/perplexity_backfill_events.py --release-quarantine
+python scripts/perplexity_backfill_events.py --requeue-empty   # old empty "validated" rows
+```
+
 ### Records-affected sanity repair
 
 Global vendor breaches get their worldwide total attributed to the Australian

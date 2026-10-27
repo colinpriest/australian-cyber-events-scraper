@@ -25,7 +25,11 @@ except ImportError:
 
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.processing.record_evidence import RecordEvidence
 from cyber_data_collector.utils import ConfigManager
+
+#: How much persisted article text the enrichment prompt quotes.
+ENRICHMENT_PROMPT_CHARS = 4000
 
 
 class PerplexityEventEnrichment(BaseModel):
@@ -95,6 +99,22 @@ class PerplexityEventEnrichment(BaseModel):
         description="Explanation of how Perplexity arrived at these conclusions"
     )
 
+    # Parse bookkeeping.  A response that could not be used is marked here
+    # instead of masquerading as an empty, zero-confidence success: the
+    # acceptance gate refuses it and the backfill records a failed attempt.
+    parse_failed: bool = Field(
+        False,
+        description="True when the response was missing, unparseable or not usable"
+    )
+    failure_reason: Optional[str] = Field(
+        None,
+        description="Why the response could not be used"
+    )
+    dropped_fields: List[str] = Field(
+        default_factory=list,
+        description="Fields discarded because their values were invalid"
+    )
+
 
 class PerplexityDuplicateCheck(BaseModel):
     """Structured response for duplicate checking."""
@@ -161,7 +181,8 @@ class PerplexityEnrichmentEngine:
         title: str,
         description: str,
         current_date: Optional[str] = None,
-        current_entity: Optional[str] = None
+        current_entity: Optional[str] = None,
+        evidence: Optional[RecordEvidence] = None,
     ) -> Optional[PerplexityEventEnrichment]:
         """
         Enrich a single event with validated information from Perplexity.
@@ -171,9 +192,15 @@ class PerplexityEnrichmentEngine:
             description: Event description
             current_date: Currently assigned date (for validation)
             current_entity: Currently identified entity (for validation)
+            evidence: The record's persisted article text (or the lack of it).
+                When given, the prompt quotes the article that was actually
+                scraped instead of the processed description.
 
         Returns:
-            PerplexityEventEnrichment object or None if enrichment fails
+            None only when no attempt was made (client not initialised).  A
+            request or parse failure comes back as an enrichment with
+            ``parse_failed=True`` and a ``failure_reason`` so the caller can
+            record the failed attempt; it is never an empty success.
         """
         if not self.client:
             self.logger.warning("Perplexity client not initialized, skipping enrichment")
@@ -183,7 +210,9 @@ class PerplexityEnrichmentEngine:
         await self._rate_limit()
 
         # Build the enrichment prompt
-        prompt = self._build_enrichment_prompt(title, description, current_date, current_entity)
+        prompt = self._build_enrichment_prompt(
+            title, description, current_date, current_entity, evidence=evidence
+        )
 
         # Query Perplexity with retry logic
         try:
@@ -200,7 +229,10 @@ class PerplexityEnrichmentEngine:
 
         except Exception as e:
             self.logger.error(f"Failed to enrich event '{title[:50]}...': {e}")
-            return None
+            return PerplexityEventEnrichment(
+                parse_failed=True,
+                failure_reason=f"request failed: {str(e)[:300]}",
+            )
 
     async def check_duplicate(
         self,
@@ -252,15 +284,22 @@ class PerplexityEnrichmentEngine:
         title: str,
         description: str,
         current_date: Optional[str],
-        current_entity: Optional[str]
+        current_entity: Optional[str],
+        evidence: Optional[RecordEvidence] = None,
     ) -> str:
         """Build a detailed prompt for event enrichment."""
+
+        if evidence is not None:
+            # Quote the persisted article, or say plainly that there is none.
+            description_block = evidence.prompt_block(max_chars=ENRICHMENT_PROMPT_CHARS)
+        else:
+            description_block = f"Description: {description[:500]}..."
 
         prompt = f"""You are a cybersecurity incident analyst. Analyze the following Australian cyber security incident and provide validated, accurate information.
 
 INCIDENT INFORMATION:
 Title: {title}
-Description: {description[:500]}...
+{description_block}
 
 {f"Currently assigned date: {current_date}" if current_date else "No date currently assigned"}
 {f"Currently identified entity: {current_entity}" if current_entity else "No entity currently identified"}
@@ -459,12 +498,38 @@ Be conservative: if uncertain, answer false.
                     len(data), e,
                 )
 
-            return PerplexityEventEnrichment(**data)
+            if not isinstance(data, dict):
+                raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+            return self._build_enrichment(data)
 
         except (json.JSONDecodeError, ValueError) as e:
             self.logger.warning(f"Failed to parse Perplexity response: {e}")
-            # Return empty enrichment with low confidence
-            return PerplexityEventEnrichment(overall_confidence=0.0)
+            # An unusable response is marked, not dressed up as an empty
+            # success: the acceptance gate refuses it and the caller records a
+            # failed attempt instead of marking the record validated.
+            return PerplexityEventEnrichment(
+                overall_confidence=0.0,
+                parse_failed=True,
+                failure_reason=f"unparseable response: {str(e)[:200]}",
+            )
+
+    def _build_enrichment(self, data: dict) -> PerplexityEventEnrichment:
+        """Build the model, discarding fields whose values are invalid.
+
+        One bad field (a fractional victim count, a confidence of "high") used
+        to fail the whole answer and throw away the valid facts beside it.
+        """
+        from pydantic import ValidationError
+
+        try:
+            return PerplexityEventEnrichment(**data)
+        except ValidationError as exc:
+            bad = {str(err["loc"][0]) for err in exc.errors() if err.get("loc")}
+            cleaned = {k: v for k, v in data.items() if k not in bad}
+            enrichment = PerplexityEventEnrichment(**cleaned)
+            enrichment.dropped_fields = sorted(bad)
+            self.logger.info("Dropped invalid Perplexity field(s): %s", ", ".join(sorted(bad)))
+            return enrichment
 
     @staticmethod
     def _repair_truncated_json(json_str: str) -> Optional[dict]:

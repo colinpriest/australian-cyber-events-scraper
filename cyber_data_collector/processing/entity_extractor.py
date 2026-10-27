@@ -80,10 +80,15 @@ class EntityExtractor:
         return enhanced_events
 
     async def _extract_entities_for_event(self, event: CyberEvent) -> CyberEvent:
-        text_content = f"{event.title} {event.description}"
-        for source in event.data_sources:
-            if source.content_snippet:
-                text_content += f" {source.content_snippet}"
+        if getattr(event, "evidence_basis", None) == "article" and getattr(event, "evidence_text", None):
+            # The persisted scraped article, not the discovery snippet: entities
+            # named only in a site menu must not become victims.
+            text_content = f"{event.title} {event.evidence_text}"
+        else:
+            text_content = f"{event.title} {event.description}"
+            for source in event.data_sources:
+                if source.content_snippet:
+                    text_content += f" {source.content_snippet}"
 
         request = EntityExtractionRequest(
             text_content=text_content[:2000],

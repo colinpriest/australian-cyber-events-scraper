@@ -421,14 +421,47 @@ Fields from Perplexity enrichment are only applied to the database when the per-
 | `attack_method` | `attack_method` | >= 0.6 |
 | `victim_count` | `records_affected` | >= 0.6 |
 
-Additionally, regardless of field-level confidence, every processed event receives:
+**Acceptance gate (since 2026-10).** An answer is judged before anything is
+written (`cyber_data_collector/processing/enrichment_gate.py`), fact by fact:
+
+| Rule | Fact rejected when |
+|------|--------------------|
+| Date | not a real ISO `YYYY-MM-DD`, after the day the record was discovered (or today), or before 1990-01-01 |
+| Confidence | not a finite number in [0, 1] (an invalid *overall* confidence rejects the whole answer) |
+| Count | not a non-negative whole number |
+| Attribution | the answer cites no real http(s) source **and** the value does not appear in the record's own persisted text |
+
+An answer with no fact left (empty, unparseable, or everything rejected) is a
+**failed attempt**, not a success. Only an accepted answer sets:
 
 | Column | Value |
 |--------|-------|
 | `perplexity_validated` | `TRUE` |
 | `perplexity_validated_at` | Current ISO timestamp |
-| `perplexity_enrichment_data` | Full JSON dump of enrichment result |
-| `data_source_reliability` | `0.85` |
+| `perplexity_enrichment_data` | JSON of the *accepted* facts, merged with any stored answer |
+| `data_source_reliability` | Computed: mean confidence of the accepted facts, averaged with the answer's overall confidence when reported; `NULL` if no accepted fact carries a confidence |
+| `perplexity_status` | `validated` |
+
+A new answer never replaces a stronger stored fact: a date, entity, actor,
+method or count is overwritten only by a strictly higher confidence, and facts
+the new answer omits are kept.
+
+**Evidence.** The prompt quotes the record's persisted article
+(`RawEvents.raw_content`, at least 200 characters) via
+`processing/record_evidence.py`. If scraping failed or stored too little, the
+prompt says so and labels the text as a snippet.
+
+**Retry and quarantine.** Each failed attempt increments
+`perplexity_attempt_count` and records `perplexity_last_attempt_at` and
+`perplexity_last_error`; the record stays in the queue (`perplexity_status =
+'retrying'`) and is tried again on the next run. After 3 failed attempts it is
+`quarantined`: it leaves the queue and is listed in the run summary.
+
+```bash
+python scripts/perplexity_backfill_events.py --report-quarantine
+python scripts/perplexity_backfill_events.py --release-quarantine   # try again
+python scripts/perplexity_backfill_events.py --requeue-empty        # old empty "validated" rows
+```
 
 ### 4.7 Rate Limiting and Retry Logic
 
@@ -442,7 +475,7 @@ Additionally, regardless of field-level confidence, every processed event receiv
 - **Perplexity sonar-pro** is chosen because it combines LLM reasoning with real-time web search, enabling it to verify claims against current authoritative sources. Unlike GPT-4o which relies on training data, Perplexity can access the latest articles and official statements.
 - **Per-field confidence thresholds** prevent low-quality data from overwriting existing (potentially correct) values. The 0.6 threshold means only data that Perplexity reports as moderately-to-highly confident is used.
 - **Storing the full enrichment JSON** (`perplexity_enrichment_data`) preserves all information for later re-analysis without requiring another API call.
-- **The 0.85 reliability score** for Perplexity-validated events reflects the high quality of multi-source-verified data while acknowledging that automated enrichment is not equivalent to manual expert review (which would score 1.0).
+- **Computed reliability, not a constant.** The original design stored 0.85 for every validated event, which also marked unparseable and empty answers as validated (95 rows by October 2026) and removed them from the retry queue. Reliability is now derived from the accepted facts, or left `NULL`.
 
 ---
 
