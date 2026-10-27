@@ -1,0 +1,21 @@
+prior_attack_type,next_attack_type,transitions,organisations,share_of_prior_type
+Data Breach,Data Breach,26,22,0.5909090909090909
+Data Breach,Denial of Service,3,3,0.06818181818181818
+Data Breach,Financial Fraud,1,1,0.022727272727272728
+Data Breach,Infrastructure Attack,1,1,0.022727272727272728
+Data Breach,Other,3,3,0.06818181818181818
+Data Breach,Phishing,2,2,0.045454545454545456
+Data Breach,Ransomware,4,4,0.09090909090909091
+Data Breach,State-Sponsored Attack,2,2,0.045454545454545456
+Data Breach,Supply Chain Attack,1,1,0.022727272727272728
+Data Breach,Vulnerability Exploit,1,1,0.022727272727272728
+Denial of Service,Data Breach,1,1,0.3333333333333333
+Denial of Service,State-Sponsored Attack,2,2,0.6666666666666666
+Financial Fraud,Data Breach,1,1,1.0
+Other,Data Breach,2,2,0.6666666666666666
+Other,Ransomware,1,1,0.3333333333333333
+Ransomware,Data Breach,3,3,0.75
+Ransomware,Ransomware,1,1,0.25
+State-Sponsored Attack,Data Breach,4,3,0.8
+State-Sponsored Attack,Other,1,1,0.2
+Vulnerability Exploit,Data Breach,1,1,1.0

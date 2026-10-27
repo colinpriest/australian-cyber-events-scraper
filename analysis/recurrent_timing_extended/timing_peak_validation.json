@@ -1,0 +1,20 @@
+{
+  "status": "pending",
+  "registered_on": "2026-10-27",
+  "validation_end": "2028-10-27",
+  "frozen_entities": 574,
+  "snapshot_cutoff": "2026-10-27",
+  "events_by_band": [
+    0,
+    0,
+    0
+  ],
+  "exposure_days_by_band": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "minimum_events": 20,
+  "one_sided_p_value": null,
+  "interpretation": "Conditional Poisson approximation for recorded incidents assumes independent Poisson counts. Current mutable records may have changed since registration; if the snapshot predates registration, unobserved intervening events may be missed."
+}

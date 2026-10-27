@@ -1,0 +1,5 @@
+scenario,status,decisions_applied,victim_attributions,incidents,entities,repeat_intervals_0_180,days_0_90,days_91_180,events_0_90,events_91_180,rate_0_90_per_100_years,rate_91_180_per_100_years,rate_ratio
+baseline,observed cohort,0,635,558,574,14,56281,51777,4,10,2.5959027025106165,7.054290515093574,2.7174710778917275
+active_same_overrides,evaluated,2,635,556,574,14,56296,51831,4,10,2.59521102742646,7.046941019852984,2.7153633925642953
+model_same_probability_ge_0.9,no applicable candidate decisions,0,635,558,574,14,56281,51777,4,10,2.5959027025106165,7.054290515093574,2.7174710778917275
+model_victim_probability_lt_0.5_excluded,evaluated,25,610,547,570,7,54062,49967,2,5,1.3512263697236506,3.6549122420797726,2.7048852242480037

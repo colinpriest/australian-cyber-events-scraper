@@ -1,0 +1,4030 @@
+{
+  "version": 1,
+  "registered_on": "2026-10-27",
+  "created_at": "2026-10-27T22:35:06.793706",
+  "validation_end": "2028-10-27",
+  "snapshot_cutoff": "2026-10-27",
+  "primary_contrast": "91-180 days vs combined 1-90 and 181-270 days; one-sided conditional Poisson approximation",
+  "minimum_events": 20,
+  "cohort": [
+    {
+      "entity_id": "1",
+      "anchor_date": "2019-12-12",
+      "anchor_ids": [
+        "f0304297-eb38-4307-a99f-8817b2320ff7"
+      ]
+    },
+    {
+      "entity_id": "4",
+      "anchor_date": "2019-05-17",
+      "anchor_ids": [
+        "48ba74fb-166a-4465-a28f-0a14f2009526"
+      ]
+    },
+    {
+      "entity_id": "5",
+      "anchor_date": "2025-06-01",
+      "anchor_ids": [
+        "29aec421-ae03-47cb-8c84-fe096cae8b2c"
+      ]
+    },
+    {
+      "entity_id": "8",
+      "anchor_date": "2020-05-05",
+      "anchor_ids": [
+        "342c599d-46e3-4982-9cbd-a704daac4fd2"
+      ]
+    },
+    {
+      "entity_id": "18",
+      "anchor_date": "2020-01-03",
+      "anchor_ids": [
+        "b74cc8c6-81b3-413c-b1d2-8b57329ecf4b"
+      ]
+    },
+    {
+      "entity_id": "31",
+      "anchor_date": "2019-12-31",
+      "anchor_ids": [
+        "8430bd30-329c-405b-936d-cedbee3cc346"
+      ]
+    },
+    {
+      "entity_id": "39",
+      "anchor_date": "2020-02-14",
+      "anchor_ids": [
+        "550e1cd3-534c-4fc4-99ea-c2c70c72edb1"
+      ]
+    },
+    {
+      "entity_id": "41",
+      "anchor_date": "2020-02-01",
+      "anchor_ids": [
+        "91c7d37f-3305-4db0-9cb0-caaa8bccbb80"
+      ]
+    },
+    {
+      "entity_id": "59",
+      "anchor_date": "2025-02-14",
+      "anchor_ids": [
+        "0362d1d4-c904-415e-910a-73c4a9ca4e8b"
+      ]
+    },
+    {
+      "entity_id": "62",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "a634f5c5-dc4e-4b17-9951-0dbbb51b8cf9"
+      ]
+    },
+    {
+      "entity_id": "63",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "a634f5c5-dc4e-4b17-9951-0dbbb51b8cf9"
+      ]
+    },
+    {
+      "entity_id": "64",
+      "anchor_date": "2025-07-01",
+      "anchor_ids": [
+        "0c8b6662-8335-4fbb-8c54-d5d2ac71f6a0"
+      ]
+    },
+    {
+      "entity_id": "73",
+      "anchor_date": "2024-04-01",
+      "anchor_ids": [
+        "61bdc563-e6ad-4946-b625-c7fef4e2fdef"
+      ]
+    },
+    {
+      "entity_id": "96",
+      "anchor_date": "2020-01-31",
+      "anchor_ids": [
+        "795c89b0-6a36-47d3-8852-9c05741894dd"
+      ]
+    },
+    {
+      "entity_id": "111",
+      "anchor_date": "2020-02-26",
+      "anchor_ids": [
+        "8a30f0de-9298-4bca-b7ad-3530af34e801"
+      ]
+    },
+    {
+      "entity_id": "112",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "330dd0ef-77f8-4af5-8d1a-1369b84eb64b"
+      ]
+    },
+    {
+      "entity_id": "116",
+      "anchor_date": "2020-03-01",
+      "anchor_ids": [
+        "92cef7e9-c345-4b8a-b227-b88e109d4209"
+      ]
+    },
+    {
+      "entity_id": "117",
+      "anchor_date": "2020-03-31",
+      "anchor_ids": [
+        "07d391be-d270-4e7e-82f4-5e9794eda5ab"
+      ]
+    },
+    {
+      "entity_id": "122",
+      "anchor_date": "2021-12-01",
+      "anchor_ids": [
+        "c2fdb00e-f9d3-4133-bc18-e59cc61c5c37"
+      ]
+    },
+    {
+      "entity_id": "126",
+      "anchor_date": "2020-03-15",
+      "anchor_ids": [
+        "43f38dea-75b9-414e-ae0a-eed456d71ea7"
+      ]
+    },
+    {
+      "entity_id": "133",
+      "anchor_date": "2021-11-01",
+      "anchor_ids": [
+        "8112a41b-f479-40a3-bb95-6d870ee8af01"
+      ]
+    },
+    {
+      "entity_id": "139",
+      "anchor_date": "2026-06-18",
+      "anchor_ids": [
+        "439d69f3-b09d-480c-b6cb-748eca9516e8"
+      ]
+    },
+    {
+      "entity_id": "160",
+      "anchor_date": "2024-01-01",
+      "anchor_ids": [
+        "c74e1a68-35ab-4404-8e79-4a532b60489b"
+      ]
+    },
+    {
+      "entity_id": "174",
+      "anchor_date": "2025-06-19",
+      "anchor_ids": [
+        "2ea1f1b2-c180-4706-a5e9-6b710449642e"
+      ]
+    },
+    {
+      "entity_id": "178",
+      "anchor_date": "2020-04-01",
+      "anchor_ids": [
+        "5e1ed459-9cfc-43a2-86eb-68c12a154005"
+      ]
+    },
+    {
+      "entity_id": "191",
+      "anchor_date": "2020-05-01",
+      "anchor_ids": [
+        "9cd5fd86-7e1b-4249-95cc-ac9ea47f97c3"
+      ]
+    },
+    {
+      "entity_id": "195",
+      "anchor_date": "2019-09-01",
+      "anchor_ids": [
+        "9f37056a-2e89-4e73-ab72-4306af906f68"
+      ]
+    },
+    {
+      "entity_id": "203",
+      "anchor_date": "2020-03-15",
+      "anchor_ids": [
+        "04500fc7-497d-4458-8fbd-1dc1ac73e55d"
+      ]
+    },
+    {
+      "entity_id": "204",
+      "anchor_date": "2020-05-16",
+      "anchor_ids": [
+        "2e76a5f8-6566-4f97-8f63-789ecb487f93"
+      ]
+    },
+    {
+      "entity_id": "217",
+      "anchor_date": "2026-01-01",
+      "anchor_ids": [
+        "ca363e13-46cf-4172-b305-a8504efba960"
+      ]
+    },
+    {
+      "entity_id": "239",
+      "anchor_date": "2020-05-01",
+      "anchor_ids": [
+        "9cd5fd86-7e1b-4249-95cc-ac9ea47f97c3"
+      ]
+    },
+    {
+      "entity_id": "248",
+      "anchor_date": "2019-09-01",
+      "anchor_ids": [
+        "23ab3eb4-f0f5-42a5-b957-f3b59f40db32"
+      ]
+    },
+    {
+      "entity_id": "251",
+      "anchor_date": "2021-12-01",
+      "anchor_ids": [
+        "de038a26-95c0-44f5-8fc0-f7929cc9f68c"
+      ]
+    },
+    {
+      "entity_id": "252",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "f39174e4-8f6d-4591-b20b-8564eadcbead"
+      ]
+    },
+    {
+      "entity_id": "258",
+      "anchor_date": "2020-06-08",
+      "anchor_ids": [
+        "cdccd4d5-0060-484f-8003-b9c40bcbac51"
+      ]
+    },
+    {
+      "entity_id": "264",
+      "anchor_date": "2020-06-03",
+      "anchor_ids": [
+        "9df933e9-a6e8-46f9-b027-ff77af6b4fa0"
+      ]
+    },
+    {
+      "entity_id": "283",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "fa86e167-c16f-46a1-842d-23bd3cf2132c"
+      ]
+    },
+    {
+      "entity_id": "286",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "5a2f61c5-45da-44e9-bc40-45153d5af85d"
+      ]
+    },
+    {
+      "entity_id": "311",
+      "anchor_date": "2020-06-15",
+      "anchor_ids": [
+        "519e3671-d272-487f-aec0-b9e115d4b8c8"
+      ]
+    },
+    {
+      "entity_id": "317",
+      "anchor_date": "2012-01-01",
+      "anchor_ids": [
+        "1e9a1cfe-8599-46c9-beda-c7c9f18100eb"
+      ]
+    },
+    {
+      "entity_id": "330",
+      "anchor_date": "2020-06-15",
+      "anchor_ids": [
+        "40845d24-dcbe-4507-9998-beeb538ec99a"
+      ]
+    },
+    {
+      "entity_id": "337",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "80303c02-94d6-46d9-8345-648b025d7a60"
+      ]
+    },
+    {
+      "entity_id": "339",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "80303c02-94d6-46d9-8345-648b025d7a60"
+      ]
+    },
+    {
+      "entity_id": "349",
+      "anchor_date": "2020-07-01",
+      "anchor_ids": [
+        "938493fc-1f43-43db-8879-516c880d43a0"
+      ]
+    },
+    {
+      "entity_id": "353",
+      "anchor_date": "2022-08-15",
+      "anchor_ids": [
+        "e735390c-ae15-4f03-b582-6e769c61aee0"
+      ]
+    },
+    {
+      "entity_id": "354",
+      "anchor_date": "2020-01-01",
+      "anchor_ids": [
+        "fd4ff67b-b99a-48e0-bf8d-351bbe0c832f"
+      ]
+    },
+    {
+      "entity_id": "357",
+      "anchor_date": "2022-02-01",
+      "anchor_ids": [
+        "48da8173-df10-4c5b-a056-c83ac91be69a"
+      ]
+    },
+    {
+      "entity_id": "358",
+      "anchor_date": "2025-10-16",
+      "anchor_ids": [
+        "caae55c5-3ca8-4a9f-9a5e-e8907178b2c8"
+      ]
+    },
+    {
+      "entity_id": "360",
+      "anchor_date": "2020-07-23",
+      "anchor_ids": [
+        "24f9cc09-05ad-4f31-a891-87909a3bef2f"
+      ]
+    },
+    {
+      "entity_id": "368",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "369",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "370",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "371",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "372",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "373",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "374",
+      "anchor_date": "2020-06-27",
+      "anchor_ids": [
+        "078ee33c-7f1b-4dbe-a7f3-519cb0086840"
+      ]
+    },
+    {
+      "entity_id": "382",
+      "anchor_date": "2026-04-25",
+      "anchor_ids": [
+        "b5698d4f-528b-4133-8090-b5f55c0589c3"
+      ]
+    },
+    {
+      "entity_id": "383",
+      "anchor_date": "2025-01-01",
+      "anchor_ids": [
+        "d9212e6b-cbeb-4102-b0c7-808b1b8b6d03"
+      ]
+    },
+    {
+      "entity_id": "384",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "385",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "386",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "387",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "388",
+      "anchor_date": "2024-08-30",
+      "anchor_ids": [
+        "80586c96-5038-4e0e-aa3b-b0efe71d976d"
+      ]
+    },
+    {
+      "entity_id": "389",
+      "anchor_date": "2026-05-28",
+      "anchor_ids": [
+        "65bc9e73-5abe-49f0-a7d5-452dd0f59866"
+      ]
+    },
+    {
+      "entity_id": "390",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "391",
+      "anchor_date": "2020-08-07",
+      "anchor_ids": [
+        "483f27b2-466e-452f-b09f-312dd04875a8"
+      ]
+    },
+    {
+      "entity_id": "396",
+      "anchor_date": "2016-12-01",
+      "anchor_ids": [
+        "8381684b-3d2e-4f22-80b4-e77b50c08f61"
+      ]
+    },
+    {
+      "entity_id": "407",
+      "anchor_date": "2020-08-01",
+      "anchor_ids": [
+        "ba561f0b-57e7-460f-946a-a9bb848b3040"
+      ]
+    },
+    {
+      "entity_id": "408",
+      "anchor_date": "2023-12-15",
+      "anchor_ids": [
+        "f0444ee7-84b5-4eb5-bc86-0def26122a54"
+      ]
+    },
+    {
+      "entity_id": "412",
+      "anchor_date": "2022-04-01",
+      "anchor_ids": [
+        "6251d12b-b6d2-41c3-a0af-9aa1f65d33fd"
+      ]
+    },
+    {
+      "entity_id": "416",
+      "anchor_date": "2022-02-15",
+      "anchor_ids": [
+        "8eb89166-3960-4e92-8b77-3ab54a64dc2e"
+      ]
+    },
+    {
+      "entity_id": "475",
+      "anchor_date": "2022-04-01",
+      "anchor_ids": [
+        "8df28686-0685-459a-8979-7488435c67ef"
+      ]
+    },
+    {
+      "entity_id": "497",
+      "anchor_date": "2020-07-01",
+      "anchor_ids": [
+        "559da594-19c5-46f9-a6c9-fed1c5c19886"
+      ]
+    },
+    {
+      "entity_id": "498",
+      "anchor_date": "2020-09-15",
+      "anchor_ids": [
+        "b0925b64-03bc-443b-a8ae-777fb58a05cf"
+      ]
+    },
+    {
+      "entity_id": "500",
+      "anchor_date": "2020-09-08",
+      "anchor_ids": [
+        "4ea36dad-b19f-4888-86a5-8ff508c8a58c"
+      ]
+    },
+    {
+      "entity_id": "516",
+      "anchor_date": "2020-09-01",
+      "anchor_ids": [
+        "4fd62bd1-7885-4bef-84a8-d54a7e31f52f"
+      ]
+    },
+    {
+      "entity_id": "528",
+      "anchor_date": "2019-09-01",
+      "anchor_ids": [
+        "9da2b74c-26a9-45cc-a59c-450dce071582"
+      ]
+    },
+    {
+      "entity_id": "537",
+      "anchor_date": "2020-08-31",
+      "anchor_ids": [
+        "3ba715e5-2009-45c5-8574-6e87795b5a3d"
+      ]
+    },
+    {
+      "entity_id": "571",
+      "anchor_date": "2020-10-15",
+      "anchor_ids": [
+        "fbad8b23-85e4-4334-bcfd-e4e9fc742154"
+      ]
+    },
+    {
+      "entity_id": "572",
+      "anchor_date": "2020-10-15",
+      "anchor_ids": [
+        "fbad8b23-85e4-4334-bcfd-e4e9fc742154"
+      ]
+    },
+    {
+      "entity_id": "583",
+      "anchor_date": "2020-09-28",
+      "anchor_ids": [
+        "df84b24c-4958-405c-a5d4-5e2ebb3c7ccc"
+      ]
+    },
+    {
+      "entity_id": "606",
+      "anchor_date": "2020-11-03",
+      "anchor_ids": [
+        "086a7a85-7d93-4341-a1a3-cbe3293886a3"
+      ]
+    },
+    {
+      "entity_id": "617",
+      "anchor_date": "2020-11-01",
+      "anchor_ids": [
+        "06724e6d-b252-4d58-8de6-31807fd1fdf0"
+      ]
+    },
+    {
+      "entity_id": "625",
+      "anchor_date": "2020-09-10",
+      "anchor_ids": [
+        "1f0044f3-6aa1-4871-ae8e-85a92155927b"
+      ]
+    },
+    {
+      "entity_id": "629",
+      "anchor_date": "2026-07-09",
+      "anchor_ids": [
+        "39d8a932-ede9-4fd9-aa61-c52a819f3432"
+      ]
+    },
+    {
+      "entity_id": "630",
+      "anchor_date": "2020-11-01",
+      "anchor_ids": [
+        "a771d1db-5fe8-4f1d-b092-d23ba4a7b750"
+      ]
+    },
+    {
+      "entity_id": "632",
+      "anchor_date": "2021-01-01",
+      "anchor_ids": [
+        "4c3761bf-cb7e-429f-a955-4d6e8680aa73"
+      ]
+    },
+    {
+      "entity_id": "639",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "32e6d426-694d-4be4-98cf-2672ce5b25fb"
+      ]
+    },
+    {
+      "entity_id": "642",
+      "anchor_date": "2020-11-15",
+      "anchor_ids": [
+        "2a1d6384-0a63-429b-96c6-26c8596aa9c2"
+      ]
+    },
+    {
+      "entity_id": "650",
+      "anchor_date": "2020-06-11",
+      "anchor_ids": [
+        "375c269c-70ce-4702-9950-41446e1e0da6"
+      ]
+    },
+    {
+      "entity_id": "653",
+      "anchor_date": "2020-12-01",
+      "anchor_ids": [
+        "240e0962-840b-4d38-9b79-63d9514fb8d4"
+      ]
+    },
+    {
+      "entity_id": "663",
+      "anchor_date": "2017-03-24",
+      "anchor_ids": [
+        "333cc4cb-dea7-413a-9e92-5ad259ffc000"
+      ]
+    },
+    {
+      "entity_id": "691",
+      "anchor_date": "2026-07-22",
+      "anchor_ids": [
+        "2db9044a-e329-4c15-a096-3d3d51c82f60"
+      ]
+    },
+    {
+      "entity_id": "698",
+      "anchor_date": "2023-01-30",
+      "anchor_ids": [
+        "79481f07-ff94-4b50-a9ba-f6711778f9c8"
+      ]
+    },
+    {
+      "entity_id": "701",
+      "anchor_date": "2026-07-01",
+      "anchor_ids": [
+        "3bc6c769-9006-4a92-b4f8-e8a508143fe0"
+      ]
+    },
+    {
+      "entity_id": "704",
+      "anchor_date": "2021-01-20",
+      "anchor_ids": [
+        "cfe21920-06d7-4824-b3ce-061a9c43fc02"
+      ]
+    },
+    {
+      "entity_id": "730",
+      "anchor_date": "2021-02-12",
+      "anchor_ids": [
+        "b7eb9cae-c633-4797-8f2b-a3467f0c66f8"
+      ]
+    },
+    {
+      "entity_id": "745",
+      "anchor_date": "2021-02-19",
+      "anchor_ids": [
+        "aabdd1ca-54c6-4fc1-8543-38b019c122f9"
+      ]
+    },
+    {
+      "entity_id": "765",
+      "anchor_date": "2021-06-15",
+      "anchor_ids": [
+        "bbf4a7ab-1d73-486f-a91c-9cfbca5bc77e"
+      ]
+    },
+    {
+      "entity_id": "766",
+      "anchor_date": "2021-02-19",
+      "anchor_ids": [
+        "5efecaac-18e6-447f-9950-1882b6d3881a"
+      ]
+    },
+    {
+      "entity_id": "774",
+      "anchor_date": "2021-03-27",
+      "anchor_ids": [
+        "adc51b29-8474-4782-84d0-7ca0c26a546b"
+      ]
+    },
+    {
+      "entity_id": "789",
+      "anchor_date": "2021-03-16",
+      "anchor_ids": [
+        "71a003a4-b1bf-46cd-9c73-13e35be0ae09"
+      ]
+    },
+    {
+      "entity_id": "790",
+      "anchor_date": "2021-03-27",
+      "anchor_ids": [
+        "adc51b29-8474-4782-84d0-7ca0c26a546b"
+      ]
+    },
+    {
+      "entity_id": "793",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "fa86e167-c16f-46a1-842d-23bd3cf2132c"
+      ]
+    },
+    {
+      "entity_id": "797",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "fa86e167-c16f-46a1-842d-23bd3cf2132c"
+      ]
+    },
+    {
+      "entity_id": "808",
+      "anchor_date": "2021-03-16",
+      "anchor_ids": [
+        "71a003a4-b1bf-46cd-9c73-13e35be0ae09"
+      ]
+    },
+    {
+      "entity_id": "826",
+      "anchor_date": "2021-03-16",
+      "anchor_ids": [
+        "71a003a4-b1bf-46cd-9c73-13e35be0ae09"
+      ]
+    },
+    {
+      "entity_id": "834",
+      "anchor_date": "2025-06-30",
+      "anchor_ids": [
+        "4c366690-2c6b-46b1-8e8b-b1564fed4b8d"
+      ]
+    },
+    {
+      "entity_id": "840",
+      "anchor_date": "2021-04-25",
+      "anchor_ids": [
+        "e7d541b7-341d-4024-904c-3f5d6a3f8a7a"
+      ]
+    },
+    {
+      "entity_id": "855",
+      "anchor_date": "2021-01-01",
+      "anchor_ids": [
+        "b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54"
+      ]
+    },
+    {
+      "entity_id": "862",
+      "anchor_date": "2021-04-20",
+      "anchor_ids": [
+        "be90addc-7fe6-4af4-ae74-a9c9abb9686e"
+      ]
+    },
+    {
+      "entity_id": "869",
+      "anchor_date": "2021-04-03",
+      "anchor_ids": [
+        "13796692-c5bf-4335-ac01-78dcaa623694"
+      ]
+    },
+    {
+      "entity_id": "874",
+      "anchor_date": "2021-04-01",
+      "anchor_ids": [
+        "90fa2628-5ea4-4041-8280-b4ace7db1a87"
+      ]
+    },
+    {
+      "entity_id": "897",
+      "anchor_date": "2021-05-01",
+      "anchor_ids": [
+        "8e1a04c8-0262-4be8-858d-97fc9431ebd2"
+      ]
+    },
+    {
+      "entity_id": "900",
+      "anchor_date": "2021-05-17",
+      "anchor_ids": [
+        "cac59f6a-6913-4baa-a569-798445640bb5"
+      ]
+    },
+    {
+      "entity_id": "912",
+      "anchor_date": "2021-02-01",
+      "anchor_ids": [
+        "38e526c7-c627-400b-a42a-e06526805562"
+      ]
+    },
+    {
+      "entity_id": "923",
+      "anchor_date": "2021-03-19",
+      "anchor_ids": [
+        "701a425a-22c4-4ffa-815a-5da8e7a7c809"
+      ]
+    },
+    {
+      "entity_id": "958",
+      "anchor_date": "2021-06-15",
+      "anchor_ids": [
+        "4b7a1d78-106a-40c3-90ae-64a972f4dddf"
+      ]
+    },
+    {
+      "entity_id": "969",
+      "anchor_date": "2021-02-01",
+      "anchor_ids": [
+        "38e526c7-c627-400b-a42a-e06526805562"
+      ]
+    },
+    {
+      "entity_id": "982",
+      "anchor_date": "2021-07-07",
+      "anchor_ids": [
+        "9a001bce-19a2-4fec-8965-5e9e20405db0"
+      ]
+    },
+    {
+      "entity_id": "994",
+      "anchor_date": "2025-04-10",
+      "anchor_ids": [
+        "97922245-6359-4477-9d7e-6214943309ff"
+      ]
+    },
+    {
+      "entity_id": "999",
+      "anchor_date": "2025-03-24",
+      "anchor_ids": [
+        "cb302a11-7d5b-4761-a06f-6caecbbaea86"
+      ]
+    },
+    {
+      "entity_id": "1037",
+      "anchor_date": "2021-10-01",
+      "anchor_ids": [
+        "036fb79a-324c-4545-9df6-0e1af78c5371"
+      ]
+    },
+    {
+      "entity_id": "1041",
+      "anchor_date": "2025-10-22",
+      "anchor_ids": [
+        "bcbb5f29-9be0-4705-b6ad-39c2842adad3"
+      ]
+    },
+    {
+      "entity_id": "1042",
+      "anchor_date": "2021-10-06",
+      "anchor_ids": [
+        "29d31743-171a-4e1c-9fc1-43918bea2ace"
+      ]
+    },
+    {
+      "entity_id": "1048",
+      "anchor_date": "2021-04-01",
+      "anchor_ids": [
+        "90fa2628-5ea4-4041-8280-b4ace7db1a87"
+      ]
+    },
+    {
+      "entity_id": "1066",
+      "anchor_date": "2021-11-27",
+      "anchor_ids": [
+        "c16aee42-3608-4600-a5c2-0fb760be0c1f"
+      ]
+    },
+    {
+      "entity_id": "1068",
+      "anchor_date": "2020-08-01",
+      "anchor_ids": [
+        "76490f42-eb9f-4e22-9c14-66ae444aec52"
+      ]
+    },
+    {
+      "entity_id": "1071",
+      "anchor_date": "2018-01-01",
+      "anchor_ids": [
+        "119bfaa4-2e76-4ce3-98e5-a8537f70b9b6"
+      ]
+    },
+    {
+      "entity_id": "1073",
+      "anchor_date": "2021-11-01",
+      "anchor_ids": [
+        "6069f32f-e657-43aa-a3a7-520a00699c51"
+      ]
+    },
+    {
+      "entity_id": "1081",
+      "anchor_date": "2021-09-06",
+      "anchor_ids": [
+        "6148875b-56da-4718-b34c-37389f42896a"
+      ]
+    },
+    {
+      "entity_id": "1107",
+      "anchor_date": "2021-11-19",
+      "anchor_ids": [
+        "c4e9be98-2ebd-410e-a263-5955ea2b2b57"
+      ]
+    },
+    {
+      "entity_id": "1155",
+      "anchor_date": "2024-10-01",
+      "anchor_ids": [
+        "84c30c63-2e05-4708-a1d7-50285d0091ea"
+      ]
+    },
+    {
+      "entity_id": "1159",
+      "anchor_date": "2023-07-15",
+      "anchor_ids": [
+        "c60d84a9-469e-46fa-b159-267b488637fa"
+      ]
+    },
+    {
+      "entity_id": "1221",
+      "anchor_date": "2018-11-01",
+      "anchor_ids": [
+        "1a5f2a82-3985-4eb4-b1aa-bfb62d4a77dc"
+      ]
+    },
+    {
+      "entity_id": "1241",
+      "anchor_date": "2024-11-13",
+      "anchor_ids": [
+        "eae47143-1331-4d52-a739-aebf01874ec9"
+      ]
+    },
+    {
+      "entity_id": "1247",
+      "anchor_date": "2025-01-14",
+      "anchor_ids": [
+        "fce66253-ba8c-4083-b0c9-5a825fbe8a46"
+      ]
+    },
+    {
+      "entity_id": "1255",
+      "anchor_date": "2020-02-01",
+      "anchor_ids": [
+        "631cacff-36e6-48a3-a25d-553b1c22254a"
+      ]
+    },
+    {
+      "entity_id": "1284",
+      "anchor_date": "2022-02-25",
+      "anchor_ids": [
+        "c45385e4-796f-4ee7-88af-fa1cbe73a6da"
+      ]
+    },
+    {
+      "entity_id": "1288",
+      "anchor_date": "2022-08-07",
+      "anchor_ids": [
+        "21d1b49e-d2f2-4287-a48b-cfd463a94ea4"
+      ]
+    },
+    {
+      "entity_id": "1311",
+      "anchor_date": "2025-02-16",
+      "anchor_ids": [
+        "4821fce6-dba8-4ade-a70d-a0ccf226bbdf"
+      ]
+    },
+    {
+      "entity_id": "1324",
+      "anchor_date": "2022-03-01",
+      "anchor_ids": [
+        "af5a353f-353a-4b42-921f-3027d464280f"
+      ]
+    },
+    {
+      "entity_id": "1326",
+      "anchor_date": "2022-01-20",
+      "anchor_ids": [
+        "e7da1eb7-0bb4-4674-b680-25df939bc534"
+      ]
+    },
+    {
+      "entity_id": "1364",
+      "anchor_date": "2022-03-01",
+      "anchor_ids": [
+        "3f72d721-ccb9-4578-8925-393527418b9e"
+      ]
+    },
+    {
+      "entity_id": "1415",
+      "anchor_date": "2022-05-19",
+      "anchor_ids": [
+        "034ef136-888b-4060-8a45-9bfb97fa8d34"
+      ]
+    },
+    {
+      "entity_id": "1421",
+      "anchor_date": "2022-05-15",
+      "anchor_ids": [
+        "ebb8d0d6-5072-4967-a7fd-31deff79dcb8"
+      ]
+    },
+    {
+      "entity_id": "1429",
+      "anchor_date": "2022-05-04",
+      "anchor_ids": [
+        "18c7b1e4-fe88-4328-b947-23bb85513570"
+      ]
+    },
+    {
+      "entity_id": "1435",
+      "anchor_date": "2022-05-01",
+      "anchor_ids": [
+        "bce0194f-3bef-4755-98a4-27fbe13bd9f3"
+      ]
+    },
+    {
+      "entity_id": "1453",
+      "anchor_date": "2022-05-01",
+      "anchor_ids": [
+        "2e8a0631-060b-472e-a696-548cbd95ce41"
+      ]
+    },
+    {
+      "entity_id": "1477",
+      "anchor_date": "2022-06-01",
+      "anchor_ids": [
+        "0d6f7b45-f949-421b-8731-33fb5a72004a"
+      ]
+    },
+    {
+      "entity_id": "1484",
+      "anchor_date": "2022-10-01",
+      "anchor_ids": [
+        "f46824ae-3b60-4b50-b267-014c0e2985ba"
+      ]
+    },
+    {
+      "entity_id": "1486",
+      "anchor_date": "2022-05-10",
+      "anchor_ids": [
+        "aaddb6cb-adc0-46af-b541-95b5b7a2fd3f"
+      ]
+    },
+    {
+      "entity_id": "1495",
+      "anchor_date": "2022-07-10",
+      "anchor_ids": [
+        "999b3e4f-8307-4e6c-bce7-8ac84d542f76"
+      ]
+    },
+    {
+      "entity_id": "1502",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "f5c3de23-1e1c-4aa7-b2cd-da3617aa8b4f"
+      ]
+    },
+    {
+      "entity_id": "1504",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "f5c3de23-1e1c-4aa7-b2cd-da3617aa8b4f"
+      ]
+    },
+    {
+      "entity_id": "1505",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "f5c3de23-1e1c-4aa7-b2cd-da3617aa8b4f"
+      ]
+    },
+    {
+      "entity_id": "1507",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "f5c3de23-1e1c-4aa7-b2cd-da3617aa8b4f"
+      ]
+    },
+    {
+      "entity_id": "1508",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "f5c3de23-1e1c-4aa7-b2cd-da3617aa8b4f"
+      ]
+    },
+    {
+      "entity_id": "1511",
+      "anchor_date": "2022-07-15",
+      "anchor_ids": [
+        "5616abcb-7942-4751-9a45-6b16d43eb520"
+      ]
+    },
+    {
+      "entity_id": "1525",
+      "anchor_date": "2022-07-05",
+      "anchor_ids": [
+        "dcc2ba57-4816-4809-9737-6f0b2e729ccf"
+      ]
+    },
+    {
+      "entity_id": "1529",
+      "anchor_date": "2023-11-01",
+      "anchor_ids": [
+        "d8f6d341-dd77-4e49-bf84-cf9f7196f9a2"
+      ]
+    },
+    {
+      "entity_id": "1581",
+      "anchor_date": "2022-08-01",
+      "anchor_ids": [
+        "481ce5ea-9ab8-4126-b41d-45b82b990a17"
+      ]
+    },
+    {
+      "entity_id": "1692",
+      "anchor_date": "2021-03-27",
+      "anchor_ids": [
+        "adc51b29-8474-4782-84d0-7ca0c26a546b"
+      ]
+    },
+    {
+      "entity_id": "1695",
+      "anchor_date": "2026-07-23",
+      "anchor_ids": [
+        "f82c0e12-a93c-4485-8328-bf8c4009d1e5"
+      ]
+    },
+    {
+      "entity_id": "1779",
+      "anchor_date": "2022-10-14",
+      "anchor_ids": [
+        "9634e59b-4fb4-400a-bd4d-8c03e8002ab6"
+      ]
+    },
+    {
+      "entity_id": "1817",
+      "anchor_date": "2022-09-30",
+      "anchor_ids": [
+        "709da74d-15e5-4cfc-a541-de0677177ca1"
+      ]
+    },
+    {
+      "entity_id": "1818",
+      "anchor_date": "2023-08-24",
+      "anchor_ids": [
+        "f82d36f7-c8b2-46f1-9b7f-3ae7b4e80017"
+      ]
+    },
+    {
+      "entity_id": "1828",
+      "anchor_date": "2022-08-07",
+      "anchor_ids": [
+        "21d1b49e-d2f2-4287-a48b-cfd463a94ea4"
+      ]
+    },
+    {
+      "entity_id": "1852",
+      "anchor_date": "2022-07-01",
+      "anchor_ids": [
+        "c60fa7ef-7b67-48cc-9469-a6d81ea10b2e"
+      ]
+    },
+    {
+      "entity_id": "1857",
+      "anchor_date": "2026-06-18",
+      "anchor_ids": [
+        "439d69f3-b09d-480c-b6cb-748eca9516e8"
+      ]
+    },
+    {
+      "entity_id": "1889",
+      "anchor_date": "2022-08-07",
+      "anchor_ids": [
+        "21d1b49e-d2f2-4287-a48b-cfd463a94ea4"
+      ]
+    },
+    {
+      "entity_id": "1922",
+      "anchor_date": "2022-10-24",
+      "anchor_ids": [
+        "6a6a01ca-9bf2-4d96-a858-d804d5924d35"
+      ]
+    },
+    {
+      "entity_id": "1929",
+      "anchor_date": "2022-10-01",
+      "anchor_ids": [
+        "e3979677-b6a7-4110-8453-af2e2a44fdea"
+      ]
+    },
+    {
+      "entity_id": "1930",
+      "anchor_date": "2026-01-14",
+      "anchor_ids": [
+        "907a8b68-cb73-4ad0-ae6b-de4747eedaed"
+      ]
+    },
+    {
+      "entity_id": "1936",
+      "anchor_date": "2022-08-07",
+      "anchor_ids": [
+        "21d1b49e-d2f2-4287-a48b-cfd463a94ea4"
+      ]
+    },
+    {
+      "entity_id": "1938",
+      "anchor_date": "2022-12-22",
+      "anchor_ids": [
+        "c0caf82d-93fb-431a-b6b7-1ea3936b9965"
+      ]
+    },
+    {
+      "entity_id": "1948",
+      "anchor_date": "2022-11-04",
+      "anchor_ids": [
+        "9718511e-c712-482e-8b89-663f3a39e3b3"
+      ]
+    },
+    {
+      "entity_id": "1954",
+      "anchor_date": "2022-11-03",
+      "anchor_ids": [
+        "7a7189d4-10e9-494a-84d9-8cd431cde8d3"
+      ]
+    },
+    {
+      "entity_id": "1970",
+      "anchor_date": "2022-11-03",
+      "anchor_ids": [
+        "69fa50aa-88a3-4722-bbb5-c1c4cca2b1ea"
+      ]
+    },
+    {
+      "entity_id": "1999",
+      "anchor_date": "2022-09-05",
+      "anchor_ids": [
+        "62d1712a-a3db-4547-a772-9476c2388244"
+      ]
+    },
+    {
+      "entity_id": "2006",
+      "anchor_date": "2022-12-15",
+      "anchor_ids": [
+        "6641ba39-9359-4ee5-869c-2f674a6ca071"
+      ]
+    },
+    {
+      "entity_id": "2018",
+      "anchor_date": "2022-12-09",
+      "anchor_ids": [
+        "54f0227c-5495-4f31-a008-6e474f835f0a"
+      ]
+    },
+    {
+      "entity_id": "2042",
+      "anchor_date": "2022-11-06",
+      "anchor_ids": [
+        "297cf903-60c2-48a0-a1a6-995c7f1d61ef"
+      ]
+    },
+    {
+      "entity_id": "2054",
+      "anchor_date": "2022-12-15",
+      "anchor_ids": [
+        "8ae252d0-5efd-4e3e-80ec-cf9b23d2d9db"
+      ]
+    },
+    {
+      "entity_id": "2080",
+      "anchor_date": "2023-01-10",
+      "anchor_ids": [
+        "4c8ffd29-fb18-47fd-886f-a17e8e84440b"
+      ]
+    },
+    {
+      "entity_id": "2106",
+      "anchor_date": "2023-01-11",
+      "anchor_ids": [
+        "44eb6ca8-c5ae-49b3-9063-4720cc5c0959"
+      ]
+    },
+    {
+      "entity_id": "2131",
+      "anchor_date": "2022-12-01",
+      "anchor_ids": [
+        "1886ad1f-a27e-455a-bee2-175d46bec37d"
+      ]
+    },
+    {
+      "entity_id": "2184",
+      "anchor_date": "2023-03-16",
+      "anchor_ids": [
+        "dfa1f7be-bc7a-4b84-8643-0e8b381a1311"
+      ]
+    },
+    {
+      "entity_id": "2214",
+      "anchor_date": "2026-01-14",
+      "anchor_ids": [
+        "907a8b68-cb73-4ad0-ae6b-de4747eedaed"
+      ]
+    },
+    {
+      "entity_id": "2229",
+      "anchor_date": "2023-03-13",
+      "anchor_ids": [
+        "25cc3127-02ec-4bb6-82c0-e25f88c51b26"
+      ]
+    },
+    {
+      "entity_id": "2233",
+      "anchor_date": "2022-09-12",
+      "anchor_ids": [
+        "67b5be9f-9075-4fe2-808f-4783b4341303"
+      ]
+    },
+    {
+      "entity_id": "2258",
+      "anchor_date": "2023-01-14",
+      "anchor_ids": [
+        "d3300559-23e1-495e-9ef3-5cd0f3b5f6d4"
+      ]
+    },
+    {
+      "entity_id": "2297",
+      "anchor_date": "2023-12-15",
+      "anchor_ids": [
+        "1ae787a2-a6e7-4487-acef-1bb67d028f53"
+      ]
+    },
+    {
+      "entity_id": "2371",
+      "anchor_date": "2023-03-01",
+      "anchor_ids": [
+        "2f193adf-19d1-4fed-83d1-77473ad0aad6"
+      ]
+    },
+    {
+      "entity_id": "2421",
+      "anchor_date": "2014-02-10",
+      "anchor_ids": [
+        "cc94aab4-4415-4f9a-b4b5-73ddbc98a8ac"
+      ]
+    },
+    {
+      "entity_id": "2434",
+      "anchor_date": "2023-03-07",
+      "anchor_ids": [
+        "ad0ccafe-a9e0-4091-9fb2-6a8dc72c0996"
+      ]
+    },
+    {
+      "entity_id": "2455",
+      "anchor_date": "2026-04-25",
+      "anchor_ids": [
+        "b5698d4f-528b-4133-8090-b5f55c0589c3"
+      ]
+    },
+    {
+      "entity_id": "2497",
+      "anchor_date": "2023-04-26",
+      "anchor_ids": [
+        "8d337f85-ac94-44c5-9ae0-667d7dc88270"
+      ]
+    },
+    {
+      "entity_id": "2513",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "77e555b7-86eb-48cb-8e39-c52841d76412"
+      ]
+    },
+    {
+      "entity_id": "2613",
+      "anchor_date": "2024-03-01",
+      "anchor_ids": [
+        "5733ce3e-3913-440c-a65b-b6b989068972"
+      ]
+    },
+    {
+      "entity_id": "2628",
+      "anchor_date": "2023-05-10",
+      "anchor_ids": [
+        "0481ced1-f0f6-49f2-88b3-eb49c2556c7d"
+      ]
+    },
+    {
+      "entity_id": "2643",
+      "anchor_date": "2023-05-01",
+      "anchor_ids": [
+        "3ee27739-5634-48b0-aad9-c86283142c77"
+      ]
+    },
+    {
+      "entity_id": "2704",
+      "anchor_date": "2023-05-19",
+      "anchor_ids": [
+        "a7b90b19-ee4f-47f3-9245-05590a10c27e"
+      ]
+    },
+    {
+      "entity_id": "2706",
+      "anchor_date": "2024-04-13",
+      "anchor_ids": [
+        "97d89918-0964-4bd8-bc2e-769eb515196c"
+      ]
+    },
+    {
+      "entity_id": "2755",
+      "anchor_date": "2023-06-10",
+      "anchor_ids": [
+        "adfd2605-6852-415e-9207-5828bc567cf9"
+      ]
+    },
+    {
+      "entity_id": "2760",
+      "anchor_date": "2023-06-01",
+      "anchor_ids": [
+        "0ec362dc-de70-44dc-bd2b-671f31379511"
+      ]
+    },
+    {
+      "entity_id": "2766",
+      "anchor_date": "2023-05-27",
+      "anchor_ids": [
+        "a95ca772-62da-4aec-b8e0-9753fec8b4d0"
+      ]
+    },
+    {
+      "entity_id": "2784",
+      "anchor_date": "2023-06-01",
+      "anchor_ids": [
+        "6adf6ee0-a20d-4da4-859d-ae0d395298a7"
+      ]
+    },
+    {
+      "entity_id": "2825",
+      "anchor_date": "2023-11-01",
+      "anchor_ids": [
+        "b79b5f11-ad26-42dd-a49c-e976cfa34ff5"
+      ]
+    },
+    {
+      "entity_id": "2837",
+      "anchor_date": "2023-07-04",
+      "anchor_ids": [
+        "76fad460-226a-49e1-9469-ce9918d11d0d"
+      ]
+    },
+    {
+      "entity_id": "2840",
+      "anchor_date": "2023-07-01",
+      "anchor_ids": [
+        "6b59b4c6-e286-482f-a47a-76d1c70a7990"
+      ]
+    },
+    {
+      "entity_id": "2907",
+      "anchor_date": "2023-08-10",
+      "anchor_ids": [
+        "874e5d47-3bda-45c8-ac0e-e4a06c56f73b"
+      ]
+    },
+    {
+      "entity_id": "2909",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "99658816-907e-4d5e-83ae-7b93c0e55ac6"
+      ]
+    },
+    {
+      "entity_id": "2920",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "33e52830-eede-48ae-890b-241785ed192b"
+      ]
+    },
+    {
+      "entity_id": "2926",
+      "anchor_date": "2023-08-18",
+      "anchor_ids": [
+        "c1e0d1c3-7ec4-481e-9827-d9f685b510aa"
+      ]
+    },
+    {
+      "entity_id": "2946",
+      "anchor_date": "2023-05-01",
+      "anchor_ids": [
+        "9f9e67df-f969-4385-8fb1-2677c4f78229"
+      ]
+    },
+    {
+      "entity_id": "2965",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "33e52830-eede-48ae-890b-241785ed192b"
+      ]
+    },
+    {
+      "entity_id": "2967",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "33e52830-eede-48ae-890b-241785ed192b"
+      ]
+    },
+    {
+      "entity_id": "2997",
+      "anchor_date": "2023-05-01",
+      "anchor_ids": [
+        "73bddbfe-f477-40aa-86c1-d1e2d88f5ae9"
+      ]
+    },
+    {
+      "entity_id": "3008",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "33e52830-eede-48ae-890b-241785ed192b"
+      ]
+    },
+    {
+      "entity_id": "3013",
+      "anchor_date": "2023-06-01",
+      "anchor_ids": [
+        "42c10955-eeac-4b28-999b-2acc1c46c81d"
+      ]
+    },
+    {
+      "entity_id": "3016",
+      "anchor_date": "2023-09-01",
+      "anchor_ids": [
+        "44378d79-a715-4d26-829b-033c408cdd56"
+      ]
+    },
+    {
+      "entity_id": "3071",
+      "anchor_date": "2024-05-15",
+      "anchor_ids": [
+        "0d953d53-b894-417c-9276-b173173d2bb0"
+      ]
+    },
+    {
+      "entity_id": "3187",
+      "anchor_date": "2023-10-06",
+      "anchor_ids": [
+        "31ebaa8f-ffeb-4b12-ab30-1b5cce068455"
+      ]
+    },
+    {
+      "entity_id": "3189",
+      "anchor_date": "2023-10-01",
+      "anchor_ids": [
+        "db43235f-9367-4076-be46-9b7852c5fcd9"
+      ]
+    },
+    {
+      "entity_id": "3214",
+      "anchor_date": "2023-10-05",
+      "anchor_ids": [
+        "ad805ca2-7bd7-49ee-a40a-19d4a256baa7"
+      ]
+    },
+    {
+      "entity_id": "3224",
+      "anchor_date": "2023-10-16",
+      "anchor_ids": [
+        "e0cb7db6-f302-428b-848b-57f37241fa4e"
+      ]
+    },
+    {
+      "entity_id": "3240",
+      "anchor_date": "2023-11-10",
+      "anchor_ids": [
+        "db19b7c9-3883-4f9d-9828-1ceac82eac23"
+      ]
+    },
+    {
+      "entity_id": "3254",
+      "anchor_date": "2019-11-01",
+      "anchor_ids": [
+        "731df64e-8e16-4d55-b8a5-2d79b08a03f0"
+      ]
+    },
+    {
+      "entity_id": "3314",
+      "anchor_date": "2023-11-01",
+      "anchor_ids": [
+        "a7e829e2-5cfb-4215-9c2e-2b518e9361b2"
+      ]
+    },
+    {
+      "entity_id": "3412",
+      "anchor_date": "2023-12-19",
+      "anchor_ids": [
+        "6f3a9368-734b-4b74-a45a-fceaeaf62203"
+      ]
+    },
+    {
+      "entity_id": "3417",
+      "anchor_date": "2023-12-02",
+      "anchor_ids": [
+        "503c59e3-88e2-453a-baa4-92508f68d422"
+      ]
+    },
+    {
+      "entity_id": "3431",
+      "anchor_date": "2023-12-01",
+      "anchor_ids": [
+        "88eb75ee-c7d8-4c3d-8541-1c6139bf2126"
+      ]
+    },
+    {
+      "entity_id": "3437",
+      "anchor_date": "2024-01-01",
+      "anchor_ids": [
+        "d66ed2bb-7d0e-422b-8be0-921f18185610"
+      ]
+    },
+    {
+      "entity_id": "3447",
+      "anchor_date": "2023-11-27",
+      "anchor_ids": [
+        "aff07d57-a59f-43a6-850f-95daa7ca8784"
+      ]
+    },
+    {
+      "entity_id": "3451",
+      "anchor_date": "2026-06-26",
+      "anchor_ids": [
+        "69112208-203d-472e-ae55-84b3bf584d1d"
+      ]
+    },
+    {
+      "entity_id": "3463",
+      "anchor_date": "2024-09-15",
+      "anchor_ids": [
+        "e2bda4ed-84e7-4a1c-9574-560aad2a2af5"
+      ]
+    },
+    {
+      "entity_id": "3495",
+      "anchor_date": "2023-12-02",
+      "anchor_ids": [
+        "66fe533f-fefb-443f-8e92-69c074e3f86f"
+      ]
+    },
+    {
+      "entity_id": "3548",
+      "anchor_date": "2021-10-01",
+      "anchor_ids": [
+        "44c1ade1-50d9-41d0-8a21-0efcf932c2e0"
+      ]
+    },
+    {
+      "entity_id": "3565",
+      "anchor_date": "2023-11-25",
+      "anchor_ids": [
+        "b816fac7-234e-410f-b69b-2678bc4a1912"
+      ]
+    },
+    {
+      "entity_id": "3580",
+      "anchor_date": "2023-11-22",
+      "anchor_ids": [
+        "62f6731c-e246-4d28-96ef-1fe0f27440dd"
+      ]
+    },
+    {
+      "entity_id": "3587",
+      "anchor_date": "2023-12-12",
+      "anchor_ids": [
+        "c98e9414-08d0-4d60-b172-a07ae395344c"
+      ]
+    },
+    {
+      "entity_id": "3599",
+      "anchor_date": "2023-11-01",
+      "anchor_ids": [
+        "92297337-b19a-43a2-b9e7-eb42032dc57c"
+      ]
+    },
+    {
+      "entity_id": "3607",
+      "anchor_date": "2023-11-22",
+      "anchor_ids": [
+        "cd37031d-7a06-4998-9044-1df0d4fa5e3a"
+      ]
+    },
+    {
+      "entity_id": "3620",
+      "anchor_date": "2026-07-30",
+      "anchor_ids": [
+        "0be09a7d-d558-4a1f-b4aa-ca5c88750451"
+      ]
+    },
+    {
+      "entity_id": "3638",
+      "anchor_date": "2024-01-08",
+      "anchor_ids": [
+        "f8534d52-f559-4be9-9fd2-3ae8799a3da3"
+      ]
+    },
+    {
+      "entity_id": "3650",
+      "anchor_date": "2023-12-27",
+      "anchor_ids": [
+        "3ba18e8b-e619-4e1f-87a5-391bc4452e64"
+      ]
+    },
+    {
+      "entity_id": "3713",
+      "anchor_date": "2022-03-26",
+      "anchor_ids": [
+        "4722f686-18c5-4243-8a78-a313e9311a35"
+      ]
+    },
+    {
+      "entity_id": "3789",
+      "anchor_date": "2024-01-22",
+      "anchor_ids": [
+        "b45d1d5d-9e80-4d61-aa3e-16835d09fbd4"
+      ]
+    },
+    {
+      "entity_id": "3793",
+      "anchor_date": "2024-02-18",
+      "anchor_ids": [
+        "00b578aa-ca07-465f-8cd1-1f310577efc5"
+      ]
+    },
+    {
+      "entity_id": "3798",
+      "anchor_date": "2023-12-31",
+      "anchor_ids": [
+        "75cac18d-e260-4771-8864-9469c4950757"
+      ]
+    },
+    {
+      "entity_id": "3807",
+      "anchor_date": "2023-11-14",
+      "anchor_ids": [
+        "e01ca9bb-d58a-4e67-8405-561dcaedcab0"
+      ]
+    },
+    {
+      "entity_id": "3811",
+      "anchor_date": "2024-02-12",
+      "anchor_ids": [
+        "6b4045a7-86b8-48ec-9d14-57e319da9611"
+      ]
+    },
+    {
+      "entity_id": "3820",
+      "anchor_date": "2024-02-29",
+      "anchor_ids": [
+        "b4374883-198b-4637-9478-f1cca6a00ec1"
+      ]
+    },
+    {
+      "entity_id": "3823",
+      "anchor_date": "2024-02-01",
+      "anchor_ids": [
+        "90792e6a-2a38-4546-9c28-d764b6777162"
+      ]
+    },
+    {
+      "entity_id": "3835",
+      "anchor_date": "2024-01-30",
+      "anchor_ids": [
+        "4d84c709-7542-4c02-b298-f366413488d0"
+      ]
+    },
+    {
+      "entity_id": "3838",
+      "anchor_date": "2024-02-18",
+      "anchor_ids": [
+        "00b578aa-ca07-465f-8cd1-1f310577efc5"
+      ]
+    },
+    {
+      "entity_id": "3845",
+      "anchor_date": "2025-07-01",
+      "anchor_ids": [
+        "0c8b6662-8335-4fbb-8c54-d5d2ac71f6a0"
+      ]
+    },
+    {
+      "entity_id": "3857",
+      "anchor_date": "2024-02-15",
+      "anchor_ids": [
+        "64469738-ff9b-4e20-a00f-2de132d777e0"
+      ]
+    },
+    {
+      "entity_id": "3863",
+      "anchor_date": "2024-01-24",
+      "anchor_ids": [
+        "c5356fc1-b790-46e5-9880-20b4d497203e"
+      ]
+    },
+    {
+      "entity_id": "3867",
+      "anchor_date": "2024-01-29",
+      "anchor_ids": [
+        "de63acd9-522a-480e-b8ef-25cf1fbcb273"
+      ]
+    },
+    {
+      "entity_id": "3887",
+      "anchor_date": "2023-04-01",
+      "anchor_ids": [
+        "4d5812d3-c976-4458-9d75-2c2e9edba6a5"
+      ]
+    },
+    {
+      "entity_id": "3906",
+      "anchor_date": "2023-09-28",
+      "anchor_ids": [
+        "a0e02265-dd6e-4812-a485-f14a71cd3482"
+      ]
+    },
+    {
+      "entity_id": "3914",
+      "anchor_date": "2025-03-29",
+      "anchor_ids": [
+        "5f077fd9-773d-4bb5-9239-d412c0c25208"
+      ]
+    },
+    {
+      "entity_id": "3918",
+      "anchor_date": "2025-03-29",
+      "anchor_ids": [
+        "4bbbdb62-e4b7-46c0-9525-8879cee974f7"
+      ]
+    },
+    {
+      "entity_id": "3927",
+      "anchor_date": "2024-04-29",
+      "anchor_ids": [
+        "4f5f4e37-3e38-474b-b5f6-e9872b838436"
+      ]
+    },
+    {
+      "entity_id": "3945",
+      "anchor_date": "2024-03-01",
+      "anchor_ids": [
+        "34da22ac-3831-43b4-adf1-870478f36344"
+      ]
+    },
+    {
+      "entity_id": "3991",
+      "anchor_date": "2024-03-01",
+      "anchor_ids": [
+        "32c9cbc4-2d32-4d06-b544-3e03302270b3"
+      ]
+    },
+    {
+      "entity_id": "4097",
+      "anchor_date": "2024-04-01",
+      "anchor_ids": [
+        "9e13136f-4b0c-441a-aac4-ea70549849ab"
+      ]
+    },
+    {
+      "entity_id": "4102",
+      "anchor_date": "2024-04-16",
+      "anchor_ids": [
+        "1749862e-23de-4bed-8043-314058f0f293"
+      ]
+    },
+    {
+      "entity_id": "4114",
+      "anchor_date": "2024-04-06",
+      "anchor_ids": [
+        "2ca32c66-39f6-45ca-b764-c22942bedc2d"
+      ]
+    },
+    {
+      "entity_id": "4117",
+      "anchor_date": "2024-04-12",
+      "anchor_ids": [
+        "2cd725b3-bc54-4f0b-adda-1d9aa485d892"
+      ]
+    },
+    {
+      "entity_id": "4133",
+      "anchor_date": "2024-04-08",
+      "anchor_ids": [
+        "85baecf7-fe2d-419c-9b98-d6a0fa79bcc9"
+      ]
+    },
+    {
+      "entity_id": "4141",
+      "anchor_date": "2024-04-01",
+      "anchor_ids": [
+        "2bf63674-3731-497a-838f-2b0119f7f9d5"
+      ]
+    },
+    {
+      "entity_id": "4142",
+      "anchor_date": "2024-02-01",
+      "anchor_ids": [
+        "07b55ec4-562d-4331-8a77-f699226e5e73"
+      ]
+    },
+    {
+      "entity_id": "4147",
+      "anchor_date": "2023-11-02",
+      "anchor_ids": [
+        "e05ed49b-0064-4a85-ba53-fe384a807ed2"
+      ]
+    },
+    {
+      "entity_id": "4184",
+      "anchor_date": "2024-03-29",
+      "anchor_ids": [
+        "eaf00cad-7c6d-48c7-8be8-f0b7b044e710"
+      ]
+    },
+    {
+      "entity_id": "4218",
+      "anchor_date": "2024-04-27",
+      "anchor_ids": [
+        "0b507238-23f0-4733-b597-0644d5489ea1"
+      ]
+    },
+    {
+      "entity_id": "4283",
+      "anchor_date": "2024-04-30",
+      "anchor_ids": [
+        "cb0f253f-ac0b-414a-bca8-23a39283a6ba"
+      ]
+    },
+    {
+      "entity_id": "4304",
+      "anchor_date": "2024-05-13",
+      "anchor_ids": [
+        "b1a25a58-538e-441f-bcf4-047d262c18ec"
+      ]
+    },
+    {
+      "entity_id": "4310",
+      "anchor_date": "2024-05-02",
+      "anchor_ids": [
+        "8bbd23c2-c8b9-4bfc-bab1-0ffa8941f62a"
+      ]
+    },
+    {
+      "entity_id": "4323",
+      "anchor_date": "2024-05-01",
+      "anchor_ids": [
+        "50cbb6fe-d833-4369-b1fc-de52c0dc4f96"
+      ]
+    },
+    {
+      "entity_id": "4329",
+      "anchor_date": "2024-09-01",
+      "anchor_ids": [
+        "9ecb03ce-0ac4-4d73-83c3-4ef069898036"
+      ]
+    },
+    {
+      "entity_id": "4343",
+      "anchor_date": "2024-05-01",
+      "anchor_ids": [
+        "dcc66dd1-9865-4bdd-a5b1-871bea0b559b"
+      ]
+    },
+    {
+      "entity_id": "4353",
+      "anchor_date": "2024-05-18",
+      "anchor_ids": [
+        "e7955d84-7d49-4e6c-b23f-040aff976d76"
+      ]
+    },
+    {
+      "entity_id": "4368",
+      "anchor_date": "2026-08-05",
+      "anchor_ids": [
+        "5677c5dd-31fb-434a-bcfc-a3f03c2501ae"
+      ]
+    },
+    {
+      "entity_id": "4386",
+      "anchor_date": "2024-05-20",
+      "anchor_ids": [
+        "89c0a567-dc0e-4a69-9b7b-17b46b447a1c"
+      ]
+    },
+    {
+      "entity_id": "4387",
+      "anchor_date": "2024-05-20",
+      "anchor_ids": [
+        "89c0a567-dc0e-4a69-9b7b-17b46b447a1c"
+      ]
+    },
+    {
+      "entity_id": "4437",
+      "anchor_date": "2024-05-11",
+      "anchor_ids": [
+        "70d00423-58a0-4641-9a9c-efe29c9cddd3"
+      ]
+    },
+    {
+      "entity_id": "4464",
+      "anchor_date": "2024-05-01",
+      "anchor_ids": [
+        "a8862fc9-791a-41cf-b73f-15bd659a1ab6"
+      ]
+    },
+    {
+      "entity_id": "4503",
+      "anchor_date": "2024-02-09",
+      "anchor_ids": [
+        "30449ec8-0ac7-44b6-a077-a3372299f10c"
+      ]
+    },
+    {
+      "entity_id": "4515",
+      "anchor_date": "2024-06-15",
+      "anchor_ids": [
+        "5d262786-f5c6-4b57-af10-3cc8d0e8d78b"
+      ]
+    },
+    {
+      "entity_id": "4516",
+      "anchor_date": "2024-06-15",
+      "anchor_ids": [
+        "5d262786-f5c6-4b57-af10-3cc8d0e8d78b"
+      ]
+    },
+    {
+      "entity_id": "4519",
+      "anchor_date": "2024-06-15",
+      "anchor_ids": [
+        "1e5a44e2-700e-4d8e-8ee2-99e105ca6929"
+      ]
+    },
+    {
+      "entity_id": "4523",
+      "anchor_date": "2024-06-01",
+      "anchor_ids": [
+        "7f39f3ad-01fb-45b5-9022-7194e6f4a320"
+      ]
+    },
+    {
+      "entity_id": "4588",
+      "anchor_date": "2024-06-06",
+      "anchor_ids": [
+        "92c0561f-806d-43ac-92bd-77528c1ae158"
+      ]
+    },
+    {
+      "entity_id": "4634",
+      "anchor_date": "2024-06-13",
+      "anchor_ids": [
+        "a70689f2-50bf-40a1-a21b-9b5b0855a756"
+      ]
+    },
+    {
+      "entity_id": "4637",
+      "anchor_date": "2024-03-01",
+      "anchor_ids": [
+        "d597ee9b-f7cf-43a2-a8b6-59ba7607c04a"
+      ]
+    },
+    {
+      "entity_id": "4640",
+      "anchor_date": "2024-05-26",
+      "anchor_ids": [
+        "b7238d7e-b112-4fe4-a13e-f7c86df76aae"
+      ]
+    },
+    {
+      "entity_id": "4656",
+      "anchor_date": "2024-07-12",
+      "anchor_ids": [
+        "5e822cdc-a41c-4a66-b570-bca6e1108466"
+      ]
+    },
+    {
+      "entity_id": "4680",
+      "anchor_date": "2024-07-15",
+      "anchor_ids": [
+        "c282cdcd-f3aa-4577-95c9-00ddabf5b915"
+      ]
+    },
+    {
+      "entity_id": "4691",
+      "anchor_date": "2024-07-14",
+      "anchor_ids": [
+        "be4d64e9-d2f4-4819-b8f2-85350024791f"
+      ]
+    },
+    {
+      "entity_id": "4718",
+      "anchor_date": "2024-06-25",
+      "anchor_ids": [
+        "a20d5bcb-56e5-4fc9-bd88-74de74a008ba"
+      ]
+    },
+    {
+      "entity_id": "4765",
+      "anchor_date": "2024-07-01",
+      "anchor_ids": [
+        "a355dbbe-0dbb-4d58-bce4-2cf4a1ef5b2c"
+      ]
+    },
+    {
+      "entity_id": "4796",
+      "anchor_date": "2024-07-15",
+      "anchor_ids": [
+        "5dc81d45-ac4b-480b-bd3b-de632532b412"
+      ]
+    },
+    {
+      "entity_id": "4808",
+      "anchor_date": "2024-08-08",
+      "anchor_ids": [
+        "c70d5873-197c-449c-b462-634cbed2ad60"
+      ]
+    },
+    {
+      "entity_id": "4814",
+      "anchor_date": "2024-07-05",
+      "anchor_ids": [
+        "bcd3537a-0cbd-48cd-a76a-a9ebedd10974"
+      ]
+    },
+    {
+      "entity_id": "4816",
+      "anchor_date": "2024-08-21",
+      "anchor_ids": [
+        "66421da3-e06c-4548-a3c4-aed19d3e9e9c"
+      ]
+    },
+    {
+      "entity_id": "4818",
+      "anchor_date": "2024-08-04",
+      "anchor_ids": [
+        "7290104d-2453-4473-9bb0-7c13925b3911"
+      ]
+    },
+    {
+      "entity_id": "4825",
+      "anchor_date": "2024-07-24",
+      "anchor_ids": [
+        "418a7c95-3aee-4854-828e-127d1cce4433"
+      ]
+    },
+    {
+      "entity_id": "4826",
+      "anchor_date": "2024-07-01",
+      "anchor_ids": [
+        "03795129-e215-4923-93eb-811f41fb15a2"
+      ]
+    },
+    {
+      "entity_id": "4830",
+      "anchor_date": "2024-07-21",
+      "anchor_ids": [
+        "49ecd541-7f72-4d34-a4b1-95128f3a8414"
+      ]
+    },
+    {
+      "entity_id": "4834",
+      "anchor_date": "2024-08-26",
+      "anchor_ids": [
+        "9686d45a-f58d-4a38-865e-3f9222d1caba"
+      ]
+    },
+    {
+      "entity_id": "4849",
+      "anchor_date": "2024-03-01",
+      "anchor_ids": [
+        "13a12ba8-8aa5-415c-afe4-4d030e222407"
+      ]
+    },
+    {
+      "entity_id": "4852",
+      "anchor_date": "2024-07-01",
+      "anchor_ids": [
+        "c5de9182-29d7-423a-b474-14365827b68f"
+      ]
+    },
+    {
+      "entity_id": "4908",
+      "anchor_date": "2024-08-25",
+      "anchor_ids": [
+        "f7e36d3d-2a10-46cb-87a3-d2696a7cbe5f"
+      ]
+    },
+    {
+      "entity_id": "4922",
+      "anchor_date": "2025-03-29",
+      "anchor_ids": [
+        "596781b4-ced0-4e92-8d0c-0b161c4b6fa7"
+      ]
+    },
+    {
+      "entity_id": "4930",
+      "anchor_date": "2024-08-15",
+      "anchor_ids": [
+        "f7818274-a92a-4200-8af9-d38b2fbed8eb"
+      ]
+    },
+    {
+      "entity_id": "4978",
+      "anchor_date": "2024-09-12",
+      "anchor_ids": [
+        "44278a7f-78be-4f4b-a1cd-0f4b55a2ca27"
+      ]
+    },
+    {
+      "entity_id": "4983",
+      "anchor_date": "2024-09-15",
+      "anchor_ids": [
+        "97aeea43-b5b6-45f5-8e1a-92d6f3a6f4f7"
+      ]
+    },
+    {
+      "entity_id": "4990",
+      "anchor_date": "2024-09-01",
+      "anchor_ids": [
+        "e0365cc8-be97-424c-8e4f-394fe4097309"
+      ]
+    },
+    {
+      "entity_id": "4997",
+      "anchor_date": "2023-09-01",
+      "anchor_ids": [
+        "4053cb99-d5ed-4c6b-b9da-5d3bf75bdc01"
+      ]
+    },
+    {
+      "entity_id": "5019",
+      "anchor_date": "2024-08-30",
+      "anchor_ids": [
+        "cfe2c811-5e83-469b-b15e-7a1c084592c7"
+      ]
+    },
+    {
+      "entity_id": "5022",
+      "anchor_date": "2024-09-18",
+      "anchor_ids": [
+        "3ae2a482-178e-470f-854d-ecd265a13323"
+      ]
+    },
+    {
+      "entity_id": "5030",
+      "anchor_date": "2024-09-17",
+      "anchor_ids": [
+        "c5906d2d-050a-4b1e-86f9-f1fd95a6ade8"
+      ]
+    },
+    {
+      "entity_id": "5041",
+      "anchor_date": "2024-08-03",
+      "anchor_ids": [
+        "55109202-d1a2-4dda-b411-728f54037083"
+      ]
+    },
+    {
+      "entity_id": "5090",
+      "anchor_date": "2024-09-28",
+      "anchor_ids": [
+        "9b5e67ac-93a6-4858-b5e8-78d8bdca241c"
+      ]
+    },
+    {
+      "entity_id": "5109",
+      "anchor_date": "2024-09-29",
+      "anchor_ids": [
+        "1537b298-47ab-40d9-b3c4-26dc5ede4217"
+      ]
+    },
+    {
+      "entity_id": "5116",
+      "anchor_date": "2024-10-09",
+      "anchor_ids": [
+        "26ea608a-4886-439c-ae7f-f0d51d055974"
+      ]
+    },
+    {
+      "entity_id": "5120",
+      "anchor_date": "2024-10-15",
+      "anchor_ids": [
+        "a5c5124d-2460-4952-9c01-81dc5e5447e9"
+      ]
+    },
+    {
+      "entity_id": "5124",
+      "anchor_date": "2024-09-13",
+      "anchor_ids": [
+        "dd254d96-66b1-4404-b247-ba6d4abd2d72"
+      ]
+    },
+    {
+      "entity_id": "5133",
+      "anchor_date": "2024-09-20",
+      "anchor_ids": [
+        "0ac88646-6155-49cb-9436-eaea62662882"
+      ]
+    },
+    {
+      "entity_id": "5135",
+      "anchor_date": "2024-09-20",
+      "anchor_ids": [
+        "05e6cb89-1197-48e3-b381-cffb494ea031"
+      ]
+    },
+    {
+      "entity_id": "5138",
+      "anchor_date": "2024-10-18",
+      "anchor_ids": [
+        "e1811981-c695-467e-8b6e-b5a2c2ce5f09"
+      ]
+    },
+    {
+      "entity_id": "5146",
+      "anchor_date": "2024-05-13",
+      "anchor_ids": [
+        "50e7cf69-e97a-493b-824d-9ed0c75cfbfb"
+      ]
+    },
+    {
+      "entity_id": "5152",
+      "anchor_date": "2024-10-01",
+      "anchor_ids": [
+        "9c6535de-4196-4c23-aab0-fc7be7ab9795"
+      ]
+    },
+    {
+      "entity_id": "5168",
+      "anchor_date": "2025-08-29",
+      "anchor_ids": [
+        "8384cd46-1678-494e-846b-49963b4da80d"
+      ]
+    },
+    {
+      "entity_id": "5188",
+      "anchor_date": "2021-08-27",
+      "anchor_ids": [
+        "e7b08df9-24c1-4b7a-8796-539d6d75f5f4"
+      ]
+    },
+    {
+      "entity_id": "5191",
+      "anchor_date": "2024-09-15",
+      "anchor_ids": [
+        "90d95ed0-1997-4d60-93aa-31ff31f9ff2f"
+      ]
+    },
+    {
+      "entity_id": "5205",
+      "anchor_date": "2024-10-15",
+      "anchor_ids": [
+        "424ea4a8-a698-429a-b39a-32b88fcf6785"
+      ]
+    },
+    {
+      "entity_id": "5217",
+      "anchor_date": "2024-10-28",
+      "anchor_ids": [
+        "088b594e-5f80-4318-98a9-002cd2072272"
+      ]
+    },
+    {
+      "entity_id": "5239",
+      "anchor_date": "2024-01-01",
+      "anchor_ids": [
+        "690c6ded-317b-4e2d-9b48-73a902c5d8b0"
+      ]
+    },
+    {
+      "entity_id": "5243",
+      "anchor_date": "2024-09-28",
+      "anchor_ids": [
+        "69a7362d-541a-481b-89ec-ace8d9bf28cc"
+      ]
+    },
+    {
+      "entity_id": "5248",
+      "anchor_date": "2024-11-01",
+      "anchor_ids": [
+        "ccfcb826-2af2-4187-9122-125844c67690"
+      ]
+    },
+    {
+      "entity_id": "5254",
+      "anchor_date": "2024-11-02",
+      "anchor_ids": [
+        "f5789f0e-ba82-4580-8e61-740a4d7d31cc"
+      ]
+    },
+    {
+      "entity_id": "5269",
+      "anchor_date": "2024-11-01",
+      "anchor_ids": [
+        "d950485b-7e0f-4bc4-9b03-48acf117e578"
+      ]
+    },
+    {
+      "entity_id": "5282",
+      "anchor_date": "2024-11-03",
+      "anchor_ids": [
+        "ecfc3f15-39b0-434e-8a8f-8c277909a1cd"
+      ]
+    },
+    {
+      "entity_id": "5289",
+      "anchor_date": "2018-11-01",
+      "anchor_ids": [
+        "1a5f2a82-3985-4eb4-b1aa-bfb62d4a77dc"
+      ]
+    },
+    {
+      "entity_id": "5339",
+      "anchor_date": "2024-12-10",
+      "anchor_ids": [
+        "012c5958-9394-400f-9241-415e3ff5708a"
+      ]
+    },
+    {
+      "entity_id": "5364",
+      "anchor_date": "2024-12-11",
+      "anchor_ids": [
+        "bcdc7447-a168-43d6-8d84-8515ac35f497"
+      ]
+    },
+    {
+      "entity_id": "5372",
+      "anchor_date": "2013-11-02",
+      "anchor_ids": [
+        "8988b819-8900-4e6b-a1d1-b74cda5f34e3"
+      ]
+    },
+    {
+      "entity_id": "5387",
+      "anchor_date": "2024-12-19",
+      "anchor_ids": [
+        "c1e360b9-86b3-471e-9f5c-32ee97879220"
+      ]
+    },
+    {
+      "entity_id": "5390",
+      "anchor_date": "2025-01-27",
+      "anchor_ids": [
+        "cef1cdbc-e49b-4de0-8d8a-941df2ae870d"
+      ]
+    },
+    {
+      "entity_id": "5412",
+      "anchor_date": "2025-01-19",
+      "anchor_ids": [
+        "9a7ff884-a6e3-4cad-9798-7a8d78988f69"
+      ]
+    },
+    {
+      "entity_id": "5415",
+      "anchor_date": "2025-11-01",
+      "anchor_ids": [
+        "a2dbf026-e41e-49e5-bf12-0e6cdcce4b79"
+      ]
+    },
+    {
+      "entity_id": "5433",
+      "anchor_date": "2025-01-14",
+      "anchor_ids": [
+        "72ca0947-6cf7-41a3-9aeb-62f041997cb4"
+      ]
+    },
+    {
+      "entity_id": "5446",
+      "anchor_date": "2024-12-24",
+      "anchor_ids": [
+        "c640c6f1-24a6-45e2-9414-87ecd58653b3"
+      ]
+    },
+    {
+      "entity_id": "5454",
+      "anchor_date": "2025-01-01",
+      "anchor_ids": [
+        "a855f275-ff41-4581-b630-cfd8f72c7e35"
+      ]
+    },
+    {
+      "entity_id": "5464",
+      "anchor_date": "2025-02-25",
+      "anchor_ids": [
+        "54bd2f35-2f84-4269-8c6c-1f49f015c79e"
+      ]
+    },
+    {
+      "entity_id": "5466",
+      "anchor_date": "2025-01-09",
+      "anchor_ids": [
+        "e45f3cf4-77dd-4b39-9d0d-d8b40e3610ba"
+      ]
+    },
+    {
+      "entity_id": "5472",
+      "anchor_date": "2024-12-04",
+      "anchor_ids": [
+        "f015d9c2-3399-4edc-92ca-9ab67bd53545"
+      ]
+    },
+    {
+      "entity_id": "5476",
+      "anchor_date": "2024-11-26",
+      "anchor_ids": [
+        "1f09c2f7-0aab-4b99-9ffc-57d5cef6d11c"
+      ]
+    },
+    {
+      "entity_id": "5479",
+      "anchor_date": "2025-01-13",
+      "anchor_ids": [
+        "62e41129-5667-4a8b-842d-548a8d364692"
+      ]
+    },
+    {
+      "entity_id": "5483",
+      "anchor_date": "2025-01-13",
+      "anchor_ids": [
+        "62e41129-5667-4a8b-842d-548a8d364692"
+      ]
+    },
+    {
+      "entity_id": "5493",
+      "anchor_date": "2025-01-22",
+      "anchor_ids": [
+        "7e21399e-68c8-4fcb-87e4-e318448e9b1f"
+      ]
+    },
+    {
+      "entity_id": "5573",
+      "anchor_date": "2025-02-01",
+      "anchor_ids": [
+        "a9c68923-a93a-4b74-a29c-a8c118dd4a15"
+      ]
+    },
+    {
+      "entity_id": "5618",
+      "anchor_date": "2025-02-15",
+      "anchor_ids": [
+        "d2d7894c-96c9-49a9-9287-f96056d795a5"
+      ]
+    },
+    {
+      "entity_id": "5632",
+      "anchor_date": "2025-01-30",
+      "anchor_ids": [
+        "3d704b64-88ea-4eaf-8882-6bdf4b2a4be9"
+      ]
+    },
+    {
+      "entity_id": "5638",
+      "anchor_date": "2025-03-01",
+      "anchor_ids": [
+        "0b3f850f-339c-419e-98ec-4f34063cd094"
+      ]
+    },
+    {
+      "entity_id": "5651",
+      "anchor_date": "2025-03-15",
+      "anchor_ids": [
+        "55ecf218-aab5-4cbd-a1db-2a46b6ceb62e"
+      ]
+    },
+    {
+      "entity_id": "5693",
+      "anchor_date": "2025-02-15",
+      "anchor_ids": [
+        "0ea87427-4ee7-45ae-a373-af7cf03696f1"
+      ]
+    },
+    {
+      "entity_id": "5696",
+      "anchor_date": "2025-02-01",
+      "anchor_ids": [
+        "2f373046-1a18-4864-a383-77aca5b9f9e6"
+      ]
+    },
+    {
+      "entity_id": "5700",
+      "anchor_date": "2025-03-01",
+      "anchor_ids": [
+        "c310fe7d-4390-4ac6-93b1-f66e3484caee"
+      ]
+    },
+    {
+      "entity_id": "5703",
+      "anchor_date": "2025-03-18",
+      "anchor_ids": [
+        "be931ffd-b9ea-4ba0-bd41-1220ba0debbe"
+      ]
+    },
+    {
+      "entity_id": "5713",
+      "anchor_date": "2025-03-16",
+      "anchor_ids": [
+        "e6439609-b004-49b2-a658-a834558bf95d"
+      ]
+    },
+    {
+      "entity_id": "5717",
+      "anchor_date": "2025-02-24",
+      "anchor_ids": [
+        "9d1f903e-6658-45a4-91bc-d1da265b388f"
+      ]
+    },
+    {
+      "entity_id": "5749",
+      "anchor_date": "2025-06-02",
+      "anchor_ids": [
+        "806e44ed-4091-46c5-b15d-e3f69158939e"
+      ]
+    },
+    {
+      "entity_id": "5786",
+      "anchor_date": "2024-10-01",
+      "anchor_ids": [
+        "d104479a-cbae-4697-97d2-b8e5d01bba79"
+      ]
+    },
+    {
+      "entity_id": "5801",
+      "anchor_date": "2025-03-24",
+      "anchor_ids": [
+        "739a7fbf-5066-49f9-9c0f-743e956a4457"
+      ]
+    },
+    {
+      "entity_id": "5802",
+      "anchor_date": "2025-08-12",
+      "anchor_ids": [
+        "a57f27e6-ff4e-46f3-8960-03a775c68685"
+      ]
+    },
+    {
+      "entity_id": "5815",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "c4a6aa3c-8d10-4e2c-9304-52a3a1f9fbcb"
+      ]
+    },
+    {
+      "entity_id": "5846",
+      "anchor_date": "2025-03-29",
+      "anchor_ids": [
+        "0f7ac689-884a-4057-9f72-7fd9f70e03e4"
+      ]
+    },
+    {
+      "entity_id": "5862",
+      "anchor_date": "2025-03-01",
+      "anchor_ids": [
+        "d71b6cff-4611-4401-bd01-aa171dae5fc1"
+      ]
+    },
+    {
+      "entity_id": "5902",
+      "anchor_date": "2025-04-10",
+      "anchor_ids": [
+        "c65bcfd9-779c-4680-9bb1-8e49dc695b2c"
+      ]
+    },
+    {
+      "entity_id": "5912",
+      "anchor_date": "2025-03-28",
+      "anchor_ids": [
+        "35dee222-1f32-4ef1-807f-6d02e60600bd"
+      ]
+    },
+    {
+      "entity_id": "5919",
+      "anchor_date": "2025-04-29",
+      "anchor_ids": [
+        "b7a2a520-dc6c-4af6-ab6d-67506b86b02f"
+      ]
+    },
+    {
+      "entity_id": "5935",
+      "anchor_date": "2025-05-21",
+      "anchor_ids": [
+        "4c0d5aad-0f29-4f25-8ea6-209cc64238f7"
+      ]
+    },
+    {
+      "entity_id": "5949",
+      "anchor_date": "2025-04-30",
+      "anchor_ids": [
+        "e2d74353-3a9c-43e7-93a9-f53ec23e4d26"
+      ]
+    },
+    {
+      "entity_id": "5955",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "da01df5c-ddc8-4a8f-8a70-ed93aacd2f8b"
+      ]
+    },
+    {
+      "entity_id": "5966",
+      "anchor_date": "2025-05-14",
+      "anchor_ids": [
+        "3458189e-839f-48c6-8c5b-744d26edd614"
+      ]
+    },
+    {
+      "entity_id": "5976",
+      "anchor_date": "2025-04-07",
+      "anchor_ids": [
+        "42f712dd-e188-4a0c-972c-0fe97786335a"
+      ]
+    },
+    {
+      "entity_id": "5999",
+      "anchor_date": "2025-05-01",
+      "anchor_ids": [
+        "01055d77-a123-480e-96b0-8a5ee98d34b9"
+      ]
+    },
+    {
+      "entity_id": "6045",
+      "anchor_date": "2025-06-17",
+      "anchor_ids": [
+        "88c6a59c-b8bc-44b1-a5a2-cbaf6983d8f8"
+      ]
+    },
+    {
+      "entity_id": "6075",
+      "anchor_date": "2024-12-01",
+      "anchor_ids": [
+        "351f1fd9-dbe4-4c3d-838c-d8bce4dcb59b"
+      ]
+    },
+    {
+      "entity_id": "6082",
+      "anchor_date": "2025-02-16",
+      "anchor_ids": [
+        "4821fce6-dba8-4ade-a70d-a0ccf226bbdf"
+      ]
+    },
+    {
+      "entity_id": "6120",
+      "anchor_date": "2025-06-15",
+      "anchor_ids": [
+        "022df357-e47b-4977-9cd0-89fb1197f36c"
+      ]
+    },
+    {
+      "entity_id": "6141",
+      "anchor_date": "2025-05-05",
+      "anchor_ids": [
+        "0840be79-7059-47b9-8fc9-555dc9d02307"
+      ]
+    },
+    {
+      "entity_id": "6149",
+      "anchor_date": "2025-07-03",
+      "anchor_ids": [
+        "43dc59e8-7f69-40b3-bf7b-e4d3bf624460"
+      ]
+    },
+    {
+      "entity_id": "6165",
+      "anchor_date": "2025-07-21",
+      "anchor_ids": [
+        "6c7ee984-3172-48b6-ba5e-2133da207f72"
+      ]
+    },
+    {
+      "entity_id": "6207",
+      "anchor_date": "2025-06-23",
+      "anchor_ids": [
+        "6846b31a-1261-4119-b2e9-386aee4d83fe"
+      ]
+    },
+    {
+      "entity_id": "6243",
+      "anchor_date": "2025-05-05",
+      "anchor_ids": [
+        "0840be79-7059-47b9-8fc9-555dc9d02307"
+      ]
+    },
+    {
+      "entity_id": "6324",
+      "anchor_date": "2025-08-16",
+      "anchor_ids": [
+        "41aa259b-ea39-4d7b-b127-1e47844050a1"
+      ]
+    },
+    {
+      "entity_id": "6410",
+      "anchor_date": "2025-03-24",
+      "anchor_ids": [
+        "7e7e266d-5c39-4b2a-90e7-4d56505e6485"
+      ]
+    },
+    {
+      "entity_id": "6463",
+      "anchor_date": "2025-08-31",
+      "anchor_ids": [
+        "62cfe72f-077f-4c90-b42e-a3c6d12b6e9c"
+      ]
+    },
+    {
+      "entity_id": "6469",
+      "anchor_date": "2025-09-16",
+      "anchor_ids": [
+        "c8f7de99-3c2e-462c-98fa-f6878bcda280"
+      ]
+    },
+    {
+      "entity_id": "6474",
+      "anchor_date": "2025-08-30",
+      "anchor_ids": [
+        "efd77a62-1517-4e43-91c8-bdc5283dd511"
+      ]
+    },
+    {
+      "entity_id": "6496",
+      "anchor_date": "2025-08-29",
+      "anchor_ids": [
+        "a66207c8-a1a1-45ea-bb59-daac58ab6d1e"
+      ]
+    },
+    {
+      "entity_id": "6551",
+      "anchor_date": "2025-10-09",
+      "anchor_ids": [
+        "44cb4fa6-a8b3-4743-bd03-f7689bfdad2c"
+      ]
+    },
+    {
+      "entity_id": "6563",
+      "anchor_date": "2025-09-29",
+      "anchor_ids": [
+        "27c3a426-1f50-4584-bec9-1a79e4dca34d"
+      ]
+    },
+    {
+      "entity_id": "6578",
+      "anchor_date": "2022-09-25",
+      "anchor_ids": [
+        "fec9c4f3-e09f-470b-89c5-9089756a7618"
+      ]
+    },
+    {
+      "entity_id": "6652",
+      "anchor_date": "2025-10-16",
+      "anchor_ids": [
+        "b03e7ac8-54a8-4b7f-bffe-5f56c73e0347"
+      ]
+    },
+    {
+      "entity_id": "6703",
+      "anchor_date": "2025-10-10",
+      "anchor_ids": [
+        "3649f8d7-f600-4bd0-a95e-e091def88f7a"
+      ]
+    },
+    {
+      "entity_id": "6719",
+      "anchor_date": "2025-10-17",
+      "anchor_ids": [
+        "52510523-c9e4-428c-baf8-22b871c4bf96"
+      ]
+    },
+    {
+      "entity_id": "6777",
+      "anchor_date": "2025-11-13",
+      "anchor_ids": [
+        "7e543fe9-270e-46c4-ae15-1a710983eb70"
+      ]
+    },
+    {
+      "entity_id": "6799",
+      "anchor_date": "2025-11-01",
+      "anchor_ids": [
+        "ab21bbc0-281d-48d4-a967-c34bbe2083df"
+      ]
+    },
+    {
+      "entity_id": "6803",
+      "anchor_date": "2025-10-28",
+      "anchor_ids": [
+        "2a84d595-208b-48f9-befc-a3c030527dd4"
+      ]
+    },
+    {
+      "entity_id": "6833",
+      "anchor_date": "2025-10-17",
+      "anchor_ids": [
+        "52510523-c9e4-428c-baf8-22b871c4bf96"
+      ]
+    },
+    {
+      "entity_id": "6843",
+      "anchor_date": "2025-10-14",
+      "anchor_ids": [
+        "95932818-1c20-40ce-b0d4-fdb1801ccf6f"
+      ]
+    },
+    {
+      "entity_id": "6961",
+      "anchor_date": "2026-04-11",
+      "anchor_ids": [
+        "9a0cb72d-0fb9-4751-b890-a4d35c5b7442"
+      ]
+    },
+    {
+      "entity_id": "7014",
+      "anchor_date": "2025-03-12",
+      "anchor_ids": [
+        "83e16566-3a89-4dc8-816d-e49b06574517"
+      ]
+    },
+    {
+      "entity_id": "7040",
+      "anchor_date": "2025-10-16",
+      "anchor_ids": [
+        "9d5654da-1128-433c-8a7e-451c35876648"
+      ]
+    },
+    {
+      "entity_id": "7366",
+      "anchor_date": "2025-10-17",
+      "anchor_ids": [
+        "086c2b36-0bc5-4532-a5a3-2c9577c9c330"
+      ]
+    },
+    {
+      "entity_id": "7485",
+      "anchor_date": "2020-06-01",
+      "anchor_ids": [
+        "baca48ea-8c2f-4048-8e1c-14819a8229b6"
+      ]
+    },
+    {
+      "entity_id": "7646",
+      "anchor_date": "2025-05-21",
+      "anchor_ids": [
+        "3eab98fa-985a-4f83-bd0c-2ea404d7dd96"
+      ]
+    },
+    {
+      "entity_id": "7769",
+      "anchor_date": "2025-10-01",
+      "anchor_ids": [
+        "8d6df0e8-7001-45f4-aba3-45c126235ba9"
+      ]
+    },
+    {
+      "entity_id": "8899",
+      "anchor_date": "2025-11-15",
+      "anchor_ids": [
+        "2096b8e3-6fc7-476f-ac08-9a8dbfc1639c"
+      ]
+    },
+    {
+      "entity_id": "8936",
+      "anchor_date": "2026-01-14",
+      "anchor_ids": [
+        "907a8b68-cb73-4ad0-ae6b-de4747eedaed"
+      ]
+    },
+    {
+      "entity_id": "8937",
+      "anchor_date": "2026-01-14",
+      "anchor_ids": [
+        "907a8b68-cb73-4ad0-ae6b-de4747eedaed"
+      ]
+    },
+    {
+      "entity_id": "9093",
+      "anchor_date": "2026-01-03",
+      "anchor_ids": [
+        "bc4d5bfc-859b-4057-9d36-6b542737dbf9"
+      ]
+    },
+    {
+      "entity_id": "9236",
+      "anchor_date": "2025-12-30",
+      "anchor_ids": [
+        "b4a59aa6-f56d-4bb9-8335-ce12c6a70f56"
+      ]
+    },
+    {
+      "entity_id": "9547",
+      "anchor_date": "2025-06-01",
+      "anchor_ids": [
+        "590fe166-e697-46cf-968d-839a566c2ad5"
+      ]
+    },
+    {
+      "entity_id": "9654",
+      "anchor_date": "2026-01-01",
+      "anchor_ids": [
+        "e60f9c80-1b84-4639-9dd6-22f4855c5f0f"
+      ]
+    },
+    {
+      "entity_id": "9925",
+      "anchor_date": "2025-11-17",
+      "anchor_ids": [
+        "87aba7b0-1e7b-4143-8efc-47d8036c0e1a"
+      ]
+    },
+    {
+      "entity_id": "9947",
+      "anchor_date": "2025-11-01",
+      "anchor_ids": [
+        "7705e6db-9ac1-48dd-90d3-65d42fc57cfb"
+      ]
+    },
+    {
+      "entity_id": "10254",
+      "anchor_date": "2025-07-01",
+      "anchor_ids": [
+        "0c8b6662-8335-4fbb-8c54-d5d2ac71f6a0"
+      ]
+    },
+    {
+      "entity_id": "11052",
+      "anchor_date": "2026-02-11",
+      "anchor_ids": [
+        "052a103d-b0aa-4501-922a-52d66cc893f0"
+      ]
+    },
+    {
+      "entity_id": "11101",
+      "anchor_date": "2026-02-19",
+      "anchor_ids": [
+        "5752974f-b369-402e-8c43-620cff068636"
+      ]
+    },
+    {
+      "entity_id": "11188",
+      "anchor_date": "2026-02-12",
+      "anchor_ids": [
+        "4ae1dc99-df96-4cd1-a24b-d338d4910d95"
+      ]
+    },
+    {
+      "entity_id": "11560",
+      "anchor_date": "2026-02-11",
+      "anchor_ids": [
+        "94bfa2eb-6c37-4945-8f2c-b112452d18ba"
+      ]
+    },
+    {
+      "entity_id": "11786",
+      "anchor_date": "2026-02-15",
+      "anchor_ids": [
+        "cff2b691-6572-4ddd-882d-8b15c76712b5"
+      ]
+    },
+    {
+      "entity_id": "11849",
+      "anchor_date": "2013-11-02",
+      "anchor_ids": [
+        "8988b819-8900-4e6b-a1d1-b74cda5f34e3"
+      ]
+    },
+    {
+      "entity_id": "12248",
+      "anchor_date": "2025-06-01",
+      "anchor_ids": [
+        "6787966b-1d75-41f5-bf43-d5845a0ef812"
+      ]
+    },
+    {
+      "entity_id": "13027",
+      "anchor_date": "2023-02-01",
+      "anchor_ids": [
+        "5882b80c-6af2-41f2-b191-195d92c3b08a"
+      ]
+    },
+    {
+      "entity_id": "14343",
+      "anchor_date": "2026-01-19",
+      "anchor_ids": [
+        "88757002-4c01-40e5-ac2e-0f34b1f4b52f"
+      ]
+    },
+    {
+      "entity_id": "15893",
+      "anchor_date": "2026-02-01",
+      "anchor_ids": [
+        "1521a40b-2195-418d-8b4b-f0a8fc687be8"
+      ]
+    },
+    {
+      "entity_id": "16808",
+      "anchor_date": "2025-03-01",
+      "anchor_ids": [
+        "4f6211e9-999d-470f-a12e-025462cf9910"
+      ]
+    },
+    {
+      "entity_id": "19211",
+      "anchor_date": "2026-02-11",
+      "anchor_ids": [
+        "052a103d-b0aa-4501-922a-52d66cc893f0"
+      ]
+    },
+    {
+      "entity_id": "22111",
+      "anchor_date": "2026-02-24",
+      "anchor_ids": [
+        "9658392e-1c57-46b1-8fd6-6664ba30e737"
+      ]
+    },
+    {
+      "entity_id": "22119",
+      "anchor_date": "2026-01-28",
+      "anchor_ids": [
+        "1049b5d7-5468-44a6-8649-369bdf11efd1"
+      ]
+    },
+    {
+      "entity_id": "22122",
+      "anchor_date": "2025-02-01",
+      "anchor_ids": [
+        "a9c68923-a93a-4b74-a29c-a8c118dd4a15"
+      ]
+    },
+    {
+      "entity_id": "22166",
+      "anchor_date": "2025-02-01",
+      "anchor_ids": [
+        "d78b955a-1214-44c6-8b31-0f05bb3847e5"
+      ]
+    },
+    {
+      "entity_id": "22254",
+      "anchor_date": "2026-03-23",
+      "anchor_ids": [
+        "c16915d2-c774-482f-8e93-7ad18fe1edea"
+      ]
+    },
+    {
+      "entity_id": "22267",
+      "anchor_date": "2026-04-10",
+      "anchor_ids": [
+        "732bd12d-c226-4fdd-89a9-3d338f94a15d"
+      ]
+    },
+    {
+      "entity_id": "22270",
+      "anchor_date": "2026-03-19",
+      "anchor_ids": [
+        "66dca163-5987-4e68-a5c4-01119adafa29"
+      ]
+    },
+    {
+      "entity_id": "22277",
+      "anchor_date": "2026-03-31",
+      "anchor_ids": [
+        "636d5cf0-faf9-4f19-b3c3-2f7c13f497b5"
+      ]
+    },
+    {
+      "entity_id": "22289",
+      "anchor_date": "2026-04-27",
+      "anchor_ids": [
+        "6380510a-52fa-40cd-a607-89dfb81f028c"
+      ]
+    },
+    {
+      "entity_id": "22293",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "494baf22-fb80-4db7-84e0-53f0482abaad"
+      ]
+    },
+    {
+      "entity_id": "22299",
+      "anchor_date": "2026-02-01",
+      "anchor_ids": [
+        "2fe76e76-9246-4d6b-b53f-c15c4e3911f1"
+      ]
+    },
+    {
+      "entity_id": "22301",
+      "anchor_date": "2026-01-01",
+      "anchor_ids": [
+        "f267c6d2-d2e6-4735-b4cc-0b17c06c33e3"
+      ]
+    },
+    {
+      "entity_id": "22319",
+      "anchor_date": "2026-02-01",
+      "anchor_ids": [
+        "483de08f-1cbe-4f68-b678-833e490a58b3"
+      ]
+    },
+    {
+      "entity_id": "22340",
+      "anchor_date": "2026-04-11",
+      "anchor_ids": [
+        "9a0cb72d-0fb9-4751-b890-a4d35c5b7442"
+      ]
+    },
+    {
+      "entity_id": "22348",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "cd8020ea-c3bd-4182-85a2-4cf860e1ead4"
+      ]
+    },
+    {
+      "entity_id": "22359",
+      "anchor_date": "2026-03-11",
+      "anchor_ids": [
+        "1357585f-36fb-4317-a8ca-83a3d381cd78"
+      ]
+    },
+    {
+      "entity_id": "22385",
+      "anchor_date": "2025-06-15",
+      "anchor_ids": [
+        "022df357-e47b-4977-9cd0-89fb1197f36c"
+      ]
+    },
+    {
+      "entity_id": "22396",
+      "anchor_date": "2026-05-03",
+      "anchor_ids": [
+        "29dbc6c9-8080-43d8-b5c3-a71ac61cc3f9"
+      ]
+    },
+    {
+      "entity_id": "22399",
+      "anchor_date": "2026-03-06",
+      "anchor_ids": [
+        "02328b9e-1a3e-4566-9816-40663d7264d5"
+      ]
+    },
+    {
+      "entity_id": "22421",
+      "anchor_date": "2026-03-01",
+      "anchor_ids": [
+        "73a2bd4e-98e0-4db0-abf8-3452e45064e8"
+      ]
+    },
+    {
+      "entity_id": "22424",
+      "anchor_date": "2025-12-15",
+      "anchor_ids": [
+        "c84bcd46-7199-4d3b-9d08-c612678cfdf9"
+      ]
+    },
+    {
+      "entity_id": "22480",
+      "anchor_date": "2025-12-08",
+      "anchor_ids": [
+        "33c4785f-0da6-4aeb-bd87-7fb29703d456"
+      ]
+    },
+    {
+      "entity_id": "22530",
+      "anchor_date": "2026-04-27",
+      "anchor_ids": [
+        "b54cf97a-c3e9-4352-bddd-c38b3b618176"
+      ]
+    },
+    {
+      "entity_id": "22535",
+      "anchor_date": "2026-04-10",
+      "anchor_ids": [
+        "732bd12d-c226-4fdd-89a9-3d338f94a15d"
+      ]
+    },
+    {
+      "entity_id": "22545",
+      "anchor_date": "2026-03-08",
+      "anchor_ids": [
+        "0f454076-9b61-4ca6-bf61-70847cf3f60b"
+      ]
+    },
+    {
+      "entity_id": "22576",
+      "anchor_date": "2026-04-06",
+      "anchor_ids": [
+        "31243411-98d0-45e2-9c81-39663abeb1fe"
+      ]
+    },
+    {
+      "entity_id": "22583",
+      "anchor_date": "2023-01-01",
+      "anchor_ids": [
+        "f50298c9-672c-40d8-b6e4-96b39ddacbda"
+      ]
+    },
+    {
+      "entity_id": "22630",
+      "anchor_date": "2026-05-15",
+      "anchor_ids": [
+        "304830cc-6d7c-4200-9d5a-8b76bfbaec0e"
+      ]
+    },
+    {
+      "entity_id": "22633",
+      "anchor_date": "2026-05-29",
+      "anchor_ids": [
+        "00dd87f0-5bcb-455d-8bf5-b2292ae280e2"
+      ]
+    },
+    {
+      "entity_id": "22656",
+      "anchor_date": "2026-02-12",
+      "anchor_ids": [
+        "0bce440e-b007-467f-8d78-32e07766384c"
+      ]
+    },
+    {
+      "entity_id": "22660",
+      "anchor_date": "2026-06-23",
+      "anchor_ids": [
+        "e318d45a-2a01-4b53-9a97-33b272d67c1a"
+      ]
+    },
+    {
+      "entity_id": "22670",
+      "anchor_date": "2026-05-05",
+      "anchor_ids": [
+        "60dd413f-3a45-4c70-9e5e-5a2de559224b"
+      ]
+    },
+    {
+      "entity_id": "22675",
+      "anchor_date": "2026-05-05",
+      "anchor_ids": [
+        "1c0b5199-6216-4282-ba8d-fefb151bd20b"
+      ]
+    },
+    {
+      "entity_id": "22676",
+      "anchor_date": "2026-05-05",
+      "anchor_ids": [
+        "504421c8-03f0-466c-8f84-14d425f91405"
+      ]
+    },
+    {
+      "entity_id": "22691",
+      "anchor_date": "2026-04-25",
+      "anchor_ids": [
+        "b5698d4f-528b-4133-8090-b5f55c0589c3"
+      ]
+    },
+    {
+      "entity_id": "22700",
+      "anchor_date": "2026-05-27",
+      "anchor_ids": [
+        "b8246512-0f87-4fb5-8767-ebb9d92c5b7a"
+      ]
+    },
+    {
+      "entity_id": "22705",
+      "anchor_date": "2026-04-25",
+      "anchor_ids": [
+        "b5698d4f-528b-4133-8090-b5f55c0589c3"
+      ]
+    },
+    {
+      "entity_id": "22739",
+      "anchor_date": "2026-04-21",
+      "anchor_ids": [
+        "83113f85-7aa0-4a73-819e-574b3e27ab33"
+      ]
+    },
+    {
+      "entity_id": "22744",
+      "anchor_date": "2026-04-25",
+      "anchor_ids": [
+        "b5698d4f-528b-4133-8090-b5f55c0589c3"
+      ]
+    },
+    {
+      "entity_id": "22761",
+      "anchor_date": "2026-04-22",
+      "anchor_ids": [
+        "7ac2c370-cceb-4a4d-af95-5a24212f8c49"
+      ]
+    },
+    {
+      "entity_id": "22784",
+      "anchor_date": "2026-02-01",
+      "anchor_ids": [
+        "a732b52d-d4c9-4dd8-aa5c-e209ef9df740"
+      ]
+    },
+    {
+      "entity_id": "22813",
+      "anchor_date": "2026-04-15",
+      "anchor_ids": [
+        "f91af64b-51a8-4ced-b6a4-bc99a94bc512"
+      ]
+    },
+    {
+      "entity_id": "22825",
+      "anchor_date": "2026-04-17",
+      "anchor_ids": [
+        "eb29884f-4ce0-429f-9465-791a2111b41f"
+      ]
+    },
+    {
+      "entity_id": "22828",
+      "anchor_date": "2026-04-08",
+      "anchor_ids": [
+        "e1f8e441-99f8-4039-9504-2e45d3d944bc"
+      ]
+    },
+    {
+      "entity_id": "22854",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "b7d950d5-d1ff-4394-8c2b-1c0e92e71291"
+      ]
+    },
+    {
+      "entity_id": "22858",
+      "anchor_date": "2026-04-06",
+      "anchor_ids": [
+        "29847657-f16a-4bdd-b69a-6be344ccd3d8"
+      ]
+    },
+    {
+      "entity_id": "22868",
+      "anchor_date": "2026-04-04",
+      "anchor_ids": [
+        "0a8844d5-25bb-4188-9742-c223411c0d0a"
+      ]
+    },
+    {
+      "entity_id": "22892",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "796e1172-7480-45c8-b797-76c6d3388661"
+      ]
+    },
+    {
+      "entity_id": "22895",
+      "anchor_date": "2026-03-02",
+      "anchor_ids": [
+        "558131cb-93dc-427e-a9a0-8d6befa32673"
+      ]
+    },
+    {
+      "entity_id": "22916",
+      "anchor_date": "2026-05-13",
+      "anchor_ids": [
+        "1f6e48e7-04d9-46af-b1ab-8393d6d96430"
+      ]
+    },
+    {
+      "entity_id": "22956",
+      "anchor_date": "2026-03-20",
+      "anchor_ids": [
+        "f0adf32a-9fb2-4c41-b1ea-577148773fc5"
+      ]
+    },
+    {
+      "entity_id": "23005",
+      "anchor_date": "2026-05-31",
+      "anchor_ids": [
+        "a190d2a3-cf0e-4a9f-95d4-3dce132014cd"
+      ]
+    },
+    {
+      "entity_id": "23008",
+      "anchor_date": "2026-02-13",
+      "anchor_ids": [
+        "da8470fe-5280-4498-9bd0-279f9a937e62"
+      ]
+    },
+    {
+      "entity_id": "23021",
+      "anchor_date": "2024-01-26",
+      "anchor_ids": [
+        "bac5a336-78cf-4599-9333-f512fa0624e1"
+      ]
+    },
+    {
+      "entity_id": "23053",
+      "anchor_date": "2026-05-31",
+      "anchor_ids": [
+        "e7e690ec-ed1d-4a61-b3d4-bb12bef8bb2b"
+      ]
+    },
+    {
+      "entity_id": "23120",
+      "anchor_date": "2025-12-26",
+      "anchor_ids": [
+        "2f4ccd6e-4d45-428e-ad6b-b51957ce64fc"
+      ]
+    },
+    {
+      "entity_id": "23132",
+      "anchor_date": "2026-04-11",
+      "anchor_ids": [
+        "9a0cb72d-0fb9-4751-b890-a4d35c5b7442"
+      ]
+    },
+    {
+      "entity_id": "23143",
+      "anchor_date": "2021-06-15",
+      "anchor_ids": [
+        "ed67b757-bdf2-4bfa-83d9-4fbc402d91b7"
+      ]
+    },
+    {
+      "entity_id": "23171",
+      "anchor_date": "2026-07-01",
+      "anchor_ids": [
+        "4a205999-7946-4e29-a899-aa20cc6c205b"
+      ]
+    },
+    {
+      "entity_id": "23174",
+      "anchor_date": "2026-06-15",
+      "anchor_ids": [
+        "c3a13440-181c-4103-8494-12768581bfee"
+      ]
+    },
+    {
+      "entity_id": "23190",
+      "anchor_date": "2026-07-24",
+      "anchor_ids": [
+        "164605ac-174b-42b7-b48b-31a7765dce9e"
+      ]
+    },
+    {
+      "entity_id": "23193",
+      "anchor_date": "2026-06-23",
+      "anchor_ids": [
+        "4caf809e-78dc-45a5-be44-dcccb58bc8f7"
+      ]
+    },
+    {
+      "entity_id": "23209",
+      "anchor_date": "2026-07-15",
+      "anchor_ids": [
+        "d2b4ebc0-4b32-4b2e-b110-66c77e153d6b"
+      ]
+    },
+    {
+      "entity_id": "23218",
+      "anchor_date": "2020-07-15",
+      "anchor_ids": [
+        "b615bf7a-6b07-4453-9763-a4382d70371c"
+      ]
+    },
+    {
+      "entity_id": "23226",
+      "anchor_date": "2026-06-24",
+      "anchor_ids": [
+        "6380cc92-f41f-4486-a187-aa5eac5c13c8"
+      ]
+    },
+    {
+      "entity_id": "23241",
+      "anchor_date": "2026-07-10",
+      "anchor_ids": [
+        "55070897-ee1a-472d-a57d-305fc0905594"
+      ]
+    },
+    {
+      "entity_id": "23242",
+      "anchor_date": "2026-07-24",
+      "anchor_ids": [
+        "5df656f6-f134-4c35-8685-71eab147346a"
+      ]
+    },
+    {
+      "entity_id": "23247",
+      "anchor_date": "2026-07-11",
+      "anchor_ids": [
+        "0d3a11f9-9555-450e-b1c0-7706ddd807d4"
+      ]
+    },
+    {
+      "entity_id": "23257",
+      "anchor_date": "2020-01-01",
+      "anchor_ids": [
+        "fd91f95c-c58e-40a7-ad3c-c84d69c098a6"
+      ]
+    },
+    {
+      "entity_id": "23276",
+      "anchor_date": "2026-07-06",
+      "anchor_ids": [
+        "185970eb-c5ac-406d-ba3a-c9634d389705"
+      ]
+    },
+    {
+      "entity_id": "23279",
+      "anchor_date": "2026-06-10",
+      "anchor_ids": [
+        "662f9854-a4c0-486e-957f-d74ef263a44f"
+      ]
+    },
+    {
+      "entity_id": "23321",
+      "anchor_date": "2018-05-01",
+      "anchor_ids": [
+        "dc026a70-9c67-4566-a014-7cff1a1833cc"
+      ]
+    },
+    {
+      "entity_id": "23413",
+      "anchor_date": "2026-06-01",
+      "anchor_ids": [
+        "8fd5d2cd-6e8a-4a96-808d-bb3d4e4028cb"
+      ]
+    },
+    {
+      "entity_id": "23422",
+      "anchor_date": "2026-06-01",
+      "anchor_ids": [
+        "8304817f-d04e-4c8a-9c36-59163d26c496"
+      ]
+    },
+    {
+      "entity_id": "23440",
+      "anchor_date": "2026-06-09",
+      "anchor_ids": [
+        "6b00cdd5-1dc1-4bd2-b55e-dd2f99e44a7c"
+      ]
+    },
+    {
+      "entity_id": "23453",
+      "anchor_date": "2026-05-23",
+      "anchor_ids": [
+        "ac3b7148-5cae-40a4-8628-421941b2b8bf"
+      ]
+    },
+    {
+      "entity_id": "23462",
+      "anchor_date": "2026-06-20",
+      "anchor_ids": [
+        "38b652fc-a24c-45d7-b896-4b96624ac4ac"
+      ]
+    },
+    {
+      "entity_id": "23483",
+      "anchor_date": "2026-06-15",
+      "anchor_ids": [
+        "e45a821b-8fbf-4a09-9478-ae2b98cef686"
+      ]
+    },
+    {
+      "entity_id": "23509",
+      "anchor_date": "2022-09-10",
+      "anchor_ids": [
+        "2d265445-dc02-46c7-9c87-fb2b60888d12"
+      ]
+    },
+    {
+      "entity_id": "23510",
+      "anchor_date": "2020-05-14",
+      "anchor_ids": [
+        "65379d75-0968-4895-86ba-555e1490957d"
+      ]
+    },
+    {
+      "entity_id": "23512",
+      "anchor_date": "2025-07-01",
+      "anchor_ids": [
+        "b5815da9-5b75-42fe-b170-ca284ac9c309"
+      ]
+    },
+    {
+      "entity_id": "23513",
+      "anchor_date": "2023-05-04",
+      "anchor_ids": [
+        "b7b08c6b-d93c-4b7c-bdbe-6dfa83209be9"
+      ]
+    },
+    {
+      "entity_id": "23514",
+      "anchor_date": "2024-01-31",
+      "anchor_ids": [
+        "bebb790c-2494-4980-b3a3-d9520095447a"
+      ]
+    },
+    {
+      "entity_id": "23515",
+      "anchor_date": "2020-10-01",
+      "anchor_ids": [
+        "cb28d092-040f-4c5f-9f0c-b4bfc9efba2c"
+      ]
+    },
+    {
+      "entity_id": "23516",
+      "anchor_date": "2025-05-21",
+      "anchor_ids": [
+        "dd0d63ee-c57b-4788-9764-90870e0bd5e2"
+      ]
+    },
+    {
+      "entity_id": "23517",
+      "anchor_date": "2023-08-18",
+      "anchor_ids": [
+        "fcf9d284-23c5-4777-b12b-a43a7a51ea60"
+      ]
+    },
+    {
+      "entity_id": "23518",
+      "anchor_date": "2025-02-14",
+      "anchor_ids": [
+        "6da7acc6-5f9a-4654-a92f-005c033cfaa3"
+      ]
+    },
+    {
+      "entity_id": "23519",
+      "anchor_date": "2025-03-24",
+      "anchor_ids": [
+        "7b8d1f61-c8e9-403e-99ef-8b5d69d09e5a"
+      ]
+    },
+    {
+      "entity_id": "23522",
+      "anchor_date": "2025-04-01",
+      "anchor_ids": [
+        "fbab450f-0b52-43c1-88f5-508ab55a2b2c"
+      ]
+    },
+    {
+      "entity_id": "23526",
+      "anchor_date": "2026-08-13",
+      "anchor_ids": [
+        "b976f159-d48d-4f7e-a1e0-4f60e8e257be"
+      ]
+    },
+    {
+      "entity_id": "23547",
+      "anchor_date": "2026-09-01",
+      "anchor_ids": [
+        "ce7b53f2-6db4-41dd-93c0-c4b6d4487a2e"
+      ]
+    },
+    {
+      "entity_id": "23554",
+      "anchor_date": "2026-09-09",
+      "anchor_ids": [
+        "eb8e2054-0286-4491-9a6d-813f77f96e3d"
+      ]
+    },
+    {
+      "entity_id": "23555",
+      "anchor_date": "2026-08-10",
+      "anchor_ids": [
+        "2c8a15f0-fd40-4b94-b432-c2e43ac6b088"
+      ]
+    },
+    {
+      "entity_id": "23558",
+      "anchor_date": "2026-08-07",
+      "anchor_ids": [
+        "f916ccfc-ac38-4789-a4b7-8e961a965f5b"
+      ]
+    },
+    {
+      "entity_id": "23578",
+      "anchor_date": "2026-07-18",
+      "anchor_ids": [
+        "051e0657-b30c-4f62-8add-a55dbb6c1997"
+      ]
+    },
+    {
+      "entity_id": "23592",
+      "anchor_date": "2026-09-07",
+      "anchor_ids": [
+        "f0ef7d54-4147-4f09-a8c9-0267d757e48d"
+      ]
+    },
+    {
+      "entity_id": "23594",
+      "anchor_date": "2026-08-01",
+      "anchor_ids": [
+        "1276ba87-e059-498f-a14b-cae96d10e453"
+      ]
+    },
+    {
+      "entity_id": "23601",
+      "anchor_date": "2026-08-17",
+      "anchor_ids": [
+        "b10a74c2-8f1d-4438-8812-d4c28a0d7c06"
+      ]
+    },
+    {
+      "entity_id": "23629",
+      "anchor_date": "2026-08-26",
+      "anchor_ids": [
+        "ebc24166-3d81-44de-877f-055d3f0950e4"
+      ]
+    },
+    {
+      "entity_id": "23631",
+      "anchor_date": "2026-08-13",
+      "anchor_ids": [
+        "d40d720f-e0c5-4386-b5a0-599ae807ab27"
+      ]
+    },
+    {
+      "entity_id": "23636",
+      "anchor_date": "2026-08-23",
+      "anchor_ids": [
+        "294895d4-512d-430d-ad6e-e8b23af63459"
+      ]
+    },
+    {
+      "entity_id": "23643",
+      "anchor_date": "2026-08-17",
+      "anchor_ids": [
+        "6cde601c-e875-4f34-b635-dc151379e047"
+      ]
+    },
+    {
+      "entity_id": "23650",
+      "anchor_date": "2026-08-13",
+      "anchor_ids": [
+        "92277ae4-bb56-44f2-9391-707597afdad5"
+      ]
+    },
+    {
+      "entity_id": "23653",
+      "anchor_date": "2026-08-10",
+      "anchor_ids": [
+        "17f0f30b-af3d-428d-87be-76f189ec2de6"
+      ]
+    },
+    {
+      "entity_id": "23673",
+      "anchor_date": "2026-08-14",
+      "anchor_ids": [
+        "6e12e8dc-10e2-410d-b2ad-0019739ab5cf"
+      ]
+    },
+    {
+      "entity_id": "23700",
+      "anchor_date": "2026-08-03",
+      "anchor_ids": [
+        "e1458dc4-7748-4eff-be50-abc82cc38c6e"
+      ]
+    },
+    {
+      "entity_id": "23702",
+      "anchor_date": "2023-03-03",
+      "anchor_ids": [
+        "6bd32c51-6323-47c2-8e27-4a3d596d6862"
+      ]
+    },
+    {
+      "entity_id": "23710",
+      "anchor_date": "2026-07-31",
+      "anchor_ids": [
+        "a483fe2e-b454-4434-84e3-00a0df47dbdc"
+      ]
+    },
+    {
+      "entity_id": "23720",
+      "anchor_date": "2026-08-15",
+      "anchor_ids": [
+        "1a03d950-4f10-4cbc-9a70-3fd67ccf4eb2"
+      ]
+    },
+    {
+      "entity_id": "23734",
+      "anchor_date": "2026-05-15",
+      "anchor_ids": [
+        "c0c5a9cb-cf7b-4618-bed2-36ccd7433d82"
+      ]
+    },
+    {
+      "entity_id": "23805",
+      "anchor_date": "2026-07-14",
+      "anchor_ids": [
+        "15e9c705-3ea4-430c-bad6-99f3e6d3c0ac"
+      ]
+    },
+    {
+      "entity_id": "23825",
+      "anchor_date": "2025-06-28",
+      "anchor_ids": [
+        "f2588dec-18e8-433d-aa18-fcf388a50b69"
+      ]
+    },
+    {
+      "entity_id": "23863",
+      "anchor_date": "2026-07-06",
+      "anchor_ids": [
+        "6a3fca6c-5f77-4ba4-a52e-6ed7153b7f77"
+      ]
+    },
+    {
+      "entity_id": "23875",
+      "anchor_date": "2026-05-29",
+      "anchor_ids": [
+        "007f723f-baec-4a4d-9658-df8fc511f7e4"
+      ]
+    },
+    {
+      "entity_id": "23895",
+      "anchor_date": "2026-09-30",
+      "anchor_ids": [
+        "ba5ad7be-3e05-4382-86d5-3ad6508b07b2"
+      ]
+    },
+    {
+      "entity_id": "23903",
+      "anchor_date": "2026-09-24",
+      "anchor_ids": [
+        "20886ad5-1f46-4d6a-8018-a8f04dedcc4a"
+      ]
+    },
+    {
+      "entity_id": "23905",
+      "anchor_date": "2026-08-13",
+      "anchor_ids": [
+        "34a55d0a-0a67-4444-8f6c-04babe484c9b"
+      ]
+    },
+    {
+      "entity_id": "23907",
+      "anchor_date": "2026-08-28",
+      "anchor_ids": [
+        "efd8b151-f274-4ee4-a62c-35266293a606"
+      ]
+    },
+    {
+      "entity_id": "23920",
+      "anchor_date": "2026-09-04",
+      "anchor_ids": [
+        "6929a3f1-6e80-46b6-b9f2-6506ec36ba38"
+      ]
+    },
+    {
+      "entity_id": "23977",
+      "anchor_date": "2011-04-19",
+      "anchor_ids": [
+        "5481fafa-d107-4fd4-b5b5-20910d5d91cc"
+      ]
+    },
+    {
+      "entity_id": "23979",
+      "anchor_date": "2026-09-15",
+      "anchor_ids": [
+        "f5f14379-695d-4efb-8750-a8b5eb10368a"
+      ]
+    },
+    {
+      "entity_id": "24052",
+      "anchor_date": "2026-09-04",
+      "anchor_ids": [
+        "6929a3f1-6e80-46b6-b9f2-6506ec36ba38"
+      ]
+    },
+    {
+      "entity_id": "24069",
+      "anchor_date": "2026-09-23",
+      "anchor_ids": [
+        "150d8cf4-f285-4e30-9ce0-74b99a2eef48"
+      ]
+    },
+    {
+      "entity_id": "24106",
+      "anchor_date": "2026-04-01",
+      "anchor_ids": [
+        "c5dea795-dac9-48ec-a8fc-1c764d900c22"
+      ]
+    },
+    {
+      "entity_id": "24148",
+      "anchor_date": "2026-05-01",
+      "anchor_ids": [
+        "91fea90b-fd96-4e8e-9ec9-3b11719ce2bf"
+      ]
+    },
+    {
+      "entity_id": "24178",
+      "anchor_date": "2020-02-01",
+      "anchor_ids": [
+        "fdf33115-2d27-4e74-b27d-c211db283638"
+      ]
+    },
+    {
+      "entity_id": "24179",
+      "anchor_date": "2026-09-07",
+      "anchor_ids": [
+        "34b25aa5-feab-483d-9395-02089147b5c7"
+      ]
+    }
+  ],
+  "cohort_sha256": "87e9330ddb2a755ba1f587a4989c58462841df8d50711972cedd5f544de01754"
+}
