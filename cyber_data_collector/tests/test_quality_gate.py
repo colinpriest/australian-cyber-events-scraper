@@ -188,8 +188,10 @@ def test_quarantine_is_counted_when_tracked(db):
 
 def test_asd_staleness_needs_fingerprints(db):
     conn = sqlite3.connect(db)
+    # init adds input_fingerprint; an older database without it cannot be measured
+    conn.execute("ALTER TABLE ASDRiskClassifications DROP COLUMN input_fingerprint")
     found = metrics.measure_staleness(conn, load_thresholds(), TODAY)
-    assert found["staleness.asd_stale_share"].not_measured      # committed schema has no input_fingerprint
+    assert found["staleness.asd_stale_share"].not_measured
     assert found["staleness.asd_unclassified"].value == 5
 
     conn.execute("ALTER TABLE ASDRiskClassifications ADD COLUMN input_fingerprint TEXT")
@@ -387,7 +389,6 @@ def test_script_exit_codes(db, fast, tmp_path):
     assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'QualityRuns'").fetchone()
 
     conn.execute("DELETE FROM DeduplicatedEvents WHERE deduplicated_event_id IN ('E4', 'E5')")
-    conn.execute("ALTER TABLE ASDRiskClassifications ADD COLUMN input_fingerprint TEXT")
     conn.commit()
     assert quality_report.main(["--db", str(db), "--out-dir", str(out), "--quiet",
                                 "--thresholds", str(_permissive(tmp_path))]) == 0
