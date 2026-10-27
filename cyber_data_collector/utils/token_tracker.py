@@ -9,7 +9,7 @@ Usage::
     from cyber_data_collector.utils.token_tracker import tracker
 
     # After an OpenAI / Perplexity API call:
-    tracker.record("gpt-4o", response.usage.prompt_tokens,
+    tracker.record(model, response.usage.prompt_tokens,
                    response.usage.completion_tokens, context="enrichment")
 
     # At the end of the pipeline:
@@ -20,12 +20,17 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Pricing per 1M tokens (USD) — updated March 2026
+#
+# Only models whose price is documented in this repo are listed. A model that
+# is not listed (e.g. the GPT-5 snapshots in llm_models) still has its tokens
+# counted, but its cost is reported as ``None`` (unknown) rather than guessed.
+# The gpt-4o entries stay so historical logs still price.
 # ---------------------------------------------------------------------------
 PRICING: Dict[str, Dict[str, float]] = {
     # OpenAI models
@@ -36,6 +41,11 @@ PRICING: Dict[str, Dict[str, float]] = {
     "sonar-pro":    {"input": 3.00, "output": 15.00},
     "sonar":        {"input": 1.00, "output":  1.00},
 }
+
+
+def _format_cost(cost: Optional[float]) -> str:
+    """Dollar cost, or ``cost unknown`` for a model with no listed price."""
+    return "cost unknown" if cost is None else f"${cost:.4f}"
 
 
 @dataclass
@@ -96,22 +106,28 @@ class TokenTracker:
             total_output = 0
             total_cost = 0.0
             total_calls = 0
+            has_unpriced = False
 
             for model, usage in sorted(self._usage.items()):
-                prices = PRICING.get(model, {"input": 0.0, "output": 0.0})
-                cost = (
-                    usage.input_tokens * prices["input"] / 1_000_000
-                    + usage.output_tokens * prices["output"] / 1_000_000
-                )
+                prices = PRICING.get(model)
+                if prices is None:
+                    cost: Optional[float] = None
+                    has_unpriced = True
+                else:
+                    cost = (
+                        usage.input_tokens * prices["input"] / 1_000_000
+                        + usage.output_tokens * prices["output"] / 1_000_000
+                    )
                 models[model] = {
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
                     "api_calls": usage.api_calls,
-                    "cost_usd": round(cost, 6),
+                    "cost_usd": round(cost, 6) if cost is not None else None,
                 }
                 total_input += usage.input_tokens
                 total_output += usage.output_tokens
-                total_cost += cost
+                if cost is not None:
+                    total_cost += cost
                 total_calls += usage.api_calls
 
             return {
@@ -120,6 +136,7 @@ class TokenTracker:
                 "total_output_tokens": total_output,
                 "total_tokens": total_input + total_output,
                 "total_cost_usd": round(total_cost, 4),
+                "has_unpriced_models": has_unpriced,
                 "total_api_calls": total_calls,
             }
 
@@ -141,7 +158,7 @@ class TokenTracker:
                 f"  {model:16s}  {info['input_tokens']:>10,} in / "
                 f"{info['output_tokens']:>8,} out  "
                 f"({info['api_calls']:>3} calls)  "
-                f"= ${info['cost_usd']:.4f}"
+                f"= {_format_cost(info['cost_usd'])}"
             )
         lines.append("-" * 60)
         lines.append(
@@ -149,6 +166,7 @@ class TokenTracker:
             f"{data['total_output_tokens']:>8,} out  "
             f"({data['total_api_calls']:>3} calls)  "
             f"= ${data['total_cost_usd']:.4f}"
+            + (" (excludes unpriced models)" if data["has_unpriced_models"] else "")
         )
         lines.append("=" * 60)
 

@@ -30,6 +30,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set
 
 from pydantic import BaseModel, Field, field_validator
 
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 from cyber_data_collector.dedup.victim_selection import (
     is_never_victim,
     is_non_organisation,
@@ -38,8 +39,6 @@ from cyber_data_collector.dedup.victim_selection import (
 )
 
 logger = logging.getLogger(__name__)
-
-CLASSIFIER_MODEL = "gpt-4o"
 
 
 class EntityKind(str, Enum):
@@ -209,10 +208,10 @@ SYSTEM_PROMPT = (
 class EntityRoleClassifier:
     """Assigns kinds and roles to the entities of an event."""
 
-    def __init__(self, openai_client=None, model: str = CLASSIFIER_MODEL):
+    def __init__(self, openai_client=None, model: Optional[str] = None):
         self._client = openai_client
         self._client_ready = openai_client is not None
-        self.model = model
+        self.model = model or openai_model()
         self.stats: Dict[str, int] = {
             "events": 0, "llm_calls": 0, "llm_failures": 0, "rule_only": 0,
         }
@@ -278,13 +277,12 @@ class EntityRoleClassifier:
         try:
             self.stats["llm_calls"] += 1
             result: EventEntityRoles = client.chat.completions.create(
-                model=self.model,
+                **chat_params(self.model),
                 response_model=EventEntityRoles,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.0,
             )
         except Exception as exc:  # noqa: BLE001 - one event must not stop a run
             self.stats["llm_failures"] += 1

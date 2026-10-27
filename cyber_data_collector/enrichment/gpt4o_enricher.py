@@ -1,8 +1,9 @@
 """
-GPT-4o Enricher - Primary extraction using GPT-4o with ultra-specific prompts.
+GPT-4o Enricher - Primary extraction with ultra-specific prompts.
 
 This module extracts structured cybersecurity incident data from full article text
-using GPT-4o's superior reasoning capabilities.
+using the strong OpenAI model (see ``cyber_data_collector.utils.llm_models``;
+until 2026-10 this was GPT-4o, which the class name still reflects).
 """
 
 from __future__ import annotations
@@ -12,11 +13,12 @@ import json
 from typing import Dict, Any
 from datetime import datetime
 from openai import OpenAI
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 from cyber_data_collector.utils.validation import llm_validate_records_affected
 
 
 class GPT4oEnricher:
-    """Primary enrichment using GPT-4o with ultra-specific prompts"""
+    """Primary enrichment using the strong OpenAI model with ultra-specific prompts"""
 
     NIST_CATEGORIES = [
         'GOVERNMENT', 'FINANCIAL_SERVICES', 'HEALTHCARE', 'EDUCATION',
@@ -28,12 +30,12 @@ class GPT4oEnricher:
     ]
 
     def __init__(self, api_key: str):
-        """Initialize GPT-4o enricher with OpenAI API key"""
+        """Initialize the enricher with an OpenAI API key"""
         if not api_key:
             raise ValueError("OpenAI API key required for GPT4oEnricher")
 
         self.client = OpenAI(api_key=api_key)
-        self.model = "gpt-4o"  # Latest GPT-4o model
+        self.model = openai_model()  # strong model, see llm_models
         self.logger = logging.getLogger(__name__)
 
     def create_extraction_prompt(self, content: Dict[str, Any]) -> str:
@@ -661,7 +663,7 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
 
     def extract(self, content: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extract structured data using GPT-4o.
+        Extract structured data using the strong OpenAI model.
 
         Args:
             content: Dict with full article content from ContentAcquisitionService
@@ -673,10 +675,10 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
         prompt = self.create_extraction_prompt(content)
 
         try:
-            self.logger.info(f"Calling GPT-4o for extraction...")
+            self.logger.info(f"Calling {self.model} for extraction...")
 
             response = self.client.chat.completions.create(
-                model=self.model,
+                **chat_params(self.model),
                 messages=[
                     {
                         "role": "system",
@@ -687,7 +689,6 @@ Respond with ONLY a valid JSON object. No markdown, no explanation outside the J
                         "content": prompt
                     }
                 ],
-                temperature=0.1,  # Low temperature for consistency
                 response_format={"type": "json_object"}  # Force JSON output
             )
 

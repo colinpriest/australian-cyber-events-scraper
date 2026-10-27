@@ -121,6 +121,7 @@ class CyberEvent:
             self.urls = []
 
 from .entity_extractor import EntityExtractor
+from ..utils.llm_models import chat_params, openai_fast_model
 from ..utils.validation import llm_validate_records_affected, validate_records_affected
 
 logger = logging.getLogger(__name__)
@@ -578,9 +579,9 @@ class SimilarityCalculator:
 class LLMArbiter:
     """LLM-based decision maker for uncertain similarity cases"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key
-        self.model = model
+        self.model = model or openai_fast_model()
         self.logger = logging.getLogger(f"{__name__}.LLMArbiter")
     
     def decide_similarity(self, event1: CyberEvent, event2: CyberEvent, algo_score: float) -> ArbiterDecision:
@@ -659,13 +660,11 @@ Respond with JSON:
 
         client = OpenAI(api_key=self.api_key)
         response = client.chat.completions.create(
-            model=self.model,
+            **chat_params(self.model, max_tokens=200),
             messages=[
                 {"role": "system", "content": "You are a cybersecurity analyst comparing breach reports. Respond only with valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.1,
-            max_tokens=200,
         )
         # Track token usage
         from ..utils.token_tracker import tracker

@@ -34,6 +34,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from cyber_data_collector.utils import setup_logging
+from cyber_data_collector.utils.llm_models import (
+    add_model_arguments, apply_model_arguments, chat_params, openai_fast_model,
+    openai_model,
+)
 from scripts.oaic.oaic_validators import (
     OAICValidationError,
     quarantine_extraction,
@@ -1862,29 +1866,31 @@ class OAICDashboardController:
 
 
 class DashboardVisionExtractor:
-    """Extracts structured data from dashboard screenshots using GPT-4o vision.
+    """Extracts structured data from dashboard screenshots using OpenAI vision.
 
-    Different model tiers per page:
-      - Pages 2-5: gpt-4o-mini is sufficient (KPI numbers, simple bars).
-      - Pages 6/7/8/9: gpt-4o (full model) - these have side-by-side
+    Different model tiers per page (models come from llm_models and are
+    resolved at call time; until 2026-10 these were gpt-4o-mini / gpt-4o):
+      - Pages 2-5: the fast model is sufficient (KPI numbers, simple bars).
+      - Pages 6/7/8/9: the strong model - these have side-by-side
         bar pairs and tiny percentage labels that the mini model
-        consistently misreads (current/previous swaps, offset-by-one
+        consistently misread (current/previous swaps, offset-by-one
         bucket alignment).
     """
 
-    # Per-page model selection. gpt-4o costs ~25x more per call than
-    # mini but eliminates the misread errors on multi-bar charts.
-    # 7 semesters x 4 chart-heavy pages = 28 extra full-model calls per
-    # full-history scrape, which is ~$0.20 - cheap insurance.
-    PAGE_MODELS = {
-        2: "gpt-4o-mini",
-        3: "gpt-4o-mini",
-        4: "gpt-4o-mini",
-        5: "gpt-4o-mini",
-        6: "gpt-4o",
-        7: "gpt-4o",
-        8: "gpt-4o",
-        9: "gpt-4o",
+    # Per-page model tier. The strong model costs far more per call than the
+    # fast one but eliminates the misread errors on multi-bar charts.
+    # 7 semesters x 4 chart-heavy pages = 28 extra strong-model calls per
+    # full-history scrape - cheap insurance. Tiers, not model names: the
+    # model is looked up when the call is made (see _model_for_page).
+    PAGE_TIERS = {
+        2: "fast",
+        3: "fast",
+        4: "fast",
+        5: "fast",
+        6: "strong",
+        7: "strong",
+        8: "strong",
+        9: "strong",
     }
 
     def __init__(self, api_key: str):
@@ -1897,7 +1903,12 @@ class DashboardVisionExtractor:
         if not api_key:
             raise ValueError("OpenAI API key required for vision extraction")
         self.client = AsyncOpenAI(api_key=api_key)
-        self.model = "gpt-4o-mini"  # Default; per-page override via PAGE_MODELS
+
+    def _model_for_page(self, page: Optional[int]) -> str:
+        """Model for a dashboard page: its tier, else the fast model."""
+        if page and self.PAGE_TIERS.get(page) == "strong":
+            return openai_model()
+        return openai_fast_model()
 
     def _encode_image(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 for API."""
@@ -1928,16 +1939,14 @@ class DashboardVisionExtractor:
     async def _call_vision_api(self, image_bytes: bytes, prompt: str, page: Optional[int] = None) -> Dict:
         """
         Call the OpenAI Vision API with retry logic (async). Uses
-        PAGE_MODELS[page] when page is given; falls back to self.model.
+        the tier in PAGE_TIERS when page is given; falls back to the fast model.
         """
         messages = self._create_vision_message(image_bytes, prompt)
-        model = self.PAGE_MODELS.get(page, self.model) if page else self.model
+        model = self._model_for_page(page)
 
         response = await self.client.chat.completions.create(
-            model=model,
+            **chat_params(model, max_tokens=4096),
             messages=messages,
-            max_tokens=4096,
-            temperature=0.1,
             response_format={"type": "json_object"}
         )
 
@@ -3264,7 +3273,9 @@ async def main():
         )
     )
 
+    add_model_arguments(parser)
     args = parser.parse_args()
+    apply_model_arguments(args)
 
     load_dotenv()
     api_key = os.getenv('OPENAI_API_KEY')

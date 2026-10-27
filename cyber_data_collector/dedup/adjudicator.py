@@ -9,7 +9,7 @@ Three layers, cheapest first, each recording why it decided what it did:
    replaces v2's literal title comparison, which could not tell that "Qantas
    contact centre breach" and "6 million Qantas customers exposed" are one
    incident.
-3. **LLM adjudication** (expensive, precise) - GPT-4o rules on the survivors
+3. **LLM adjudication** (expensive, precise) - the strong OpenAI model (see llm_models) rules on the survivors
    and must justify itself in terms a reviewer can check.
 
 An active human override always wins. A shared source article is strong
@@ -40,6 +40,7 @@ from cyber_data_collector.dedup.entity_resolution import (
     EntityResolver,
     name_similarity,
 )
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 from cyber_data_collector.dedup.models import (
     DecidedBy,
     LLMPairAdjudication,
@@ -50,7 +51,6 @@ from cyber_data_collector.dedup.models import (
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-ADJUDICATION_MODEL = "gpt-4o"
 
 # Pairs below this embedding similarity are not worth an LLM call. Tuned to be
 # permissive: a false negative here is a permanently missed merge, whereas a
@@ -157,7 +157,7 @@ class Adjudicator:
         openai_client=None,
         overrides: Optional[Dict[frozenset, bool]] = None,
         embed_model: str = EMBEDDING_MODEL,
-        adjudication_model: str = ADJUDICATION_MODEL,
+        adjudication_model: Optional[str] = None,
         merge_threshold: float = 0.85,
         require_entity_match: bool = True,
     ):
@@ -166,7 +166,7 @@ class Adjudicator:
         self._client_ready = openai_client is not None
         self.overrides = overrides or {}
         self.embed_model = embed_model
-        self.adjudication_model = adjudication_model
+        self.adjudication_model = adjudication_model or openai_model()
         self.merge_threshold = merge_threshold
         # When False, a non-matching entity is recorded as evidence but does not
         # by itself decide the pair. Needed when reviewing already-grouped
@@ -459,7 +459,7 @@ class Adjudicator:
         try:
             self.stats["llm_calls"] += 1
             result: LLMPairAdjudication = client.chat.completions.create(
-                model=self.adjudication_model,
+                **chat_params(self.adjudication_model),
                 response_model=LLMPairAdjudication,
                 messages=[
                     {
@@ -498,7 +498,6 @@ class Adjudicator:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.0,
             )
         except Exception as exc:  # noqa: BLE001 - never let one pair break a run
             self.stats["llm_failures"] += 1

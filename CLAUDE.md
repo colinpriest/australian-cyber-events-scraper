@@ -8,8 +8,9 @@ A comprehensive Python system for discovering, scraping, filtering, and enrichin
 |-------|------------|---------|---------|
 | Runtime | Python | 3.8+ | Core scripting and data processing |
 | Framework | Pydantic | 2.x | Data validation and models |
-| LLM Primary | OpenAI GPT-4o | Latest | Primary event extraction and enrichment |
-| LLM Fallback | GPT-4o-mini | Latest | Fast initial filtering during discovery |
+| LLM Primary | OpenAI GPT-5.5 | `gpt-5.5-2026-04-23` (`OPENAI_MODEL`) | Primary event extraction, adjudication, enrichment |
+| LLM Fast | GPT-5.4-mini | `gpt-5.4-mini-2026-03-17` (`OPENAI_FAST_MODEL`) | Fast filtering and classification |
+| Judgements | TypeSafe Jev | `jev-1.14.0` (`TYPESAFE_MODEL`) | Probabilistic judgements, stored in `ModelJudgements` |
 | AI Search | Perplexity AI | API v1 | Real-time cyber event discovery and fact-checking |
 | Database | SQLite | 3.x | Event storage and persistence |
 | Web Scraping | Playwright | 1.44+ | Browser-based content extraction |

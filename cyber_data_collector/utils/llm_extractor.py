@@ -9,6 +9,8 @@ import instructor
 import openai
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
+
 # Initialize the OpenAI client for instructor
 # This will use the OPENAI_API_KEY environment variable
 client = instructor.patch(openai.OpenAI())
@@ -23,13 +25,13 @@ class ExtractedEventDetails(BaseModel):
     event_date: Optional[date] = Field(None, description="The actual date when the cyber event occurred (not when it was reported). Extract from article text if available, format as YYYY-MM-DD.")
     records_affected: Optional[int] = Field(None, description="The number of individuals, customers, or records affected by the event.")
 
-def extract_event_details_with_llm(text_content: str, model: str = "gpt-4o-mini") -> Optional[ExtractedEventDetails]:
+def extract_event_details_with_llm(text_content: str, model: Optional[str] = None) -> Optional[ExtractedEventDetails]:
     """
     Uses an LLM to extract structured details from the text of a news article.
 
     Args:
         text_content: The full text content scraped from the article page.
-        model: The name of the OpenAI model to use.
+        model: The OpenAI model to use (default: the fast model, see llm_models).
 
     Returns:
         A Pydantic object containing the extracted details, or None if extraction fails.
@@ -60,17 +62,17 @@ def extract_event_details_with_llm(text_content: str, model: str = "gpt-4o-mini"
         f"--- ARTICLE TEXT ---\n{truncated_content}"
     )
 
+    model = model or openai_fast_model()
     try:
         logger = logging.getLogger(__name__)
         logger.debug(f"Calling LLM ({model}) for analysis...")
         details = client.chat.completions.create(
-            model=model,
+            **chat_params(model),
             response_model=ExtractedEventDetails,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.0,
             max_retries=2,
         )
         logger.debug("LLM analysis successful.")

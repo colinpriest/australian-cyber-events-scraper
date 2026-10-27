@@ -25,6 +25,8 @@ from typing import List, Optional, Sequence, Set
 
 from pydantic import BaseModel, Field
 
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
+
 logger = logging.getLogger(__name__)
 
 PLACEHOLDER_TITLES: Set[str] = {
@@ -301,8 +303,8 @@ class TitleGenerator:
     a bad title is never replaced by a worse one.
     """
 
-    def __init__(self, openai_client=None, model: str = "gpt-4o") -> None:
-        self.model = model
+    def __init__(self, openai_client=None, model: Optional[str] = None) -> None:
+        self.model = model or openai_model()
         self._client = openai_client
         if self._client is None:
             try:
@@ -334,9 +336,8 @@ class TitleGenerator:
 
         try:
             return self._client.chat.completions.create(
-                model=self.model,
+                **chat_params(self.model),
                 response_model=GeneratedTitle,
-                temperature=0.0,
                 messages=[
                     {
                         "role": "system",

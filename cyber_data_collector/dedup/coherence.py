@@ -36,10 +36,10 @@ from typing import Any, Dict, List, Optional, Sequence
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 
 logger = logging.getLogger(__name__)
 
-COHERENCE_MODEL = "gpt-4o"
 HOME_WINDOW_DAYS = 90
 _EMPTY = {"", "none", "null", "unknown", "n/a"}
 
@@ -165,7 +165,7 @@ def judge_event(event: Dict[str, Any], client=None) -> Optional[CoherenceVerdict
         return None
     try:
         verdict: CoherenceVerdict = client.chat.completions.create(
-            model=COHERENCE_MODEL, response_model=CoherenceVerdict, temperature=0.0,
+            **chat_params(openai_model()), response_model=CoherenceVerdict,
             messages=[{"role": "system", "content": SYSTEM_PROMPT},
                       {"role": "user", "content": render_event(event)}])
     except Exception as exc:  # noqa: BLE001 - one event must not break a run

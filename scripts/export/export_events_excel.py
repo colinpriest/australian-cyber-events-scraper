@@ -41,6 +41,12 @@ from openai import OpenAI
 import pandas as pd
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from cyber_data_collector.utils.llm_models import (  # noqa: E402
+    add_model_arguments, apply_model_arguments, chat_params, openai_fast_model,
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -153,7 +159,7 @@ def summarize_with_llm(client: OpenAI, text: str, max_words: int = 500) -> str:
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            **chat_params(openai_fast_model(), max_tokens=2000),
             messages=[
                 {
                     "role": "system",
@@ -173,9 +179,7 @@ Write up to {max_words} words. Be thorough and include all relevant details."""
                     "role": "user",
                     "content": f"Summarize this cyber security event:\n\n{text}"
                 }
-            ],
-            max_tokens=2000,
-            temperature=0.3
+            ]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -203,7 +207,7 @@ def anonymize_with_llm(client: OpenAI, text: str, industry: str = None, title: s
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            **chat_params(openai_fast_model(), max_tokens=2000),
             messages=[
                 {
                     "role": "system",
@@ -245,9 +249,7 @@ Return ONLY the fully anonymized text with no dates, no entity names, and no tit
                     "role": "user",
                     "content": f"Fully anonymize this incident description (remove all entity names, dates, years, and any title):\n\n{text}"
                 }
-            ],
-            max_tokens=2000,
-            temperature=0.2
+            ]
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
@@ -568,8 +570,10 @@ def main():
         action='store_true',
         help='Exclude events where the number of customer records affected is unknown'
     )
+    add_model_arguments(parser)
 
     args = parser.parse_args()
+    apply_model_arguments(args)
 
     # Check if openpyxl is available
     try:

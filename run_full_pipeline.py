@@ -21,13 +21,13 @@ PHASES:
 1. **Discovery & Initial Processing**
    - Discovers cyber events from multiple sources (GDELT, Perplexity, Google, Webber Insurance)
    - Scrapes full article content
-   - Performs initial GPT-4o-mini filtering (fast, basic quality check)
+   - Performs initial fast-model filtering (fast, basic quality check)
 
 2. **Perplexity AI Enrichment**
    - AUTOMATICALLY runs after discovery to enrich all new events with Perplexity AI
    - Extracts: formal entity names, threat actors, attack methods, victim counts
    - Uses sophisticated multi-source verification
-   - Much higher quality than initial GPT-4o-mini pass
+   - Much higher quality than initial fast-model pass
 
 3. **Global Deduplication**
    - Merges duplicate events using entity-based matching
@@ -38,7 +38,7 @@ PHASES:
 4. **ASD Risk Classification**
    - Classifies events using Australian Signals Directorate (ASD) risk matrix framework
    - Assigns severity categories (C1-C6) and stakeholder levels
-   - Uses GPT-4o for intelligent classification based on impact and records affected
+   - Uses the strong OpenAI model for intelligent classification based on impact and records affected
    - INCREMENTAL: Only processes events without existing classifications
 
 5. **Dashboard Generation**
@@ -101,6 +101,10 @@ from scripts.build_static_dashboard import (
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.utils import ConfigManager, setup_logging
+from cyber_data_collector.utils.llm_models import (
+    add_model_arguments,
+    apply_model_arguments,
+)
 from cyber_data_collector.utils.run_summary import (
     install_run_summary,
     print_run_summary,
@@ -187,15 +191,15 @@ class UnifiedPipeline:
 
         This phase:
         1. Discovers raw events from multiple sources
-        2. Performs initial GPT-4o-mini filtering (fast pass)
+        2. Performs initial fast-model filtering (fast pass)
         3. AUTOMATICALLY enriches all new events with Perplexity AI
         4. Runs global deduplication
         """
         self.print_header("PHASE 1: EVENT DISCOVERY & PERPLEXITY ENRICHMENT")
 
         try:
-            # Step 1: Run initial discovery with GPT-4o-mini filtering
-            logger.info("Step 1/3: Discovering events from sources (with initial GPT-4o-mini filtering)...")
+            # Step 1: Run initial discovery with fast-model filtering
+            logger.info("Step 1/3: Discovering events from sources (with initial fast-model filtering)...")
             pipeline = EventDiscoveryEnrichmentPipeline(self.db_path)
 
             await pipeline.discover_events(
@@ -227,7 +231,7 @@ class UnifiedPipeline:
 
             # Step 2: Automatically run Perplexity enrichment on newly discovered events
             logger.info("\nStep 2/3: Enriching events with Perplexity AI (high-quality enrichment)...")
-            logger.info("This automatically upgrades GPT-4o-mini enrichment to Perplexity AI...")
+            logger.info("This automatically upgrades fast-model enrichment to Perplexity AI...")
 
             perplexity_success = await self._run_auto_perplexity_enrichment(args)
 
@@ -259,7 +263,7 @@ class UnifiedPipeline:
     async def _run_auto_perplexity_enrichment(self, args) -> bool:
         """
         Automatically run Perplexity enrichment on events discovered in this session.
-        This upgrades the initial GPT-4o-mini enrichment to high-quality Perplexity AI.
+        This upgrades the initial fast-model enrichment to high-quality Perplexity AI.
         """
         db = None
         try:
@@ -495,10 +499,17 @@ class UnifiedPipeline:
         events by victim.
 
         1. ``classify-pages`` - every unclassified suspect page, not only new
-           ones, since the suspect patterns widen over time (gpt-4o-mini, one
+           ones, since the suspect patterns widen over time (the fast OpenAI model, one
            call per page, each verdict stored and never paid for twice).
         2. ``reject-non-incidents`` - events made only of confident
-           non-incident pages.
+           non-incident pages. **Report-only** unless
+           ``--hygiene-apply-rejections``: judged on the page's own text,
+           2026-10-27, it would have rejected 74 events, many of them real
+           incidents whose stored page is the victim's privacy policy or home
+           page while the incident came from Perplexity's research (LUSH,
+           Nexia, Legal Aid ACT). A page verdict says what the page is, not
+           whether the event happened; that needs an event-level judgement
+           with corroboration, measured before it deletes anything.
         3. ``check-victims`` - deterministic, no API calls.
 
         Never fails the phase.
@@ -508,7 +519,10 @@ class UnifiedPipeline:
             return
         from scripts import dedup_admin
         base = ["--db", self.db_path]
-        steps = [["reject-non-incidents"], ["check-victims"]]
+        reject = ["reject-non-incidents"]
+        if not getattr(args, 'hygiene_apply_rejections', False):
+            reject.append("--dry-run")
+        steps = [reject, ["check-victims"]]
         if os.getenv('OPENAI_API_KEY'):
             steps.insert(0, ["classify-pages"])
         else:
@@ -643,7 +657,7 @@ class UnifiedPipeline:
 
         This phase:
         1. Identifies events that don't have ASD risk classifications
-        2. Classifies them using GPT-4o based on ASD risk matrix framework
+        2. Classifies them using the strong OpenAI model based on ASD risk matrix framework
         3. Stores classifications in ASDRiskClassifications table
         4. Incremental: Only processes new events, uses cache for existing ones
         """
@@ -660,7 +674,7 @@ class UnifiedPipeline:
 
             # Initialize classifier
             logger.info("Initializing ASD risk classifier...")
-            classifier = ASDRiskClassifier(self.db_path, model='gpt-4o', api_key=openai_api_key)
+            classifier = ASDRiskClassifier(self.db_path, api_key=openai_api_key)
 
             try:
                 # Get count of unclassified events
@@ -916,6 +930,9 @@ Examples:
     parser.add_argument('--skip-data-hygiene', action='store_true',
                         help='Skip rejecting non-incident pages and correcting victims '
                              'that the event\'s own records contradict')
+    parser.add_argument('--hygiene-apply-rejections', action='store_true',
+                        help='Reject events made only of non-incident pages (default: '
+                             'report them only; see run_data_hygiene)')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')
@@ -960,7 +977,9 @@ Examples:
     parser.add_argument('--db-path', default=None,
                         help='Path to SQLite database file (defaults to DATABASE_URL/.env setting)')
 
+    add_model_arguments(parser)
     args = parser.parse_args()
+    apply_model_arguments(args)
     env_config = ConfigManager(".env").load()
     if not args.db_path:
         args.db_path = env_config.get("DATABASE_PATH") or "instance/cyber_events.db"

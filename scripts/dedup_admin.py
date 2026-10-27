@@ -53,6 +53,10 @@ except ImportError:  # pragma: no cover - optional dependency
     pass
 
 from cyber_data_collector.dedup import repair, schema
+from cyber_data_collector.utils.llm_models import (
+    add_model_arguments,
+    apply_model_arguments,
+)
 from cyber_data_collector.dedup.adjudicator import Adjudicator, EventRecord
 from cyber_data_collector.dedup.backfill import run_backfill
 from cyber_data_collector.dedup.cluster_adjudicator import ClusterAdjudicator
@@ -2443,7 +2447,7 @@ def cmd_classify_pages(args) -> int:
         print(f"{len(suspects)} unclassified suspect record(s)")
         verdicts = page_classifier.classify_pages(conn, suspects, dry_run=args.dry_run)
         counts: Dict[str, int] = {}
-        for eid, title, url, _ in suspects:
+        for eid, title, *_ in suspects:
             v = verdicts.get(eid)
             if v is None:
                 continue
@@ -2544,6 +2548,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--no-refresh-roles", action="store_true",
         help="Do not reclassify entity roles for events whose membership "
              "changed. Roles are refreshed automatically otherwise.")
+    add_model_arguments(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("migrate").set_defaults(func=cmd_migrate)
@@ -2647,7 +2652,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--min-members", type=int, default=1,
                    help="Only retitle events with at least this many records.")
     p.add_argument("--generate", action="store_true",
-                   help="Write a headline with GPT-4o when every candidate "
+                   help="Write a headline with the strong OpenAI model when every candidate "
                         "title is a placeholder, prose or page furniture.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_retitle)
@@ -2690,7 +2695,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("redate",
                        help="Repair event dates from member consensus and text")
     p.add_argument("--research", action="store_true",
-                   help="Search (Perplexity + GPT-4o) for events the stored "
+                   help="Search (Perplexity + the strong OpenAI model) for events the stored "
                         "text cannot date.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_redate)
@@ -2807,6 +2812,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_restore_dedup_state)
 
     args = parser.parse_args(argv)
+    apply_model_arguments(args)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",

@@ -47,10 +47,9 @@ from cyber_data_collector.dedup.cluster_adjudicator import (
     IncidentGroup,
     singleton_partition,
 )
+from cyber_data_collector.utils.llm_models import chat_params, openai_model
 
 logger = logging.getLogger(__name__)
-
-RECURRENCE_MODEL = "gpt-4o"
 
 # The window the user's question is about: a repeat attack arriving less than
 # this many days after the previous one is suspicious enough to re-check.
@@ -269,13 +268,13 @@ class RecurrenceAuditor:
     def __init__(
         self,
         openai_client=None,
-        model: str = RECURRENCE_MODEL,
+        model: Optional[str] = None,
         window_days: int = DEFAULT_WINDOW_DAYS,
         max_run_size: int = MAX_RUN_SIZE,
     ):
         self._client = openai_client
         self._client_ready = openai_client is not None
-        self.model = model
+        self.model = model or openai_model()
         self.window_days = window_days
         self.max_run_size = max_run_size
         self.stats: Dict[str, int] = {
@@ -323,9 +322,8 @@ class RecurrenceAuditor:
         try:
             self.stats["llm_calls"] += 1
             partition: ClusterPartition = client.chat.completions.create(
-                model=self.model,
+                **chat_params(self.model),
                 response_model=ClusterPartition,
-                temperature=0.0,
                 messages=[
                     {"role": "system",
                      "content": SYSTEM_PROMPT.format(window=self.window_days)},
