@@ -28,6 +28,7 @@ from cyber_data_collector.models.events import (
     EventSource,
 )
 from cyber_data_collector.utils import RateLimiter
+from cyber_data_collector.utils.llm_models import perplexity_model
 
 
 class PerplexityEvent(BaseModel):
@@ -255,7 +256,7 @@ class PerplexityDataSource(DataSource):
         response = await loop.run_in_executor(
             None,
             lambda: self.openai_client.chat.completions.create(
-                model="sonar-pro",
+                model=perplexity_model(),
                 messages=messages,
                 temperature=0.1,
                 max_tokens=4000,
@@ -266,7 +267,7 @@ class PerplexityDataSource(DataSource):
         from cyber_data_collector.utils.token_tracker import tracker
         if response.usage:
             tracker.record(
-                "sonar-pro", response.usage.prompt_tokens,
+                perplexity_model(), response.usage.prompt_tokens,
                 response.usage.completion_tokens, context="perplexity_discovery",
             )
 
@@ -429,7 +430,7 @@ class PerplexityDataSource(DataSource):
             response = await loop.run_in_executor(
                 None,
                 lambda: self.openai_client.chat.completions.create(
-                    model="sonar-pro",
+                    model=perplexity_model(),
                     messages=messages,
                     temperature=0.0,
                     max_tokens=4000,
@@ -438,7 +439,7 @@ class PerplexityDataSource(DataSource):
             # Track token usage
             if response.usage:
                 tracker.record(
-                    "sonar-pro", response.usage.prompt_tokens,
+                    perplexity_model(), response.usage.prompt_tokens,
                     response.usage.completion_tokens, context="perplexity_strict_json",
                 )
             content = response.choices[0].message.content
@@ -549,7 +550,7 @@ class PerplexityDataSource(DataSource):
             response = await loop.run_in_executor(
                 None,
                 lambda: self.openai_client.chat.completions.create(
-                    model="sonar-pro",
+                    model=perplexity_model(),
                     messages=messages,
                     temperature=0.0,
                     max_tokens=4000,
@@ -558,7 +559,7 @@ class PerplexityDataSource(DataSource):
             # Track token usage
             if response.usage:
                 tracker.record(
-                    "sonar-pro", response.usage.prompt_tokens,
+                    perplexity_model(), response.usage.prompt_tokens,
                     response.usage.completion_tokens, context="perplexity_partial_complete",
                 )
             content = response.choices[0].message.content

@@ -7,6 +7,8 @@ from typing import Optional, List, Dict, Any
 import logging
 import os
 
+from cyber_data_collector.utils.llm_models import perplexity_model
+
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 try:

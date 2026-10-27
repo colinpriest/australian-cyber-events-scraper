@@ -30,6 +30,15 @@ ENRICHMENT_TRACKING_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("perplexity_last_error", "TEXT"),
     # NULL (never attempted) | 'retrying' | 'validated' | 'quarantined'
     ("perplexity_status", "TEXT"),
+    # How records_affected was stated by the source that supports it (NULL =
+    # not clear from the source, or not a supported Perplexity count):
+    # unit 'records' | 'accounts' | 'customers' | 'people';
+    # basis 'stated' | 'estimate' (incl. "up to") | 'at_least';
+    # scope 'australian' | 'global'; source = cited URL or 'record'.
+    ("records_affected_unit", "TEXT"),
+    ("records_affected_basis", "TEXT"),
+    ("records_affected_scope", "TEXT"),
+    ("records_affected_source", "TEXT"),
 )
 
 STATUS_RETRYING = "retrying"
@@ -40,6 +49,7 @@ STATUS_QUARANTINED = "quarantined"
 _PROMOTABLE_COLUMNS = frozenset({
     "event_date", "date_confidence", "entity_confidence",
     "attacking_entity_name", "attack_method", "records_affected",
+    "records_affected_unit", "records_affected_basis", "records_affected_scope", "records_affected_source",
 })
 
 
@@ -102,8 +112,11 @@ class CyberEventDataV2:
             if name not in existing:
                 cursor.execute(f"ALTER TABLE EnrichedEvents ADD COLUMN {name} {ddl}")
                 added = True
+        # Fact provenance and the cited-page cache the acceptance gate needs.
+        from cyber_data_collector.storage.enrichment_support import ensure_schema as ensure_support_schema
+        ensure_support_schema(self._conn)
+        self._conn.commit()
         if added:
-            self._conn.commit()
             self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
 
     # =========================================================================
@@ -420,6 +433,24 @@ class CyberEventDataV2:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    #: Relationship types whose organisations identify the incident a record
+    #: is about (a cited page naming one of them is about the same incident).
+    INCIDENT_ORGANISATION_ROLES = ("victim", "primary_target", "affected", "affected_customer", "vendor")
+
+    def get_record_organisations(self, enriched_event_id: str) -> List[str]:
+        """Names of the organisations linked to a record as victim, affected party or vendor."""
+        placeholders = ",".join("?" * len(self.INCIDENT_ORGANISATION_ROLES))
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT e.entity_name FROM EnrichedEventEntities x "
+                "JOIN EntitiesV2 e ON e.entity_id = x.entity_id "
+                f"WHERE x.enriched_event_id = ? AND x.relationship_type IN ({placeholders}) "
+                "ORDER BY e.entity_name",
+                (enriched_event_id, *self.INCIDENT_ORGANISATION_ROLES),
+            )
+            return [row[0] for row in cursor.fetchall() if row[0]]
+
     def record_enrichment_success(
         self,
         enriched_event_id: str,
@@ -430,6 +461,14 @@ class CyberEventDataV2:
 
         The stored row is read and updated inside one lock so the "never
         replace stronger information" decision is made against current state.
+        Each stored fact's provenance (and each withheld claim) is written to
+        ``EnrichmentFactSupport``.
+
+        If the answer made a claim confident enough to promote that no source
+        supports (and the fact is not already stored with support), the
+        supported facts are still stored but the record is **not** marked
+        validated: the attempt is counted and the record stays in the retry
+        queue (quarantined after ``MAX_ENRICHMENT_ATTEMPTS``).
 
         Args:
             enriched_event_id: Row to update.
@@ -438,15 +477,21 @@ class CyberEventDataV2:
                 typed column.
 
         Returns:
-            ``{'applied': [...], 'reliability': float | None}``.
+            ``{'applied': [...], 'reliability': float | None, 'pending': [...],
+            'status': 'validated' | 'retrying' | 'quarantined'}``.
 
         Raises:
             ValueError: If the gate result is not accepted or the row is missing.
+            CorruptStoredEnrichment: If the stored enrichment JSON cannot be
+                read - the baseline is unknown, so nothing is written; the
+                caller quarantines the record.
         """
         from cyber_data_collector.processing.enrichment_gate import (
+            MAX_ENRICHMENT_ATTEMPTS,
             MIN_APPLY_CONFIDENCE,
             plan_enrichment_update,
         )
+        from cyber_data_collector.storage.enrichment_support import load_fact_support, upsert_fact_support
 
         threshold = MIN_APPLY_CONFIDENCE if min_apply_confidence is None else min_apply_confidence
         now = datetime.now().isoformat()
@@ -455,23 +500,36 @@ class CyberEventDataV2:
             cursor.execute(
                 "SELECT date_confidence, entity_confidence, attacking_entity_name, "
                 "attack_method, records_affected, perplexity_enrichment_data, "
-                "data_source_reliability FROM EnrichedEvents WHERE enriched_event_id = ?",
+                "data_source_reliability, COALESCE(perplexity_attempt_count, 0) AS attempts "
+                "FROM EnrichedEvents WHERE enriched_event_id = ?",
                 (enriched_event_id,),
             )
             current = cursor.fetchone()
             if current is None:
                 raise ValueError(f"EnrichedEvents row {enriched_event_id} not found")
 
-            plan = plan_enrichment_update(dict(current), gate, threshold)
-            assignments = ["perplexity_enrichment_data = ?", "data_source_reliability = ?",
-                           "perplexity_validated = ?", "perplexity_validated_at = ?",
-                           "perplexity_attempt_count = COALESCE(perplexity_attempt_count, 0) + 1",
-                           "perplexity_last_attempt_at = ?", "perplexity_last_error = NULL",
-                           "perplexity_status = ?", "updated_at = ?"]
-            values: List[Any] = [
-                json.dumps(plan.merged, default=str), plan.reliability,
-                True, now, now, STATUS_VALIDATED, now,
-            ]
+            support = load_fact_support(self._conn, [enriched_event_id]).get(enriched_event_id, {})
+            plan = plan_enrichment_update(dict(current), gate, threshold, current_support=support)
+            attempts = int(current["attempts"]) + 1
+            if plan.pending:
+                status = STATUS_QUARANTINED if attempts >= MAX_ENRICHMENT_ATTEMPTS else STATUS_RETRYING
+                error = ("unsupported claims withheld: "
+                         + "; ".join(f"{name}: {gate.decisions[name].reason}" for name in plan.pending))[:500]
+                assignments = ["perplexity_enrichment_data = ?", "data_source_reliability = ?",
+                               "perplexity_validated = ?",
+                               "perplexity_attempt_count = ?", "perplexity_last_attempt_at = ?",
+                               "perplexity_last_error = ?", "perplexity_status = ?", "updated_at = ?"]
+                values: List[Any] = [json.dumps(plan.merged, default=str), plan.reliability,
+                                     False, attempts, now, error, status, now]
+            else:
+                status = STATUS_VALIDATED
+                assignments = ["perplexity_enrichment_data = ?", "data_source_reliability = ?",
+                               "perplexity_validated = ?", "perplexity_validated_at = ?",
+                               "perplexity_attempt_count = ?",
+                               "perplexity_last_attempt_at = ?", "perplexity_last_error = NULL",
+                               "perplexity_status = ?", "updated_at = ?"]
+                values = [json.dumps(plan.merged, default=str), plan.reliability,
+                          True, now, attempts, now, STATUS_VALIDATED, now]
             for column, value in plan.columns.items():
                 if column not in _PROMOTABLE_COLUMNS:
                     raise ValueError(f"refusing to write unexpected column {column!r}")
@@ -483,11 +541,38 @@ class CyberEventDataV2:
                     f"UPDATE EnrichedEvents SET {', '.join(assignments)} WHERE enriched_event_id = ?",
                     values,
                 )
+                upsert_fact_support(self._conn, enriched_event_id, plan.support_rows)
                 self._conn.commit()
             except sqlite3.Error:
                 self._conn.rollback()
                 raise
-        return {"applied": plan.applied, "reliability": plan.reliability}
+        if status == STATUS_QUARANTINED:
+            self._logger.warning("Enrichment quarantined after %d attempts with unsupported claims: %s",
+                                 attempts, enriched_event_id)
+        return {"applied": plan.applied, "reliability": plan.reliability,
+                "pending": plan.pending, "status": status}
+
+    def quarantine_enrichment(self, enriched_event_id: str, reason: str) -> None:
+        """Take a record out of the retry queue for a human, with the reason.
+
+        Used when enriching it again would be unsafe - its stored enrichment
+        cannot be read, so a new answer could not be weighed against it.  The
+        attempt count is left alone; ``--release-quarantine`` puts it back.
+        """
+        now = datetime.now().isoformat()
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "UPDATE EnrichedEvents SET perplexity_status = ?, perplexity_validated = 0, "
+                    "perplexity_last_error = ?, perplexity_last_attempt_at = ?, updated_at = ? "
+                    "WHERE enriched_event_id = ?",
+                    (STATUS_QUARANTINED, (reason or "quarantined")[:500], now, now, enriched_event_id),
+                )
+                self._conn.commit()
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        self._logger.warning("Enrichment quarantined: %s (%s)", enriched_event_id, (reason or "")[:120])
 
     def record_enrichment_failure(
         self,

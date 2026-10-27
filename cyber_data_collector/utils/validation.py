@@ -13,6 +13,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from cyber_data_collector.utils.llm_models import perplexity_model
+
 logger = logging.getLogger(__name__)
 
 
@@ -746,7 +748,7 @@ def llm_validate_records_affected(
         )
 
         payload = {
-            "model": "sonar-pro",
+            "model": perplexity_model(),
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 800,
             "temperature": 0.1,
@@ -774,7 +776,7 @@ def llm_validate_records_affected(
         usage = resp.json().get("usage", {})
         if usage:
             tracker.record(
-                "sonar-pro",
+                perplexity_model(),
                 usage.get("prompt_tokens", 0),
                 usage.get("completion_tokens", 0),
                 context="records_affected_validation",

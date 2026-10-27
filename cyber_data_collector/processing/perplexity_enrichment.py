@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 
 from cyber_data_collector.processing.record_evidence import RecordEvidence
 from cyber_data_collector.utils import ConfigManager
+from cyber_data_collector.utils.api_budget import is_budget_refusal
+from cyber_data_collector.utils.llm_models import perplexity_model
 
 #: How much persisted article text the enrichment prompt quotes.
 ENRICHMENT_PROMPT_CHARS = 4000
@@ -42,6 +44,18 @@ class PerplexityEventEnrichment(BaseModel):
     date_confidence: Optional[float] = Field(
         None,
         description="Confidence in the date (0.0-1.0)"
+    )
+    # Set by the acceptance gate, never taken from the answer: how precisely
+    # a source states the date ('day' or 'month' - a month-only statement
+    # supports only a YYYY-MM-01 claim) and on what basis ('stated'; a date a
+    # source carries only as its publication date is never accepted).
+    date_precision: Optional[str] = Field(
+        None,
+        description="Precision the supporting source states the date to (set by the gate)"
+    )
+    date_basis: Optional[str] = Field(
+        None,
+        description="How the supporting source states the date (set by the gate)"
     )
 
     formal_entity_name: Optional[str] = Field(
@@ -82,6 +96,17 @@ class PerplexityEventEnrichment(BaseModel):
     victim_count_confidence: Optional[float] = Field(
         None,
         description="Confidence in victim count (0.0-1.0)"
+    )
+    # Set by the acceptance gate from the supporting source's wording, never
+    # taken from the answer; None when the source does not make it clear.
+    victim_count_unit: Optional[str] = Field(
+        None, description="What the count counts: records / accounts / customers / people (set by the gate)"
+    )
+    victim_count_basis: Optional[str] = Field(
+        None, description="stated / estimate (incl. 'up to') / at_least (set by the gate)"
+    )
+    victim_count_scope: Optional[str] = Field(
+        None, description="australian / global, when the source frames it (set by the gate)"
     )
 
     sources_consulted: List[str] = Field(
@@ -131,7 +156,13 @@ class PerplexityDuplicateCheck(BaseModel):
 
 
 class PerplexityEnrichmentEngine:
-    """Engine for enriching events using Perplexity AI."""
+    """Engine for enriching events using Perplexity AI.
+
+    The model is ``PERPLEXITY_MODEL`` (:func:`llm_models.perplexity_model`),
+    read at call time.  Construction fails loudly when the API key or the
+    ``openai`` package is missing: there is no degraded mode that quietly
+    skips enrichment.
+    """
 
     def __init__(self, api_key: Optional[str] = None, logger: Optional[logging.Logger] = None):
         # Try to get API key from parameter, then environment, then .env file
@@ -163,18 +194,19 @@ class PerplexityEnrichmentEngine:
         self.base_delay = 2.0
         self.max_delay = 60.0
 
-        # Initialize client
-        if self.api_key and openai:
-            try:
-                self.client = openai.OpenAI(
-                    api_key=self.api_key,
-                    base_url="https://api.perplexity.ai"
-                )
-                self.logger.info("Perplexity enrichment engine initialized")
-            except Exception as e:
-                self.logger.error(f"Failed to initialize Perplexity client: {e}")
-        else:
-            self.logger.warning("Perplexity API key not available or openai not installed")
+        # Initialize client - or fail, naming what is missing.
+        if not self.api_key:
+            raise RuntimeError("Perplexity enrichment needs PERPLEXITY_API_KEY (not set in the environment or .env)")
+        if openai is None:
+            raise RuntimeError("Perplexity enrichment needs the 'openai' package (pip install -r requirements.txt)")
+        try:
+            self.client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.perplexity.ai"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize the Perplexity client: {e}") from e
+        self.logger.info("Perplexity enrichment engine initialized (model %s)", perplexity_model())
 
     async def enrich_event(
         self,
@@ -197,14 +229,17 @@ class PerplexityEnrichmentEngine:
                 scraped instead of the processed description.
 
         Returns:
-            None only when no attempt was made (client not initialised).  A
-            request or parse failure comes back as an enrichment with
-            ``parse_failed=True`` and a ``failure_reason`` so the caller can
-            record the failed attempt; it is never an empty success.
+            The parsed answer.  A request or parse failure comes back as an
+            enrichment with ``parse_failed=True`` and a ``failure_reason`` so
+            the caller can record the failed attempt; it is never an empty
+            success.
+
+        Raises:
+            RuntimeError: If the engine has no client (it was not constructed
+                normally); nothing is quietly skipped.
         """
         if not self.client:
-            self.logger.warning("Perplexity client not initialized, skipping enrichment")
-            return None
+            raise RuntimeError("Perplexity client not initialized; cannot enrich")
 
         # Rate limiting
         await self._rate_limit()
@@ -249,10 +284,14 @@ class PerplexityEnrichmentEngine:
         Use Perplexity to determine if two events are the same incident.
 
         This is used for borderline cases where algorithmic similarity is uncertain.
+
+        Raises:
+            RuntimeError: If there is no client, the request fails or the
+                answer cannot be parsed.  A made-up "not the same, confidence
+                0" answer is never returned in place of a real one.
         """
         if not self.client:
-            self.logger.warning("Perplexity client not initialized, skipping duplicate check")
-            return None
+            raise RuntimeError("Perplexity client not initialized; cannot check duplicates")
 
         # Rate limiting
         await self._rate_limit()
@@ -263,21 +302,15 @@ class PerplexityEnrichmentEngine:
             event2_title, event2_description, event2_date, event2_entity
         )
 
-        # Query Perplexity
-        try:
-            response = await self._query_perplexity_with_retry(prompt, max_tokens=500)
-            check = self._parse_duplicate_check_response(response)
+        # Query Perplexity (failures propagate to the caller)
+        response = await self._query_perplexity_with_retry(prompt, max_tokens=500)
+        check = self._parse_duplicate_check_response(response)
 
-            self.logger.info(
-                f"Duplicate check: '{event1_title[:30]}...' vs '{event2_title[:30]}...' - "
-                f"Same: {check.are_same_incident} (confidence: {check.confidence:.2f})"
-            )
-
-            return check
-
-        except Exception as e:
-            self.logger.error(f"Failed duplicate check: {e}")
-            return None
+        self.logger.info(
+            f"Duplicate check: '{event1_title[:30]}...' vs '{event2_title[:30]}...' - "
+            f"Same: {check.are_same_incident} (confidence: {check.confidence:.2f})"
+        )
+        return check
 
     def _build_enrichment_prompt(
         self,
@@ -420,10 +453,11 @@ Be conservative: if uncertain, answer false.
                     await asyncio.sleep(delay)
 
                 loop = asyncio.get_running_loop()
+                model = perplexity_model()
                 response = await loop.run_in_executor(
                     None,
                     lambda: self.client.chat.completions.create(
-                        model="sonar-pro",
+                        model=model,
                         messages=[
                             {
                                 "role": "system",
@@ -443,7 +477,7 @@ Be conservative: if uncertain, answer false.
                 from cyber_data_collector.utils.token_tracker import tracker
                 if hasattr(response, 'usage') and response.usage:
                     tracker.record(
-                        "sonar-pro", response.usage.prompt_tokens,
+                        model, response.usage.prompt_tokens,
                         response.usage.completion_tokens, context="perplexity_enrichment",
                     )
 
@@ -455,6 +489,11 @@ Be conservative: if uncertain, answer false.
 
             except Exception as e:
                 last_exception = e
+
+                # A request refused by the run's API budget was never sent;
+                # retrying it would only sleep and be refused again.
+                if is_budget_refusal(e):
+                    raise
 
                 # Don't retry auth errors
                 if "401" in str(e) or "403" in str(e) or "api key" in str(e).lower():
@@ -607,13 +646,9 @@ Be conservative: if uncertain, answer false.
             return PerplexityDuplicateCheck(**data)
 
         except (json.JSONDecodeError, ValueError) as e:
-            self.logger.warning(f"Failed to parse duplicate check response: {e}")
-            # Return conservative result
-            return PerplexityDuplicateCheck(
-                are_same_incident=False,
-                confidence=0.0,
-                reasoning="Failed to parse Perplexity response"
-            )
+            # No invented "different, confidence 0" verdict: the caller must
+            # see that there is no answer.
+            raise ValueError(f"unparseable Perplexity duplicate-check response: {e}") from e
 
     async def _rate_limit(self):
         """Ensure minimum time between requests."""

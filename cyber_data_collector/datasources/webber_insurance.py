@@ -24,6 +24,7 @@ from cyber_data_collector.models.events import (
     EventSource,
 )
 from cyber_data_collector.utils import RateLimiter
+from cyber_data_collector.utils.llm_models import perplexity_model
 
 
 class WebberInsuranceDataSource(DataSource):
