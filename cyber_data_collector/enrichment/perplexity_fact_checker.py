@@ -14,6 +14,8 @@ import requests
 from typing import Dict, Any, List
 from datetime import datetime
 
+from cyber_data_collector.utils.llm_models import perplexity_model
+
 
 class PerplexityFactChecker:
     """Use Perplexity to verify extracted facts with real-time web search"""
@@ -271,7 +273,7 @@ CRITICAL RULES:
         for attempt in range(max_retries):
             try:
                 payload = {
-                    "model": "sonar-pro",
+                    "model": perplexity_model(),
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 1000,
                     "temperature": 0.1
@@ -294,7 +296,7 @@ CRITICAL RULES:
                     usage = resp_json.get('usage', {})
                     if usage:
                         tracker.record(
-                            "sonar-pro",
+                            perplexity_model(),
                             usage.get('prompt_tokens', 0),
                             usage.get('completion_tokens', 0),
                             context="perplexity_fact_check",

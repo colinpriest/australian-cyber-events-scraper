@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
@@ -31,9 +31,12 @@ from cyber_data_collector.models.events import (
     EventSource,
 )
 from cyber_data_collector.pipelines import discovery
+from cyber_data_collector.processing import cited_documents as cited_documents_module
+from cyber_data_collector.processing.cited_documents import STATUS_FETCH_ERROR, CitedDocument
 from cyber_data_collector.processing.enrichment_gate import (
     MAX_ENRICHMENT_ATTEMPTS,
     evaluate_enrichment,
+    valid_source_urls,
     plan_enrichment_update,
     validate_confidence,
     validate_count,
@@ -96,6 +99,12 @@ CREATE TABLE EnrichedEvents (
     entity_confidence REAL, data_source_reliability REAL, attacking_entity_id INTEGER,
     attacking_entity_name VARCHAR(255), attack_method VARCHAR(100))
 """
+ENTITY_DDL = """
+CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT UNIQUE,
+    entity_type TEXT, is_australian BOOLEAN, confidence_score REAL, created_at TIMESTAMP);
+CREATE TABLE EnrichedEventEntities (enriched_event_id TEXT, entity_id INTEGER, relationship_type TEXT,
+    confidence_score REAL)
+"""
 PROCESSING_LOG_DDL = """
 CREATE TABLE ProcessingLog (
     log_id TEXT PRIMARY KEY, raw_event_id TEXT, processing_stage TEXT, status TEXT,
@@ -105,10 +114,31 @@ CREATE TABLE ProcessingLog (
 
 def _make_db(path) -> CyberEventDataV2:
     conn = sqlite3.connect(path)
-    conn.executescript(RAW_EVENTS_DDL + ";" + ENRICHED_EVENTS_DDL + ";" + PROCESSING_LOG_DDL)
+    conn.executescript(RAW_EVENTS_DDL + ";" + ENRICHED_EVENTS_DDL + ";" + ENTITY_DDL + ";" + PROCESSING_LOG_DDL)
     conn.commit()
     conn.close()
     return CyberEventDataV2(path)
+
+
+def _unreadable_page(url: str) -> CitedDocument:
+    return CitedDocument(url, STATUS_FETCH_ERROR, datetime.now().isoformat(), error="offline in tests")
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """No test reads a real page: every cited URL comes back unreadable."""
+    monkeypatch.setattr(cited_documents_module, "fetch_document", _unreadable_page)
+
+
+def _unfetched(answer: Optional[PerplexityEventEnrichment]) -> Dict[str, CitedDocument]:
+    urls = valid_source_urls(answer.sources_consulted) if answer is not None else []
+    return {url: _unreadable_page(url) for url in urls}
+
+
+def _evaluate(answer, **kwargs):
+    """The gate, with every cited page unreadable (facts must stand on the record)."""
+    kwargs.setdefault("cited_documents", _unfetched(answer))
+    return evaluate_enrichment(answer, **kwargs)
 
 
 @pytest.fixture
@@ -248,7 +278,7 @@ class TestGatePrimitives:
 
 class TestEvaluateEnrichment:
     def test_good_answer_is_accepted_with_computed_reliability(self):
-        result = evaluate_enrichment(_good_answer(), record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(_good_answer(), record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert result.is_accepted
         assert set(result.accepted_facts) >= {"date", "entity", "victim_count", "attack_method"}
         # Mean fact confidence (0.9, .85, .7, .8, .75 = 0.8), averaged with overall 0.8.
@@ -256,7 +286,7 @@ class TestEvaluateEnrichment:
         assert result.reliability != 0.85
 
     def test_reliability_tracks_the_accepted_facts_not_a_constant(self):
-        weak = evaluate_enrichment(
+        weak = _evaluate(
             _good_answer(date_confidence=0.2, entity_confidence=0.2, threat_actor_confidence=0.2,
                          attack_method_confidence=0.2, victim_count_confidence=0.2, overall_confidence=0.2),
             record_text=ARTICLE, reference_date=date(2025, 6, 1))
@@ -264,7 +294,7 @@ class TestEvaluateEnrichment:
 
     def test_future_date_is_dropped_but_other_facts_survive(self):
         answer = _good_answer(earliest_event_date="2025-12-25")
-        result = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert result.is_accepted
         assert "date" in result.rejected_facts
         assert result.sanitized.earliest_event_date is None
@@ -272,23 +302,23 @@ class TestEvaluateEnrichment:
         assert result.sanitized.formal_entity_name == "Acme Logistics Pty Ltd"
 
     def test_out_of_range_fact_confidence_drops_that_fact(self):
-        result = evaluate_enrichment(_good_answer(entity_confidence=1.7), record_text=ARTICLE,
+        result = _evaluate(_good_answer(entity_confidence=1.7), record_text=ARTICLE,
                                      reference_date=date(2025, 6, 1))
         assert "entity" in result.rejected_facts
         assert result.sanitized.formal_entity_name is None
 
     def test_missing_fact_confidence_drops_that_fact(self):
-        result = evaluate_enrichment(_good_answer(threat_actor_confidence=None), record_text=ARTICLE,
+        result = _evaluate(_good_answer(threat_actor_confidence=None), record_text=ARTICLE,
                                      reference_date=date(2025, 6, 1))
         assert "threat_actor" in result.rejected_facts
 
     def test_out_of_range_overall_confidence_rejects_the_whole_answer(self):
-        result = evaluate_enrichment(_good_answer(overall_confidence=3.0), record_text=ARTICLE,
+        result = _evaluate(_good_answer(overall_confidence=3.0), record_text=ARTICLE,
                                      reference_date=date(2025, 6, 1))
         assert not result.is_accepted and "overall" in result.failure_reason
 
     def test_negative_count_is_dropped(self):
-        result = evaluate_enrichment(_good_answer(victim_count=-40), record_text=ARTICLE,
+        result = _evaluate(_good_answer(victim_count=-40), record_text=ARTICLE,
                                      reference_date=date(2025, 6, 1))
         assert "victim_count" in result.rejected_facts
         assert result.sanitized.victim_count is None
@@ -296,39 +326,39 @@ class TestEvaluateEnrichment:
     def test_fact_with_no_source_and_not_in_the_record_is_dropped(self):
         answer = _good_answer(sources_consulted=[], formal_entity_name="Zeta Mining Corp",
                               victim_count=9999999)
-        result = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert "entity" in result.rejected_facts and "victim_count" in result.rejected_facts
         # The date, actor and method are in the article, so they stand on the record's own content.
         assert {"date", "threat_actor"} <= set(result.accepted_facts)
 
     def test_fact_without_a_source_is_kept_when_the_record_text_contains_it(self):
         answer = _good_answer(sources_consulted=[])
-        result = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert {"entity", "victim_count", "date"} <= set(result.accepted_facts)
 
     def test_placeholder_urls_do_not_count_as_a_source(self):
         answer = _good_answer(sources_consulted=["url1", "example", "ftp://x.y"],
                               formal_entity_name="Zeta Mining Corp")
-        result = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert "entity" in result.rejected_facts
         assert result.sanitized.sources_consulted == []
 
     def test_parse_failure_is_rejected_not_an_empty_success(self):
         failed = PerplexityEventEnrichment(parse_failed=True, failure_reason="unparseable response")
-        result = evaluate_enrichment(failed, record_text=ARTICLE)
+        result = _evaluate(failed, record_text=ARTICLE)
         assert not result.is_accepted
         assert result.failure_reason == "unparseable response"
         assert result.reliability is None
 
     def test_empty_answer_is_rejected(self):
-        result = evaluate_enrichment(PerplexityEventEnrichment(overall_confidence=0.0), record_text=ARTICLE)
+        result = _evaluate(PerplexityEventEnrichment(overall_confidence=0.0), record_text=ARTICLE)
         assert not result.is_accepted and result.reliability is None
 
     def test_answer_whose_every_fact_fails_is_rejected(self):
         answer = PerplexityEventEnrichment(earliest_event_date="2099-01-01", date_confidence=0.9,
                                            sources_consulted=["https://a.example.com/x"],
                                            overall_confidence=0.9)
-        result = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
+        result = _evaluate(answer, record_text=ARTICLE, reference_date=date(2025, 6, 1))
         assert not result.is_accepted and "date" in result.failure_reason
 
 
@@ -341,7 +371,7 @@ class TestEngineParsing:
     def test_unparseable_response_is_marked_failed(self):
         result = self._engine()._parse_enrichment_response("this is not json at all")
         assert result.parse_failed and result.failure_reason
-        assert evaluate_enrichment(result, record_text=ARTICLE).is_accepted is False
+        assert _evaluate(result, record_text=ARTICLE).is_accepted is False
 
     def test_non_object_json_is_marked_failed(self):
         result = self._engine()._parse_enrichment_response('["a", "b"]')
@@ -665,7 +695,7 @@ class TestMigration:
     def test_existing_rows_start_with_zero_attempts(self, tmp_path):
         path = tmp_path / "m.db"
         conn = sqlite3.connect(path)
-        conn.executescript(RAW_EVENTS_DDL + ";" + ENRICHED_EVENTS_DDL + ";" + PROCESSING_LOG_DDL)
+        conn.executescript(RAW_EVENTS_DDL + ";" + ENRICHED_EVENTS_DDL + ";" + ENTITY_DDL + ";" + PROCESSING_LOG_DDL)
         conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title) VALUES ('e1','r1','t')")
         conn.commit()
         conn.close()
@@ -732,7 +762,7 @@ class TestBackfillEnrichment:
         counts = _run(PerplexityBackfillProcessor(db, _FakePerplexityEngine([_good_answer()])))
 
         row = _row(db, enriched_id)
-        assert counts == {"enriched": 1, "failed": 0}
+        assert (counts["attempted"], counts["enriched"], counts["validated"], counts["failed"]) == (1, 1, 1, 0)
         assert row["perplexity_validated"] and row["perplexity_status"] == "validated"
         assert row["data_source_reliability"] == pytest.approx(0.8, abs=0.001)
         assert row["data_source_reliability"] != 0.85
@@ -759,7 +789,7 @@ class TestBackfillEnrichment:
         counts = _run(PerplexityBackfillProcessor(db, _FakePerplexityEngine([_malformed()])))
 
         row = _row(db, enriched_id)
-        assert counts == {"enriched": 0, "failed": 1}
+        assert (counts["attempted"], counts["enriched"], counts["failed"]) == (1, 0, 1)
         assert not row["perplexity_validated"]
         assert row["data_source_reliability"] is None
         assert row["perplexity_enrichment_data"] is None
@@ -836,8 +866,10 @@ class TestBackfillEnrichment:
 
 
 class TestWeakerNeverReplacesStronger:
-    def _accept(self, db, enriched_id, answer, reference=date(2025, 6, 1)):
-        gate = evaluate_enrichment(answer, record_text=ARTICLE, reference_date=reference)
+    def _accept(self, db, enriched_id, answer, reference=date(2025, 6, 1), pages=None):
+        documents = _unfetched(answer)
+        documents.update(pages or {})
+        gate = _evaluate(answer, record_text=ARTICLE, reference_date=reference, cited_documents=documents)
         assert gate.is_accepted
         return db.record_enrichment_success(enriched_id, gate)
 
@@ -868,8 +900,12 @@ class TestWeakerNeverReplacesStronger:
         raw_id = _add_record(db, content=ARTICLE)
         enriched_id = _add_enriched(db, raw_id)
         self._accept(db, enriched_id, _good_answer(date_confidence=0.7))
+        url = "https://www.example.com/acme-breach"
+        page = CitedDocument(url, "ok", datetime.now().isoformat(),
+                             text="Acme Logistics said intruders first entered its network on 15 March 2025, "
+                                  "a day before the encryption began. " * 3)
         outcome = self._accept(db, enriched_id, _good_answer(earliest_event_date="2025-03-15",
-                                                               date_confidence=0.95))
+                                                               date_confidence=0.95), pages={url: page})
         assert "date" in outcome["applied"]
         row = _row(db, enriched_id)
         assert row["event_date"] == "2025-03-15" and row["date_confidence"] == pytest.approx(0.95)
@@ -907,7 +943,7 @@ class TestWeakerNeverReplacesStronger:
 
     def test_plan_refuses_an_unaccepted_result(self):
         with pytest.raises(ValueError):
-            plan_enrichment_update({}, evaluate_enrichment(PerplexityEventEnrichment(), record_text=""))
+            plan_enrichment_update({}, _evaluate(PerplexityEventEnrichment(), record_text=""))
 
 
 class TestRequeueEmptyValidations:

@@ -24,6 +24,7 @@ from cyber_data_collector.models.events import (
     EventSource,
 )
 from cyber_data_collector.utils import RateLimiter
+from cyber_data_collector.utils.llm_models import perplexity_model
 
 
 class WebberInsuranceDataSource(DataSource):
@@ -298,7 +299,7 @@ I need you to:
 The original URL is inaccessible, so I need the actual story content."""
 
             response = client.chat.completions.create(
-                model="sonar-pro",
+                model=perplexity_model(),
                 messages=[
                     {
                         "role": "system",
