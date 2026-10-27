@@ -91,7 +91,15 @@ def test_only_suspects_are_sent_and_verdicts_are_stored_once(conn):
     assert {s[0] for s in suspects} == {"r-wir", "r-ausfec", "r-post"}   # news article not sent
     pc.classify_pages(conn, suspects, client=fake)
     assert fake.calls == 3
-    assert pc.pending_suspects(conn) == []                                # never paid for twice
+    from cyber_data_collector.utils.llm_models import openai_fast_model
+    assert pc.pending_suspects(conn, model=openai_fast_model()) == []    # never paid for twice
+
+
+def test_no_jev_fails_loudly_instead_of_switching_model(conn, monkeypatch):
+    from cyber_data_collector.utils.jev import JevUnavailable
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(JevUnavailable):
+        pc.classify_pages(conn, pc.pending_suspects(conn))
 
 
 def test_roundup_event_rejected_but_real_incident_from_a_roundup_kept(conn):
