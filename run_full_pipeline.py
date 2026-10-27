@@ -79,7 +79,9 @@ import argparse
 import asyncio
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -236,7 +238,10 @@ class UnifiedPipeline:
             perplexity_success = await self._run_auto_perplexity_enrichment(args)
 
             if not perplexity_success:
-                logger.warning("Perplexity enrichment had errors, but continuing with pipeline...")
+                # Deduplication still runs (it is incremental and safe), but the
+                # phase reports failure: it used to report success regardless.
+                logger.error("Perplexity enrichment failed - continuing to deduplication, phase will fail")
+                self.results['discovery']['errors'].append("Perplexity enrichment failed")
 
             # Step 3: Run global deduplication (cross-month, entity-based).
             # This is the ONLY place deduplication runs during a refresh. It is
@@ -249,11 +254,13 @@ class UnifiedPipeline:
             dedup_success = self.run_deduplication_phase(args)
 
             if not dedup_success:
-                logger.warning("Deduplication had errors, but discovery phase completed")
+                logger.error("Deduplication failed - discovery phase fails")
+                self.results['discovery']['errors'].append("Deduplication failed")
 
-            self.results['discovery']['success'] = True
-            logger.info(f"Discovery phase complete: {initial_events} events discovered and enriched")
-            return True
+            ok = perplexity_success and dedup_success
+            self.results['discovery']['success'] = ok
+            logger.info(f"Discovery phase {'complete' if ok else 'FAILED'}: {initial_events} events discovered")
+            return ok
 
         except Exception as e:
             logger.error(f"Discovery phase failed: {e}")
@@ -270,8 +277,10 @@ class UnifiedPipeline:
             # Load Perplexity API key
             perplexity_api_key = os.getenv('PERPLEXITY_API_KEY')
             if not perplexity_api_key:
+                # A skip, not a failure: the key is recommended, not required.
                 logger.warning("Perplexity API key not found - skipping automatic enrichment")
-                return False
+                self.results['reenrichment']['skipped'] = 'no PERPLEXITY_API_KEY'
+                return True
 
             # Initialize enrichment engine
             db = CyberEventDataV2(self.db_path)
@@ -305,11 +314,11 @@ class UnifiedPipeline:
             # flaky. Surface it as a warning so the user notices.
             attempted = enriched_count + failed_count
             if attempted >= 10 and failed_count / attempted > 0.25:
-                logger.warning(
-                    f"Perplexity enrichment failure rate {failed_count}/"
-                    f"{attempted} ({failed_count / attempted:.0%}) above 25% "
-                    "threshold. Check API key + network."
-                )
+                message = (f"Perplexity enrichment failure rate {failed_count}/{attempted} "
+                           f"({failed_count / attempted:.0%}) above 25% threshold. Check API key + network.")
+                logger.warning(message)
+                # Completed, but not cleanly: the exit code says so (2).
+                self.results['reenrichment']['errors'].append(message)
             return True
 
         except Exception as e:
@@ -803,30 +812,29 @@ class UnifiedPipeline:
             except Exception as e:
                 raise RuntimeError(f"Database schema validation failed: {e}")
 
-            files_created = []
-
-            # Generate static dashboard
-            logger.info("Generating static HTML dashboard...")
-            static_file = self._generate_static_dashboard(args)
-            if static_file:
-                files_created.append(static_file)
-                # Sanity check: a real dashboard with all chart sections
-                # is at least ~50 KB once embedded JSON is injected. A
-                # tiny file means a query failed silently and we wrote a
-                # stub.
-                try:
-                    size = Path(static_file).stat().st_size
-                    if size < 50 * 1024:
-                        logger.warning(
-                            f"Dashboard file {static_file} is only "
-                            f"{size:,} bytes (<50 KB). Likely a query "
-                            "returned no rows - inspect DB contents."
-                        )
-                except Exception:
-                    pass
+            # Build into a staging folder, validate, and only then replace the
+            # published files: a failed or truncated build used to overwrite the
+            # last good dashboard and still report success.
+            out_dir = Path(args.out_dir)
+            staging = Path(tempfile.mkdtemp(prefix="dashboard_staging_", dir=out_dir.parent if out_dir.parent.exists() else None))
+            try:
+                logger.info("Generating static HTML dashboard...")
+                built = build_dashboard_file(db_path=self.db_path, out_dir=str(staging))
+                problems = self._validate_dashboard(built)
+                if problems:
+                    raise RuntimeError("Dashboard failed validation, last published version kept: "
+                                       + "; ".join(problems))
+                out_dir.mkdir(parents=True, exist_ok=True)
+                published = []
+                for staged in staging.iterdir():
+                    target = out_dir / staged.name
+                    os.replace(staged, target)
+                    published.append(str(target))
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
 
             self.results['dashboard']['success'] = True
-            self.results['dashboard']['files_created'] = files_created
+            self.results['dashboard']['files_created'] = published
             return True
 
         except Exception as e:
@@ -834,24 +842,44 @@ class UnifiedPipeline:
             self.results['dashboard']['errors'].append(str(e))
             return False
 
-    def _generate_static_dashboard(self, args) -> Optional[str]:
-        """Generate static HTML dashboard.
+    @staticmethod
+    def _validate_dashboard(path: Optional[str]) -> List[str]:
+        """Reasons a built dashboard must not be published; empty when it is fine.
 
-        Delegates to build_static_dashboard.build_dashboard_file so the pipeline
-        and the standalone CLI assemble the exact same set of chart sections.
-        A previous in-line copy here had drifted and omitted several OAIC
-        comparison charts, shipping a dashboard with empty plots.
+        Uses build_static_dashboard.build_dashboard_file, so the pipeline and the
+        standalone CLI build the same page (a drifted in-line copy once shipped
+        empty plots). A real dashboard with all its chart data is at least
+        ~50 KB; a smaller file means a query failed silently.
         """
-        try:
-            return build_dashboard_file(db_path=self.db_path, out_dir=args.out_dir)
-        except Exception as e:
-            logger.error(f"Static dashboard generation failed: {e}")
-            self.results['dashboard']['errors'].append(f"Static dashboard: {e}")
-            return None
+        if not path or not Path(path).exists():
+            return ["no dashboard file was produced"]
+        problems = []
+        size = Path(path).stat().st_size
+        if size < 50 * 1024:
+            problems.append(f"{Path(path).name} is only {size:,} bytes (< 50 KB): a query probably returned no rows")
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        if "</html>" not in text.lower():
+            problems.append(f"{Path(path).name} is truncated (no closing </html>)")
+        return problems
 
+
+    def outcome(self, failed_phases) -> str:
+        """'ok', 'failed' (a required phase failed) or 'degraded' (all phases ran, but a step
+        inside one failed - e.g. a data-hygiene step or a high enrichment failure rate)."""
+        if failed_phases:
+            return "failed"
+        if any(r.get('errors') for r in self.results.values()):
+            return "degraded"
+        return "ok"
 
     async def run_pipeline(self, args):
-        """Run the complete unified pipeline."""
+        """Run the complete unified pipeline. Returns 'ok', 'degraded' or 'failed'.
+
+        A failed required phase stops the run unless --continue-on-error, and is
+        reported as a failure either way: the run used to return success after
+        continuing past a failed phase.
+        """
+        failed_phases = []
         print("🚀 AUSTRALIAN CYBER EVENTS UNIFIED PIPELINE")
         print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Database: {self.db_path}")
@@ -859,9 +887,11 @@ class UnifiedPipeline:
         # Phase 1: Discovery & Deduplication
         if not args.dashboard_only and not args.re_enrich and not args.classify_only:
             discovery_success = await self.run_discovery_phase(args)
+            if not discovery_success:
+                failed_phases.append("discovery")
             if not discovery_success and not args.continue_on_error:
                 logger.error("Discovery phase failed - stopping pipeline")
-                return False
+                return "failed"
         elif args.re_enrich:
             logger.info("Skipping discovery phase (--re-enrich specified)")
         elif args.classify_only:
@@ -872,22 +902,28 @@ class UnifiedPipeline:
         # Phase 1b: Re-enrichment (if requested)
         if args.re_enrich:
             reenrich_success = await self.run_reenrichment_phase(args)
+            if not reenrich_success:
+                failed_phases.append("reenrich")
             if not reenrich_success and not args.continue_on_error:
                 logger.error("Re-enrichment phase failed - stopping pipeline")
-                return False
+                return "failed"
 
             # Run deduplication after re-enrichment
             dedup_success = self.run_deduplication_phase(args)
+            if not dedup_success:
+                failed_phases.append("dedup")
             if not dedup_success and not args.continue_on_error:
                 logger.error("Deduplication phase failed - stopping pipeline")
-                return False
+                return "failed"
 
         # Phase 2: ASD Risk Classification
         if not args.dashboard_only and not args.discover_only and not args.skip_classification:
             classification_success = self.run_classification_phase(args)
+            if not classification_success:
+                failed_phases.append("classification")
             if not classification_success and not args.continue_on_error:
                 logger.error("ASD classification phase failed - stopping pipeline")
-                return False
+                return "failed"
         elif args.skip_classification:
             logger.info("Skipping classification phase (--skip-classification specified)")
         elif args.dashboard_only:
@@ -898,9 +934,11 @@ class UnifiedPipeline:
         # Phase 3: Dashboard
         if not args.discover_only and not args.classify_only:
             dashboard_success = self.run_dashboard_phase(args)
+            if not dashboard_success:
+                failed_phases.append("dashboard")
             if not dashboard_success and not args.continue_on_error:
                 logger.error("Dashboard phase failed - stopping pipeline")
-                return False
+                return "failed"
         elif args.classify_only:
             logger.info("Skipping dashboard phase (--classify-only specified)")
         else:
@@ -913,7 +951,12 @@ class UnifiedPipeline:
         from cyber_data_collector.utils.token_tracker import tracker
         tracker.log_report()
 
-        return True
+        result = self.outcome(failed_phases)
+        if result != "ok":
+            logger.error("Pipeline finished %s%s", result.upper(),
+                         f" (failed phases: {', '.join(failed_phases)})" if failed_phases else
+                         " (a step inside a phase failed - see the run summary)")
+        return result
 
 
 def main():
@@ -1033,8 +1076,9 @@ Examples:
     exit_code = 1
     try:
         try:
-            success = asyncio.run(pipeline.run_pipeline(args))
-            exit_code = 0 if success else 1
+            # 0 ok, 1 a required phase failed, 2 completed with failed steps.
+            result = asyncio.run(pipeline.run_pipeline(args))
+            exit_code = {"ok": 0, "degraded": 2}.get(result, 1)
         except KeyboardInterrupt:
             print("\nPipeline interrupted by user")
             logger.warning("Pipeline interrupted by user (Ctrl+C)")
