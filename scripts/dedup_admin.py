@@ -2515,6 +2515,37 @@ def cmd_check_events(args) -> int:
     return 0
 
 
+def cmd_check_duplicates(args) -> int:
+    """Judge same-victim event pairs with Jev; merge at the calibrated cut-off.
+
+    See :mod:`cyber_data_collector.dedup.duplicate_judgement`. Findings are
+    written to ``instance/duplicate_findings.json``.
+    """
+    from cyber_data_collector.dedup.duplicate_judgement import check_duplicates
+    from cyber_data_collector.utils import jev
+
+    if not jev.available():
+        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
+        return 0
+    conn = _connect(args.db)
+    try:
+        result = check_duplicates(conn, apply=args.apply)
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "duplicate_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    if not result["calibrated"]:
+        print(f"Judged {result['judged']} of {result['pairs']} pair(s). No calibration for this model "
+              "and question: nothing merged. Run scripts/calibrate_duplicates.py.")
+        return 0
+    for p in result["proposals"]:
+        print(f"  {p['p_same']:.3f}  {p['organisation'][:30]:30}  {p['gap_days']}d  {p['pair_id'][:8]}|...")
+    print(f"{len(result['merged'])} merge(s) applied of {len(result['proposals'])} proposed pair(s) at "
+          f"cut-off {result['cutoff']}; findings in {out}")
+    return 0
+
+
 def cmd_check_victims(args) -> int:
     """Make each event's victim agree with the victim its own records name.
 
@@ -2837,6 +2868,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Reject below the cut-off (only with a calibration matching the "
                         "current model and question; otherwise report only)")
     p.set_defaults(func=cmd_check_events)
+
+    p = sub.add_parser("check-duplicates",
+                       help="Ask Jev whether each pair of events sharing a victim is one "
+                            "incident and merge pairs at or above the calibrated cut-off")
+    p.add_argument("--apply", action="store_true",
+                   help="Merge (only with a calibration matching the current model and "
+                        "question; otherwise report only)")
+    p.set_defaults(func=cmd_check_duplicates)
 
     p = sub.add_parser("check-victims",
                        help="Re-attribute events whose records all name a different "
