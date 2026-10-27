@@ -524,6 +524,9 @@ class UnifiedPipeline:
            2026-10-27 would have rejected real incidents whose stored page was
            a privacy policy or home page (LUSH, Nexia, Legal Aid ACT).
            ``--report-event-rejections`` keeps it report-only regardless.
+        2b. ``classify-entities --stale-only`` - re-derive victim and vendor
+           roles for events whose members changed since they were classified
+           (merges, splits, re-enriched records; see record_fingerprints).
         3. ``check-victims`` - deterministic, no API calls.
         4. ``check-duplicates --apply`` - Jev judges every pair of events
            sharing a victim (with both events' evidence, corroboration and
@@ -557,6 +560,11 @@ class UnifiedPipeline:
         if not getattr(args, 'report_event_rejections', False):
             sources.append("--apply")
         steps = [sources, check, ["check-victims"], duplicates, ["check-victim-attribution"]]
+        if os.getenv('OPENAI_API_KEY'):
+            # Roles (who is the victim, who the vendor) go out of date when an
+            # event's members change - a merge, a split, a re-enriched record -
+            # and nothing in a routine run refreshed them.
+            steps.insert(steps.index(["check-victims"]), ["classify-entities", "--stale-only"])
         if os.getenv('OPENAI_API_KEY') or os.getenv('TYPESAFE_API_KEY'):
             steps.insert(0, ["classify-pages"])
         else:
@@ -711,30 +719,16 @@ class UnifiedPipeline:
             classifier = ASDRiskClassifier(self.db_path, api_key=openai_api_key)
 
             try:
-                # Get count of unclassified events
-                import sqlite3
-                with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor()
-
-                    # Count total active events
-                    cursor.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'")
-                    total_events = cursor.fetchone()[0]
-
-                    # Count events already classified
-                    cursor.execute("""
-                        SELECT COUNT(DISTINCT de.deduplicated_event_id)
-                        FROM DeduplicatedEvents de
-                        INNER JOIN ASDRiskClassifications arc
-                            ON de.deduplicated_event_id = arc.deduplicated_event_id
-                        WHERE de.status = 'Active'
-                    """)
-                    classified_events = cursor.fetchone()[0]
-
-                unclassified_count = total_events - classified_events
+                # Events needing classification: none yet, or classified from
+                # inputs that have since changed (a merge, a corrected victim or
+                # date, a re-enrichment, a new prompt version or model).
+                total_events = len(classifier.get_events(limit=10**9, prioritize_unclassified=False))
+                unclassified_count = classifier.stale_count()
+                classified_events = total_events - unclassified_count
 
                 logger.info(f"Total active events: {total_events}")
-                logger.info(f"Already classified: {classified_events}")
-                logger.info(f"Need classification: {unclassified_count}")
+                logger.info(f"Classified from current inputs: {classified_events}")
+                logger.info(f"Need classification (new or changed): {unclassified_count}")
 
                 if unclassified_count == 0:
                     logger.info("All events are already classified - skipping classification phase")
@@ -750,7 +744,7 @@ class UnifiedPipeline:
                 else:
                     # No limit - classify all unclassified events
                     limit = total_events
-                    logger.info(f"Classifying all {unclassified_count} unclassified events")
+                    logger.info(f"Classifying all {unclassified_count} new or changed events")
 
                 # Process events (this will use cache for already-classified events)
                 logger.info("Starting classification...")

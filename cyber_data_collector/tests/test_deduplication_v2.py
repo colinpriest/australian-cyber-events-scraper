@@ -307,36 +307,72 @@ class TestDeduplicationEngine:
         assert len(result.merge_groups) == 1
         assert result.merge_groups[0].confidence > 0.0
     
-    def test_deduplicate_similar_events(self):
-        """Test deduplication with similar events"""
+    def test_similar_titles_are_left_for_the_calibrated_check(self):
+        """Title overlap alone no longer merges: that pair goes to Jev check-duplicates."""
         engine = DeduplicationEngine(similarity_threshold=0.7)
-        
+
         events = [
-            CyberEvent(
-                event_id="1", 
-                title="Optus Data Breach", 
-                summary="Optus experienced a data breach",
-                event_date=date(2023, 1, 1)
-            ),
-            CyberEvent(
-                event_id="2", 
-                title="Optus Security Incident", 
-                summary="Optus had a security incident",
-                event_date=date(2023, 1, 2)
-            ),
-            CyberEvent(
-                event_id="3", 
-                title="Completely Different", 
-                summary="A different company had an issue",
-                event_date=date(2023, 1, 3)
-            )
+            CyberEvent(event_id="1", title="Optus Data Breach",
+                       summary="Optus experienced a data breach", event_date=date(2023, 1, 1),
+                       victim_organization_name="Optus"),
+            CyberEvent(event_id="2", title="Optus Security Incident",
+                       summary="Optus had a security incident", event_date=date(2023, 1, 2),
+                       victim_organization_name="Optus"),
         ]
-        
+
         result = engine.deduplicate(events)
-        
-        # Should merge the two Optus events
+
         assert len(result.unique_events) == 2
-        assert len(result.merge_groups) == 1
+        assert len(result.merge_groups) == 0
+
+    def test_same_organisation_same_exact_day_merges(self):
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="Optus Data Breach", event_date=date(2022, 9, 22),
+                       victim_organization_name="Optus"),
+            CyberEvent(event_id="2", title="Optus hack exposes customers", event_date=date(2022, 9, 22),
+                       victim_organization_name="Singtel Optus Pty Limited"),
+        ]
+
+        result = engine.deduplicate(events)
+
+        assert len(result.unique_events) == 1
+
+    def test_first_of_month_is_not_an_exact_day(self):
+        """A month-precision date is stored as the 1st; sharing it proves nothing."""
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="Optus Data Breach", event_date=date(2022, 9, 1),
+                       victim_organization_name="Optus"),
+            CyberEvent(event_id="2", title="Optus outage", event_date=date(2022, 9, 1),
+                       victim_organization_name="Optus"),
+        ]
+
+        assert engine.merge_decision(*events) is None
+
+    def test_different_universities_on_one_day_do_not_merge(self):
+        """The reviewer's reproduction: a shared word is not a shared organisation."""
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="University of Sydney data breach",
+                       event_date=date(2024, 5, 14), victim_organization_name="University of Sydney"),
+            CyberEvent(event_id="2", title="University of Melbourne data breach",
+                       event_date=date(2024, 5, 14), victim_organization_name="University of Melbourne"),
+        ]
+
+        assert engine.merge_decision(*events) is None
+
+    def test_event_without_a_victim_matches_nothing(self):
+        """No victim is not guessed from title keywords."""
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="Council hit by ransomware", event_date=date(2024, 5, 14)),
+            CyberEvent(event_id="2", title="Council data breach", event_date=date(2024, 5, 14),
+                       victim_organization_name="City of Ballarat"),
+        ]
+
+        assert not engine._same_entity(*events)
+        assert engine.merge_decision(*events) is None
     
     def test_deduplicate_different_events(self):
         """Test deduplication with completely different events"""
@@ -700,7 +736,8 @@ class TestIntegration:
                 event_id="1",
                 title="Optus Data Breach",
                 summary="Optus experienced a major data breach",
-                event_date=date(2023, 1, 1),
+                event_date=date(2023, 1, 5),
+                victim_organization_name="Optus",
                 event_type="Data Breach",
                 severity="High",
                 records_affected=1000000
@@ -709,7 +746,8 @@ class TestIntegration:
                 event_id="2",
                 title="Optus Data Breach Incident",
                 summary="Optus had a security incident affecting customers",
-                event_date=date(2023, 1, 2),
+                event_date=date(2023, 1, 5),
+                victim_organization_name="Optus",
                 event_type="Security Incident",
                 severity="High",
                 records_affected=2000000
@@ -1018,14 +1056,14 @@ class TestForeignKeyEnforcedStorage:
         conn.execute("PRAGMA foreign_keys = ON;")  # mirror the live pipeline connection
         storage = DeduplicationStorage(conn)
 
-        # event_id values are real EnrichedEvents ids. The two Optus events merge.
+        # event_id values are real EnrichedEvents ids. The two Optus events (same victim, same day) merge.
         events = [
             CyberEvent(event_id="enr-1", title="Optus Data Breach",
-                       summary="Optus breach", event_date=date(2023, 1, 1),
+                       summary="Optus breach", event_date=date(2023, 1, 5), victim_organization_name="Optus",
                        event_type="Data Breach", severity="High",
                        records_affected=1000000),
             CyberEvent(event_id="enr-2", title="Optus Data Breach Incident",
-                       summary="Optus security incident", event_date=date(2023, 1, 2),
+                       summary="Optus security incident", event_date=date(2023, 1, 5), victim_organization_name="Optus",
                        event_type="Security Incident", severity="High",
                        records_affected=2000000),
             CyberEvent(event_id="enr-3", title="Telstra Network Outage",

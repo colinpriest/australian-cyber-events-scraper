@@ -46,6 +46,10 @@ setup_logging(log_file="logs/asd_risk_classifier.log")
 logger = logging.getLogger(__name__)
 
 # Valid stakeholder categories (from ASD risk matrix)
+# Bump when the prompt or the response schema changes: every classification
+# made under another version is then stale and is redone (input_fingerprint).
+PROMPT_VERSION = "asd-v1"
+
 VALID_STAKEHOLDER_CATEGORIES = [
     "Member(s) of the public",
     "Small organisation(s)",
@@ -212,6 +216,26 @@ class ASDRiskClassifier:
         # Ensures identical reruns skip the API call entirely
         self._prompt_cache: Dict[str, Dict[str, Any]] = {}
         self._temperature = chat_params(self.model)["temperature"]  # for cache key
+        self._ensure_fingerprint_column()
+
+    def _ensure_fingerprint_column(self) -> None:
+        """Add ASDRiskClassifications.input_fingerprint to older databases."""
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(ASDRiskClassifications)")}
+        if columns and "input_fingerprint" not in columns:
+            self.conn.execute("ALTER TABLE ASDRiskClassifications ADD COLUMN input_fingerprint TEXT")
+            self.conn.commit()
+
+    def input_fingerprint(self, event: Dict[str, Any]) -> str:
+        """Hash of everything a classification depends on: the prompt built from
+        the event's current fields, the prompt version and the model.
+
+        Classifications used to be cached by event id alone, so a merge, a
+        corrected victim or a re-enrichment never reached the risk matrix.
+        A stored classification is reused only while its fingerprint matches;
+        rows from before fingerprints (NULL) count as stale.
+        """
+        raw = f"{PROMPT_VERSION}|{self._prompt_cache_key(self.build_prompt(event))}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
     
     def close(self):
         """Close database connection."""
@@ -224,78 +248,62 @@ class ASDRiskClassifier:
 
         Args:
             limit: Maximum number of events to retrieve
-            prioritize_unclassified: If True, prioritize events without classifications
+            prioritize_unclassified: If True, events needing (re)classification come
+                first - unclassified, or classified from inputs that have since
+                changed - so they are processed before the limit is reached
 
         Returns:
-            List of event dictionaries
+            List of event dictionaries, each with its ``_fingerprint``
         """
         cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT
+                de.deduplicated_event_id,
+                de.title,
+                de.description,
+                de.summary,
+                de.event_type,
+                de.severity,
+                de.event_date,
+                de.records_affected,
+                de.victim_organization_name,
+                de.victim_organization_industry,
+                de.attacking_entity_name,
+                de.attack_method,
+                de.is_australian_event,
+                de.australian_relevance_score,
+                de.created_at,
+                arc.input_fingerprint AS stored_fingerprint
+            FROM DeduplicatedEvents de
+            LEFT JOIN ASDRiskClassifications arc
+                ON de.deduplicated_event_id = arc.deduplicated_event_id
+            WHERE de.status = 'Active'
+            ORDER BY de.event_date DESC, de.created_at DESC
+        """)
+        events = []
+        for row in cursor.fetchall():
+            event = dict(row)
+            stored = event.pop('stored_fingerprint')
+            event['_fingerprint'] = self.input_fingerprint(event)
+            event['_is_stale'] = stored != event['_fingerprint']
+            events.append(event)
 
         if prioritize_unclassified:
-            # Get unclassified events first, then classified ones
-            # This ensures we process new events before hitting the limit
-            query = """
-                SELECT
-                    de.deduplicated_event_id,
-                    de.title,
-                    de.description,
-                    de.summary,
-                    de.event_type,
-                    de.severity,
-                    de.event_date,
-                    de.records_affected,
-                    de.victim_organization_name,
-                    de.victim_organization_industry,
-                    de.attacking_entity_name,
-                    de.attack_method,
-                    de.is_australian_event,
-                    de.australian_relevance_score,
-                    de.created_at,
-                    CASE WHEN arc.deduplicated_event_id IS NULL THEN 0 ELSE 1 END as has_classification
-                FROM DeduplicatedEvents de
-                LEFT JOIN ASDRiskClassifications arc
-                    ON de.deduplicated_event_id = arc.deduplicated_event_id
-                WHERE de.status = 'Active'
-                ORDER BY has_classification ASC, de.event_date DESC, de.created_at DESC
-                LIMIT ?
-            """
-        else:
-            # Original query - just get events by date
-            query = """
-                SELECT
-                    deduplicated_event_id,
-                    title,
-                    description,
-                    summary,
-                    event_type,
-                    severity,
-                    event_date,
-                    records_affected,
-                    victim_organization_name,
-                    victim_organization_industry,
-                    attacking_entity_name,
-                    attack_method,
-                    is_australian_event,
-                    australian_relevance_score,
-                    created_at
-                FROM DeduplicatedEvents
-                WHERE status = 'Active'
-                ORDER BY event_date DESC, created_at DESC
-                LIMIT ?
-            """
+            events.sort(key=lambda e: not e['_is_stale'])  # stable: date order kept within each group
+        events = events[:limit]
 
-        cursor.execute(query, (limit,))
-        events = [dict(row) for row in cursor.fetchall()]
-
-        # Remove the has_classification field if it exists
-        for event in events:
-            event.pop('has_classification', None)
-
-        logger.debug(f"Retrieved {len(events)} active events")
+        logger.debug(f"Retrieved {len(events)} active events "
+                     f"({sum(e['_is_stale'] for e in events)} needing classification)")
         return events
-    
-    def get_cached_classification(self, deduplicated_event_id: str) -> Optional[Dict[str, Any]]:
-        """Check if classification already exists in cache."""
+
+    def stale_count(self) -> int:
+        """Active events whose classification is missing or out of date."""
+        return sum(e['_is_stale'] for e in self.get_events(limit=10**9))
+
+    def get_cached_classification(self, deduplicated_event_id: str,
+                                  fingerprint: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """The stored classification, if any - and, when ``fingerprint`` is given,
+        only if it was made from those same inputs."""
         cursor = self.conn.cursor()
         
         query = """
@@ -309,6 +317,8 @@ class ASDRiskClassifier:
         if row:
             # Convert database row to classification format
             cached = dict(row)
+            if fingerprint is not None and cached.get('input_fingerprint') != fingerprint:
+                return None
             # Parse reasoning_json to reasoning dict
             if 'reasoning_json' in cached and cached['reasoning_json']:
                 try:
@@ -415,7 +425,7 @@ Return your response as a JSON object with this exact structure:
         # Check DB cache first (already-classified events)
         if not force_reclassify:
             with self._db_lock:
-                cached = self.get_cached_classification(event_id)
+                cached = self.get_cached_classification(event_id, self._fingerprint_of(event))
             if cached:
                 with self._stats_lock:
                     self.cache_hits += 1
@@ -548,7 +558,11 @@ Return your response as a JSON object with this exact structure:
         
         return True
     
-    def save_classification(self, event_id: str, classification: Dict[str, Any]) -> bool:
+    def _fingerprint_of(self, event: Dict[str, Any]) -> str:
+        return event.get('_fingerprint') or self.input_fingerprint(event)
+
+    def save_classification(self, event_id: str, classification: Dict[str, Any],
+                            fingerprint: Optional[str] = None) -> bool:
         """Save classification to database. Thread-safe."""
         try:
             with self._db_lock:
@@ -567,8 +581,9 @@ Return your response as a JSON object with this exact structure:
                         reasoning_json,
                         confidence_score,
                         model_used,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        updated_at,
+                        input_fingerprint
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
 
                 cursor.execute(query, (
@@ -580,7 +595,8 @@ Return your response as a JSON object with this exact structure:
                     reasoning_json,
                     classification['confidence'],
                     self.model,
-                    datetime.now().isoformat()
+                    datetime.now().isoformat(),
+                    fingerprint,
                 ))
 
                 self.conn.commit()
@@ -599,7 +615,9 @@ Return your response as a JSON object with this exact structure:
 
         # Check DB cache (thread-safe inside classify_event)
         with self._db_lock:
-            cached_classification = None if force_reclassify else self.get_cached_classification(event_id)
+            fingerprint = self._fingerprint_of(event)
+            cached_classification = (None if force_reclassify
+                                     else self.get_cached_classification(event_id, fingerprint))
 
         if cached_classification is not None and not force_reclassify:
             with self._stats_lock:
@@ -609,7 +627,7 @@ Return your response as a JSON object with this exact structure:
         classification = self.classify_event(event, force_reclassify)
 
         if classification:
-            if not self.save_classification(event_id, classification):
+            if not self.save_classification(event_id, classification, fingerprint):
                 logger.warning(f"Failed to save classification for event {event_id}")
                 return None
             return {'event': event, 'classification': classification}

@@ -149,3 +149,77 @@ def test_repair_is_idempotent_and_safe_on_clean_db(real_schema_db):
     cur = conn.cursor()
     # No orphans present — repair must touch nothing.
     assert _migration()._repair_orphaned_incremental_mappings(cur) == 0
+
+
+def _incremental_migration(db_path):
+    migration = _migration()
+    migration.db_path = db_path
+    migration.dry_run = False
+    migration.migration_report = {"steps_completed": [], "errors": [], "statistics": {}}
+    return migration
+
+
+def test_whole_new_group_joins_the_matched_event(real_schema_db, monkeypatch):
+    """Every record of a new group is attached, not just its lead record."""
+    conn, db_path = real_schema_db
+    conn.execute("INSERT INTO RawEvents VALUES ('raw-new2', 'Perplexity', 'New 2')")
+    conn.execute("INSERT INTO EnrichedEvents VALUES ('enr-new2', 'raw-new2', 'New 2', 'Active')")
+    conn.commit()
+    from types import SimpleNamespace
+    from datetime import date
+    import cyber_data_collector.dedup.backfill as backfill
+    monkeypatch.setattr(backfill, "run_backfill", lambda c: SimpleNamespace(summary=lambda: "stub"))
+
+    day = date(2026, 2, 10)
+    new = [CyberEvent(event_id="enr-new", title="Optus breach", event_date=day, victim_organization_name="Optus"),
+           CyberEvent(event_id="enr-new2", title="Optus hack", event_date=day, victim_organization_name="Optus")]
+    existing = [CyberEvent(event_id="dedup-uuid-1", title="Existing", event_date=day,
+                           victim_organization_name="Singtel Optus Pty Limited")]
+
+    assert _incremental_migration(db_path)._run_incremental_deduplication(
+        new, existing, {"dedup-uuid-1": "enr-existing"})
+
+    mapped = {r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = 'dedup-uuid-1'")}
+    assert mapped == {"enr-new", "enr-new2"}
+    import gc
+    gc.collect()  # the run's connection sits in a reference cycle; free it so Windows can delete the file
+
+
+def test_split_ruling_keeps_a_record_out_of_its_old_event(real_schema_db):
+    conn, _ = real_schema_db
+    conn.executescript("""
+        CREATE TABLE DedupOverrides (left_enriched_event_id TEXT, right_enriched_event_id TEXT,
+                                     verdict TEXT, active INTEGER);
+        INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id)
+            VALUES ('m0', 'raw-existing', 'enr-existing', 'dedup-uuid-1');
+        INSERT INTO DedupOverrides VALUES ('enr-existing', 'enr-new', 'different', 1);
+    """)
+    cur = conn.cursor()
+    assert _migration()._ruled_different(cur, {"enr-new"}, "dedup-uuid-1")
+    assert not _migration()._ruled_different(cur, {"enr-other"}, "dedup-uuid-1")
+
+
+def test_membership_check_finds_records_in_no_event_and_in_two(real_schema_db):
+    conn, _ = real_schema_db
+    cur = conn.cursor()
+    # enr-new is active and in no event.
+    errors = _migration()._membership_errors(cur)
+    assert len(errors) == 1 and "belong to no event" in errors[0]
+
+    cur.execute("INSERT INTO DeduplicatedEvents VALUES ('dedup-uuid-2', 'enr-new', 'New', '2026-02-10', 'Active')")
+    cur.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                "VALUES ('a', 'raw-new', 'enr-new', 'dedup-uuid-1')")
+    cur.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                "VALUES ('b', 'raw-new', 'enr-new', 'dedup-uuid-2')")
+    errors = _migration()._membership_errors(cur)
+    assert len(errors) == 1 and "more than one active event" in errors[0]
+
+
+def test_membership_check_ignores_records_removed_by_rejection(real_schema_db):
+    conn, _ = real_schema_db
+    cur = conn.cursor()
+    cur.execute("INSERT INTO DeduplicatedEvents VALUES ('dedup-rej', 'enr-new', 'New', '2026-02-10', 'Rejected')")
+    cur.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                "VALUES ('r', 'raw-new', 'enr-new', 'dedup-rej')")
+    assert _migration()._membership_errors(cur) == []

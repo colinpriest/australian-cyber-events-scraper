@@ -28,7 +28,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from tqdm import tqdm
 
@@ -193,6 +193,11 @@ class DeduplicationMigration:
                 existing_dedup_events, dedup_to_master = self._load_existing_deduplicated_events()
                 if not self._run_incremental_deduplication(new_events, existing_dedup_events, dedup_to_master):
                     return False
+
+            # Records re-enriched since they were placed: refresh their events
+            # (stable ids) so corrected dates, victims and counts reach them.
+            if not self.dry_run:
+                self._refresh_changed_events()
 
             # Validate results (skip in dry-run or skip mode)
             if not self.dry_run and self.migration_report['steps_completed'] \
@@ -522,42 +527,37 @@ class DeduplicationMigration:
 
                 matched_ids = set()
                 cursor = conn.cursor()
+                # Every record each unique new event stands for. When the event
+                # matches an existing one, all of them are attached to it: this
+                # used to attach only the lead record, so the rest of the group
+                # belonged to no event (34 records on 2026-10-27).
+                group_of = {
+                    g.master_event.event_id: [g.master_event] + [e for e in g.merged_events
+                                                                 if e.event_id != g.master_event.event_id]
+                    for g in new_result.merge_groups
+                }
 
                 for new_event in tqdm(new_result.unique_events,
                                       desc="Incremental matching", unit="event", smoothing=0):
+                    # The same decision the full rebuild makes (merge_decision):
+                    # only certain merges happen here; the rest are left for the
+                    # calibrated Jev duplicate check that runs after dedup.
                     best_match = None
-
+                    group = group_of.get(new_event.event_id, [new_event])
+                    members = {e.event_id for e in group}
                     for existing in existing_dedup_events:
-                        # Reuse same matching rules as _group_similar_events
-                        same_entity = engine._same_entity(new_event, existing)
-                        same_date = (new_event.event_date and existing.event_date
-                                     and new_event.event_date == existing.event_date)
-
-                        if same_entity and same_date:
-                            best_match = existing
-                            break
-
-                        if (new_event.title.lower().strip() == existing.title.lower().strip()
-                                and new_event.event_date == existing.event_date):
-                            best_match = existing
-                            break
-
-                        if same_entity:
-                            title_sim = engine._quick_title_similarity(new_event.title, existing.title)
-                            if title_sim >= 0.15:
-                                best_match = existing
-                                break
-                            if new_event.description and existing.summary:
-                                desc_sim = engine._quick_title_similarity(
-                                    new_event.description, existing.summary)
-                                if desc_sim >= 0.20:
-                                    best_match = existing
-                                    break
+                        if not engine.merge_decision(new_event, existing):
+                            continue
+                        if self._ruled_different(cursor, members, existing.event_id):
+                            continue
+                        best_match = existing
+                        break
 
                     if best_match:
-                        # Merge into existing deduplicated event
-                        self._merge_into_existing(cursor, new_event, best_match,
-                                                  dedup_to_master or {})
+                        # Merge the whole group into the existing deduplicated event
+                        for member in group:
+                            self._merge_into_existing(cursor, member, best_match,
+                                                      dedup_to_master or {})
                         matched_ids.add(new_event.event_id)
 
                 conn.commit()
@@ -617,6 +617,37 @@ class DeduplicationMigration:
             logger.error(f"❌ Incremental deduplication failed: {e}")
             self.migration_report['errors'].append(f"Incremental dedup failed: {e}")
             return False
+
+    @staticmethod
+    def _ruled_different(cursor: sqlite3.Cursor, enriched_ids: Set[str], dedup_event_id: str) -> bool:
+        """True when a cached 'different' ruling separates these records from the event.
+
+        Splits are recorded as 'different' overrides; without this check an
+        incremental run could re-attach a split record to the event it was
+        split from.
+        """
+        if not enriched_ids:
+            return False
+        placeholders = ",".join("?" * len(enriched_ids))
+        ids = list(enriched_ids)
+        try:
+            row = cursor.execute(
+                f"""
+                SELECT 1 FROM DedupOverrides o
+                WHERE o.active = 1 AND o.verdict = 'different'
+                  AND ((o.left_enriched_event_id IN ({placeholders})
+                        AND o.right_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap
+                                                          WHERE deduplicated_event_id = ?))
+                    OR (o.right_enriched_event_id IN ({placeholders})
+                        AND o.left_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap
+                                                         WHERE deduplicated_event_id = ?)))
+                LIMIT 1
+                """,
+                ids + [dedup_event_id] + ids + [dedup_event_id],
+            ).fetchone()
+        except sqlite3.OperationalError:  # no overrides table yet
+            return False
+        return row is not None
 
     def _merge_into_existing(self, cursor: sqlite3.Cursor,
                              new_event: CyberEvent, existing_dedup: CyberEvent,
@@ -807,6 +838,13 @@ class DeduplicationMigration:
                         logger.error(f"  - {error.error_type}: {error.message}")
                     return False
 
+                membership_errors = self._membership_errors(conn.cursor())
+                if membership_errors:
+                    for message in membership_errors:
+                        logger.error(f"❌ Membership check failed: {message}")
+                        self.migration_report['errors'].append(f"Membership: {message}")
+                    return False
+
                 # Get final statistics
                 stats = storage.get_deduplication_statistics()
                 logger.info(f"📊 Final statistics:")
@@ -829,6 +867,59 @@ class DeduplicationMigration:
             self.migration_report['errors'].append(f"Validation failed: {e}")
             return False
     
+    def _refresh_changed_events(self) -> None:
+        from cyber_data_collector.dedup.record_fingerprints import refresh_changed_events
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                report = refresh_changed_events(conn)
+                conn.commit()
+            logger.info(f"🔁 {report.summary()}")
+            self.migration_report['statistics']['events_refreshed_from_changed_records'] =                 len(report.refreshed_events)
+        except Exception as e:
+            logger.error(f"❌ Refreshing events from changed records failed: {e}")
+            self.migration_report['errors'].append(f"Record refresh failed: {e}")
+
+    @staticmethod
+    def _membership_errors(cursor: sqlite3.Cursor) -> List[str]:
+        """Every active record must belong to exactly one event once dedup has run.
+
+        A record in two active events is counted twice by every analysis; a
+        record in none has silently fallen out of the dataset. Records whose
+        only events are Merged or Rejected were removed deliberately (by a
+        merge or a rejection) and are not counted. Records with no RawEvents
+        row cannot be mapped (the map's raw_event_id is a foreign key) and
+        are logged rather than failed.
+        """
+        errors: List[str] = []
+        in_two = cursor.execute("""
+            SELECT m.enriched_event_id, COUNT(DISTINCT m.deduplicated_event_id)
+            FROM EventDeduplicationMap m
+            JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+            WHERE d.status = 'Active'
+            GROUP BY m.enriched_event_id
+            HAVING COUNT(DISTINCT m.deduplicated_event_id) > 1
+        """).fetchall()
+        if in_two:
+            errors.append(f"{len(in_two)} record(s) belong to more than one active event "
+                          f"(e.g. {in_two[0][0]})")
+        unmapped = cursor.execute("""
+            SELECT e.enriched_event_id,
+                   EXISTS (SELECT 1 FROM RawEvents r WHERE r.raw_event_id = e.raw_event_id)
+            FROM EnrichedEvents e
+            WHERE e.status = 'Active'
+              AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                              WHERE m.enriched_event_id = e.enriched_event_id)
+              AND NOT EXISTS (SELECT 1 FROM DeduplicatedEvents d
+                              WHERE d.master_enriched_event_id = e.enriched_event_id)
+        """).fetchall()
+        mappable = [row[0] for row in unmapped if row[1]]
+        if len(unmapped) > len(mappable):
+            logger.warning(f"⚠️ {len(unmapped) - len(mappable)} active record(s) have no RawEvents "
+                           f"row and cannot be placed in an event")
+        if mappable:
+            errors.append(f"{len(mappable)} active record(s) belong to no event (e.g. {mappable[0]})")
+        return errors
+
     def _generate_migration_report(self):
         """Generate a comprehensive migration report"""
         logger.info("📋 Generating migration report...")
