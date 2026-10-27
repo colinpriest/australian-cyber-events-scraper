@@ -275,11 +275,11 @@ def build_member_state(conn: sqlite3.Connection, event: Dict[str, Any], enriched
                            "summary": (m["body"] or "")[:OTHER_SUMMARY_CHARS]} for m in others],
         "record": _record(conn, enriched_id),
     }
+    # Already in the judgement shape: organisation / incidents / citations, plus
+    # a warning only when the history may be incomplete.
     timeline = timeline_for_event(conn, event["id"])
     if timeline:
-        state["organisation_timeline"] = {"organisation": timeline["organisation"],
-                                          "incidents": timeline["timeline"],
-                                          "citations": timeline["citations"]}
+        state["organisation_timeline"] = timeline
     return state
 
 
