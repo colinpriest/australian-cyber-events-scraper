@@ -210,3 +210,47 @@ def test_missing_labels_refuse_to_reject(conn, tmp_path, monkeypatch):
                         judge=judge, calibration_path=_calibration(tmp_path, 0.3),
                         search=NO_FINDINGS, labels_path=tmp_path / "missing.csv")
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2
+
+
+def test_a_labelled_non_incident_unchanged_since_labelling_is_rejected_however_it_scores(conn, tmp_path,
+                                                                                         monkeypatch):
+    """The review hold is for events that gained records since labelling; LUSH has not."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,not_incident,a privacy policy,packet,test\n", encoding="utf-8")
+    snapshot = tmp_path / "labelled.db"
+    snap = sqlite3.connect(snapshot)
+    snap.execute("CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT)")
+    snap.executemany("INSERT INTO EventDeduplicationMap VALUES (?, ?)",
+                     conn.execute("SELECT enriched_event_id, deduplicated_event_id FROM EventDeduplicationMap "
+                                  "WHERE deduplicated_event_id = 'lush'").fetchall())
+    snap.commit()
+    snap.close()
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.9, "LUSH data breach": 0.9}))
+    kwargs = dict(timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True, judge=judge,
+                  calibration_path=_calibration(tmp_path, 0.01), search=NO_FINDINGS, labels_path=labels)
+    result = er.check_events(conn, snapshot_path=snapshot, **kwargs)
+    assert [f["deduplicated_event_id"] for f in result["labelled_rejections"]] == ["lush"]
+    assert result["labelled_needing_review"] == []
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'lush'").fetchone()[0] \
+        == "Rejected"
+
+
+def test_a_labelled_non_incident_that_gained_a_record_is_held_for_review(conn, tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,not_incident,a privacy policy,packet,test\n", encoding="utf-8")
+    snapshot = tmp_path / "labelled.db"
+    snap = sqlite3.connect(snapshot)
+    snap.execute("CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT)")
+    snap.commit()
+    snap.close()                                   # LUSH held none of its current records when labelled
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.9, "LUSH data breach": 0.9}))
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True,
+                             judge=judge, calibration_path=_calibration(tmp_path, 0.01), search=NO_FINDINGS,
+                             labels_path=labels, snapshot_path=snapshot)
+    assert [f["deduplicated_event_id"] for f in result["labelled_needing_review"]] == ["lush"]
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'lush'").fetchone()[0] \
+        == "Active"

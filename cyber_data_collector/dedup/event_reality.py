@@ -330,6 +330,37 @@ def labelled_non_incidents(path: Path = LABELS_PATH) -> set:
         return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "not_incident"}
 
 
+def labelling_snapshot(conn: sqlite3.Connection, cal: Optional[Dict[str, Any]],
+                       snapshot_path: Optional[Path] = None) -> Optional[Path]:
+    """The database the labels were made on (``calibrated_on_database``, beside
+    the live database), or None when it cannot be found."""
+    if snapshot_path is None:
+        name = (cal or {}).get("calibrated_on_database")
+        row = conn.execute("PRAGMA database_list").fetchone()
+        if not name or not row or not row[2]:
+            return None
+        snapshot_path = Path(row[2]).parent / name
+    return Path(snapshot_path) if Path(snapshot_path).is_file() else None
+
+
+def gained_since_labelling(conn: sqlite3.Connection, event_ids: Sequence[str],
+                           snapshot: Optional[Path]) -> Optional[set]:
+    """Events that hold a record they did not hold when labelled; None when the
+    labelling snapshot is unavailable (then no event can be shown unchanged)."""
+    if snapshot is None or not event_ids:
+        return None if snapshot is None else set()
+    snap = sqlite3.connect(f"file:{Path(snapshot).as_posix()}?mode=ro", uri=True)
+    try:
+        query = "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?"
+        return {did for did in event_ids
+                if {r[0] for r in conn.execute(query, (did,))} - {r[0] for r in snap.execute(query, (did,))}}
+    except sqlite3.Error as exc:
+        logger.error("Labelling snapshot %s unreadable (%s): labelled non-incidents held for review", snapshot, exc)
+        return None
+    finally:
+        snap.close()
+
+
 def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
     """Undo this filter's rejection of any protected event (latest snapshot)."""
     from cyber_data_collector.dedup.ledger import DedupLedger
@@ -387,7 +418,7 @@ def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) 
 def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
                  calibration_path: Path = CALIBRATION_PATH, search=None,
                  labels_path: Path = LABELS_PATH, escalation_client=None,
-                 timeline_search=None) -> Dict[str, Any]:
+                 timeline_search=None, snapshot_path: Optional[Path] = None) -> Dict[str, Any]:
     """Screen, corroborate the low scorers, research timelines, judge, escalate the
     middle band, and reject below the calibrated cut-off.
 
@@ -413,17 +444,23 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
         for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
         if p < cutoff and did not in protected]
     # Labels are ground truth both ways: a labelled non-incident is rejected
-    # even above the cut-off - while the model still leans the same way. One
-    # that now scores as real may have absorbed a real incident's records
-    # since labelling (a merge into it), so it is reported for review instead.
+    # even above the cut-off. The one exception is an event holding a record it
+    # did not hold when labelled (a merge into it may have brought in a real
+    # incident): if it now scores as real it is reported for review instead.
+    # Without the labelling snapshot no event can be shown unchanged, so the
+    # model's lean decides as before.
     labelled_out: List[Dict[str, Any]] = []
     needs_review: List[Dict[str, Any]] = []
     if cutoff is not None and apply:
         already = {f["deduplicated_event_id"] for f in below}
-        for did in sorted(labelled_non_incidents(labels_path) & set(probabilities) - already - protected):
+        candidates = sorted(labelled_non_incidents(labels_path) & set(probabilities) - already - protected)
+        gained = gained_since_labelling(conn, candidates, labelling_snapshot(conn, cal, snapshot_path))
+        for did in candidates:
             entry = {"deduplicated_event_id": did, "title": titles.get(did), "p_real": probabilities[did],
                      "label": "not_incident"}
-            (labelled_out if probabilities[did] < LABELLED_NON_INCIDENT_MAX_P else needs_review).append(entry)
+            unchanged = gained is not None and did not in gained
+            (labelled_out if unchanged or probabilities[did] < LABELLED_NON_INCIDENT_MAX_P
+             else needs_review).append(entry)
         below = below + labelled_out
     applied = bool(apply and cal and below)
     if applied:
