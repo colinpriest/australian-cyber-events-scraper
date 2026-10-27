@@ -9,6 +9,11 @@ import openai
 from pydantic import BaseModel, Field
 from tqdm import tqdm
 
+from cyber_data_collector.processing.record_evidence import (
+    BASIS_ARTICLE,
+    BASIS_SNIPPET_ONLY,
+    BASIS_UNSCRAPED,
+)
 from cyber_data_collector.utils.entity_scraper import is_blocked_domain
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from cyber_data_collector.models.events import (
@@ -26,6 +31,10 @@ class EventEnhancementRequest(BaseModel):
     description: str
     entity_names: List[str]
     raw_data_sources: List[str]
+    # Persisted scraped article (see record_evidence).  ``evidence_basis`` tells
+    # the prompt whether the text is an article or only a discovery snippet.
+    article_text: Optional[str] = None
+    evidence_basis: str = BASIS_UNSCRAPED
 
 
 class EventEnhancement(BaseModel):
@@ -46,6 +55,15 @@ class EventEnhancement(BaseModel):
     response_actions: List[str] = Field(default_factory=list)
     attribution: Optional[str] = None
     confidence_adjustments: Dict[str, float] = Field(default_factory=dict)
+
+
+#: Article characters sent to the classifier (gpt-4o-mini; keeps cost bounded).
+MAX_ARTICLE_PROMPT_CHARS = 6000
+
+#: A record judged from a bare snippet is weaker evidence than one judged from
+#: the article, so its overall confidence is capped rather than left at the
+#: datasource's optimistic default.
+SNIPPET_ONLY_CONFIDENCE_CAP = 0.5
 
 
 class LLMClassifier:
@@ -80,7 +98,10 @@ class LLMClassifier:
                     return await self._enhance_single_event(event)
                 except Exception as exc:
                     self.logger.error("Failed to enhance event %s: %s", event.event_id, exc)
-                    return event  # Return original event on error
+                    # An LLM error is not an acceptance.  Hand the event back
+                    # flagged so the caller neither stores it as a classified
+                    # incident nor marks its raw record processed.
+                    return event.model_copy(update={"classification_status": "failed"})
         
         # Create tasks for all events
         tasks = [process_event_with_semaphore(event) for event in events]
@@ -134,11 +155,16 @@ class LLMClassifier:
                 # Fall back to title if it's different from the generic description
                 description = event.title
 
+        evidence_basis = getattr(event, "evidence_basis", BASIS_UNSCRAPED)
+        article_text = getattr(event, "evidence_text", None) if evidence_basis == BASIS_ARTICLE else None
+
         enhancement_request = EventEnhancementRequest(
             title=event.title,
             description=description,
             entity_names=[entity.name for entity in event.affected_entities],
             raw_data_sources=[source.content_snippet for source in event.data_sources if source.content_snippet],
+            article_text=article_text[:MAX_ARTICLE_PROMPT_CHARS] if article_text else None,
+            evidence_basis=evidence_basis,
         )
 
         response = await self._invoke_llm(enhancement_request)
@@ -160,13 +186,31 @@ class LLMClassifier:
         if not self.client:
             raise RuntimeError("LLM client not configured")
 
+        if request.article_text:
+            evidence_section = (
+                "ARTICLE TEXT (scraped from the source page - base your decision on THIS, not on the "
+                "snippets below):\n" + request.article_text +
+                "\n\nDiscovery snippet(s), for reference only: " + ' '.join(request.raw_data_sources)
+            )
+        elif request.evidence_basis == BASIS_SNIPPET_ONLY:
+            evidence_section = (
+                "NO ARTICLE TEXT WAS RETRIEVED for this record (scraping failed or returned too little text). "
+                "The only evidence is the search-result snippet below. Snippets often quote site navigation, "
+                "menus or boilerplate - for example a 'Cyber incident' menu link, or a privacy policy's "
+                "data-breach clause - rather than describing an incident. Set is_cybersecurity_event=false "
+                "unless the snippet itself describes a specific incident that happened to a named organisation.\n"
+                "Snippet(s): " + ' '.join(request.raw_data_sources)
+            )
+        else:
+            evidence_section = "Raw Data Snippets: " + ' '.join(request.raw_data_sources)
+
         user_prompt = f"""
 FIRST, determine if this is actually a cybersecurity INCIDENT and if it's Australian-relevant.
 
 Event Title: {request.title}
-Event Description: {request.description}
+Event Description (discovery summary): {request.description}
 Affected Entities: {', '.join(request.entity_names)}
-Raw Data Snippets: {' '.join(request.raw_data_sources)}
+{evidence_section}
 
 STEP 1 - VALIDATION (CRITICAL):
 - `is_cybersecurity_event`: Is this genuinely about ONE SPECIFIC cybersecurity INCIDENT that actually happened to a named organization?
@@ -295,6 +339,7 @@ CRITICAL REQUIREMENTS:
             return None
 
         event_copy = event.model_copy(deep=True)
+        event_copy.classification_status = "classified"
         event_copy.event_type = enhancement.event_type
         event_copy.secondary_types = enhancement.secondary_types
         event_copy.severity = enhancement.severity
@@ -337,5 +382,8 @@ CRITICAL REQUIREMENTS:
         if enhancement.confidence_adjustments and event_copy.confidence:
             overall_adjustment = enhancement.confidence_adjustments.get("overall", 0.0)
             event_copy.confidence.overall = min(max(event_copy.confidence.overall + overall_adjustment, 0.0), 1.0)
+
+        if event_copy.evidence_basis == BASIS_SNIPPET_ONLY and event_copy.confidence:
+            event_copy.confidence.overall = min(event_copy.confidence.overall, SNIPPET_ONLY_CONFIDENCE_CAP)
 
         return event_copy
