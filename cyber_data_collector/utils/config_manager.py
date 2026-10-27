@@ -80,7 +80,11 @@ class ConfigManager:
             return database_url.replace("sqlite://", "", 1)
 
         parsed = urlparse(database_url)
-        if parsed.scheme:
-            return "instance/cyber_events.db"
+        # A drive letter ("D:/data/x.db") parses as a one-letter scheme.
+        if parsed.scheme and len(parsed.scheme) > 1:
+            # Never fall back to the default database: an operation meant for
+            # another database would silently act on this one.
+            raise ValueError(f"Unsupported DATABASE_URL {database_url!r}: only sqlite:/// URLs "
+                             "or file paths are supported")
 
         return database_url

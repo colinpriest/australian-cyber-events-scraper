@@ -15,7 +15,9 @@ record by comparing the stored incident date with the dates around it:
 
 ``basis`` names which of these the incident date equals (checked in that
 order, because a date equal to the publication date is the one most likely to
-lag the incident), or ``stated in the record`` when it equals none of them.
+lag the incident), ``stated in the record`` only when the record's own text
+states that date (to its precision), and ``unknown`` otherwise - a date that
+matches nothing used to be called "stated" without any check.
 ``precision`` is ``day``, ``month only`` (stored as the 1st) or ``year only``
 (stored as 1 January) - a genuine 1st of the month is indistinguishable from a
 placeholder, so it is reported as possibly month-only.
@@ -24,6 +26,7 @@ placeholder, so it is reported as possibly month-only.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import Counter
 from typing import Any, Dict, List, Optional
@@ -45,9 +48,47 @@ def precision(date_text: Optional[str]) -> str:
     return "day"
 
 
+MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august",
+          "september", "october", "november", "december"]
+
+
+def text_states_date(text: Optional[str], day: Optional[str]) -> bool:
+    """Does ``text`` state ``day`` to the precision it is stored at?
+
+    A day-precision date needs the day ("12 March 2024", "March 12, 2024",
+    "2024-03-12", "12/03/2024"); a month-only date (stored as the 1st) needs
+    the month and year; a year-only date needs the year. A month mention is
+    never taken as support for an exact day.
+    """
+    if not text or not day:
+        return False
+    year, month, dom = int(day[:4]), int(day[5:7]), int(day[8:10])
+    lowered = text.lower()
+    name = MONTHS[month - 1]
+    names = rf"(?:{name}|{name[:3]}\.?)"
+    level = precision(day)
+    if level.startswith("year only"):
+        return re.search(rf"\b{year}\b", lowered) is not None
+    month_year = re.search(rf"\b{names}\s*,?\s*{year}\b", lowered) is not None
+    if level.startswith("month only"):
+        return month_year or _states_day(lowered, year, month, dom, names)
+    return _states_day(lowered, year, month, dom, names)
+
+
+def _states_day(lowered: str, year: int, month: int, dom: int, names: str) -> bool:
+    patterns = [
+        rf"\b0?{dom}(?:st|nd|rd|th)?\s+(?:of\s+)?{names}\s*,?\s*{year}\b",
+        rf"\b{names}\s+0?{dom}(?:st|nd|rd|th)?\s*,?\s*{year}\b",
+        rf"\b{year}-{month:02d}-{dom:02d}\b",
+        rf"\b0?{dom}/0?{month}/{year}\b",
+    ]
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
 def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str],
-                 discovered_at: Any, perplexity_data: Optional[str]) -> Dict[str, Any]:
-    """Provenance for one record's date."""
+                 discovered_at: Any, perplexity_data: Optional[str],
+                 text: Optional[str] = None) -> Dict[str, Any]:
+    """Provenance for one record's date; ``text`` is the record's own page text."""
     try:
         meta = json.loads(source_metadata or "{}")
     except (TypeError, ValueError):
@@ -68,8 +109,10 @@ def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str]
         basis = "date the record was found (may lag the incident)"
     elif incident_day == researched:
         basis = "Perplexity research"
-    else:
+    elif text_states_date(text, incident_day):
         basis = "stated in the record"
+    else:
+        basis = "unknown (not a source date and not found in the text)"
     return {"date": incident_day, "basis": basis, "precision": precision(incident_day),
             "published": published, "found": found, "researched": researched}
 
@@ -86,7 +129,7 @@ def event_dates(conn: sqlite3.Connection, dedup_id: str, max_records: int) -> Di
            LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
            WHERE m.deduplicated_event_id = ?""", (dedup_id,)).fetchall()
     rows = sorted(rows, key=lambda r: (not r[1], r[0]))
-    per_record: List[Dict[str, Any]] = [record_dates(*r[2:]) for r in rows]
+    per_record: List[Dict[str, Any]] = [record_dates(*r[2:], text=r[1]) for r in rows]
     stored = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
                           (dedup_id,)).fetchone()
     event_day = _day(stored[0] if stored else None)
@@ -99,3 +142,42 @@ def event_dates(conn: sqlite3.Connection, dedup_id: str, max_records: int) -> Di
         "record_date_bases": dict(Counter(d["basis"] for d in per_record)),
         "records": per_record[:max_records],
     }
+
+
+def event_date_provenance(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, str]:
+    """What the event's own date is: its basis and precision.
+
+    The basis is the most common basis among the records carrying the event
+    date; an event date no record carries was set by a repair pass
+    (consensus, text extraction or research).
+    """
+    summary = event_dates(conn, dedup_id, max_records=10 ** 6)
+    stored = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                          (dedup_id,)).fetchone()
+    event_day = _day(stored[0] if stored else None)
+    carrying = [r["basis"] for r in summary["records"] if event_day and r["date"] == event_day]
+    if event_day is None:
+        basis = "no date"
+    elif carrying:
+        basis = Counter(carrying).most_common(1)[0][0]
+    else:
+        basis = "set by a repair pass (no record carries it)"
+    return {"date_basis": basis, "date_precision": precision(event_day)}
+
+
+def refresh_event_date_provenance(conn: sqlite3.Connection) -> int:
+    """Store ``date_basis`` / ``date_precision`` on every active event; returns how many changed."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    for column in ("date_basis", "date_precision"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE DeduplicatedEvents ADD COLUMN {column} TEXT")
+    changed = 0
+    rows = conn.execute("SELECT deduplicated_event_id, date_basis, date_precision FROM DeduplicatedEvents "
+                        "WHERE status = 'Active'").fetchall()
+    for dedup_id, old_basis, old_precision in rows:
+        new = event_date_provenance(conn, dedup_id)
+        if (old_basis, old_precision) != (new["date_basis"], new["date_precision"]):
+            conn.execute("UPDATE DeduplicatedEvents SET date_basis = ?, date_precision = ? "
+                         "WHERE deduplicated_event_id = ?", (new["date_basis"], new["date_precision"], dedup_id))
+            changed += 1
+    return changed
