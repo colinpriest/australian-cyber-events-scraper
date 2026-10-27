@@ -142,9 +142,22 @@ def test_no_replacement_when_the_incident_is_already_covered(conn):
     # The event carries the trading name; research gave the formal name ("Lush Retail").
     conn.execute("INSERT INTO DeduplicatedEvents VALUES ('ev-lush', 'Lush breach', '2024-02-01', 'Lush', "
                  "'Active', NULL)")
+    conn.execute("INSERT INTO EnrichedEvents VALUES ('lush-article', 'lush-article', 'x', '{}', 'Active', NULL)")
+    conn.execute("INSERT INTO EventDeduplicationMap VALUES ('lush-article', 'ev-lush')")
     calls = []
     assert sg.replace_evidence(conn, "policy", None, search=_found(calls)) is None
     assert calls == []
+
+
+def test_an_event_with_no_active_record_covers_nothing(conn):
+    # The University of Sydney shape: the labelled-real event kept after its only page was
+    # removed is the event the replacement is for; it pruned its own replacement (2026-10-28).
+    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('ev-lush', 'Lush breach', '2024-02-01', 'Lush', "
+                 "'Active', NULL)")
+    conn.execute("INSERT INTO EnrichedEvents VALUES ('lush-junk', 'lush-junk', 'x', '{}', 'Inactive', NULL)")
+    conn.execute("INSERT INTO EventDeduplicationMap VALUES ('lush-junk', 'ev-lush')")
+    calls = []
+    assert sg.replace_evidence(conn, "policy", None, search=_found(calls)) is not None and len(calls) == 1
 
 
 def test_a_page_too_short_to_judge_is_left_alone(conn, tmp_path):

@@ -276,6 +276,11 @@ def _covered(conn: sqlite3.Connection, org: str, when: Optional[date],
     organisation years apart would "cover" it. So a missing or malformed date
     is never covered (the search goes ahead) - it used to match any event.
 
+    An event with no active record covers nothing either: a labelled-real event
+    kept after its only (junk) page was removed is exactly the event the
+    replacement is for. Counting it pruned the University of Sydney's queued
+    replacement (2026-10-28).
+
     Args:
         exclude_events: Events that are about to be rejected (every record in
             them is being removed), which therefore cannot cover anything.
@@ -295,7 +300,10 @@ def _covered(conn: sqlite3.Connection, org: str, when: Optional[date],
                     WHERE dee.deduplicated_event_id = d.deduplicated_event_id
                       AND dee.relationship_type = 'victim')
            FROM DeduplicatedEvents d
-           WHERE d.status = 'Active'""").fetchall()
+           WHERE d.status = 'Active'
+             AND EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                           JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                          WHERE m.deduplicated_event_id = d.deduplicated_event_id AND e.status = 'Active')""").fetchall()
     for event_id, event_date, scalar, role_names in rows:
         if event_id in excluded:
             continue

@@ -6,6 +6,11 @@ names the evidence that showed the problem. Done items move to the README or
 
 ## Done tonight (2026-10-27; timelines and victims: see `docs/10-victim-attribution-and-timelines.md`)
 
+- Publication gate unblocked (2026-10-28): `out_of_scope` event label
+  (rejected, gate-checked, left out of calibration); `label-evidence` hygiene
+  step queues and attaches the reports labels cite; an event with no active
+  record no longer "covers" an incident in the source gate.
+
 - Labels win both ways: an unchanged labelled non-incident is rejected
   whatever it scores (12 on the live database); only events that gained
   records since labelling are held for review.
@@ -32,20 +37,28 @@ names the evidence that showed the problem. Done items move to the README or
 
 ## To do
 
-- **Publication gate blocked on the live database (2026-10-28): three
-  labelled-real events whose only page is labelled junk.** The two label sets
-  collide, so no state satisfies both and the gate reports 3 contradictions
-  (threshold 2). Each page is now deactivated and its event kept
-  (`check-sources`), which ends the reject/restore loop, but the page stays
-  mapped as the event's only record. Needs a decision per event:
-  - Home Affairs / ZircoDATA 2024 (`84c30c63`): only page is the ACSC
-    ransomware playbook; Perplexity research too weak to search for a
-    replacement. Find the Cyber Daily report the label cites and ingest it.
-  - University of Sydney third-party breach 2023 (`793cba68`): replacement
-    found (iTnews) and queued; the next refresh should ingest it and merge it in.
-  - NHS Dumfries and Galloway 2024 (`a8862fc9`): labelled real but not an
-    Australian incident - probably reject as out of scope, and relabel.
-  Until then `run_full_pipeline.py` keeps the last published dashboard.
+- **Two label collisions left after the 2026-10-28 fix (gate allows: 2 <=
+  threshold 2).** NHS Dumfries and Galloway (`a8862fc9`) is relabelled
+  `out_of_scope` and rejected. For Home Affairs / ZircoDATA (`84c30c63`) and
+  the University of Sydney (`793cba68`), `label-evidence` queued the reports
+  their labels cite (USyd's iTnews replacement had been pruned: its own
+  evidence-less event counted as covering it - fixed in `source_gate._covered`).
+  Check after the next refresh that both attached. Risk: the Cyber Daily
+  article is behind a registration wall (stored in 2025 as the wall and site
+  menu, then dropped), so the Google page gate may reject it again; then the
+  event needs another source (e.g. an OAIC or Home Affairs statement).
+- **More evidence-less labelled-real events** found by `label-evidence`
+  (queued the same way): LUSH (`bac5a336`), the Lynx electrical-wholesaler
+  claim (`f7818274`), Tonga's health system (`29aec421`) and Ward Transport &
+  Logistics (`c310fe7d`). The last two look non-Australian: candidates for
+  `out_of_scope`. Strike Bowling's owner (`1043b84f`): its cited Cyber Daily
+  report is already a record in another event - merge the two
+  (`dedup_admin.py merge`).
+- **Cyber Daily's registration wall.** 427 stored records cite cyberdaily.au
+  (Webber 264, Google 98, Perplexity 65; 173 of 657 active events hold one),
+  but scraping returns "You have N free articles left" and the site menu.
+  Decide between a feed-based source (titles and summaries) and registered
+  access before relying on its page text.
 - **Short-gap repeats still made by data errors.** Oz Hair & Beauty is the
   recorded victim of a superannuation credential-stuffing campaign (victim
   attribution scored it 0.02 and flagged it, with no replacement), a 3-day

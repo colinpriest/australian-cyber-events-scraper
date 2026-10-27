@@ -254,3 +254,18 @@ def test_a_labelled_non_incident_that_gained_a_record_is_held_for_review(conn, t
     assert [f["deduplicated_event_id"] for f in result["labelled_needing_review"]] == ["lush"]
     assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'lush'").fetchone()[0] \
         == "Active"
+
+
+def test_an_out_of_scope_event_is_rejected_however_real(conn, tmp_path, monkeypatch):
+    """A real incident outside the dataset (NHS Dumfries and Galloway) is rejected, not protected."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,out_of_scope,a real breach but not Australian,packet,test\n", encoding="utf-8")
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.9, "LUSH data breach": 0.99}))
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True,
+                             judge=judge, calibration_path=_calibration(tmp_path, 0.01), search=NO_FINDINGS,
+                             labels_path=labels)
+    assert [(f["deduplicated_event_id"], f["label"]) for f in result["labelled_rejections"]] == [("lush", "out_of_scope")]
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    assert status == {"act": "Active", "lush": "Rejected"}

@@ -545,6 +545,10 @@ class UnifiedPipeline:
         article mentions Optus. Run before the recurrence check, which groups
         events by victim.
 
+        -1. ``label-evidence`` - labelled-real events with no active record
+           get the report their label cites queued for the next refresh;
+           processed reports are merged into their labelled event and its
+           inactive records split out and rejected.
         0. ``check-sources --apply`` - Google-sourced records count only if
            the page itself reports an incident (calibrated Jev gate; menus,
            help pages and policies do not). Junk records are removed and, where
@@ -622,7 +626,14 @@ class UnifiedPipeline:
         suppliers = ["find-supplier-victims", "--research"]
         if not getattr(args, 'report_event_rejections', False):
             suppliers.append("--apply")
-        steps = [["rescrape-short-pages"], ["research-timelines"], ["classify-pages"], sources, check,
+        # label-evidence first: a labelled-real event left with no active
+        # record gets the report its label cites queued, and once that report
+        # has been processed it is attached and the junk page split out.
+        evidence = ["label-evidence"]
+        if getattr(args, 'report_event_rejections', False):
+            evidence.append("--dry-run")
+        steps = [evidence, ["rescrape-short-pages"], ["research-timelines"], ["classify-pages"],
+                 sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
                  coherence, duplicates, suppliers, ["reconcile-timelines", "--queue-gaps"]]
         for step in steps:

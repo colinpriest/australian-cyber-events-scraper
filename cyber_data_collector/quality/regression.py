@@ -17,6 +17,8 @@ What contradicts a label:
 event_reality real     the event (or the event it was merged into) is Rejected
 event_reality          the event is still Active (merged into another event is not
 not_incident           counted: the incident it joined may be real)
+event_reality          the event is still Active (a real incident outside the dataset's
+out_of_scope           scope, e.g. not Australian)
 duplicates same        the two events are still two distinct Active events
 duplicates different   both now resolve to one Active event
 source_gate            the record is evidence of an Active event, or is unmapped
@@ -124,17 +126,17 @@ def check_event_reality(conn, resolver: EventResolver, path: Path) -> Dict[str, 
     contradictions, unchecked, checked = [], defaultdict(int), 0
     for row in rows:
         label, event_id = row["label"].strip(), row["deduplicated_event_id"].strip()
-        if label not in ("real", "not_incident"):
+        if label not in ("real", "not_incident", "out_of_scope"):
             unchecked[f"label {label!r}"] += 1
             continue
         raw = resolver.status.get(event_id)
         if raw is None:
             unchecked["event no longer exists"] += 1
             continue
-        if label == "not_incident":
+        if label in ("not_incident", "out_of_scope"):
             checked += 1
             if raw == "Active":
-                contradictions.append(f"{event_id}: labelled not_incident, still Active - {row.get('rationale', '')[:90]}")
+                contradictions.append(f"{event_id}: labelled {label}, still Active - {row.get('rationale', '')[:90]}")
             continue
         now, status = resolver.resolve(event_id)
         if status in ("missing", "untraceable", "ambiguous"):

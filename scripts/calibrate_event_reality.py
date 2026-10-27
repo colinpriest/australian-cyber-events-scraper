@@ -22,7 +22,8 @@ Two steps, each reproducible from committed files:
                The cut-off is the largest one at which the events it would
                reject are, weighted by stratum, at least ``--precision`` (0.95)
                labelled ``not_incident``. ``unsure`` labels are excluded and
-               counted. The model and question version are recorded; the
+               counted; ``out_of_scope`` (a real incident that is not
+               Australian) is excluded too. The model and question version are recorded; the
                pipeline only rejects while both match.
 
 Usage (from the project root):

@@ -555,6 +555,18 @@ Labellers were Claude Opus 5.5 subagents working from the stored evidence plus
 web searches; conventions worth reviewing are noted in each file's rationales
 (dark-web sale claims naming no victim = unsure; campaigns naming no victim,
 physical-security incidents and non-cyber fraud = not an incident).
+An event label `out_of_scope` marks a real incident outside the dataset (not
+Australian): `check-events --apply` rejects it, the quality gate checks it
+stays rejected, and calibration leaves it out.
+
+**Labelled-real events with no evidence.** The source gate keeps a
+labelled-real event whose only page was junk, but the page stays mapped to it
+and contradicts the page labels. `dedup_admin.py label-evidence` (the first
+hygiene step) queues the report the label cites (`corroboration` column) for the
+next refresh - processing a stored copy again rather than storing it twice -
+and once that report is a record, merges its event into the labelled one and
+splits the inactive pages out and rejects them. A cited report that is
+processed and still rejected is reported, not left waiting.
 
 **Calibrating** (`scripts/calibrate_source_gate.py`,
 `calibrate_event_reality.py`, `calibrate_duplicates.py`): samples are
