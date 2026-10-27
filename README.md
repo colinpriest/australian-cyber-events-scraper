@@ -499,6 +499,7 @@ labelled one way is never acted on the other way.
 | 1 | `classify-pages` | What kind of page each suspect record is (informs, removes nothing) | Jev | - | - | - | - |
 | 2 | `check-events --apply` | Is the event a real, specific incident? | Jev + escalation | reject below **0.28** | 0.954 (68/72) | 0.71 | 0.91 |
 | 3 | `check-victims` | Do the records name a different victim? (deterministic rule) | none | - | 8/9 reviewed | - | - |
+| 3b | `check-coherence --apply` (not yet wired into `run_full_pipeline.py`) | Is each suspect record about its event's incident? (splits strays out) | Jev + escalation | split below **0.15** | 1.00 (17/17) | 0.94 | 0.98 |
 | 4 | `check-duplicates --apply` | Are two events about one organisation the same incident? | Jev + escalation | merge at **0.81** | 1.00 (16/16) | 0.94 | 0.97 |
 | 5 | `check-victim-attribution` | Is the recorded victim really the affected organisation? | Jev | report only (no labels yet) | - | - | - |
 
@@ -510,6 +511,7 @@ it is scored on flatters it.
 python scripts/dedup_admin.py check-sources [--apply] [--unmapped-only]
 python scripts/dedup_admin.py check-events [--apply]
 python scripts/dedup_admin.py check-victims [--dry-run]
+python scripts/dedup_admin.py check-coherence [--apply] [--event <dedup_id>]
 python scripts/dedup_admin.py check-duplicates [--apply]
 python scripts/dedup_admin.py check-victim-attribution
 python scripts/dedup_admin.py research-timelines
@@ -519,7 +521,8 @@ python scripts/dedup_admin.py reconcile-timelines [--queue-gaps]
 **Labels** (all blind to the model being calibrated, each with a written
 reason; reviewed where flagged): `evaluation/source_gate_labels.csv` (170
 pages), `evaluation/event_reality_labels.csv` (168 events),
-`evaluation/duplicate_labels.csv` (157 pairs - every same-victim pair).
+`evaluation/duplicate_labels.csv` (157 pairs - every same-victim pair),
+`evaluation/coherence_labels.csv` (148 event members - every suspect).
 Labellers were Claude Opus 5.5 subagents working from the stored evidence plus
 web searches; conventions worth reviewing are noted in each file's rationales
 (dark-web sale claims naming no victim = unsure; campaigns naming no victim,
@@ -615,23 +618,33 @@ distort dates and counts and pull every later duplicate check toward wrong
 matches.
 
 ```bash
-python scripts/dedup_admin.py check-coherence --dry-run     # review proposals
-python scripts/dedup_admin.py check-coherence               # split out (logged, reversible)
+python scripts/dedup_admin.py check-coherence                    # report
+python scripts/dedup_admin.py check-coherence --apply            # split out (logged, reversible)
 python scripts/dedup_admin.py check-coherence --event <dedup_id>
 ```
 
 A member is a *suspect* when the organisation Perplexity named for it shares no
-distinctive name key with the event's victim, vendor or majority organisation;
-one GPT-4o call per suspect event judges every member. A member is split out
-only if it is a suspect, judged foreign at certainty >= 0.99, its own incident
-label does not name the event, and the strays are not a majority all naming one
-incident (that pattern means the event is mislabelled). Strays naming the same
-incident stay together; one is folded into an existing event only when exactly
-one event for its organisation lies within 90 days. Every guard comes from a
-wrong split seen in review - supplier customers (Frontier / NSW Health), misdated
-copies (Partnered Health), brand variants (youX / Vroom by YouX). First run
-(2026-10-02): 25 strays split out of 14 events. Findings:
-`instance/dedup_coherence_findings.json`.
+distinctive name key with the event's victim, vendor or majority organisation.
+Jev answers, for each suspect, *is this record about the same incident as the
+event?* from the record's title, summary, Perplexity research and stored page,
+the event's victim and other records, and the victim's researched timeline;
+0.1-0.7 is escalated to GPT-5.5 with reasoning. With `--apply` a suspect below
+the calibrated cut-off (**0.15**, 17/17 correct on the labelled census of
+suspects, recall 0.94) is split out through the ledger - snapshotted,
+reversible, cached as `different` rulings - and strays about one incident leave
+together. Labels are ground truth: `same` never leaves, `different` always does
+(all 25 labelled strays - WSU's WA Health records, UTas's University of Sydney
+and Canvas records, NT Health's Updoc record ... - leave on the first run).
+Guards kept from past wrong splits: same-organisation members never leave on a
+model score (misdated copies), an organisation named in the event's title stays
+(youX / Vroom by YouX), a majority of strays naming one organisation means the
+event is mislabelled, and the question states the supplier-customer rule.
+Split-off records are re-homed by `check-duplicates`, which runs next. No
+fallback: missing keys, a Jev failure or a missing/unreadable labels or
+calibration file under `--apply` exit non-zero; a failed escalation leaves its
+member undecided (not acted on) and exits non-zero. Findings:
+`dedup_coherence_findings.json` beside the database. Details, including what the
+suspect gate misses: [docs/09-deduplication-v3.md section 8j](docs/09-deduplication-v3.md).
 
 ### Cluster-level adjudication
 
