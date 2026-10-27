@@ -89,7 +89,7 @@ def stored(conn: sqlite3.Connection, dedup_id: str) -> Optional[Dict[str, Any]]:
     ensure_schema(conn)
     row = conn.execute(
         "SELECT answer, citations_json, model, created_at FROM EventCorroborations "
-        "WHERE deduplicated_event_id = ? ORDER BY created_at DESC LIMIT 1", (dedup_id,)).fetchone()
+        "WHERE deduplicated_event_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1", (dedup_id,)).fetchone()
     if row is None:
         return None
     return {"answer": row[0], "citations": json.loads(row[1] or "[]")[:MAX_CITATIONS],

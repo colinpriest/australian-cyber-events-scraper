@@ -62,7 +62,8 @@ def perplexity_model() -> str:
     return os.getenv("PERPLEXITY_MODEL") or DEFAULT_PERPLEXITY_MODEL
 
 
-def chat_params(model: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
+def chat_params(model: str, max_tokens: Optional[int] = None,
+                reasoning_effort: str = "none") -> Dict[str, Any]:
     """Keyword arguments for ``chat.completions.create`` on ``model``.
 
     GPT-5 models reject ``max_tokens`` (it is ``max_completion_tokens``) and
@@ -73,7 +74,11 @@ def chat_params(model: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
     """
     params: Dict[str, Any] = {"model": model, "temperature": 0.0}
     if model.startswith(("gpt-5", "o1", "o3", "o4")):
-        params["reasoning_effort"] = "none"
+        params["reasoning_effort"] = reasoning_effort
+        if reasoning_effort != "none":
+            # GPT-5 accepts a temperature only with reasoning off; an escalation
+            # that reasons is therefore not repeatable, and its answer is stored.
+            del params["temperature"]
         if max_tokens is not None:
             params["max_completion_tokens"] = max_tokens
     elif max_tokens is not None:

@@ -43,8 +43,17 @@ QUESTION_ID = "is_real_incident"
 # it scores below CORROBORATE_BELOW get a web search (see corroboration), and
 # v2 - the same evidence plus that search - is the question calibrated and
 # used to reject.
+#
+# v2 (corroborated) calibrated at 0.25 with weighted precision 0.956. v3 adds
+# the victim organisation's researched incident timeline (org_timeline), and
+# events v3 scores inside ESCALATE_BAND - fixed before calibration - are
+# re-judged by the reasoning model (utils.escalation). The *final* score is the
+# escalation's where there is one, else Jev's; that is what is calibrated.
 SCREEN_VERSION = "event-reality-v1"
-QUESTION_VERSION = "event-reality-v2-corroborated"
+QUESTION_VERSION = "event-reality-v3-timeline"
+ESCALATION_QUESTION_ID = "is_real_incident_escalated"
+ESCALATION_VERSION = "event-reality-escalation-v1"
+ESCALATE_BAND = (0.1, 0.7)
 CORROBORATE_BELOW = 0.5
 MAX_RECORDS = 10
 PAGE_CHARS = 1200
@@ -73,6 +82,12 @@ CORROBORATION_INSTRUCTIONS = (
     "records hold no concrete evidence either, that is evidence against it. A search that found a "
     "*different* incident at the same organisation is not evidence for this one."
 )
+TIMELINE_INSTRUCTIONS = (
+    " `organisation_timeline`, when present, is researched history of the victim organisation's "
+    "publicly reported cyber incidents, with dates and sources. An event that matches an incident "
+    "in it is real. An event that matches none of them, for an organisation whose history was "
+    "researched, needs concrete evidence of its own."
+)
 CRITERIA = {
     "true": ("A specific incident is described by the page text or by concrete research: who was "
              "affected, what happened, and roughly when."),
@@ -99,11 +114,12 @@ def _perplexity(pe: Optional[str]) -> Dict[str, Any]:
 
 
 def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = False,
-                max_records: int = MAX_RECORDS) -> Dict[str, Any]:
+                max_records: int = MAX_RECORDS, with_timeline: bool = False) -> Dict[str, Any]:
     """Everything Jev sees about one event. Deterministic, so the input hash is stable.
 
     With ``corroborated``, a stored web search for the event is added when one
-    exists.
+    exists; with ``with_timeline``, the victim organisation's stored incident
+    timeline.
     """
     state = _evidence_state(conn, dedup_id, max_records)
     if corroborated:
@@ -111,6 +127,13 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = Fa
         found = stored(conn, dedup_id)
         if found:
             state["corroboration"] = {"answer": found["answer"], "citations": found["citations"]}
+    if with_timeline:
+        from cyber_data_collector.dedup.org_timeline import timeline_for_event
+        timeline = timeline_for_event(conn, dedup_id)
+        if timeline:
+            state["organisation_timeline"] = {"organisation": timeline["organisation"],
+                                              "incidents": timeline["timeline"],
+                                              "citations": timeline["citations"]}
     return state
 
 
@@ -138,10 +161,20 @@ def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = 
     }
 
 
+def _instructions(version: str) -> str:
+    if version == SCREEN_VERSION:
+        return INSTRUCTIONS
+    return INSTRUCTIONS + CORROBORATION_INSTRUCTIONS + TIMELINE_INSTRUCTIONS
+
+
 def question(version: str = QUESTION_VERSION):
     from typesafe_sdk import Noul, NoulCriteria
-    instructions = INSTRUCTIONS + (CORROBORATION_INSTRUCTIONS if version == QUESTION_VERSION else "")
-    return Noul(instructions=instructions, criteria=NoulCriteria(**CRITERIA))
+    return Noul(instructions=_instructions(version), criteria=NoulCriteria(**CRITERIA))
+
+
+def escalation_question() -> str:
+    return (_instructions(QUESTION_VERSION) + f" YES means: {CRITERIA['true']} NO means: {CRITERIA['false']}"
+            " Is this stored event a real, specific cyber incident?")
 
 
 def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
@@ -156,13 +189,14 @@ def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
     owned = judge is None
     judge = judge or JevJudge(conn)
     q = {QUESTION_ID: question(version)}
-    corroborated = version == QUESTION_VERSION
+    full = version == QUESTION_VERSION
     out: Dict[str, float] = {}
     try:
         for i, dedup_id in enumerate(dedup_ids, 1):
             try:
                 answer = judge.ask("deduplicated_event", dedup_id, version,
-                                   build_state(conn, dedup_id, corroborated), q, refresh=refresh)[QUESTION_ID]
+                                   build_state(conn, dedup_id, corroborated=full, with_timeline=full),
+                                   q, refresh=refresh)[QUESTION_ID]
             except Exception as exc:  # noqa: BLE001 - one failure never decides an event
                 logger.warning("Event reality judgement failed for %s: %s", dedup_id, exc)
                 continue
@@ -173,6 +207,50 @@ def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
         if owned:
             judge.close()
     return out
+
+
+def calibration_identity() -> Dict[str, str]:
+    """What a calibration must have been measured on to apply: question, escalation and both models."""
+    from cyber_data_collector.utils.llm_models import openai_model
+    return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
+            "model": f"{typesafe_model()}+{openai_model()}"}
+
+
+def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None) -> Dict[str, float]:
+    """Re-judge with the reasoning model every event Jev scores inside ESCALATE_BAND."""
+    from cyber_data_collector.utils.escalation import escalate
+
+    lo, hi = ESCALATE_BAND
+    band = sorted(d for d, p in probabilities.items() if lo <= p < hi)
+    out: Dict[str, float] = {}
+    for i, did in enumerate(band, 1):
+        value = escalate(conn, "deduplicated_event", did, ESCALATION_QUESTION_ID, ESCALATION_VERSION,
+                         build_state(conn, did, corroborated=True, with_timeline=True),
+                         escalation_question(), client=client)
+        if value is not None:
+            out[did] = value
+        if i % 10 == 0:
+            logger.info("Escalated %d/%d mid-band events", i, len(band))
+    logger.info("Escalated %d of %d events Jev scored in %s", len(out), len(band), ESCALATE_BAND)
+    return out
+
+
+def stored_final_probabilities(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, float]:
+    """The final score per event from storage: the escalation's where there is one, else Jev's."""
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for sid, value in conn.execute(
+                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
+                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
+            out[sid] = float(value)
+        return out
+
+    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
+    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
+    lo, hi = ESCALATE_BAND
+    return {d: (escalated[d] if d in escalated and lo <= jev[d] < hi else jev[d]) for d in ids if d in jev}
 
 
 def corroborate_low(conn: sqlite3.Connection, screen: Dict[str, float], search=None) -> int:
@@ -202,9 +280,10 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if cal.get("question_version") != QUESTION_VERSION or cal.get("model") != typesafe_model():
+    want = calibration_identity()
+    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
         logger.warning("Event reality calibration is for %s / %s, not %s / %s: report only",
-                       cal.get("model"), cal.get("question_version"), typesafe_model(), QUESTION_VERSION)
+                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
         return None
     if cal.get("cutoff") is None:
         return None
@@ -284,16 +363,23 @@ def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) 
 
 def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
                  calibration_path: Path = CALIBRATION_PATH, search=None,
-                 labels_path: Path = LABELS_PATH) -> Dict[str, Any]:
-    """Screen, corroborate the low scorers, judge again, reject below the calibrated cut-off.
+                 labels_path: Path = LABELS_PATH, escalation_client=None,
+                 timeline_search=None) -> Dict[str, Any]:
+    """Screen, corroborate the low scorers, research timelines, judge, escalate the
+    middle band, and reject below the calibrated cut-off.
 
     Without an active calibration, or without ``apply``, nothing is rejected:
     the would-be rejections are returned for review.
     """
+    from cyber_data_collector.dedup.org_timeline import research_all
+
     events = active_events(conn)
     screen = judge_events(conn, events, judge=judge, version=SCREEN_VERSION)
     corroborated = corroborate_low(conn, screen, search=search)
-    probabilities = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
+    research_all(conn, search=timeline_search)
+    jev_scores = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
+    escalated = escalate_band(conn, jev_scores, client=escalation_client)
+    probabilities = {d: escalated.get(d, p) for d, p in jev_scores.items()}
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
@@ -306,6 +392,7 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     if applied:
         reject_events(conn, below)
     restored = restore_protected(conn, protected) if apply else []
-    return {"judged": len(probabilities), "corroborated": corroborated, "cutoff": cutoff,
+    return {"judged": len(probabilities), "corroborated": corroborated, "escalated": len(escalated),
+            "cutoff": cutoff,
             "calibrated": cal is not None, "applied": applied, "rejections": below,
             "restored_protected": restored}

@@ -41,7 +41,15 @@ QUESTION_ID = "same_incident"
 # v1 (never calibrated) lacked date provenance; v2 shows how each date was
 # determined and how precise it is, because a gap built from publication dates
 # or month-only placeholders is weak evidence of separate incidents.
-QUESTION_VERSION = "same-incident-v2-dated"
+# v2 calibrated at 0.75 (9/9 merges correct, recall 0.53). v3 adds the
+# organisation's researched incident timeline, which is what decided the hard
+# labelled cases (Western Sydney University's four separate incidents); pairs
+# v3 scores inside ESCALATE_BAND - fixed before calibration - are re-judged by
+# the reasoning model, and the final score is calibrated.
+QUESTION_VERSION = "same-incident-v3-timeline"
+ESCALATION_QUESTION_ID = "same_incident_escalated"
+ESCALATION_VERSION = "same-incident-escalation-v1"
+ESCALATE_BAND = (0.2, 0.8)
 RECORDS_PER_EVENT = 6
 
 LABELS_PATH = ROOT / "evaluation" / "duplicate_labels.csv"
@@ -59,7 +67,10 @@ INSTRUCTIONS = (
     "its date (none means a later repair pass set it), and the bases of its records' dates. A gap "
     "built from publication or found dates, from month- or year-only dates stored as the 1st, or "
     "from an event date no record carries, is weak evidence of separate incidents; a gap between "
-    "two dates stated to the day in the records is strong evidence."
+    "two dates stated to the day in the records is strong evidence. `organisation_timeline`, when "
+    "present, is researched history of the organisation's publicly reported incidents with dates "
+    "and sources: if both events match the same incident in it they are one incident; if they "
+    "match two different incidents in it they are two."
 )
 CRITERIA = {
     "true": ("One incident: the same breach or attack reported again - follow-up coverage, a later "
@@ -98,7 +109,8 @@ def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                     continue
                 pid = pair_id(a.dedup_id, b.dedup_id)
                 pairs.setdefault(pid, {"pair_id": pid, "a": a.dedup_id, "b": b.dedup_id,
-                                       "organisation": a.entity_name, "gap_days": a.gap_to(b)})
+                                       "organisation": a.entity_name, "entity_id": a.entity_id,
+                                       "gap_days": a.gap_to(b)})
     return sorted(pairs.values(), key=lambda p: p["pair_id"])
 
 
@@ -117,9 +129,63 @@ def _event_with_dates(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]
 
 
 def build_pair_state(conn: sqlite3.Connection, pair: Dict[str, Any]) -> Dict[str, Any]:
-    return {"organisation": pair["organisation"], "gap_days": pair["gap_days"],
-            "event_a": _event_with_dates(conn, pair["a"]),
-            "event_b": _event_with_dates(conn, pair["b"])}
+    from cyber_data_collector.dedup.org_timeline import stored
+
+    state = {"organisation": pair["organisation"], "gap_days": pair["gap_days"],
+             "event_a": _event_with_dates(conn, pair["a"]),
+             "event_b": _event_with_dates(conn, pair["b"])}
+    timeline = stored(conn, pair["entity_id"]) if pair.get("entity_id") is not None else None
+    if timeline:
+        state["organisation_timeline"] = {"incidents": timeline["timeline"], "citations": timeline["citations"]}
+    return state
+
+
+def escalation_question() -> str:
+    return (INSTRUCTIONS + f" YES means: {CRITERIA['true']} NO means: {CRITERIA['false']}"
+            " Do event_a and event_b describe the same real-world cyber incident?")
+
+
+def calibration_identity() -> Dict[str, str]:
+    from cyber_data_collector.utils.llm_models import openai_model
+    return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
+            "model": f"{typesafe_model()}+{openai_model()}"}
+
+
+def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], probabilities: Dict[str, float],
+                  client=None) -> Dict[str, float]:
+    """Re-judge with the reasoning model every pair Jev scores inside ESCALATE_BAND."""
+    from cyber_data_collector.utils.escalation import escalate
+
+    lo, hi = ESCALATE_BAND
+    out: Dict[str, float] = {}
+    for pair in pairs:
+        p = probabilities.get(pair["pair_id"])
+        if p is None or not lo <= p < hi:
+            continue
+        value = escalate(conn, "event_pair", pair["pair_id"], ESCALATION_QUESTION_ID, ESCALATION_VERSION,
+                         build_pair_state(conn, pair), escalation_question(), client=client)
+        if value is not None:
+            out[pair["pair_id"]] = value
+    logger.info("Escalated %d pair(s) Jev scored in %s", len(out), ESCALATE_BAND)
+    return out
+
+
+def stored_final_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
+    """Final score per pair from storage: the escalation's in the band, else Jev's."""
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for sid, value in conn.execute(
+                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
+                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
+            out[sid] = float(value)
+        return out
+
+    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
+    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
+    lo, hi = ESCALATE_BAND
+    return {p: (escalated[p] if p in escalated and lo <= v < hi else v) for p, v in jev.items()}
 
 
 def question():
@@ -167,9 +233,10 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if cal.get("question_version") != QUESTION_VERSION or cal.get("model") != typesafe_model():
+    want = calibration_identity()
+    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
         logger.warning("Duplicate calibration is for %s / %s, not %s / %s: report only",
-                       cal.get("model"), cal.get("question_version"), typesafe_model(), QUESTION_VERSION)
+                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
         return None
     return cal if cal.get("cutoff") is not None else None
 
@@ -221,10 +288,16 @@ def merge_components(conn: sqlite3.Connection, components: Sequence[Sequence[str
 
 def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
                      calibration_path: Path = CALIBRATION_PATH,
-                     labels_path: Path = LABELS_PATH) -> Dict[str, Any]:
-    """Judge every same-victim pair; merge those at or above the calibrated cut-off."""
+                     labels_path: Path = LABELS_PATH, escalation_client=None,
+                     timeline_search=None) -> Dict[str, Any]:
+    """Judge every same-victim pair (escalating the middle band); merge at or above the calibrated cut-off."""
+    from cyber_data_collector.dedup.org_timeline import research_all
+
+    research_all(conn, search=timeline_search)
     pairs = candidate_pairs(conn)
-    probabilities = judge_pairs(conn, pairs, judge=judge)
+    jev_scores = judge_pairs(conn, pairs, judge=judge)
+    escalated = escalate_band(conn, pairs, jev_scores, client=escalation_client)
+    probabilities = {p: escalated.get(p, v) for p, v in jev_scores.items()}
     labels = labelled_pairs(labels_path)
     different = {p for p, label in labels.items() if label == "different"}
     cal = active_calibration(calibration_path)
@@ -239,5 +312,5 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     if apply and cal and chosen:
         merged = merge_components(conn, _components([(by_id[p]["a"], by_id[p]["b"]) for p in chosen]),
                                   different)
-    return {"pairs": len(pairs), "judged": len(probabilities), "cutoff": cutoff,
+    return {"pairs": len(pairs), "judged": len(probabilities), "escalated": len(escalated), "cutoff": cutoff,
             "calibrated": cal is not None, "proposals": proposals, "merged": merged}

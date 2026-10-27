@@ -498,6 +498,11 @@ class UnifiedPipeline:
         article mentions Optus. Run before the recurrence check, which groups
         events by victim.
 
+        0. ``check-sources --apply`` - Google-sourced records count only if
+           the page itself reports an incident (calibrated Jev gate; menus,
+           help pages and policies do not). Junk records are removed and, where
+           they pointed at an uncovered real incident, a replacement source is
+           queued. The same gate runs at ingestion in run_global_deduplication.
         1. ``classify-pages`` - every unclassified suspect page (Jev, or the
            fast OpenAI model without a TypeSafe key; each verdict stored and
            never paid for twice). Verdicts describe pages; they reject nothing.
@@ -517,6 +522,14 @@ class UnifiedPipeline:
            cut-off (``evaluation/duplicate_calibration.json``); report-only
            without a calibration for the current model and question. Runs
            after the victim check because pairs are formed by victim.
+        5. ``check-victim-attribution`` - Jev asks whether each event's
+           recorded victim (one with a researched timeline) is really the
+           organisation affected. **Report-only**: there are no labelled
+           victim attributions to calibrate a cut-off on.
+
+        Steps 2 and 4 research each multi-event organisation's incident
+        timeline once (Perplexity, stored) and escalate the cases Jev scores in
+        the middle band to the reasoning model; both answers are stored.
 
         Never fails the phase.
         """
@@ -531,7 +544,10 @@ class UnifiedPipeline:
         duplicates = ["check-duplicates"]
         if not getattr(args, 'report_event_rejections', False):
             duplicates.append("--apply")
-        steps = [check, ["check-victims"], duplicates]
+        sources = ["check-sources"]
+        if not getattr(args, 'report_event_rejections', False):
+            sources.append("--apply")
+        steps = [sources, check, ["check-victims"], duplicates, ["check-victim-attribution"]]
         if os.getenv('OPENAI_API_KEY') or os.getenv('TYPESAFE_API_KEY'):
             steps.insert(0, ["classify-pages"])
         else:

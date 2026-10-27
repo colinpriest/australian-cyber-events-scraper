@@ -41,6 +41,13 @@ def test_date_precision(date, precision):
     assert dp.precision(date) == precision
 
 
+def NO_SEARCH(query, model):
+    return {"answer": "NONE FOUND", "citations": []}
+
+
+NO_ESCALATION = object()   # never called: the fake Jev scores sit outside the escalation band
+
+
 class FakeTypeSafe:
     def __init__(self, p_same):
         self.p_same = p_same
@@ -92,7 +99,7 @@ def conn(monkeypatch, merges):
 
 def _cal(tmp_path, cutoff):
     path = tmp_path / "cal.json"
-    path.write_text(json.dumps({"cutoff": cutoff, "model": "jev-1.14.0", "question_version": dj.QUESTION_VERSION}))
+    path.write_text(json.dumps({"cutoff": cutoff, **dj.calibration_identity()}))
     return path
 
 
@@ -114,28 +121,28 @@ def test_pairs_carry_gap_and_date_provenance(conn):
 
 def test_nothing_merges_without_a_calibration(conn, merges, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
-    result = dj.check_duplicates(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.99)),
+    result = dj.check_duplicates(conn, timeline_search=NO_SEARCH, escalation_client=NO_ESCALATION, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.99)),
                                  calibration_path=tmp_path / "none.json", labels_path=_labels(tmp_path, None))
     assert result["judged"] == 1 and not result["calibrated"] and merges == []
 
 
 def test_calibrated_cutoff_merges(conn, merges, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
-    result = dj.check_duplicates(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.9)),
+    result = dj.check_duplicates(conn, timeline_search=NO_SEARCH, escalation_client=NO_ESCALATION, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.9)),
                                  calibration_path=_cal(tmp_path, 0.8), labels_path=_labels(tmp_path, None))
     assert len(result["proposals"]) == 1 and len(merges) == 1 and set(merges[0]) == {"e1", "e2"}
 
 
 def test_labelled_different_is_never_merged(conn, merges, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
-    result = dj.check_duplicates(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.99)),
+    result = dj.check_duplicates(conn, timeline_search=NO_SEARCH, escalation_client=NO_ESCALATION, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.99)),
                                  calibration_path=_cal(tmp_path, 0.5), labels_path=_labels(tmp_path, "different"))
     assert result["proposals"] == [] and merges == []
 
 
 def test_labelled_same_is_merged_below_the_cutoff(conn, merges, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
-    dj.check_duplicates(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.1)),
+    dj.check_duplicates(conn, timeline_search=NO_SEARCH, escalation_client=NO_ESCALATION, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(0.1)),
                         calibration_path=_cal(tmp_path, 0.8), labels_path=_labels(tmp_path, "same"))
     assert len(merges) == 1
 
