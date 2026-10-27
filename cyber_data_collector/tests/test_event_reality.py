@@ -17,6 +17,10 @@ from cyber_data_collector.dedup.ledger import DedupLedger  # noqa: E402
 from cyber_data_collector.utils.jev import JevJudge  # noqa: E402
 
 
+def NO_FINDINGS(query, model):
+    return {"answer": "FOUND: no\nINCIDENT: none found", "citations": []}
+
+
 class FakeTypeSafe:
     """P(real) by event title; records what it was shown."""
 
@@ -79,7 +83,8 @@ def test_state_carries_page_text_and_perplexity_research(conn):
 def test_without_calibration_nothing_is_rejected(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=True, judge=judge, calibration_path=tmp_path / "missing.json")
+    result = er.check_events(conn, apply=True, judge=judge, calibration_path=tmp_path / "missing.json",
+                             search=NO_FINDINGS)
     assert result["judged"] == 2 and not result["calibrated"] and not result["applied"]
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2
 
@@ -94,7 +99,8 @@ def test_calibration_for_another_model_or_question_is_ignored(conn, tmp_path, mo
 def test_calibrated_cutoff_rejects_only_below_it(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3))
+    result = er.check_events(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+                             search=NO_FINDINGS)
 
     assert result["applied"] and [r["deduplicated_event_id"] for r in result["rejections"]] == ["act"]
     status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
@@ -102,9 +108,57 @@ def test_calibrated_cutoff_rejects_only_below_it(conn, tmp_path, monkeypatch):
     assert conn.execute("SELECT status FROM EnrichedEvents WHERE enriched_event_id = 'act-r'").fetchone()[0] == "Inactive"
 
 
+def test_only_low_screen_scores_are_searched_and_v2_sees_the_result(conn, tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    fake = FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9})
+    queries = []
+
+    def search(query, model):
+        queries.append(query)
+        return {"answer": "FOUND: no\nINCIDENT: none found", "citations": ["https://example.com/x"]}
+
+    er.check_events(conn, judge=JevJudge(conn, client=fake), calibration_path=tmp_path / "none.json",
+                    search=search)
+
+    assert len(queries) == 1 and "Business - ACT Government" in queries[0]
+    v2_states = [s for s in fake.states if "corroboration" in s]
+    assert len(v2_states) == 1 and v2_states[0]["corroboration"]["citations"] == ["https://example.com/x"]
+    versions = [r[0] for r in conn.execute("SELECT DISTINCT question_version FROM ModelJudgements")]
+    assert set(versions) == {er.SCREEN_VERSION, er.QUESTION_VERSION}
+
+
+def test_a_search_is_stored_and_never_repeated(conn):
+    from cyber_data_collector.dedup import corroboration as co
+    calls = []
+
+    def search(query, model):
+        calls.append(query)
+        return {"answer": "FOUND: yes\nINCIDENT: Lush confirmed a breach in January 2024.",
+                "citations": ["https://example.com/lush"]}
+
+    state = er.build_state(conn, "lush")
+    first = co.corroborate(conn, "lush", state, search=search)
+    again = co.corroborate(conn, "lush", state, search=search)
+    assert len(calls) == 1 and again["answer"] == first["answer"]
+    assert "January 2024" in er.build_state(conn, "lush", corroborated=True)["corroboration"]["answer"]
+    row = conn.execute("SELECT model, query FROM EventCorroborations").fetchone()
+    assert row[0] and "LUSH data breach" in row[1]
+
+
+def test_a_failed_search_stores_nothing(conn):
+    from cyber_data_collector.dedup import corroboration as co
+
+    def broken(query, model):
+        raise RuntimeError("timeout")
+
+    assert co.corroborate(conn, "lush", er.build_state(conn, "lush"), search=broken) is None
+    assert conn.execute("SELECT COUNT(*) FROM EventCorroborations").fetchone()[0] == 0
+
+
 def test_report_only_without_apply(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=False, judge=judge, calibration_path=_calibration(tmp_path, 0.3))
+    result = er.check_events(conn, apply=False, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+                             search=NO_FINDINGS)
     assert len(result["rejections"]) == 1 and not result["applied"]
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2

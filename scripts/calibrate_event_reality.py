@@ -3,7 +3,8 @@
 Two steps, each reproducible from committed files:
 
 ``sample``     Writes ``evaluation/event_reality_sample.csv``: a sample of
-               active events stratified on Jev's stored P(real). Labellers are
+               active events stratified on Jev's stored *screen* P(real)
+               (``event-reality-v1``, stored evidence only). Labellers are
                never shown the probability; stratifying on it only decides who
                is labelled, and the weights undo it.
                * Stratum ``A`` - every event below ``--census-below`` (0.5): a
@@ -65,7 +66,10 @@ def wilson(successes: float, n: float, z: float = 1.96) -> Tuple[Optional[float]
 def cmd_sample(args) -> int:
     conn = sqlite3.connect(args.db)
     active = er.active_events(conn)
-    probs = _probabilities(conn, active)
+    # Stratify on the screen (stored evidence only): it exists before any
+    # corroboration, so the sample - and its weights - do not depend on the
+    # question being calibrated.
+    probs = _probabilities(conn, active, version=er.SCREEN_VERSION)
     unjudged = len(active) - len(probs)
     bands = {
         "A": sorted(d for d, p in probs.items() if p < args.census_below),
@@ -88,8 +92,9 @@ def cmd_sample(args) -> int:
     return 0
 
 
-def _probabilities(conn: sqlite3.Connection, ids: List[str]) -> Dict[str, float]:
-    """Latest stored Jev answer per event for the current question and model."""
+def _probabilities(conn: sqlite3.Connection, ids: List[str],
+                   version: str = er.QUESTION_VERSION) -> Dict[str, float]:
+    """Latest stored Jev answer per event for a question version and the current model."""
     out: Dict[str, float] = {}
     for did in ids:
         row = conn.execute(
@@ -97,7 +102,7 @@ def _probabilities(conn: sqlite3.Connection, ids: List[str]) -> Dict[str, float]
                WHERE subject_type = 'deduplicated_event' AND subject_id = ? AND question_id = ?
                  AND question_version = ? AND model_requested = ?
                ORDER BY created_at DESC LIMIT 1""",
-            (did, er.QUESTION_ID, er.QUESTION_VERSION, typesafe_model())).fetchone()
+            (did, er.QUESTION_ID, version, typesafe_model())).fetchone()
         if row is not None:
             out[did] = float(row[0])
     return out

@@ -37,7 +37,15 @@ from cyber_data_collector.utils.llm_models import typesafe_model
 logger = logging.getLogger(__name__)
 
 QUESTION_ID = "is_real_incident"
-QUESTION_VERSION = "event-reality-v1"
+# v1 sees the stored evidence only. Calibrated 2026-10-27 it ranked well
+# (weighted AUC 0.957) but real incidents with thin stored evidence scored low,
+# so no cut-off reached the precision target. It is now the *screen*: events
+# it scores below CORROBORATE_BELOW get a web search (see corroboration), and
+# v2 - the same evidence plus that search - is the question calibrated and
+# used to reject.
+SCREEN_VERSION = "event-reality-v1"
+QUESTION_VERSION = "event-reality-v2-corroborated"
+CORROBORATE_BELOW = 0.5
 MAX_RECORDS = 10
 PAGE_CHARS = 1200
 REASONING_CHARS = 800
@@ -57,6 +65,13 @@ INSTRUCTIONS = (
     "research about the record: a named victim with specific dates, attack details and "
     "sources is evidence for the incident; vague, generic or zero-confidence research is not. "
     "Generated titles such as 'X data breach (2025)' are not evidence on their own."
+)
+CORROBORATION_INSTRUCTIONS = (
+    " `corroboration`, when present, is a fresh web search for public reporting of this "
+    "incident (`answer` and `citations`). Credible reporting found there is strong evidence for "
+    "the incident even when the stored pages are unhelpful. If the search found nothing and the "
+    "records hold no concrete evidence either, that is evidence against it. A search that found a "
+    "*different* incident at the same organisation is not evidence for this one."
 )
 CRITERIA = {
     "true": ("A specific incident is described by the page text or by concrete research: who was "
@@ -83,8 +98,22 @@ def _perplexity(pe: Optional[str]) -> Dict[str, Any]:
     return out
 
 
-def build_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
-    """Everything Jev sees about one event. Deterministic, so the input hash is stable."""
+def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = False) -> Dict[str, Any]:
+    """Everything Jev sees about one event. Deterministic, so the input hash is stable.
+
+    With ``corroborated``, a stored web search for the event is added when one
+    exists.
+    """
+    state = _evidence_state(conn, dedup_id)
+    if corroborated:
+        from cyber_data_collector.dedup.corroboration import stored
+        found = stored(conn, dedup_id)
+        if found:
+            state["corroboration"] = {"answer": found["answer"], "citations": found["citations"]}
+    return state
+
+
+def _evidence_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
     event = conn.execute(
         "SELECT title, event_date, victim_organization_name FROM DeduplicatedEvents "
         "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
@@ -108,35 +137,56 @@ def build_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
     }
 
 
-def question():
+def question(version: str = QUESTION_VERSION):
     from typesafe_sdk import Noul, NoulCriteria
-    return Noul(instructions=INSTRUCTIONS, criteria=NoulCriteria(**CRITERIA))
+    instructions = INSTRUCTIONS + (CORROBORATION_INSTRUCTIONS if version == QUESTION_VERSION else "")
+    return Noul(instructions=instructions, criteria=NoulCriteria(**CRITERIA))
 
 
 def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
-                 refresh: bool = False) -> Dict[str, float]:
-    """P(real incident) for each event; stored answers are reused (see :mod:`jev`)."""
+                 refresh: bool = False, version: str = QUESTION_VERSION) -> Dict[str, float]:
+    """P(real incident) for each event; stored answers are reused (see :mod:`jev`).
+
+    ``version`` is :data:`SCREEN_VERSION` (stored evidence only) or
+    :data:`QUESTION_VERSION` (plus any stored corroboration search).
+    """
     from cyber_data_collector.utils.jev import JevJudge
 
     owned = judge is None
     judge = judge or JevJudge(conn)
-    q = {QUESTION_ID: question()}
+    q = {QUESTION_ID: question(version)}
+    corroborated = version == QUESTION_VERSION
     out: Dict[str, float] = {}
     try:
         for i, dedup_id in enumerate(dedup_ids, 1):
             try:
-                answer = judge.ask("deduplicated_event", dedup_id, QUESTION_VERSION,
-                                   build_state(conn, dedup_id), q, refresh=refresh)[QUESTION_ID]
+                answer = judge.ask("deduplicated_event", dedup_id, version,
+                                   build_state(conn, dedup_id, corroborated), q, refresh=refresh)[QUESTION_ID]
             except Exception as exc:  # noqa: BLE001 - one failure never decides an event
                 logger.warning("Event reality judgement failed for %s: %s", dedup_id, exc)
                 continue
             out[dedup_id] = float(answer.value)
             if i % 50 == 0:
-                logger.info("Judged %d/%d events", i, len(dedup_ids))
+                logger.info("Judged %d/%d events (%s)", i, len(dedup_ids), version)
     finally:
         if owned:
             judge.close()
     return out
+
+
+def corroborate_low(conn: sqlite3.Connection, screen: Dict[str, float], search=None) -> int:
+    """Run (or reuse) a corroboration search for every event the screen scores low."""
+    from cyber_data_collector.dedup.corroboration import corroborate
+
+    low = [d for d, p in screen.items() if p < CORROBORATE_BELOW]
+    done = 0
+    for i, dedup_id in enumerate(sorted(low), 1):
+        if corroborate(conn, dedup_id, _evidence_state(conn, dedup_id), search=search) is not None:
+            done += 1
+        if i % 25 == 0:
+            logger.info("Corroborated %d/%d low-scoring events", i, len(low))
+    logger.info("%d of %d low-scoring events have a corroboration search", done, len(low))
+    return done
 
 
 def active_events(conn: sqlite3.Connection) -> List[str]:
@@ -185,13 +235,16 @@ def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) 
 
 
 def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
-                 calibration_path: Path = CALIBRATION_PATH) -> Dict[str, Any]:
-    """Judge every active event and reject those below the calibrated cut-off.
+                 calibration_path: Path = CALIBRATION_PATH, search=None) -> Dict[str, Any]:
+    """Screen, corroborate the low scorers, judge again, reject below the calibrated cut-off.
 
     Without an active calibration, or without ``apply``, nothing is rejected:
     the would-be rejections are returned for review.
     """
-    probabilities = judge_events(conn, active_events(conn), judge=judge)
+    events = active_events(conn)
+    screen = judge_events(conn, events, judge=judge, version=SCREEN_VERSION)
+    corroborated = corroborate_low(conn, screen, search=search)
+    probabilities = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
@@ -201,5 +254,5 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     applied = bool(apply and cal and below)
     if applied:
         reject_events(conn, below)
-    return {"judged": len(probabilities), "cutoff": cutoff, "calibrated": cal is not None,
-            "applied": applied, "rejections": below}
+    return {"judged": len(probabilities), "corroborated": corroborated, "cutoff": cutoff,
+            "calibrated": cal is not None, "applied": applied, "rejections": below}

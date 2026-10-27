@@ -50,6 +50,18 @@ def typesafe_model() -> str:
     return os.getenv("TYPESAFE_MODEL") or DEFAULT_TYPESAFE_MODEL
 
 
+DEFAULT_PERPLEXITY_MODEL = "sonar-pro"
+
+
+def perplexity_model() -> str:
+    """Perplexity search model for new code (``PERPLEXITY_MODEL``).
+
+    Perplexity publishes no dated snapshots, so a search cannot be replayed;
+    callers store the answer and citations instead.
+    """
+    return os.getenv("PERPLEXITY_MODEL") or DEFAULT_PERPLEXITY_MODEL
+
+
 def chat_params(model: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
     """Keyword arguments for ``chat.completions.create`` on ``model``.
 
