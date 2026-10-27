@@ -4,7 +4,7 @@ import sqlite3
 
 import pandas as pd
 
-from scripts.recurrence_extended.linkage_supplier import run
+from scripts.recurrence_extended.linkage_supplier import run, _standardized, _prepare, _entity_totals, _size_weights
 
 
 def _database(path):
@@ -84,3 +84,45 @@ def test_absent_evidence_empty_cohort_and_zero_bootstrap(tmp_path):
     boot = pd.read_csv(tmp_path / 'out' / 'recurrence_cluster_bootstrap.csv')
     assert boot.valid_replicates.eq(0).all()
     assert boot.estimate.isna().all()
+
+
+def test_size_standardization_uses_fixed_weights_and_requires_exposure():
+    # A high-risk group has disproportionately longer exposure after 90 days.
+    # Pooling the raw totals exaggerates the late/early contrast, whereas the
+    # fixed-size mix recovers the same rates in both periods.
+    grouped = {'SMALL': [100, 50, 1, .5], 'HUGE': [10, 100, 1, 10]}
+    early, late, ratio, status = _standardized(grouped, {'SMALL': .5, 'HUGE': .5})
+    assert status == 'estimated'
+    assert abs(early - 2008.875) < 1e-8
+    assert abs(late - early) < 1e-8
+    assert abs(ratio - 1) < 1e-8
+    assert _standardized({'SMALL': [100, 50, 1, 1]}, {'SMALL': .5, 'HUGE': .5})[3] == 'no early or late exposure in HUGE'
+    assert _standardized({'UNKNOWN': [100, 100, 1, 1]}, {'UNKNOWN': 1})[3] == 'insufficient known size variation'
+
+
+def test_size_weights_are_per_entity_and_conflicts_are_unknown():
+    events = _events().copy()
+    events['org_size'] = events.entity_id.map({'A': 'SMALL', 'B': 'HUGE', 'C': 'LARGE', 'D': None})
+    # Multiple incidents do not give an organisation extra weight.
+    prepared = _prepare(events, date(2026, 1, 1))
+    totals = _entity_totals(prepared, date(2026, 1, 1))
+    assert _size_weights(totals) == {'SMALL': .25, 'MEDIUM': 0., 'LARGE': .25, 'HUGE': .25, 'UNKNOWN': .25}
+    events.loc[events.deduplicated_event_id == 'e2', 'org_size'] = 'HUGE'
+    prepared = _prepare(events, date(2026, 1, 1))
+    assert set(prepared.loc[prepared.entity_id == 'A', 'size_group']) == {'UNKNOWN'}
+
+
+def test_size_outputs_include_strata_and_resampled_clusters(tmp_path):
+    db_path = tmp_path / 'db.sqlite'
+    _database(db_path)
+    events = _events().copy()
+    events['org_size'] = events.entity_id.map({'A': 'SMALL', 'B': 'HUGE', 'C': 'LARGE', 'D': None})
+    result = run(events, db_path, date(2026, 1, 1), tmp_path / 'out', 23, bootstrap=20)
+    assert result['size_reference_weights']['UNKNOWN'] == .25
+    standardized = pd.read_csv(tmp_path / 'out' / 'linkage_size_standardized.csv')
+    assert len(standardized) == 4
+    boot = pd.read_csv(tmp_path / 'out' / 'recurrence_size_standardized_bootstrap.csv')
+    assert set(boot.resampling_unit) == {'entity', 'shared_incident_component'}
+    assert (boot.valid_replicates <= boot.requested_replicates).all()
+    strata = pd.read_csv(tmp_path / 'out' / 'linkage_size_strata.csv')
+    assert set(strata['size_group']) == {'SMALL', 'MEDIUM', 'LARGE', 'HUGE', 'UNKNOWN'}

@@ -124,3 +124,47 @@ def test_run_handles_no_precision_metadata(tmp_path):
     assert result["precision_counts"] == {"ambiguous_first_of_month": 2, "unknown": 1}
     assert result["validation"]["status"] == "pending_registration"
     assert all((tmp_path / "output" / filename).exists() for filename in result["outputs"])
+
+
+def test_size_standardization_and_missing_stratum_are_explicit():
+    spells = pd.DataFrame([
+        {"entity_id": "s1", "size": "SMALL", "duration_days": 90, "event": 1},
+        {"entity_id": "s2", "size": "SMALL", "duration_days": 180, "event": 0},
+        {"entity_id": "h1", "size": "HUGE", "duration_days": 90, "event": 0},
+        {"entity_id": "h2", "size": "HUGE", "duration_days": 180, "event": 1},
+    ])
+    result, strata = timing.size_adjusted_bands(spells, (0, 90, 180), {"SMALL": .5, "HUGE": .5})
+    assert np.isclose(result.iloc[0].size_adjusted_rate_per_100_entity_years, .5 * 36525 / 180)
+    assert np.isclose(result.iloc[1].size_adjusted_rate_per_100_entity_years, .5 * 36525 / 90)
+    assert strata.loc[(strata['size'] == 'HUGE') & (strata['band'] == '91-180'), 'events'].iloc[0] == 1
+    unavailable, _ = timing.size_adjusted_bands(spells[spells['size'] == 'SMALL'], (0, 90), {"SMALL": .5, "HUGE": .5})
+    assert pd.isna(unavailable.iloc[0].size_adjusted_rate_per_100_entity_years)
+    assert unavailable.iloc[0].unsupported_size_strata == 'HUGE'
+
+
+def test_conflicting_sizes_are_unknown_and_weights_are_entity_based():
+    frame = pd.DataFrame({'entity_id': ['a', 'a', 'b', 'c'], 'org_size': ['SMALL', 'UNKNOWN', 'HUGE', 'HUGE']})
+    assert timing.size_labels(frame).tolist() == ['UNKNOWN', 'UNKNOWN', 'HUGE', 'HUGE']
+    weights = timing.standard_size_weights(frame)
+    assert np.isclose(weights['UNKNOWN'], 1 / 3)
+    assert np.isclose(weights['HUGE'], 2 / 3)
+
+
+def test_prospective_size_cohort_is_frozen_separately(tmp_path, monkeypatch):
+    class RegisteredDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 27)
+    monkeypatch.setattr(timing, 'date', RegisteredDate)
+    frame = timing.annotate_precision(events([('a', '1', '2026-09-01', None)]), {})
+    frame['org_size'] = 'LARGE'
+    first = timing.prospective_size_validation(frame, {'1': date(2026, 9, 2)}, date(2026, 10, 27), tmp_path)
+    assert first['status'] == 'pending'
+    assert (tmp_path / 'timing_size_adjusted_registration.json').exists()
+    assert not (tmp_path / 'timing_peak_registration.json').exists()
+    frame = timing.annotate_precision(events([('a', '1', '2026-09-01', None), ('a', '2', '2026-12-15', None)]), {})
+    frame['org_size'] = 'SMALL'  # Later changes must not change the frozen size.
+    second = timing.prospective_size_validation(frame, {'1': date(2026, 9, 2), '2': date(2026, 12, 16)}, date(2027, 1, 1), tmp_path)
+    large = next(row for row in second['size_strata'] if row['size'] == 'LARGE')
+    assert large['entities'] == 1 and large['events'] == [0, 1, 0]
+    assert second['one_sided_p_value'] is None

@@ -1,0 +1,85 @@
+{
+  "status": "pending",
+  "registered_on": "2026-10-27",
+  "validation_end": "2028-10-27",
+  "snapshot_cutoff": "2026-10-27",
+  "frozen_entities": 574,
+  "size_strata": [
+    {
+      "size": "SMALL",
+      "entities": 51,
+      "events": [
+        0,
+        0,
+        0
+      ],
+      "exposure_days": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "size": "MEDIUM",
+      "entities": 166,
+      "events": [
+        0,
+        0,
+        0
+      ],
+      "exposure_days": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "size": "LARGE",
+      "entities": 172,
+      "events": [
+        0,
+        0,
+        0
+      ],
+      "exposure_days": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "size": "HUGE",
+      "entities": 136,
+      "events": [
+        0,
+        0,
+        0
+      ],
+      "exposure_days": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "size": "UNKNOWN",
+      "entities": 49,
+      "events": [
+        0,
+        0,
+        0
+      ],
+      "exposure_days": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "supported_strata": [],
+  "peak_events_supported": 0,
+  "comparison_events_supported": 0,
+  "minimum_events": 20,
+  "one_sided_p_value": null,
+  "interpretation": "Size-stratified conditional Poisson test assumes independent events and correctly specified exposure within size strata. Current classifications are frozen at registration, not historical measurements; size does not directly measure visibility, attack surface or value. Sparse or unsupported strata provide no evidence for the test."
+}

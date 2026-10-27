@@ -102,7 +102,7 @@ def test_run_writes_complete_outputs_without_database_and_handles_empty_events(t
     frame = events().iloc[:0]
     result = seq.run(frame, tmp_path / "missing.db", date(2020, 4, 1), tmp_path / "out", 2, bias_replicates=3)
     assert result["source_history_status"] == "database unavailable"
-    assert len(result["outputs"]) == 5
+    assert len(result["outputs"]) == 10
     assert all(__import__("pathlib").Path(p).exists() for p in result["outputs"])
     assert "do not estimate or reconstruct unreported attacks" in result["section"]
     assert not (tmp_path / "missing.db").exists()
@@ -112,3 +112,47 @@ def test_invalid_replication_count_is_rejected():
     days = seq.prepare_events(events(), date(2020, 4, 1))
     with pytest.raises(ValueError, match="at least 1"):
         seq.reporting_sensitivity(days, date(2020, 4, 1), 1, 0)
+
+
+def test_fixed_unique_entity_weights_and_conflicting_size_are_conservative():
+    frame = events()
+    frame.loc[frame.deduplicated_event_id == "a2", "org_size"] = "HUGE"
+    days = seq.prepare_events(frame, date(2020, 4, 1))
+    assert set(days.loc[days.entity_id == "a", "size"]) == {"UNKNOWN"}
+    assert seq.size_weights(days) == {"LARGE": .5, "UNKNOWN": .5}
+
+
+def test_fixed_standardization_and_missing_support():
+    # Unequal exposure between groups must not alter the fixed entity weights.
+    spells = pd.DataFrame([
+        dict(size="SMALL", event=1, exposure_days=100, entity_id="a", prior_event_number=1,
+             source="A", event_date=date(2020, 1, 1)),
+        dict(size="LARGE", event=4, exposure_days=100, entity_id="b", prior_event_number=1,
+             source="A", event_date=date(2020, 1, 1)),
+        dict(size="SMALL", event=1, exposure_days=1000, entity_id="c", prior_event_number=1,
+             source="B", event_date=date(2020, 1, 1)),
+    ])
+    strata, standard = seq.size_comparisons(spells, {"SMALL": .5, "LARGE": .5})
+    source = standard[standard.dimension == "Prior incident source"].set_index("group")
+    assert source.loc["A", "standardized_rate_per_100_entity_years"] == pytest.approx(913.125)
+    assert pd.isna(source.loc["B", "standardized_rate_per_100_entity_years"])
+    assert source.loc["B", "reference_weight_covered"] == .5
+    assert "missing size exposure" in source.loc["B", "status"]
+    assert set(strata.loc[strata.group == "A", "size"]) == {"SMALL", "LARGE"}
+
+
+def test_transitions_and_simulated_bias_keep_size_strata_and_unknown():
+    frame = events()
+    frame.loc[frame.entity_id == "b", "org_size"] = None
+    cutoff = date(2020, 4, 1)
+    days = seq.prepare_events(frame, cutoff)
+    spells = seq.make_spells(days, cutoff)
+    transition = seq.transitions_by_size(spells)
+    assert set(transition['size']) == {"SMALL", "UNKNOWN"}
+    unknown = transition[transition['size'] == "UNKNOWN"].iloc[0]
+    assert unknown.next_attack_type == seq.UNKNOWN
+    result = seq.size_bias_simulations(days, cutoff, seq.size_weights(days), 10, 3)
+    assert {"SMALL", "UNKNOWN", "STANDARDIZED"} <= set(result['size'])
+    assert {"reporting", "history"} == set(result.family)
+    repeat = seq.size_bias_simulations(days, cutoff, seq.size_weights(days), 10, 3)
+    pd.testing.assert_frame_equal(result, repeat)

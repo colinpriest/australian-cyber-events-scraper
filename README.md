@@ -1072,6 +1072,12 @@ prior event number, ordinal organisation size (`SMALL`, `MEDIUM`, `LARGE`,
 `HUGE`, with `UNKNOWN` handled separately), sector proxy, entity kind and
 records-affected band.
 
+Organisation size is a proxy for differences in visibility, attack exposure
+and the value of targets; those factors are not directly observed or fully
+controlled by size. The main model assumes equal log-rate steps between size
+categories. Unadjusted tables and plots are descriptive diagnostics; use the
+size-adjusted results for comparisons of recurrence.
+
 ```bash
 # Main report with broad elapsed-time bands
 python scripts/analyze_recurrent_timing.py --bootstrap 500
@@ -1103,9 +1109,16 @@ missing-history scenarios. A first-of-month date is not assumed to be imprecise;
 the report labels hypothetical date assumptions separately. Its prospective
 peak test requires a cohort frozen by the fixed registration date and sufficient
 future observations; historical data alone cannot establish confirmation.
+The extended analysis also reports size-specific and directly standardised
+comparisons using a fixed distribution of organisations in the observed cohort,
+with UNKNOWN treated as a separate size group. A standardised estimate is
+unavailable if a required size group has no exposure; it is not replaced by a
+pooled estimate or by silently changing the standard population.
 Keep `timing_peak_registration.json` in the output directory across reruns;
 it contains the frozen cohort needed for future validation and cannot be
-recreated retrospectively after the registration date.
+recreated retrospectively after the registration date. Also preserve
+`timing_size_adjusted_registration.json`, the separately frozen cohort and
+size groups for the new size-adjusted prospective test.
 Results describe recorded incidents, and historical cutoffs cannot reconstruct
 the database's earlier linkage and classification state.
 
