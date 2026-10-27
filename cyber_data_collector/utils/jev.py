@@ -91,6 +91,26 @@ def available() -> bool:
     return True
 
 
+class JevUnavailable(RuntimeError):
+    """Jev is required and cannot be used. Never substitute another model for it."""
+
+
+def require() -> None:
+    """Raise :class:`JevUnavailable` unless Jev can be called.
+
+    Steps that need Jev fail loudly instead of skipping or switching model: a
+    silent fallback once let a whole run judge nothing (and classify pages with
+    a different, more expensive model) while reporting success.
+    """
+    if not os.getenv("TYPESAFE_API_KEY"):
+        raise JevUnavailable("TYPESAFE_API_KEY is not set (is the project .env loaded?); "
+                             "this step requires Jev and will not substitute another model")
+    try:
+        import typesafe_sdk  # noqa: F401
+    except ImportError as exc:
+        raise JevUnavailable("typesafe-sdk is not installed (pip install -r requirements.lock)") from exc
+
+
 def _question_payload(question: Any) -> Dict[str, Any]:
     return question.model_dump() if hasattr(question, "model_dump") else dict(question)
 

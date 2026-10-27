@@ -277,9 +277,10 @@ class UnifiedPipeline:
             # Load Perplexity API key
             perplexity_api_key = os.getenv('PERPLEXITY_API_KEY')
             if not perplexity_api_key:
-                # A skip, not a failure: the key is recommended, not required.
-                logger.warning("Perplexity API key not found - skipping automatic enrichment")
-                self.results['reenrichment']['skipped'] = 'no PERPLEXITY_API_KEY'
+                # Not a silent skip: the run reports it (degraded) and names the cause.
+                message = "PERPLEXITY_API_KEY not set - automatic enrichment did not run"
+                logger.error(message)
+                self.results['reenrichment'].setdefault('errors', []).append(message)
                 return True
 
             # Initialize enrichment engine
@@ -472,7 +473,9 @@ class UnifiedPipeline:
             logger.info("Skipping missed-merge check (--skip-missed-merge-check)")
             return
         if not os.getenv('OPENAI_API_KEY'):
-            logger.warning("OPENAI_API_KEY not set; missed-merge check skipped")
+            message = "OPENAI_API_KEY not set - missed-merge check did not run"
+            logger.error(message)
+            self.results['deduplication']['errors'].append(message)
             return
         from scripts import dedup_admin
         days = getattr(args, 'missed_merge_days', 120)
@@ -515,8 +518,8 @@ class UnifiedPipeline:
            help pages and policies do not). Junk records are removed and, where
            they pointed at an uncovered real incident, a replacement source is
            queued. The same gate runs at ingestion in run_global_deduplication.
-        1. ``classify-pages`` - every unclassified suspect page (Jev, or the
-           fast OpenAI model without a TypeSafe key; each verdict stored and
+        1. ``classify-pages`` - every unclassified suspect page (Jev only; it
+           fails rather than switch model; each verdict stored and
            never paid for twice). Verdicts describe pages; they reject nothing.
         2. ``check-events --apply`` - Jev judges whether each event is a real
            incident from every record's page text *and* Perplexity research,
@@ -562,16 +565,14 @@ class UnifiedPipeline:
         sources = ["check-sources"]
         if not getattr(args, 'report_event_rejections', False):
             sources.append("--apply")
-        steps = [sources, check, ["check-victims"], duplicates, ["check-victim-attribution"]]
-        if os.getenv('OPENAI_API_KEY'):
-            # Roles (who is the victim, who the vendor) go out of date when an
-            # event's members change - a merge, a split, a re-enriched record -
-            # and nothing in a routine run refreshed them.
-            steps.insert(steps.index(["check-victims"]), ["classify-entities", "--stale-only"])
-        if os.getenv('OPENAI_API_KEY') or os.getenv('TYPESAFE_API_KEY'):
-            steps.insert(0, ["classify-pages"])
-        else:
-            logger.warning("No OpenAI or TypeSafe key; new suspect pages left unclassified")
+        # Every step always runs. A step whose model or key is unavailable
+        # fails loudly (jev.require and friends) and is recorded below, so the
+        # run ends degraded - it is never skipped or switched to another model.
+        # classify-entities --stale-only: roles (who is the victim, who the
+        # vendor) go out of date when an event's members change - a merge, a
+        # split, a re-enriched record - and nothing else refreshes them.
+        steps = [["classify-pages"], sources, check, ["classify-entities", "--stale-only"],
+                 ["check-victims"], duplicates, ["check-victim-attribution"]]
         for step in steps:
             try:
                 if dedup_admin.main(base + step) != 0:
@@ -712,10 +713,13 @@ class UnifiedPipeline:
             # Check if OpenAI API key is available
             openai_api_key = os.getenv('OPENAI_API_KEY')
             if not openai_api_key:
-                logger.warning("OpenAI API key not found - skipping ASD risk classification")
-                logger.warning("Set OPENAI_API_KEY in .env to enable classification")
-                self.results['classification']['success'] = True  # Not an error, just skipped
-                return True
+                # A failure, not a skip: new and changed events would silently
+                # keep stale or missing classifications.
+                message = "OPENAI_API_KEY not set - ASD risk classification did not run"
+                logger.error(message)
+                self.results['classification']['success'] = False
+                self.results['classification'].setdefault('errors', []).append(message)
+                return False
 
             # Initialize classifier
             logger.info("Initializing ASD risk classifier...")

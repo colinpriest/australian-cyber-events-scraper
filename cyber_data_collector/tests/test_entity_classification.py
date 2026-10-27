@@ -156,30 +156,31 @@ def test_hallucinated_entities_are_discarded():
     assert result.vendor() is None
 
 
-def test_entities_the_model_skipped_fall_back_to_rules():
+def test_entities_the_model_skipped_stay_unlabelled():
+    """No rule answer is dressed up as a model answer."""
     response = EventEntityRoles(assignments=[
         _a("Acme Ltd", EntityKind.ORGANISATION, EntityRole.VICTIM),
     ])
     classifier = EntityRoleClassifier(openai_client=_FakeClient(response))
     result = classifier.classify("Acme breach", None,
                                  ["Acme Ltd", "Australian Cyber Security Centre"])
-
-    names = {a.name for a in result.assignments}
-    assert names == {"Acme Ltd", "Australian Cyber Security Centre"}
-    acsc = next(a for a in result.assignments
-                if a.name == "Australian Cyber Security Centre")
-    assert acsc.kind == EntityKind.GOVERNMENT_BODY
+    assert {a.name for a in result.assignments} == {"Acme Ltd"}
 
 
-def test_llm_failure_falls_back_to_rules():
+def test_llm_failure_raises_instead_of_using_rules():
+    from cyber_data_collector.dedup.entity_classification import ClassificationFailed
     classifier = EntityRoleClassifier(
         openai_client=_FakeClient(error=RuntimeError("api down")))
-    result = classifier.classify("Acme breach", None, ["Canvas", "ShinyHunters"])
-
+    with pytest.raises(ClassificationFailed):
+        classifier.classify("Acme breach", None, ["Canvas", "ShinyHunters"])
     assert classifier.stats["llm_failures"] == 1
-    kinds = {a.name: a.kind for a in result.assignments}
-    assert kinds["Canvas"] == EntityKind.PRODUCT
-    assert kinds["ShinyHunters"] == EntityKind.THREAT_ACTOR
+
+
+def test_missing_key_fails_loudly(monkeypatch):
+    from cyber_data_collector.dedup.entity_classification import ClassificationUnavailable
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ClassificationUnavailable):
+        EntityRoleClassifier().classify("Acme breach", None, ["Acme Ltd"])
 
 
 def test_no_entities_needs_no_call():
@@ -191,9 +192,7 @@ def test_no_entities_needs_no_call():
 
 def test_rule_assignments_never_invent_a_victim():
     """Rules alone cannot tell which organisation was breached."""
-    classifier = EntityRoleClassifier(openai_client=None)
-    classifier._client_ready = True
-    result = classifier.classify("Acme breach", None, ["Acme Ltd", "Canvas"])
+    result = EntityRoleClassifier(openai_client=_FakeClient(None)).rule_assignments(["Acme Ltd", "Canvas"])
     assert result.victim() is None
 
 

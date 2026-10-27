@@ -152,10 +152,9 @@ def is_non_incident_verdict(verdict: Optional[Tuple[str, float]]) -> bool:
 
 
 def current_model() -> str:
-    """The model that classifies pages now: Jev when configured, else the fast OpenAI model."""
-    from cyber_data_collector.utils import jev
-    from cyber_data_collector.utils.llm_models import openai_fast_model, typesafe_model
-    return typesafe_model() if jev.available() else openai_fast_model()
+    """The model that classifies pages: Jev. There is no automatic alternative."""
+    from cyber_data_collector.utils.llm_models import typesafe_model
+    return typesafe_model()
 
 
 def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False,
@@ -284,8 +283,10 @@ def classify_pages(conn: sqlite3.Connection, records: Sequence[Tuple[str, ...]],
     """Classify suspect records and store the verdicts.
 
     Jev answers when a TypeSafe key is configured, and its full distribution
-    is kept in ``ModelJudgements`` (see :mod:`cyber_data_collector.utils.jev`);
-    otherwise the fast OpenAI model does, or ``client`` when one is passed.
+    is kept in ``ModelJudgements`` (see :mod:`cyber_data_collector.utils.jev`).
+    Without Jev this raises :class:`~cyber_data_collector.utils.jev.JevUnavailable`;
+    it never switches to another model. ``client`` is an explicit OpenAI-style
+    client chosen by the caller (tests, deliberate comparisons).
     Records are ``(id, title, url, page_text, summary)``; a four-field record
     is read as ``(id, title, url, summary)`` with no page text.
 
@@ -296,10 +297,7 @@ def classify_pages(conn: sqlite3.Connection, records: Sequence[Tuple[str, ...]],
 
     ensure_schema(conn)
     records = [r if len(r) == 5 else (r[0], r[1], r[2], "", r[3]) for r in records]
-    if client is None and jev.available():
-        return _classify_with_jev(conn, records, dry_run)
-    client = client or _client()
-    if client is None:
-        logger.warning("No Jev or OpenAI client; %d suspect page(s) left unclassified", len(records))
-        return {}
-    return _classify_with_openai(conn, records, client, dry_run)
+    if client is not None:
+        return _classify_with_openai(conn, records, client, dry_run)
+    jev.require()
+    return _classify_with_jev(conn, records, dry_run)

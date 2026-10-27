@@ -66,7 +66,8 @@ OPENAI_API_KEY=your_openai_api_key
 # Recommended (for event discovery)
 PERPLEXITY_API_KEY=your_perplexity_api_key
 
-# Recommended (Jev judgements with probabilities; without it the fast OpenAI model is used)
+# Required for the data-quality steps (Jev judgements with probabilities). Without it those
+# steps fail and the run ends degraded - no other model is substituted.
 TYPESAFE_API_KEY=your_typesafe_api_key
 
 # Optional model overrides - defaults are pinned, dated snapshots (see "Language models")

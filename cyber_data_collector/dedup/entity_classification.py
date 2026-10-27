@@ -41,6 +41,14 @@ from cyber_data_collector.dedup.victim_selection import (
 logger = logging.getLogger(__name__)
 
 
+
+class ClassificationUnavailable(RuntimeError):
+    """The entity-role model cannot be used (no key, missing library)."""
+
+
+class ClassificationFailed(RuntimeError):
+    """One entity-role call failed; nothing was written for that event."""
+
 class EntityKind(str, Enum):
     """What an entity is, independent of any event."""
 
@@ -217,22 +225,24 @@ class EntityRoleClassifier:
         }
 
     def _get_client(self):
+        """The OpenAI client, or :class:`ClassificationUnavailable`.
+
+        No silent rule-only mode: roles written from rules alone looked like
+        model answers. Without the model nothing is written and the command
+        fails, so stale roles stay visibly stale.
+        """
         if self._client_ready:
             return self._client
-        self._client_ready = True
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            logger.warning("OPENAI_API_KEY not set; entity roles from rules only")
-            self._client = None
-            return None
+            raise ClassificationUnavailable("OPENAI_API_KEY is not set; entity roles need the model")
         try:
             import instructor
             from openai import OpenAI
-
-            self._client = instructor.from_openai(OpenAI(api_key=api_key))
         except ImportError as exc:
-            logger.warning("instructor/openai unavailable (%s)", exc)
-            self._client = None
+            raise ClassificationUnavailable(f"instructor/openai unavailable: {exc}") from exc
+        self._client = instructor.from_openai(OpenAI(api_key=api_key))
+        self._client_ready = True
         return self._client
 
     def rule_assignments(self, entities: Sequence[str]) -> EventEntityRoles:
@@ -257,16 +267,18 @@ class EntityRoleClassifier:
         summary: Optional[str],
         entities: Sequence[str],
     ) -> EventEntityRoles:
-        """Classify every entity of one event. Never raises."""
+        """Classify every entity of one event.
+
+        Raises :class:`ClassificationUnavailable` without the model and
+        :class:`ClassificationFailed` when the call fails; nothing is
+        substituted, so the caller writes nothing and the event is retried.
+        """
         self.stats["events"] += 1
         entities = [e for e in entities if e and e.strip()]
         if not entities:
             return EventEntityRoles()
 
         client = self._get_client()
-        if client is None:
-            self.stats["rule_only"] += 1
-            return self.rule_assignments(entities)
 
         listing = "\n".join(f"- {name}" for name in entities)
         prompt = (
@@ -284,10 +296,9 @@ class EntityRoleClassifier:
                     {"role": "user", "content": prompt},
                 ],
             )
-        except Exception as exc:  # noqa: BLE001 - one event must not stop a run
+        except Exception as exc:  # noqa: BLE001 - reported to the caller, never substituted
             self.stats["llm_failures"] += 1
-            logger.warning("Entity classification failed (%s); using rules", exc)
-            return self.rule_assignments(entities)
+            raise ClassificationFailed(f"entity classification failed: {exc}") from exc
 
         # Keep only entities we actually asked about, so a hallucinated name
         # cannot enter the database.
@@ -297,10 +308,10 @@ class EntityRoleClassifier:
         ]
         missing = known - {a.name.strip().lower() for a in result.assignments}
         if missing:
-            # Anything the model skipped falls back to the rule answer.
-            fallback = self.rule_assignments(
-                [e for e in entities if e.strip().lower() in missing])
-            result.assignments.extend(fallback.assignments)
+            # Entities the model did not label stay unlabelled (no rule answer
+            # dressed up as a model answer); logged so the gap is visible.
+            logger.warning("Model left %d of %d entit(ies) unlabelled for %r: %s",
+                           len(missing), len(known), title[:60], ", ".join(sorted(missing))[:200])
         return result
 
 

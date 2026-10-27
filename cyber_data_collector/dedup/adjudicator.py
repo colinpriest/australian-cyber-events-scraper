@@ -193,11 +193,10 @@ class Adjudicator:
         self._client_ready = True
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            logger.warning(
-                "OPENAI_API_KEY not set - adjudication falls back to lexical "
-                "similarity only; merges will be more conservative."
-            )
-            self._client = None
+            # No silent lexical-only mode: it changed what merged without
+            # saying so. Use --no-llm for an explicit candidate preview.
+            raise RuntimeError("OPENAI_API_KEY is not set; adjudication needs the model "
+                               "(use --no-llm for a candidate preview without judging)")
             return None
         try:
             import instructor

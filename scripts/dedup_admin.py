@@ -61,6 +61,7 @@ from cyber_data_collector.dedup.adjudicator import Adjudicator, EventRecord
 from cyber_data_collector.dedup.backfill import run_backfill
 from cyber_data_collector.dedup.cluster_adjudicator import ClusterAdjudicator
 from cyber_data_collector.dedup.entity_classification import (
+    ClassificationFailed,
     EntityRole,
     EntityRoleClassifier,
     resolve_victim,
@@ -1937,7 +1938,7 @@ def cmd_classify_entities(args) -> int:
         print(f"role status: {report['current']} current, {report['outdated']} "
               f"outdated, {report['never_classified']} never classified")
         print(f"classifying entities for {len(rows)} event(s)")
-        victims = vendors = labelled = 0
+        victims = vendors = labelled = failed = 0
 
         for index, r in enumerate(rows, start=1):
             links = conn.execute("""
@@ -1973,7 +1974,12 @@ def cmd_classify_entities(args) -> int:
                 reverse=True,
             )[: args.max_entities]
 
-            result = classifier.classify(r["title"] or "", r["summary"], names)
+            try:
+                result = classifier.classify(r["title"] or "", r["summary"], names)
+            except ClassificationFailed as exc:
+                failed += 1
+                print(f"  FAILED {r['id'][:8]} {(r['title'] or '')[:50]}: {exc}")
+                continue      # nothing written: still stale, retried next run
             if not result.assignments:
                 continue
 
@@ -2018,9 +2024,11 @@ def cmd_classify_entities(args) -> int:
         print(f"\n{'DRY RUN: ' if args.dry_run else ''}labelled {labelled} link(s); "
               f"{victims} event(s) with a victim, {vendors} with a vendor")
         print(f"classifier stats: {classifier.stats}")
+        if failed:
+            print(f"{failed} event(s) not classified (model call failed); they stay stale and are retried")
     finally:
         conn.close()
-    return 0
+    return 1 if failed else 0
 
 
 
@@ -2492,9 +2500,7 @@ def cmd_check_events(args) -> int:
     from cyber_data_collector.dedup.event_reality import check_events
     from cyber_data_collector.utils import jev
 
-    if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
-        return 0
+    jev.require()   # fails loudly; never skip or switch model
     conn = _connect(args.db)
     try:
         result = check_events(conn, apply=args.apply)
@@ -2520,9 +2526,7 @@ def cmd_check_sources(args) -> int:
     from cyber_data_collector.dedup.source_gate import check_sources
     from cyber_data_collector.utils import jev
 
-    if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
-        return 0
+    jev.require()   # fails loudly; never skip or switch model
     conn = _connect(args.db)
     try:
         result = check_sources(conn, apply=args.apply, only_unmapped=args.unmapped_only)
@@ -2585,9 +2589,7 @@ def cmd_check_victim_attribution(args) -> int:
     from cyber_data_collector.dedup.victim_judgement import check_victim_attribution
     from cyber_data_collector.utils import jev
 
-    if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
-        return 0
+    jev.require()   # fails loudly; never skip or switch model
     conn = _connect(args.db)
     try:
         result = check_victim_attribution(conn)
@@ -2612,9 +2614,7 @@ def cmd_check_duplicates(args) -> int:
     from cyber_data_collector.dedup.duplicate_judgement import check_duplicates
     from cyber_data_collector.utils import jev
 
-    if not jev.available():
-        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
-        return 0
+    jev.require()   # fails loudly; never skip or switch model
     conn = _connect(args.db)
     try:
         result = check_duplicates(conn, apply=args.apply)
