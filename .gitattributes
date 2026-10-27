@@ -1,0 +1,4 @@
+
+# Model bundles are verified by SHA-256: never convert line endings
+machine_learning_filter/bundles/** -text
+machine_learning_filter/ACTIVE_BUNDLE -text

@@ -9,6 +9,13 @@ pipeline could not:
   - which merges are weakest and should be reviewed first?
   - how do I undo one, and will that survive the next rebuild?
 
+Population: this page lists the *active incidents* (the shared reporting
+population) and, for each, its full history: every source record folded in and
+every decision on the ledger, including superseded ones. That history is the
+point of the page. It is not a count of incidents - events that were merged away
+or rejected appear only as the lineage of the event that absorbed them, and the
+page says so.
+
 The page is static (no server). Override and split actions are emitted as
 ready-to-run ``dedup_admin.py`` commands the reviewer can copy, which keeps the
 dashboard shareable while ensuring every change still goes through the audited
@@ -34,6 +41,13 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
+from cyber_data_collector.reporting.population import (  # noqa: E402
+    ReconciliationCheck,
+    count_incidents,
+    incident_filter,
+    population_breakdown,
+    reconcile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +83,9 @@ def collect(conn: sqlite3.Connection, limit: Optional[int] = None) -> Dict[str, 
     conn.row_factory = sqlite3.Row
 
     limit_clause = f" LIMIT {int(limit)}" if limit else ""
+    # Shared population: status = 'Active' (the old COALESCE(status, 'Active') let
+    # NULL through; the column defaults to 'Active' so none exist).
+    where, where_params = incident_filter(None, "d")
     events = _rows(conn, f"""
         SELECT d.deduplicated_event_id AS id, d.title, d.event_date,
                d.victim_organization_name AS entity,
@@ -81,9 +98,9 @@ def collect(conn: sqlite3.Connection, limit: Optional[int] = None) -> Dict[str, 
                (SELECT COUNT(*) FROM EventDeduplicationMap m
                 WHERE m.deduplicated_event_id = d.deduplicated_event_id) AS member_count
         FROM DeduplicatedEvents d
-        WHERE COALESCE(d.status,'Active') = 'Active'
+        WHERE {where}
         ORDER BY member_count DESC, d.event_date DESC{limit_clause}
-    """)
+    """, tuple(where_params))
 
     # EnrichedEvents has no victim column; the affected organisation lives in
     # EntitiesV2 via the EnrichedEventEntities link table. Showing it per member
@@ -229,6 +246,17 @@ def collect(conn: sqlite3.Connection, limit: Optional[int] = None) -> Dict[str, 
         "total_members": sum(e["member_count"] for e in payload),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
+
+    # What the page leaves out, stated rather than implied, and proof that what it
+    # lists is the population (unless --limit truncated it on purpose).
+    breakdown = population_breakdown(conn)
+    stats["active_population"] = breakdown["active"]
+    stats["history_merged"] = breakdown["merged"]
+    stats["history_rejected"] = breakdown["rejected"]
+    if not limit:
+        reconcile([ReconciliationCheck(
+            "Dedup dashboard events", count_incidents(conn), len(payload))],
+            context="dedup_dashboard")
     return {"events": payload, "stats": stats}
 
 
@@ -296,6 +324,7 @@ td a{color:var(--accent);text-decoration:none} td a:hover{text-decoration:underl
 <header>
   <h1>Deduplication Review</h1>
   <div class="sub">Every merge, its evidence, and how to correct it &mdash; generated __GENERATED__</div>
+  <div class="sub" id="population"></div>
 </header>
 <div class="wrap">
   <div class="cards" id="cards"></div>
@@ -327,7 +356,7 @@ const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,
 function cards(){
   const s = DATA.stats;
   const defs = [
-    ['events','Deduplicated events',''],
+    ['events','Active incidents',''],
     ['merged_events','Merged (>1 source)','good'],
     ['total_members','Source records linked',''],
     ['unexplained','Merged, no recorded reason', s.unexplained? 'warn':'good'],
@@ -337,6 +366,11 @@ function cards(){
     ['roles_stale','Entity roles need refresh', s.roles_stale? 'warn':'good'],
     ['overridden','Human-corrected','a'],
   ];
+  document.getElementById('population').textContent =
+    `Lists the ${s.active_population} active incidents with their full merge history. `
+    + `Not counted as incidents: ${s.history_merged} merged and ${s.history_rejected} rejected `
+    + `records, which appear only as the lineage of the event that absorbed them (superseded `
+    + `decisions are shown as history).`;
   document.getElementById('cards').innerHTML = defs.map(([k,l,cls])=>
     `<div class="card ${cls}"><div class="n">${s[k]??0}</div><div class="l">${l}</div></div>`
   ).join('');
