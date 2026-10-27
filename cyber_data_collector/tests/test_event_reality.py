@@ -155,6 +155,18 @@ def test_a_failed_search_stores_nothing(conn):
     assert conn.execute("SELECT COUNT(*) FROM EventCorroborations").fetchone()[0] == 0
 
 
+def test_an_event_labelled_real_is_never_rejected(conn, tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "act,real,confirmed elsewhere,packet,test\n", encoding="utf-8")
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
+    result = er.check_events(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+                             search=NO_FINDINGS, labels_path=labels)
+    assert result["rejections"] == [] and not result["applied"]
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'act'").fetchone()[0] == "Active"
+
+
 def test_report_only_without_apply(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
