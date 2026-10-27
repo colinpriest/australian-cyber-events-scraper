@@ -223,7 +223,7 @@ python run_full_pipeline.py --skip-classification
                                [Dashboard Generation]
 ```
 
-1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, GDELT. Scrapes full content. Judges each page with the calibrated Jev page gate, then the fast-model classification (see [Discovery filter and retry queue](#discovery-filter-and-retry-queue)).
+1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, Cyber Daily, GDELT. Scrapes full content. Judges each page with the calibrated Jev page gate, then the fast-model classification (see [Discovery filter and retry queue](#discovery-filter-and-retry-queue)).
 2. **Perplexity Enrichment** — Extracts formal entity names, threat actors, attack methods via multi-source verification.
 3. **Global Deduplication** — Merges only what is certain: an identical title on the same date, or the same organisation (by identity) on the same exact day. Everything else is decided by the calibrated Jev duplicate check that follows. See [Global Deduplication](#global-deduplication).
 4. **ASD Risk Classification** — Assigns C1–C6 severity categories using the Australian Signals Directorate risk matrix. Incremental (skips already-classified events).
@@ -239,9 +239,33 @@ python run_full_pipeline.py --skip-classification
 | OAIC | Free | None |
 | Google Custom Search | Free (100 queries/day) | `GOOGLE_CUSTOMSEARCH_API_KEY` + `CX_KEY` |
 | Webber Insurance | Free (scraping) | None |
+| Cyber Daily | Free (section RSS feed) | None |
 | GDELT | **WARNING: $500–$2000+** | Google Cloud + BigQuery |
 
-> Do not enable GDELT unless you have a BigQuery budget. Use `--source Perplexity OAIC GoogleSearch WebberInsurance` to exclude it.
+> Do not enable GDELT unless you have a BigQuery budget. Use `--source Perplexity OAIC GoogleSearch WebberInsurance CyberDaily` to exclude it.
+
+**Cyber Daily** (`CyberDaily`, added 2026-10-28) reads the Security section's
+public RSS feed. The feed gives title, standfirst, publication date and URL,
+and goes back to 2018. The article page is scraped and judged like any other
+source's page. Its value is ransomware leak-site claims against small
+Australian organisations that no other source reports. Of 1,001 Security
+articles in the 12 months to 2026-10-27, 68 were already in the database. A
+seeded sample of the rest suggests about 85 further Australian incidents a
+year; the database holds 146 active events for that period.
+
+The site's free-reading meter does not get in the way. 351 of 360 stored pages
+hold the full article (most after a "N free articles left" banner), and the
+other 9 keep the lead. Page-gate and event-reality scores do not differ.
+Nothing logs in, and the text the site hides behind its paywall is not read.
+Months processed before the source existed are searched with an idempotent
+backfill:
+
+```bash
+python scripts/discovery_queue.py backfill --source CyberDaily --months 12
+python pipeline.py refresh    # enrich, deduplicate and publish what it stored
+```
+
+Details: [docs/01-data-sources.md section 5a](docs/01-data-sources.md#5a-cyber-daily).
 
 ---
 
@@ -254,7 +278,7 @@ australian-cyber-events-scraper/
 ├── requirements.txt
 │
 ├── cyber_data_collector/          # Core package
-│   ├── datasources/               # Perplexity, OAIC, Google Search, Webber, GDELT
+│   ├── datasources/               # Perplexity, OAIC, Google Search, Webber, Cyber Daily, GDELT
 │   ├── enrichment/                # High-quality 5-stage enrichment pipeline
 │   ├── filtering/
 │   │   ├── page_gate.py           # Jev discovery page gate (rf_event_filter.py: retired)
@@ -907,6 +931,7 @@ or OpenAI key: discovery stops, it does not fall back. Details:
 ```bash
 python scripts/discovery_queue.py status    # incomplete source-months, quarantined records
 python scripts/discovery_queue.py release   # return quarantined records to the queue
+python scripts/discovery_queue.py backfill --source CyberDaily --months 12   # a source added later, over processed months
 ```
 
 ### API request budgets

@@ -45,3 +45,4 @@ class CollectionConfig(BaseModel):
     google_search_config: DataSourceConfig = Field(default_factory=DataSourceConfig)
     webber_config: DataSourceConfig = Field(default_factory=DataSourceConfig)
     oaic_config: DataSourceConfig = Field(default_factory=DataSourceConfig)
+    cyberdaily_config: DataSourceConfig = Field(default_factory=DataSourceConfig)

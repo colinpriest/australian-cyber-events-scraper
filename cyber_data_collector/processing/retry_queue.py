@@ -388,6 +388,13 @@ class RetryQueue:
             c.commit()
         return status
 
+    def discovery_status(self, source_type: str, year: int, month: int) -> Optional[str]:
+        """The latest search status of one source-month, or None if it was never searched."""
+        with self._locked() as c:
+            row = c.execute("SELECT status FROM SourceMonthDiscovery WHERE source_type = ? AND year = ? "
+                            "AND month = ?", (source_type, year, month)).fetchone()
+            return row[0] if row else None
+
     def failed_discoveries(self) -> List[Dict[str, Any]]:
         """Source-months whose latest search lost results."""
         with self._locked() as c:

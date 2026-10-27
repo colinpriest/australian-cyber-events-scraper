@@ -11,6 +11,7 @@ This document provides a comprehensive description of each data source used in t
 3. [OAIC Notifiable Data Breaches](#3-oaic-notifiable-data-breaches)
 4. [Google Custom Search](#4-google-custom-search)
 5. [Webber Insurance Data Breaches List](#5-webber-insurance-data-breaches-list)
+5a. [Cyber Daily](#5a-cyber-daily)
 6. [GDELT (Deprecated)](#6-gdelt-deprecated)
 7. [Source Comparison Matrix](#7-source-comparison-matrix)
 8. [Content Scraping and Extraction](#8-content-scraping-and-extraction)
@@ -23,7 +24,7 @@ This document provides a comprehensive description of each data source used in t
 
 ### Why Multiple Sources?
 
-The pipeline collects Australian cybersecurity incidents from four active data sources. No single source provides comprehensive coverage of the Australian cybersecurity incident landscape:
+The pipeline collects Australian cybersecurity incidents from five active data sources. No single source provides comprehensive coverage of the Australian cybersecurity incident landscape:
 
 | Challenge | Solution |
 |-----------|----------|
@@ -31,13 +32,14 @@ The pipeline collects Australian cybersecurity incidents from four active data s
 | OAIC only covers notifiable data breaches (Privacy Act 1988) | Supplement with news-based discovery for incidents outside OAIC scope |
 | News coverage varies by outlet and incident severity | Use AI-powered search (Perplexity) alongside traditional search (Google) |
 | Some incidents are only documented by specialist industry sources | Include Webber Insurance's curated breach list |
+| Ransomware leak-site claims against small Australian organisations are reported by one trade outlet and nowhere else | Read Cyber Daily's Security section feed directly |
 
 ### Default Source Configuration
 
-The pipeline uses four sources by default, configured in `pipeline.py`:
+The pipeline uses five sources by default, configured in `pipeline.py`:
 
 ```python
-DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance"]
+DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance", "CyberDaily"]
 ```
 
 GDELT was originally included but has been removed from the default set due to cost and data quality concerns (see [Section 6](#6-gdelt-deprecated)).
@@ -606,6 +608,134 @@ All Webber Insurance events are created with:
 - `severity`: `MEDIUM` (conservative default; refined during enrichment)
 - `australian_relevance`: `True` (source is exclusively Australian)
 - `entity_type`: `OTHER` (requires LLM enrichment for specific classification)
+
+---
+
+## 5a. Cyber Daily
+
+**Implementation:** `cyber_data_collector/datasources/cyber_daily.py`
+**`RawEvents.source_type`:** `CyberDaily`
+
+### Purpose and Justification
+
+[Cyber Daily](https://www.cyberdaily.au/) (Momentum Media) is an Australian cyber
+security news site. Its *Exclusive* stories report the claims ransomware and
+extortion groups post on their leak sites against Australian organisations:
+flooring firms, resort hotels, co-operatives, pharmacy software vendors. The
+mainstream press, Webber Insurance's list and the search-based sources rarely
+reach these.
+
+Measured on 2026-10-28 against the live database:
+
+| | |
+|---|---|
+| Security-section articles, 2025-10-28 to 2026-10-27 | 1,001 |
+| ... already stored through another source (Webber 50, Google 23, Perplexity 22 records) | 68 |
+| ... not stored, with an incident word in the title | 470 |
+| Seeded sample of those 470 (60 titles) that name a specific Australian incident | 15 (25%) |
+| ... of which the database has no event for that incident | 11 |
+| Active events dated in the same 12 months | 146 |
+
+That is roughly 470 x 0.25 x 0.73, about 85 Australian incidents a year that
+Cyber Daily reported and the database is missing. The database holds 146 for
+the same period. Most are claims ("allegedly breached by INC Ransom"). Event
+reality and the duplicate checks judge them like any other record.
+
+### Access: the section RSS feed
+
+The site runs Joomla, which serves every section as RSS:
+`https://www.cyberdaily.au/security?format=feed&type=rss&limitstart=N`. Each page
+has 13 items (title, standfirst, publication date with offset, URL), newest first.
+`limitstart` pages back to 2018 (about 5,300 Security articles). The site's terms
+name RSS as a way of using the site, and robots.txt excludes only Joomla's system
+paths. No account is created and nothing logs in.
+
+The feed is only roughly in publication order: an article can appear up to
+about a week out of place (largest seen: 7.1 days). So each month is read with
+a 14-day margin either side and filtered on the publication date itself. An old
+month is found by doubling `limitstart` and then bisecting. For March 2026 (84
+articles) that took 25 requests and found exactly what a full walk of the feed
+found; a straight walk from today would take hundreds. Requests are limited to
+30 a minute.
+
+### Records
+
+Each article becomes one record: the feed's title and standfirst
+(`raw_description`), the URL, and the publication date as `publication_date`.
+The publication date is not the incident date, so `event_date` is left empty.
+The raw record takes the publication date until enrichment finds the
+incident's own date. `event_type` is `OTHER`. `australian_relevance` is set
+only when the title or standfirst names Australia, a state or a capital city.
+Classification decides both.
+
+The article page goes through the normal discovery scrape and the Jev page
+gate. The gate scores it and keeps it: its cut-off is enforced only for Google,
+where it was calibrated. Classification, the retry queue and per-source-month
+completion (`SourceMonthDiscovery`) work as for every source. An article
+already stored by any source is not stored again. Matching is on Cyber Daily's
+numeric article id, so `www.`, scheme and slug changes do not matter.
+
+**Failures.** Any of these fails the source-month: a page that cannot be
+fetched, a page that does not parse as the feed, an empty feed, or a month that
+does not end within 60 pages. The month is not recorded as complete and is
+searched again next run. No other text is substituted.
+
+### The registration wall
+
+Cyber Daily meters free reading: four articles a month, then a free account.
+The wall does not limit what this source needs:
+
+- Of 360 stored Cyber Daily pages, 239 carry the "You have N free articles left"
+  banner and site menu *before* the full article, and 112 have no banner. 9 hit
+  the exhausted meter ("You're out of free articles"). Those still keep the
+  headline, standfirst and about 400 characters of lead (minimum 319).
+- Jev page-gate scores are the same with and without the banner: median 0.99
+  for both. The 3 low scores in each group are genuine non-incident pages
+  (reports and surveys). Events evidenced only by Cyber Daily score like other
+  events on event reality: median 0.84, with 3 of 213 judgements below the 0.28
+  cut-off, against 39 of 1,742 for other events.
+- On an exhausted meter the server still sends the rest of the article, inside
+  a hidden `section.paywall` element. The scraper keeps only what is shown.
+  Reading the hidden element would get round the site's access control, so it
+  is not done. A registered account would give full text on every page; that
+  is a decision for the project owner, not something the pipeline does.
+
+### Backfill
+
+`MonthProcessed` records a month as processed for all sources at once. A
+source added later therefore only reaches the rolling three-month window of
+each refresh. Earlier months are searched with:
+
+```bash
+python scripts/discovery_queue.py backfill --source CyberDaily --months 12
+python pipeline.py refresh       # enriches, deduplicates and publishes what it stored
+```
+
+The backfill:
+
+- runs the one source through the normal discovery path, for processed months
+  only, and leaves their `MonthProcessed` totals alone;
+- skips months the source has already searched completely, so it resumes after
+  an interruption;
+- exits 2 if any month failed;
+- accepts free sources only.
+
+### Confidence Scores
+
+| Metric | Value |
+|---|---|
+| Credibility | 0.75 |
+| Relevance | 0.6 |
+| Overall confidence | 0.6 |
+
+### Not yet done
+
+- `cyber_data_collector/quality/thresholds.json` does not list `CyberDaily` in
+  `monthly_sources`. Until earlier months are backfilled, every one of them
+  would be flagged for zero volume.
+- Only the Security section is read; `custom_config={"sections": [...]}` adds
+  others. Of the Cyber Daily articles already in the database, 333 are in
+  Security, 12 in Government and 12 elsewhere.
 
 ---
 

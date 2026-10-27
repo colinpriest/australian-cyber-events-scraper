@@ -1148,7 +1148,8 @@ Examples:
                         help='Continue to next phase even if previous phase fails')
 
     # Discovery parameters
-    parser.add_argument('--source', choices=['GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC'],
+    parser.add_argument('--source', choices=['GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC',
+                                             'CyberDaily'],
                         help='Data sources to use (can specify multiple)', action='append', nargs='+')
     parser.add_argument('--max-events', type=int, default=1000,
                         help='Maximum events to process per source per month (default: 1000)')

@@ -8,6 +8,8 @@ handles the cases a run does not:
     python scripts/discovery_queue.py status --all      # include complete months
     python scripts/discovery_queue.py drain             # process due records now, without discovery
     python scripts/discovery_queue.py release           # put quarantined records back in the queue
+    python scripts/discovery_queue.py backfill --source CyberDaily --months 12
+                                                        # run a source added later over processed months
 
 See ``cyber_data_collector/processing/retry_queue.py``.
 """
@@ -18,6 +20,7 @@ import asyncio
 import logging
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +83,40 @@ def _drain(db_path: str, limit: int | None) -> int:
     return 0 if result["completed"] == result["due"] else 2
 
 
+def backfill_months(months: int, today: date | None = None) -> list[tuple[int, int]]:
+    """The ``months`` calendar months before the current one, oldest first.
+
+    The current month is left out: every refresh searches it (and the two
+    before it) with all sources anyway.
+    """
+    today = today or date.today()
+    year, month = today.year, today.month
+    out = []
+    for _ in range(months):
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+        out.append((year, month))
+    return sorted(out)
+
+
+def _backfill(db_path: str, source: str, months: int, max_events: int) -> int:
+    from cyber_data_collector.pipelines.discovery import EventDiscoveryEnrichmentPipeline
+
+    pipeline = EventDiscoveryEnrichmentPipeline(db_path)
+    try:
+        result = asyncio.run(pipeline.backfill_source(source, backfill_months(months), max_events))
+    finally:
+        pipeline.close()
+    for key in ("searched", "already_done", "not_processed", "failed"):
+        listed = ", ".join(f"{y}-{m:02d}" for y, m in result[key]) or "-"
+        print(f"{key:<14}{len(result[key]):>3}  {listed}")
+    if result["searched"]:
+        print("\nNew records are enriched, deduplicated and published by the next "
+              "'python pipeline.py refresh'.")
+    return 2 if result["failed"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db-path", default=None, help="Database (default: DATABASE_URL / instance/cyber_events.db)")
@@ -89,6 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     drain = sub.add_parser("drain", help="Process due records now (needs OpenAI and TypeSafe keys)")
     drain.add_argument("--limit", type=int, default=None)
     sub.add_parser("release", help="Return quarantined records to the queue")
+    backfill = sub.add_parser("backfill", help="Run one source over months processed before it was added "
+                                               "(idempotent; needs OpenAI and TypeSafe keys)")
+    backfill.add_argument("--source", required=True, choices=["CyberDaily", "WebberInsurance", "OAIC"],
+                          help="Free sources only: a paid source over many months is a budget decision")
+    backfill.add_argument("--months", type=int, default=12, help="Calendar months before the current one")
+    backfill.add_argument("--max-events", type=int, default=1000)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     db_path = resolve_db_path(args.db_path)
@@ -96,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         return _status(db_path, args.all)
     if args.command == "release":
         return _release(db_path)
+    if args.command == "backfill":
+        return _backfill(db_path, args.source, args.months, args.max_events)
     return _drain(db_path, args.limit)
 
 

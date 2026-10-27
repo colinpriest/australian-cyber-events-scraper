@@ -121,7 +121,7 @@ Initial discovered events before any LLM processing. One row per discovered arti
 | Column | Type | Nullable | Default | Description |
 |--------|------|----------|---------|-------------|
 | `raw_event_id` | TEXT | **PK** | — | UUID primary key |
-| `source_type` | VARCHAR(50) | NOT NULL | — | Data source identifier. Values: `Perplexity`, `OAIC`, `GoogleSearch`, `WebberInsurance`, `GDELT` |
+| `source_type` | VARCHAR(50) | NOT NULL | — | Data source identifier. Values: `Perplexity`, `OAIC`, `GoogleSearch`, `WebberInsurance`, `CyberDaily`, `GDELT` |
 | `source_event_id` | TEXT | Yes | NULL | External identifier from the source system (e.g., GDELT event ID) |
 | `raw_title` | TEXT | Yes | NULL | Original article/event title as scraped |
 | `raw_description` | TEXT | Yes | NULL | Original description or snippet from the source |

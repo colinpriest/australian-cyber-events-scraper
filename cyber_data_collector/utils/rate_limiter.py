@@ -19,6 +19,7 @@ class RateLimiter:
             "webber_detail": {"per_minute": 30, "per_second": 1},
             "oaic_search": {"per_minute": 30, "per_second": 1},
             "oaic_detail": {"per_minute": 30, "per_second": 1},
+            "cyberdaily": {"per_minute": 30, "per_second": 1},
             "openai": {"per_minute": 200, "per_second": 5},
         }
         self.request_history: DefaultDict[str, List[float]] = defaultdict(list)
