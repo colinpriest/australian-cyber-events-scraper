@@ -1,0 +1,188 @@
+kind,subject_id,stratum,weight
+victim,10e6e8be-d9f9-4778-afb0-a787409d7e95|name:northern territory of australia department of health,low,8.5333
+victim,10e6e8be-d9f9-4778-afb0-a787409d7e95|name:south australian health and medical research institute sa health,low,8.5333
+victim,18c7b1e4-fe88-4328-b947-23bb85513570|382,low,8.5333
+victim,304830cc-6d7c-4200-9d5a-8b76bfbaec0e|name:kennedy mclaughlin and associates,low,8.5333
+victim,41aa259b-ea39-4d7b-b127-1e47844050a1|name:tpg telecom limited subsidiary iinet,low,8.5333
+victim,483de08f-1cbe-4f68-b678-833e490a58b3|name:south australian genealogy and heraldry society,low,8.5333
+victim,559da594-19c5-46f9-a6c9-fed1c5c19886|name:the scout association of australia victorian branch,low,8.5333
+victim,590fe166-e697-46cf-968d-839a566c2ad5|9287,low,8.5333
+victim,6cde601c-e875-4f34-b635-dc151379e047|name:quest serviced apartments,low,8.5333
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|2794,low,8.5333
+victim,8fd5d2cd-6e8a-4a96-808d-bb3d4e4028cb|24133,low,8.5333
+victim,e0cb7db6-f302-428b-848b-57f37241fa4e|3206,low,8.5333
+victim,ea3f8b6c-86ed-43a4-829e-ca6f8c4dba9d|174,low,8.5333
+victim,eed92698-bd74-4d98-9936-77e0ec9e17d6|name:western australia department of health,low,8.5333
+victim,fa86e167-c16f-46a1-842d-23bd3cf2132c|name:parliament of western australia,low,8.5333
+victim,02b9395d-8609-4c3e-97d3-d944b730474c|22705,mid,3.625
+victim,0e521a00-d1ad-4b83-bccb-a9208daae20c|2319,mid,3.625
+victim,1206b2b3-5450-41d8-a5e5-f9186d6c4ca1|23143,mid,3.625
+victim,12496d0b-0939-48be-8019-1027a2259b1b|name:mistral ai,mid,3.625
+victim,12496d0b-0939-48be-8019-1027a2259b1b|name:telnyx,mid,3.625
+victim,15ce860f-b7a9-4458-95a5-d1fdb908b87e|23643,mid,3.625
+victim,33e52830-eede-48ae-890b-241785ed192b|3185,mid,3.625
+victim,416042fe-243f-4913-8ea5-06edf7a55099|6501,mid,3.625
+victim,41aa259b-ea39-4d7b-b127-1e47844050a1|2054,mid,3.625
+victim,4caf809e-78dc-45a5-be44-dcccb58bc8f7|23577,mid,3.625
+victim,5003c3ff-a50c-4aee-b766-fd6dd848aeea|24308,mid,3.625
+victim,5847f682-9aef-4f99-b610-a450363b9e50|22616,mid,3.625
+victim,5847f682-9aef-4f99-b610-a450363b9e50|name:australian college of rural and remote medicine,mid,3.625
+victim,5bd6b1fa-5c4e-49bf-8994-c9bf23391d2c|name:defence housing australia maintenance contractors,mid,3.625
+victim,6251d12b-b6d2-41c3-a0af-9aa1f65d33fd|408,mid,3.625
+victim,6251d12b-b6d2-41c3-a0af-9aa1f65d33fd|name:bombardier,mid,3.625
+victim,62cfe72f-077f-4c90-b42e-a3c6d12b6e9c|name:eberspacher gruppe gmbh and co kg,mid,3.625
+victim,62cfe72f-077f-4c90-b42e-a3c6d12b6e9c|name:hollen,mid,3.625
+victim,8a30f0de-9298-4bca-b7ad-3530af34e801|name:australian wool handlers awh,mid,3.625
+victim,8a30f0de-9298-4bca-b7ad-3530af34e801|name:pgg wrightson,mid,3.625
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|1155,mid,3.625
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|1420,mid,3.625
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|2825,mid,3.625
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|62,mid,3.625
+victim,8d337f85-ac94-44c5-9ae0-667d7dc88270|64,mid,3.625
+victim,9a001bce-19a2-4fec-8965-5e9e20405db0|691,mid,3.625
+victim,9a001bce-19a2-4fec-8965-5e9e20405db0|739,mid,3.625
+victim,a1a7bb8c-c870-4c19-9246-22f9c0fdbe6c|name:swedish pharmaceutical chain,mid,3.625
+victim,a1a7bb8c-c870-4c19-9246-22f9c0fdbe6c|name:swedish state railway,mid,3.625
+victim,ad025b3e-887d-4e1c-935e-7fadff47420f|217,mid,3.625
+victim,ad025b3e-887d-4e1c-935e-7fadff47420f|name:barclays,mid,3.625
+victim,ad025b3e-887d-4e1c-935e-7fadff47420f|name:chevron,mid,3.625
+victim,ad025b3e-887d-4e1c-935e-7fadff47420f|name:t mobile us,mid,3.625
+victim,b74cc8c6-81b3-413c-b1d2-8b57329ecf4b|19,mid,3.625
+victim,cff2b691-6572-4ddd-882d-8b15c76712b5|name:australian borrowers who financed vehicle purchases through the affected service from july 2023 onward,mid,3.625
+victim,d104479a-cbae-4697-97d2-b8e5d01bba79|23714,mid,3.625
+victim,d4540326-cbbc-4bc8-bf71-62971d5551e7|name:block inc cash app investing,mid,3.625
+victim,e2713a0e-37ef-4830-b608-66007fd15c34|967,mid,3.625
+victim,e2713a0e-37ef-4830-b608-66007fd15c34|name:hsbc,mid,3.625
+victim,f26b70cc-a442-4c88-abb9-54d67e004ab3|4260,mid,3.625
+victim,02b9395d-8609-4c3e-97d3-d944b730474c|382,high,2.8333
+victim,1521a40b-2195-418d-8b4b-f0a8fc687be8|name:south australian employment tribunal,high,2.8333
+victim,1f09c2f7-0aab-4b99-9ffc-57d5cef6d11c|3676,high,2.8333
+victim,2a1d6384-0a63-429b-96c6-26c8596aa9c2|name:amadeus,high,2.8333
+victim,2a1d6384-0a63-429b-96c6-26c8596aa9c2|name:hotelbeds,high,2.8333
+victim,33e52830-eede-48ae-890b-241785ed192b|24304,high,2.8333
+victim,354953a7-7d78-409d-8172-676c5ccece56|174,high,2.8333
+victim,354953a7-7d78-409d-8172-676c5ccece56|3004,high,2.8333
+victim,39d8a932-ede9-4fd9-aa61-c52a819f3432|139,high,2.8333
+victim,39d8a932-ede9-4fd9-aa61-c52a819f3432|23949,high,2.8333
+victim,3b176b95-6fe9-413a-a5c8-6a9642dd0837|161,high,2.8333
+victim,3b176b95-6fe9-413a-a5c8-6a9642dd0837|name:flagstar bank,high,2.8333
+victim,3b176b95-6fe9-413a-a5c8-6a9642dd0837|name:jones day,high,2.8333
+victim,3b176b95-6fe9-413a-a5c8-6a9642dd0837|name:qualys,high,2.8333
+victim,3b176b95-6fe9-413a-a5c8-6a9642dd0837|name:stanford university,high,2.8333
+victim,494dcd7b-66f4-4d2f-a337-5617a3b73888|name:louis vuitton italy,high,2.8333
+victim,494dcd7b-66f4-4d2f-a337-5617a3b73888|name:louis vuitton south korea,high,2.8333
+victim,494dcd7b-66f4-4d2f-a337-5617a3b73888|name:louis vuitton turkiye,high,2.8333
+victim,49563caf-8ac9-4f5f-9daa-9293cb8076e0|1203,high,2.8333
+victim,49563caf-8ac9-4f5f-9daa-9293cb8076e0|name:australian red cross society,high,2.8333
+victim,4caf809e-78dc-45a5-be44-dcccb58bc8f7|name:mornington family doctors,high,2.8333
+victim,4caf809e-78dc-45a5-be44-dcccb58bc8f7|name:noosaville seven day medical centre,high,2.8333
+victim,4caf809e-78dc-45a5-be44-dcccb58bc8f7|name:north canberra family practice,high,2.8333
+victim,504421c8-03f0-466c-8f84-14d425f91405|4808,high,2.8333
+victim,5847f682-9aef-4f99-b610-a450363b9e50|766,high,2.8333
+victim,6929a3f1-6e80-46b6-b9f2-6506ec36ba38|name:hatch,high,2.8333
+victim,6bb2dfff-d323-4d03-8595-5b0830e44fda|6806,high,2.8333
+victim,6bb2dfff-d323-4d03-8595-5b0830e44fda|832,high,2.8333
+victim,6bb2dfff-d323-4d03-8595-5b0830e44fda|name:american airlines,high,2.8333
+victim,6bb2dfff-d323-4d03-8595-5b0830e44fda|name:deutsche bahn,high,2.8333
+victim,8ae252d0-5efd-4e3e-80ec-cf9b23d2d9db|6324,high,2.8333
+victim,99658816-907e-4d5e-83ae-7b93c0e55ac6|1219,high,2.8333
+victim,99658816-907e-4d5e-83ae-7b93c0e55ac6|2917,high,2.8333
+victim,99658816-907e-4d5e-83ae-7b93c0e55ac6|3008,high,2.8333
+victim,99658816-907e-4d5e-83ae-7b93c0e55ac6|3185,high,2.8333
+victim,a2cfe6a3-2cf0-4e79-a06f-59196e526f54|6440,high,2.8333
+victim,a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a|3071,high,2.8333
+victim,a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a|name:jones day,high,2.8333
+victim,a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a|name:qualys,high,2.8333
+victim,b2379a2c-15c7-4cf0-9337-99f00cba0d98|62,high,2.8333
+victim,b5698d4f-528b-4133-8090-b5f55c0589c3|1938,high,2.8333
+victim,b5698d4f-528b-4133-8090-b5f55c0589c3|22645,high,2.8333
+victim,b5698d4f-528b-4133-8090-b5f55c0589c3|23143,high,2.8333
+victim,b5698d4f-528b-4133-8090-b5f55c0589c3|24268,high,2.8333
+victim,b5698d4f-528b-4133-8090-b5f55c0589c3|5353,high,2.8333
+victim,b56f084d-5fa6-4ff3-bb02-4409be955372|6324,high,2.8333
+victim,b625a9a1-b268-4c7c-8ae0-d5d5a76f2469|name:tishman speyer,high,2.8333
+victim,b74cc8c6-81b3-413c-b1d2-8b57329ecf4b|name:fetishgalaxy,high,2.8333
+victim,b74cc8c6-81b3-413c-b1d2-8b57329ecf4b|name:idesires,high,2.8333
+victim,bcbb5f29-9be0-4705-b6ad-39c2842adad3|9707,high,2.8333
+victim,cc0b9f2e-d247-4bdf-865e-fc1ba5980325|382,high,2.8333
+victim,d104479a-cbae-4697-97d2-b8e5d01bba79|name:thrifty,high,2.8333
+victim,e0cb7db6-f302-428b-848b-57f37241fa4e|3182,high,2.8333
+victim,e2713a0e-37ef-4830-b608-66007fd15c34|493,high,2.8333
+victim,e2713a0e-37ef-4830-b608-66007fd15c34|name:hp,high,2.8333
+victim,edbaa5ef-fcd6-493a-9bda-25b7cca10e96|382,high,2.8333
+victim,f26b70cc-a442-4c88-abb9-54d67e004ab3|4180,high,2.8333
+victim,f26b70cc-a442-4c88-abb9-54d67e004ab3|4262,high,2.8333
+victim,f26b70cc-a442-4c88-abb9-54d67e004ab3|4652,high,2.8333
+victim,f26b70cc-a442-4c88-abb9-54d67e004ab3|name:city of greater dandenong,high,2.8333
+same_incident,0d3a11f9-9555-450e-b1c0-7706ddd807d4|39d8a932-ede9-4fd9-aa61-c52a819f3432,low,10.4
+same_incident,0fa8ef08-33e8-4cae-831f-18bb2ea9d08f|8d337f85-ac94-44c5-9ae0-667d7dc88270,low,10.4
+same_incident,1521a40b-2195-418d-8b4b-f0a8fc687be8|5752974f-b369-402e-8c43-620cff068636,low,10.4
+same_incident,21d1b49e-d2f2-4287-a48b-cfd463a94ea4|8ae252d0-5efd-4e3e-80ec-cf9b23d2d9db,low,10.4
+same_incident,25cc3127-02ec-4bb6-82c0-e25f88c51b26|6b4045a7-86b8-48ec-9d14-57e319da9611,low,10.4
+same_incident,2ea1f1b2-c180-4706-a5e9-6b710449642e|b5698d4f-528b-4133-8090-b5f55c0589c3,low,10.4
+same_incident,2eb540e3-9879-43a6-a4cf-2c38121ce470|4821fce6-dba8-4ade-a70d-a0ccf226bbdf,low,10.4
+same_incident,33e52830-eede-48ae-890b-241785ed192b|db19b7c9-3883-4f9d-9828-1ceac82eac23,low,10.4
+same_incident,34b25aa5-feab-483d-9395-02089147b5c7|f0ef7d54-4147-4f09-a8c9-0267d757e48d,low,10.4
+same_incident,44eb6ca8-c5ae-49b3-9063-4720cc5c0959|8d337f85-ac94-44c5-9ae0-667d7dc88270,low,10.4
+same_incident,4ea36dad-b19f-4888-86a5-8ff508c8a58c|80303c02-94d6-46d9-8345-648b025d7a60,low,10.4
+same_incident,97922245-6359-4477-9d7e-6214943309ff|b1a25a58-538e-441f-bcf4-047d262c18ec,low,10.4
+same_incident,97d89918-0964-4bd8-bc2e-769eb515196c|eaf00cad-7c6d-48c7-8be8-f0b7b044e710,low,10.4
+same_incident,c282cdcd-f3aa-4577-95c9-00ddabf5b915|ef70f310-cadd-4513-9799-b2c27a9c7531,low,10.4
+same_incident,c45385e4-796f-4ee7-88af-fa1cbe73a6da|fec9c4f3-e09f-470b-89c5-9089756a7618,low,10.4
+same_incident,05a642a0-d7fb-45db-91ef-f58bdf57f4f6|f26b70cc-a442-4c88-abb9-54d67e004ab3,mid,1.0
+same_incident,15ce860f-b7a9-4458-95a5-d1fdb908b87e|6cde601c-e875-4f34-b635-dc151379e047,mid,1.0
+same_incident,1c0b5199-6216-4282-ba8d-fefb151bd20b|496da0d0-565a-4e82-a5fe-22e2e5c7711d,mid,1.0
+same_incident,247185cd-f9f7-4019-8d07-516e927dd41e|fa86e167-c16f-46a1-842d-23bd3cf2132c,mid,1.0
+same_incident,2ca32c66-39f6-45ca-b764-c22942bedc2d|4f5f4e37-3e38-474b-b5f6-e9872b838436,mid,1.0
+same_incident,2ea1f1b2-c180-4706-a5e9-6b710449642e|354953a7-7d78-409d-8172-676c5ccece56,mid,1.0
+same_incident,2ea1f1b2-c180-4706-a5e9-6b710449642e|4c366690-2c6b-46b1-8e8b-b1564fed4b8d,mid,1.0
+same_incident,39d8a932-ede9-4fd9-aa61-c52a819f3432|439d69f3-b09d-480c-b6cb-748eca9516e8,mid,1.0
+same_incident,3b176b95-6fe9-413a-a5c8-6a9642dd0837|9a001bce-19a2-4fec-8965-5e9e20405db0,mid,1.0
+same_incident,41aa259b-ea39-4d7b-b127-1e47844050a1|504794cd-ee06-46f0-9412-6fa992c326a7,mid,1.0
+same_incident,44eb6ca8-c5ae-49b3-9063-4720cc5c0959|7a7189d4-10e9-494a-84d9-8cd431cde8d3,mid,1.0
+same_incident,504794cd-ee06-46f0-9412-6fa992c326a7|b56f084d-5fa6-4ff3-bb02-4409be955372,mid,1.0
+same_incident,6251d12b-b6d2-41c3-a0af-9aa1f65d33fd|9a001bce-19a2-4fec-8965-5e9e20405db0,mid,1.0
+same_incident,73b7bd58-7432-4f44-aa06-7f50b352ef32|fa86e167-c16f-46a1-842d-23bd3cf2132c,mid,1.0
+same_incident,79481f07-ff94-4b50-a9ba-f6711778f9c8|dfa1f7be-bc7a-4b84-8643-0e8b381a1311,mid,1.0
+same_incident,80303c02-94d6-46d9-8345-648b025d7a60|fa86e167-c16f-46a1-842d-23bd3cf2132c,mid,1.0
+same_incident,8fd5d2cd-6e8a-4a96-808d-bb3d4e4028cb|e45a821b-8fbf-4a09-9478-ae2b98cef686,mid,1.0
+same_incident,90ee5420-b6d4-44bc-989f-fadf18ee9905|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,mid,1.0
+same_incident,a483fe2e-b454-4434-84e3-00a0df47dbdc|ac3b7148-5cae-40a4-8628-421941b2b8bf,mid,1.0
+same_incident,b5698d4f-528b-4133-8090-b5f55c0589c3|edbaa5ef-fcd6-493a-9bda-25b7cca10e96,mid,1.0
+same_incident,b816fac7-234e-410f-b69b-2678bc4a1912|e2713a0e-37ef-4830-b608-66007fd15c34,mid,1.0
+same_incident,0362d1d4-c904-415e-910a-73c4a9ca4e8b|d125b87f-fa3a-4986-a7f1-edb671763f56,high,1.0
+same_incident,0e521a00-d1ad-4b83-bccb-a9208daae20c|79481f07-ff94-4b50-a9ba-f6711778f9c8,high,1.0
+same_incident,164605ac-174b-42b7-b48b-31a7765dce9e|5df656f6-f134-4c35-8685-71eab147346a,high,1.0
+same_incident,1bd9dc0e-643d-42cc-aef6-c628345a7103|4530b31e-df44-41c8-990b-3f8ac7cd98d0,high,1.0
+same_incident,1bd9dc0e-643d-42cc-aef6-c628345a7103|5847f682-9aef-4f99-b610-a450363b9e50,high,1.0
+same_incident,1bd9dc0e-643d-42cc-aef6-c628345a7103|fa3d35e9-4e38-4a89-8d0f-869db2b9a3ed,high,1.0
+same_incident,1c0b5199-6216-4282-ba8d-fefb151bd20b|504421c8-03f0-466c-8f84-14d425f91405,high,1.0
+same_incident,247185cd-f9f7-4019-8d07-516e927dd41e|73b7bd58-7432-4f44-aa06-7f50b352ef32,high,1.0
+same_incident,33e52830-eede-48ae-890b-241785ed192b|99658816-907e-4d5e-83ae-7b93c0e55ac6,high,1.0
+same_incident,3b176b95-6fe9-413a-a5c8-6a9642dd0837|4c3761bf-cb7e-429f-a955-4d6e8680aa73,high,1.0
+same_incident,3b176b95-6fe9-413a-a5c8-6a9642dd0837|a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a,high,1.0
+same_incident,3b176b95-6fe9-413a-a5c8-6a9642dd0837|ac6c5fd0-1c98-4dca-9e16-aa8758ba8e83,high,1.0
+same_incident,41aa259b-ea39-4d7b-b127-1e47844050a1|b56f084d-5fa6-4ff3-bb02-4409be955372,high,1.0
+same_incident,4530b31e-df44-41c8-990b-3f8ac7cd98d0|b5698d4f-528b-4133-8090-b5f55c0589c3,high,1.0
+same_incident,494dcd7b-66f4-4d2f-a337-5617a3b73888|806e44ed-4091-46c5-b15d-e3f69158939e,high,1.0
+same_incident,4a205999-7946-4e29-a899-aa20cc6c205b|8e590324-c704-497d-b084-385640a7d7da,high,1.0
+same_incident,4a205999-7946-4e29-a899-aa20cc6c205b|a9ac18ca-06f3-4889-a1eb-f3c751f73b6b,high,1.0
+same_incident,4a205999-7946-4e29-a899-aa20cc6c205b|f707e09f-3331-486a-b08e-11b234a72ad0,high,1.0
+same_incident,4c366690-2c6b-46b1-8e8b-b1564fed4b8d|588cc847-0a13-417f-ad8e-8f65b446dc35,high,1.0
+same_incident,4c3761bf-cb7e-429f-a955-4d6e8680aa73|a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a,high,1.0
+same_incident,4c3761bf-cb7e-429f-a955-4d6e8680aa73|ac6c5fd0-1c98-4dca-9e16-aa8758ba8e83,high,1.0
+same_incident,4caf809e-78dc-45a5-be44-dcccb58bc8f7|b14dc5cf-bda3-4a1f-930f-c94a59eb3210,high,1.0
+same_incident,4caf809e-78dc-45a5-be44-dcccb58bc8f7|ddbc3bf0-e83c-47d8-bd58-6e89af5fd1ad,high,1.0
+same_incident,5003c3ff-a50c-4aee-b766-fd6dd848aeea|50cbb6fe-d833-4369-b1fc-de52c0dc4f96,high,1.0
+same_incident,5847f682-9aef-4f99-b610-a450363b9e50|b5698d4f-528b-4133-8090-b5f55c0589c3,high,1.0
+same_incident,5f346227-0ff1-415a-8d6b-1132bd351316|8d337f85-ac94-44c5-9ae0-667d7dc88270,high,1.0
+same_incident,62f6731c-e246-4d28-96ef-1fe0f27440dd|cd37031d-7a06-4998-9044-1df0d4fa5e3a,high,1.0
+same_incident,907a8b68-cb73-4ad0-ae6b-de4747eedaed|d6cc64fc-0735-46bb-9d5a-0f8dd1c1a6fc,high,1.0
+same_incident,9a001bce-19a2-4fec-8965-5e9e20405db0|a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a,high,1.0
+same_incident,9a001bce-19a2-4fec-8965-5e9e20405db0|ac6c5fd0-1c98-4dca-9e16-aa8758ba8e83,high,1.0
+same_incident,a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a|ac6c5fd0-1c98-4dca-9e16-aa8758ba8e83,high,1.0
+same_incident,a95ca772-62da-4aec-b8e0-9753fec8b4d0|e2713a0e-37ef-4830-b608-66007fd15c34,high,1.0
+same_incident,ab2a5566-a0d1-40de-9bd7-d2ac2ed6b2e3|bc4d5bfc-859b-4057-9d36-6b542737dbf9,high,1.0
+same_incident,b5698d4f-528b-4133-8090-b5f55c0589c3|fa3d35e9-4e38-4a89-8d0f-869db2b9a3ed,high,1.0
+same_incident,cc0b9f2e-d247-4bdf-865e-fc1ba5980325|ee79bc14-85c4-4b5f-9a68-c181d5c81ff8,high,1.0
+same_incident,edbaa5ef-fcd6-493a-9bda-25b7cca10e96|ee79bc14-85c4-4b5f-9a68-c181d5c81ff8,high,1.0

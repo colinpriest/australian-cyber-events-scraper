@@ -90,7 +90,8 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
 
     rows = conn.execute(
         f"""
-        SELECT v.entity_name                          AS entity,
+        SELECT v.entity_id                            AS entity_id,
+               v.entity_name                          AS entity,
                {size_columns},
                d.deduplicated_event_id                AS event_id,
                d.title                                AS title,
@@ -121,8 +122,36 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         params,
     ).fetchall()
 
-    out: List[Dict[str, Any]] = []
+    # One row per (organisation, event): an incident with several victims is
+    # listed once under each, and never twice under one organisation stored
+    # under two name variants - those are listed under one representative
+    # variant, with its size.
+    from cyber_data_collector.dedup.victim_counting import organisation_groups, within_event_duplicates
+
+    drop = within_event_duplicates(conn, [(r["entity_id"], r["entity"], r["event_id"]) for r in rows])
+    rows = [r for r in rows if (r["entity_id"], r["event_id"]) not in drop]
+    groups = organisation_groups(conn, [r["entity_id"] for r in rows])
+    reps = {r["entity_id"]: r for r in rows if groups.get(r["entity_id"], r["entity_id"]) == r["entity_id"]}
+    missing = sorted({groups[r["entity_id"]] for r in rows if groups.get(r["entity_id"]) not in reps})
+    if missing:
+        for rep in conn.execute(
+                f"SELECT v.entity_id AS entity_id, v.entity_name AS entity, {size_columns} FROM EntitiesV2 v "
+                f"WHERE v.entity_id IN ({','.join('?' * len(missing))})", missing):
+            reps[rep["entity_id"]] = rep
+    seen = set()
+    resolved = []
     for r in rows:
+        rep = reps.get(groups.get(r["entity_id"], r["entity_id"]), r)
+        key = (rep["entity_id"], r["event_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append((rep, r))
+    resolved.sort(key=lambda pair: ((pair[0]["entity"] or "").lower(), pair[1]["event_date"] or "",
+                                    pair[1]["title"] or ""))
+
+    out: List[Dict[str, Any]] = []
+    for rep, r in resolved:
         description = (r["description"] or "").strip()
         # A description that is still raw page scrape (PDF headers, nav bars)
         # is worse than none; it pushes the real content out of the column.
@@ -131,15 +160,15 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         if len(description) > DESCRIPTION_CHARS:
             description = description[:DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "…"
         out.append({
-            "entity": r["entity"],
+            "entity": rep["entity"],
             # An entity that has never been researched reads as UNKNOWN, which
             # is what it is - not a blank cell that looks like a rendering bug.
             # `estimated` keeps the two apart for the footer, because "not yet
             # looked up" is pending work and "looked up, no size" is not.
-            "size": (r["size"] or "UNKNOWN").upper(),
-            "estimated": r["size"] is not None,
-            "size_basis": r["size_basis"] or "",
-            "size_confidence": r["size_confidence"],
+            "size": (rep["size"] or "UNKNOWN").upper(),
+            "estimated": rep["size"] is not None,
+            "size_basis": rep["size_basis"] or "",
+            "size_confidence": rep["size_confidence"],
             "event_id": r["event_id"],
             "title": r["title"] or "(untitled)",
             "date": str(r["event_date"])[:10] if r["event_date"] else "",
