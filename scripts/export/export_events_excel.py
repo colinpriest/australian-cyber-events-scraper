@@ -16,6 +16,13 @@ This script:
    - Records Affected
    - Entity Type (industry category)
    - Attack Type
+   - Export Notes (missing source links, summary / anonymisation failures)
+
+Failures are never hidden. A failed anonymisation writes "[anonymisation
+failed] (reason)" - never the original text - and is counted; --no-llm marks
+the anonymised column "[not anonymised]". Source text comes only from exact
+relationships (EventDeduplicationMap, DeduplicatedEventSources), never title
+matching. The script exits 1 if any summary or anonymisation failed.
 
 Usage:
     python export_events_excel.py
@@ -34,6 +41,7 @@ import os
 import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -55,45 +63,59 @@ from cyber_data_collector.reporting.population import (  # noqa: E402
     incident_filter,
     reconcile,
 )
+from scripts.export.anonymisation import (  # noqa: E402
+    NOT_ANONYMISED,
+    AnonymisationError,
+    failure_placeholder,
+    identifying_leak,
+)
 
 # Load environment variables
 load_dotenv()
 
 
+class ExportConfigurationError(RuntimeError):
+    """The export cannot run as asked (e.g. LLM requested but no API key)."""
+
+
 def get_openai_client() -> Optional[OpenAI]:
-    """Initialize OpenAI client if API key is available."""
+    """OpenAI client, or None when OPENAI_API_KEY is not set."""
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
-        print("Warning: OPENAI_API_KEY not found. LLM summarization will be disabled.")
         return None
     return OpenAI(api_key=api_key)
 
 
-def get_event_source_text(cursor: sqlite3.Cursor, deduplicated_event_id: str, event_title: str = None) -> str:
-    """Collect all source text for a deduplicated event.
+NO_SOURCE_NOTE = ("No linked source records (EventDeduplicationMap / DeduplicatedEventSources); "
+                  "description built from the event row only")
 
-    Uses multiple strategies to find content:
-    1. Direct linkage via EventDeduplicationMap
-    2. Title matching to EnrichedEvents (fallback for broken linkages)
+
+def get_event_source_text(cursor: sqlite3.Cursor, deduplicated_event_id: str) -> Tuple[str, Optional[str]]:
+    """Collect the source text of one deduplicated event.
+
+    Only exact relationships are used: the event row itself, its member records
+    through ``EventDeduplicationMap`` (enriched text and the raw article), and
+    ``DeduplicatedEventSources`` snippets. There is deliberately no title
+    matching - a 30-character title prefix used to attach unrelated articles
+    ("Cyber attack on ..." matches hundreds) when the map was missing.
+
+    Returns:
+        ``(text, note)``; ``note`` explains a missing link and is None otherwise.
     """
-    texts = []
+    texts: List[str] = []
 
-    # Get the deduplicated event's own description
     cursor.execute("""
         SELECT title, description, summary
         FROM DeduplicatedEvents
         WHERE deduplicated_event_id = ?
     """, (deduplicated_event_id,))
     row = cursor.fetchone()
-    dedup_title = None
     if row:
-        dedup_title = row[0]
         if row[1]:
             texts.append(f"Description: {row[1]}")
         if row[2]:
             texts.append(f"Summary: {row[2]}")
 
-    # Strategy 1: Try direct linkage via EventDeduplicationMap
     cursor.execute("""
         SELECT DISTINCT ee.title, ee.description, ee.summary
         FROM EventDeduplicationMap edm
@@ -101,29 +123,12 @@ def get_event_source_text(cursor: sqlite3.Cursor, deduplicated_event_id: str, ev
         WHERE edm.deduplicated_event_id = ?
     """, (deduplicated_event_id,))
     enriched_rows = cursor.fetchall()
+    for erow in enriched_rows:
+        if erow[1] and erow[1] not in str(texts):
+            texts.append(f"Event Description: {erow[1]}")
+        if erow[2] and erow[2] not in str(texts):
+            texts.append(f"Event Summary: {erow[2]}")
 
-    # Strategy 2: If no direct linkage, try title matching
-    if not enriched_rows and (dedup_title or event_title):
-        title_to_match = event_title or dedup_title
-        # Use first 30 chars for matching to handle truncated titles
-        title_prefix = title_to_match[:30] if title_to_match else None
-        if title_prefix:
-            cursor.execute("""
-                SELECT DISTINCT ee.title, ee.description, ee.summary
-                FROM EnrichedEvents ee
-                WHERE ee.title LIKE ?
-                LIMIT 3
-            """, (f"{title_prefix}%",))
-            enriched_rows = cursor.fetchall()
-
-    for row in enriched_rows:
-        if row[1] and row[1] not in str(texts):
-            texts.append(f"Event Description: {row[1]}")
-        if row[2] and row[2] not in str(texts):
-            texts.append(f"Event Summary: {row[2]}")
-
-    # Get raw event content (the actual scraped article text)
-    # Strategy 1: Via EventDeduplicationMap -> EnrichedEvents -> RawEvents
     cursor.execute("""
         SELECT DISTINCT re.raw_title, re.raw_description,
                SUBSTR(re.raw_content, 1, 10000) as content_preview
@@ -134,31 +139,41 @@ def get_event_source_text(cursor: sqlite3.Cursor, deduplicated_event_id: str, ev
         LIMIT 3
     """, (deduplicated_event_id,))
     raw_rows = cursor.fetchall()
+    for rrow in raw_rows:
+        if rrow[2] and len(rrow[2]) > 100:
+            texts.append(f"Article Content:\n{rrow[2]}")
 
-    # Strategy 2: If no direct linkage, find raw content via title matching
-    if not raw_rows and (dedup_title or event_title):
-        title_to_match = event_title or dedup_title
-        title_prefix = title_to_match[:30] if title_to_match else None
-        if title_prefix:
-            cursor.execute("""
-                SELECT DISTINCT re.raw_title, re.raw_description,
-                       SUBSTR(re.raw_content, 1, 10000) as content_preview
-                FROM EnrichedEvents ee
-                JOIN RawEvents re ON ee.raw_event_id = re.raw_event_id
-                WHERE ee.title LIKE ?
-                LIMIT 3
-            """, (f"{title_prefix}%",))
-            raw_rows = cursor.fetchall()
+    snippets: List[str] = []
+    try:
+        cursor.execute("""
+            SELECT content_snippet FROM DeduplicatedEventSources
+            WHERE deduplicated_event_id = ? AND content_snippet IS NOT NULL
+              AND TRIM(content_snippet) != ''
+            LIMIT 5
+        """, (deduplicated_event_id,))
+        snippets = [r[0] for r in cursor.fetchall()]
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+    for snippet in snippets:
+        if snippet not in str(texts):
+            texts.append(f"Source Snippet: {snippet}")
 
-    for row in raw_rows:
-        if row[2] and len(row[2]) > 100:
-            texts.append(f"Article Content:\n{row[2]}")
+    note = None if (enriched_rows or raw_rows or snippets) else NO_SOURCE_NOTE
+    return "\n\n".join(texts), note
 
-    return "\n\n".join(texts)
+
+class SummaryError(RuntimeError):
+    """The LLM summary could not be produced."""
 
 
 def summarize_with_llm(client: OpenAI, text: str, max_words: int = 500) -> str:
-    """Use OpenAI to summarize text to max_words."""
+    """Summarise ``text`` to at most ``max_words`` with the fast OpenAI model.
+
+    Raises:
+        SummaryError: the call failed or returned nothing. The caller decides
+            what to show; this function never passes raw text off as a summary.
+    """
     if not text or len(text.strip()) < 50:
         return text or ""
 
@@ -190,20 +205,29 @@ Write up to {max_words} words. Be thorough and include all relevant details."""
                 }
             ]
         )
-        return response.choices[0].message.content.strip()
+        content = (response.choices[0].message.content or "").strip()
     except Exception as e:
-        print(f"Warning: LLM summarization failed: {e}")
-        # Return truncated raw text as fallback
-        words = text.split()
-        if len(words) > max_words:
-            return " ".join(words[:max_words]) + "..."
-        return text
+        raise SummaryError(f"LLM summarization failed: {e}") from e
+    if not content:
+        raise SummaryError("LLM summarization returned no text")
+    return content
 
 
-def anonymize_with_llm(client: OpenAI, text: str, industry: str = None, title: str = None, all_entity_names: List[str] = None) -> str:
-    """Use OpenAI to anonymize entity names in the description, removing dates and titles."""
-    if not text or len(text.strip()) < 20:
-        return text or ""
+def anonymize_with_llm(client: OpenAI, text: str, industry: str = None, title: str = None,
+                       all_entity_names: List[str] = None,
+                       identifying_names: Optional[List[Optional[str]]] = None) -> str:
+    """Anonymise ``text`` with the fast OpenAI model.
+
+    Returns the anonymised text ('' for empty input). Raises
+    :class:`AnonymisationError` when there is no client, the call fails or
+    returns nothing, or the answer still names the victim / attacker or repeats
+    the title - the original text is never returned in its place. Short text is
+    anonymised like any other: a short description can still name the victim.
+    """
+    if not text or not text.strip():
+        return ""
+    if client is None:
+        raise AnonymisationError("no LLM client available")
 
     industry_hint = f"The victim organization operates in the {industry} sector." if industry and industry != "Unknown" else ""
 
@@ -260,10 +284,16 @@ Return ONLY the fully anonymized text with no dates, no entity names, and no tit
                 }
             ]
         )
-        return response.choices[0].message.content.strip()
+        content = (response.choices[0].message.content or "").strip()
     except Exception as e:
-        print(f"Warning: LLM anonymization failed: {e}")
-        return text  # Return original if anonymization fails
+        # The exception text is not echoed: an API error can quote its input.
+        raise AnonymisationError(f"LLM call failed ({type(e).__name__})") from e
+    if not content:
+        raise AnonymisationError("LLM returned no text")
+    leak = identifying_leak(content, identifying_names or [], title)
+    if leak:
+        raise AnonymisationError(leak)
+    return content
 
 
 def truncate_text(text: str, max_words: int = 500) -> str:
@@ -276,68 +306,117 @@ def truncate_text(text: str, max_words: int = 500) -> str:
     return text
 
 
+SUMMARY_FAILED_PREFIX = "[LLM summary failed - first words of the source text follow] "
+NOT_ANONYMISED_NO_LLM = f"{NOT_ANONYMISED} (--no-llm: no anonymiser was run)"
+
+
+def _row(event_data: Dict, description: str, anonymised: str, notes: List[str]) -> Dict:
+    return {
+        'Event Date': event_data['event_date'],
+        'Event Title': event_data['title'] or 'Untitled Event',
+        'Event Description': description,
+        'Anonymised Description': anonymised,
+        'Records Affected': event_data['records_affected'],
+        'Entity Type': event_data['industry'],
+        'Attack Type': event_data['event_type'],
+        'Export Notes': "; ".join(n for n in notes if n),
+    }
+
+
 def process_single_event(
     client: OpenAI,
     event_data: Dict,
     source_text: str,
     max_words: int,
     use_llm: bool,
-    all_entity_names: List[str] = None
+    all_entity_names: List[str] = None,
+    source_note: Optional[str] = None,
 ) -> Dict:
-    """Process a single event with LLM summarization and anonymization."""
-    industry = event_data['industry']
-    title = event_data['title']
+    """Summarise and anonymise one event.
 
-    # Summarize or truncate
-    if use_llm and client and len(source_text) > 100:
-        description = summarize_with_llm(client, source_text, max_words)
-        # Create anonymized version (with title, entity names for thorough anonymization)
-        anonymized = anonymize_with_llm(client, description, industry, title, all_entity_names)
-    else:
+    The returned row carries ``_summary_failed`` / ``_anonymisation_failed``
+    flags (stripped before writing) so the export can count failures. The
+    anonymised column is never the original text: without an LLM it says it was
+    not anonymised, and on any failure it says anonymisation failed.
+    """
+    notes: List[str] = [source_note] if source_note else []
+    summary_failed = False
+    anonymisation_failed = False
+
+    if not use_llm:
         description = truncate_text(source_text, max_words)
-        anonymized = description
+        anonymised = NOT_ANONYMISED_NO_LLM if description else ""
+        row = _row(event_data, description, anonymised, notes)
+        row.update(_summary_failed=False, _anonymisation_failed=False)
+        return row
 
-    return {
-        'Event Date': event_data['event_date'],
-        'Event Title': title or 'Untitled Event',
-        'Event Description': description,
-        'Anonymised Description': anonymized,
-        'Records Affected': event_data['records_affected'],
-        'Entity Type': industry,
-        'Attack Type': event_data['event_type']
-    }
+    try:
+        description = summarize_with_llm(client, source_text, max_words)
+    except SummaryError as exc:
+        summary_failed = True
+        anonymisation_failed = True
+        notes.append(str(exc))
+        description = SUMMARY_FAILED_PREFIX + truncate_text(source_text, max_words)
+        anonymised = failure_placeholder("(no summary to anonymise)")
+    else:
+        try:
+            anonymised = anonymize_with_llm(
+                client, description, event_data['industry'], event_data['title'], all_entity_names,
+                identifying_names=[event_data.get('victim_organization_name'),
+                                   event_data.get('attacking_entity_name')])
+        except AnonymisationError as exc:
+            anonymisation_failed = True
+            notes.append(f"anonymisation failed: {exc}")
+            anonymised = failure_placeholder(f"({exc})")
+
+    row = _row(event_data, description, anonymised, notes)
+    row.update(_summary_failed=summary_failed, _anonymisation_failed=anonymisation_failed)
+    return row
+
+
+def failed_worker_row(event_data: Dict, error: Exception) -> Dict:
+    """Row for an event whose worker raised: placeholders only, never source text."""
+    row = _row(event_data, f"[export failed: {error}]",
+               failure_placeholder(f"(export worker error: {error})"),
+               [f"export worker error: {error}"])
+    row.update(_summary_failed=True, _anonymisation_failed=True)
+    return row
+
+
+@dataclass
+class ExcelExportResult:
+    """What an Excel export wrote and what went wrong while writing it."""
+    output_path: str
+    rows: int = 0
+    summary_failures: int = 0
+    anonymisation_failures: int = 0
+    events_without_sources: int = 0
+    used_llm: bool = True
+
+    @property
+    def ok(self) -> bool:
+        """True only when every requested summary and anonymisation succeeded."""
+        return self.summary_failures == 0 and self.anonymisation_failures == 0
 
 
 def get_all_entity_names(cursor: sqlite3.Cursor) -> List[str]:
-    """Get all entity names from the database for thorough anonymization."""
+    """Every known entity name, longest first, for the anonymisation prompt.
+
+    A query error propagates: an anonymiser run without its name list would
+    quietly let names through.
+    """
     entity_names = set()
-
-    # Get entity names from EntitiesV2
-    try:
-        cursor.execute("SELECT DISTINCT entity_name FROM EntitiesV2 WHERE entity_name IS NOT NULL")
+    for query in (
+        "SELECT DISTINCT entity_name FROM EntitiesV2 WHERE entity_name IS NOT NULL",
+        "SELECT DISTINCT victim_organization_name FROM DeduplicatedEvents "
+        "WHERE victim_organization_name IS NOT NULL",
+        "SELECT DISTINCT attacking_entity_name FROM DeduplicatedEvents "
+        "WHERE attacking_entity_name IS NOT NULL",
+    ):
+        cursor.execute(query)
         for row in cursor.fetchall():
             if row[0]:
                 entity_names.add(row[0].strip())
-    except sqlite3.Error:
-        pass
-
-    # Get victim organization names from DeduplicatedEvents
-    try:
-        cursor.execute("SELECT DISTINCT victim_organization_name FROM DeduplicatedEvents WHERE victim_organization_name IS NOT NULL")
-        for row in cursor.fetchall():
-            if row[0]:
-                entity_names.add(row[0].strip())
-    except sqlite3.Error:
-        pass
-
-    # Get attacking entity names from DeduplicatedEvents
-    try:
-        cursor.execute("SELECT DISTINCT attacking_entity_name FROM DeduplicatedEvents WHERE attacking_entity_name IS NOT NULL")
-        for row in cursor.fetchall():
-            if row[0]:
-                entity_names.add(row[0].strip())
-    except sqlite3.Error:
-        pass
 
     # Sort by length descending to replace longer names first
     return sorted(list(entity_names), key=len, reverse=True)
@@ -352,30 +431,41 @@ def export_events_to_excel(
     max_workers: int = 10,
     exclude_unknown_records: bool = False,
     all_dates: bool = False,
-) -> str:
+    client: Optional[OpenAI] = None,
+) -> ExcelExportResult:
     """Export deduplicated events to Excel file with parallel LLM processing.
 
     The rows are the reporting population: active incidents dated in the dashboard
     reporting period (``all_dates`` lifts the date bound), so this workbook and the
     dashboards count the same incidents.
+
+    Failures are counted, never hidden: a failed summary is labelled as such, a
+    failed anonymisation leaves a placeholder (never the original text), and the
+    result reports both counts. ``ExcelExportResult.ok`` is False if any failed.
+
+    Raises:
+        FileNotFoundError: the database does not exist.
+        ExportConfigurationError: ``use_llm`` without an OpenAI key (the export
+            used to fall back to raw text, which also filled the anonymised
+            column with identifying text).
     """
 
     if output_path is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_path = f'cyber_events_export_{timestamp}.xlsx'
 
-    # Initialize OpenAI client if using LLM
-    client = None
-    if use_llm:
+    if not Path(db_path).exists():
+        raise FileNotFoundError(f"Database not found at {db_path}")
+
+    if use_llm and client is None:
         client = get_openai_client()
         if client is None:
-            print("Falling back to simple text truncation (no LLM).")
-            use_llm = False
+            raise ExportConfigurationError(
+                "OPENAI_API_KEY is not set: cannot summarise or anonymise. Set the key, "
+                "or pass --no-llm (descriptions are then truncated source text and the "
+                "anonymised column is marked as not anonymised).")
 
-    # Check database exists before connecting
-    if not Path(db_path).exists():
-        print(f"Error: Database not found at {db_path}")
-        return output_path
+    result = ExcelExportResult(output_path=output_path, used_llm=use_llm)
 
     # Connect to database using context manager to ensure the connection is always closed
     with sqlite3.connect(db_path) as conn:
@@ -384,7 +474,8 @@ def export_events_to_excel(
 
         # Get all entity names for thorough anonymization
         all_entity_names = get_all_entity_names(cursor) if use_llm else []
-        print(f"Loaded {len(all_entity_names)} entity names for anonymization")
+        if use_llm:
+            print(f"Loaded {len(all_entity_names)} entity names for anonymization")
 
         # Build query with optional filter for unknown records
         period = None if all_dates else dashboard_period()
@@ -395,7 +486,9 @@ def export_events_to_excel(
                 title,
                 event_date,
                 event_type,
+                victim_organization_name,
                 victim_organization_industry,
+                attacking_entity_name,
                 records_affected,
                 description,
                 summary
@@ -432,7 +525,6 @@ def export_events_to_excel(
         event_data_list = []
         for event in tqdm(events, desc="Reading events", smoothing=0):
             event_id = event['deduplicated_event_id']
-            event_title = event['title']
 
             # Clean up event type - use "Unknown" for unknown/null values
             event_type = event['event_type']
@@ -446,7 +538,9 @@ def export_events_to_excel(
             if not industry or industry.lower() in ('unknown', 'none', '', 'null'):
                 industry = 'Unknown'
 
-            source_text = get_event_source_text(cursor, event_id, event_title)
+            source_text, source_note = get_event_source_text(cursor, event_id)
+            if source_note:
+                result.events_without_sources += 1
 
             event_data_list.append({
                 'event_data': {
@@ -454,17 +548,19 @@ def export_events_to_excel(
                     'title': event['title'],
                     'records_affected': event['records_affected'],
                     'industry': industry,
-                    'event_type': event_type
+                    'event_type': event_type,
+                    'victim_organization_name': event['victim_organization_name'],
+                    'attacking_entity_name': event['attacking_entity_name'],
                 },
-                'source_text': source_text
+                'source_text': source_text,
+                'source_note': source_note,
             })
 
     # Phase 2: Process with LLM in parallel
-    print(f"Phase 2: Processing with LLM ({max_workers} parallel workers)...")
-    rows = [None] * len(event_data_list)  # Pre-allocate to maintain order
+    print(f"Phase 2: Processing ({max_workers} parallel workers)...")
+    rows: List[Optional[Dict]] = [None] * len(event_data_list)  # Pre-allocate to maintain order
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
         future_to_idx = {
             executor.submit(
                 process_single_event,
@@ -473,32 +569,29 @@ def export_events_to_excel(
                 item['source_text'],
                 max_words,
                 use_llm,
-                all_entity_names
+                all_entity_names,
+                item['source_note'],
             ): idx
             for idx, item in enumerate(event_data_list)
         }
 
-        # Collect results with progress bar
-        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="LLM processing", smoothing=0):
+        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing", smoothing=0):
             idx = future_to_idx[future]
             try:
                 rows[idx] = future.result()
             except Exception as e:
                 print(f"Error processing event {idx}: {e}")
-                # Fallback to basic data
-                item = event_data_list[idx]
-                rows[idx] = {
-                    'Event Date': item['event_data']['event_date'],
-                    'Event Title': item['event_data']['title'] or 'Untitled Event',
-                    'Event Description': truncate_text(item['source_text'], max_words),
-                    'Anonymised Description': truncate_text(item['source_text'], max_words),
-                    'Records Affected': item['event_data']['records_affected'],
-                    'Entity Type': item['event_data']['industry'],
-                    'Attack Type': item['event_data']['event_type']
-                }
+                rows[idx] = failed_worker_row(event_data_list[idx]['event_data'], e)
+
+    for row in rows:
+        result.summary_failures += int(row.pop('_summary_failed'))
+        result.anonymisation_failures += int(row.pop('_anonymisation_failed'))
+    result.rows = len(rows)
 
     # Create DataFrame and export to Excel
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=list(_row(
+        {'event_date': None, 'title': None, 'records_affected': None, 'industry': None,
+         'event_type': None}, '', '', []).keys()))
 
     # Write to Excel with formatting
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
@@ -517,6 +610,7 @@ def export_events_to_excel(
             'E': 15,   # Records Affected
             'F': 25,   # Entity Type
             'G': 20,   # Attack Type
+            'H': 50,   # Export Notes
         }
 
         # Apply column widths
@@ -546,8 +640,20 @@ def export_events_to_excel(
             cell = worksheet.cell(row=1, column=col_num)
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
+        summary = pd.DataFrame([
+            ('Rows', result.rows),
+            ('LLM summaries and anonymisation', 'yes' if use_llm else 'no (--no-llm)'),
+            ('Summary failures', result.summary_failures),
+            ('Anonymisation failures (placeholder written)', result.anonymisation_failures),
+            ('Events with no linked source records', result.events_without_sources),
+        ], columns=['Item', 'Value'])
+        summary.to_excel(writer, index=False, sheet_name='Export Summary')
+
     print(f"\nExported {len(rows)} events to: {output_path}")
-    return output_path
+    print(f"  Summary failures: {result.summary_failures}")
+    print(f"  Anonymisation failures (placeholder written): {result.anonymisation_failures}")
+    print(f"  Events with no linked source records: {result.events_without_sources}")
+    return result
 
 
 def main():
@@ -612,17 +718,28 @@ def main():
         print("Install with: pip install openpyxl")
         sys.exit(1)
 
-    output_file = export_events_to_excel(
-        db_path=args.db_path,
-        output_path=args.output,
-        limit=args.limit,
-        use_llm=not args.no_llm,
-        max_words=args.max_words,
-        max_workers=args.workers,
-        exclude_unknown_records=args.exclude_unknown_records,
-        all_dates=args.all_dates,
-    )
-    print(f"\nOutput file: {Path(output_file).resolve()}")
+    try:
+        result = export_events_to_excel(
+            db_path=args.db_path,
+            output_path=args.output,
+            limit=args.limit,
+            use_llm=not args.no_llm,
+            max_words=args.max_words,
+            max_workers=args.workers,
+            exclude_unknown_records=args.exclude_unknown_records,
+            all_dates=args.all_dates,
+        )
+    except (FileNotFoundError, ExportConfigurationError) as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    print(f"\nOutput file: {Path(result.output_path).resolve()}")
+    if not result.ok:
+        # The workbook is written (with placeholders, never the original text in
+        # the anonymised column) but the export did not succeed.
+        print(f"[FAILED] {result.summary_failures} summary failure(s) and "
+              f"{result.anonymisation_failures} anonymisation failure(s); see the "
+              "'Export Notes' column and the 'Export Summary' sheet.")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

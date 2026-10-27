@@ -49,6 +49,11 @@ from cyber_data_collector.reporting.population import (  # noqa: E402
     population_breakdown,
     reconcile,
 )
+from scripts.export.anonymisation import (  # noqa: E402
+    ANONYMISATION_FAILED,
+    failure_placeholder,
+    identifying_leak,
+)
 
 # Table whose rows are incidents (and so must be limited to the population).
 INCIDENT_TABLE = "DeduplicatedEvents"
@@ -56,6 +61,12 @@ INCIDENT_TABLE = "DeduplicatedEvents"
 
 class CyberEventsExporter:
     """Export cyber events data from SQLite database to CSV/Excel formats."""
+
+    # Columns that identify the incident outright; an --anonymize export drops them.
+    ANONYMISED_DROP_COLUMNS = (
+        'title', 'victim_organization_name', 'attacking_entity_name', 'entities', 'sources',
+    )
+    last_anonymisation_failures = 0
 
     # Common date/time patterns for anonymization
     DATE_PATTERNS = [
@@ -110,36 +121,24 @@ class CyberEventsExporter:
         return [(row[1], row[2]) for row in cursor.fetchall()]
 
     def _get_all_entity_names(self) -> List[str]:
-        """Get all entity names from the database for thorough anonymization."""
+        """Every known entity name, longest first, for anonymisation.
+
+        A query error propagates: anonymising without the name list would let
+        names through while reporting success.
+        """
         cursor = self.conn.cursor()
         entity_names = set()
-
-        # Get entity names from EntitiesV2
-        try:
-            cursor.execute("SELECT DISTINCT entity_name FROM EntitiesV2 WHERE entity_name IS NOT NULL")
+        for query in (
+            "SELECT DISTINCT entity_name FROM EntitiesV2 WHERE entity_name IS NOT NULL",
+            "SELECT DISTINCT victim_organization_name FROM DeduplicatedEvents "
+            "WHERE victim_organization_name IS NOT NULL",
+            "SELECT DISTINCT attacking_entity_name FROM DeduplicatedEvents "
+            "WHERE attacking_entity_name IS NOT NULL",
+        ):
+            cursor.execute(query)
             for row in cursor.fetchall():
                 if row[0]:
                     entity_names.add(row[0].strip())
-        except sqlite3.Error:
-            pass
-
-        # Get victim organization names from DeduplicatedEvents
-        try:
-            cursor.execute("SELECT DISTINCT victim_organization_name FROM DeduplicatedEvents WHERE victim_organization_name IS NOT NULL")
-            for row in cursor.fetchall():
-                if row[0]:
-                    entity_names.add(row[0].strip())
-        except sqlite3.Error:
-            pass
-
-        # Get attacking entity names from DeduplicatedEvents
-        try:
-            cursor.execute("SELECT DISTINCT attacking_entity_name FROM DeduplicatedEvents WHERE attacking_entity_name IS NOT NULL")
-            for row in cursor.fetchall():
-                if row[0]:
-                    entity_names.add(row[0].strip())
-        except sqlite3.Error:
-            pass
 
         # Sort by length descending to replace longer names first (e.g., "Company Ltd" before "Company")
         return sorted(list(entity_names), key=len, reverse=True)
@@ -161,7 +160,8 @@ class CyberEventsExporter:
                 if remaining.startswith(sep):
                     remaining = remaining[len(sep):].lstrip()
                     break
-            return remaining if remaining else description
+            # A description that is only the title has nothing anonymous left.
+            return remaining
 
         # Also check for title followed by colon pattern at start
         title_patterns = [
@@ -290,6 +290,28 @@ class CyberEventsExporter:
             result = result[0].upper() + result[1:]
 
         return result
+
+    def _anonymise_or_placeholder(self, text: str, title: str, entity_names: List[str],
+                                  event_data: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+        """Anonymise one cell; on failure return a placeholder and the reason.
+
+        Fails when anonymisation raises or the result still names the victim /
+        attacker or repeats the title. The original text is never returned.
+        """
+        victim = event_data.get('victim_organization_name')
+        attacker = event_data.get('attacking_entity_name')
+        try:
+            result = self._anonymize_description(
+                description=text, title=title, entity_names=entity_names,
+                victim_name=victim, attacker_name=attacker,
+                industry=event_data.get('victim_organization_industry'))
+        except Exception as exc:  # any failure must not leak the original text
+            reason = f"anonymiser raised {type(exc).__name__}"
+            return failure_placeholder(f"({reason})"), reason
+        leak = identifying_leak(result, [victim, attacker], event_data.get('title'))
+        if leak:
+            return failure_placeholder(f"({leak})"), leak
+        return result, None
 
     def _get_name_variations(self, name: str) -> List[str]:
         """Generate common variations of an entity name."""
@@ -546,6 +568,8 @@ class CyberEventsExporter:
 
             # Get all entity names for thorough anonymization if needed
             all_entity_names = self._get_all_entity_names() if anonymize else []
+            anonymisation_failures = 0
+            self.last_anonymisation_failures = 0
 
             # Convert to list of dictionaries
             events_data = [dict(event) for event in events]
@@ -560,27 +584,21 @@ class CyberEventsExporter:
                 if not event_data.get('attack_method') or event_data['attack_method'].lower() in ('unknown', 'none', '', 'null'):
                     event_data['attack_method'] = 'Unknown'
 
-                # Anonymize description if requested
+                # Anonymize description if requested. A failure writes a
+                # placeholder and is counted - never the original text.
                 if anonymize:
-                    event_data['description'] = self._anonymize_description(
-                        description=event_data.get('description', ''),
-                        title=event_data.get('title', ''),
-                        entity_names=all_entity_names,
-                        victim_name=event_data.get('victim_organization_name'),
-                        attacker_name=event_data.get('attacking_entity_name'),
-                        industry=event_data.get('victim_organization_industry')
-                    )
-                    # Also anonymize summary if present
-                    if event_data.get('summary'):
-                        event_data['summary'] = self._anonymize_description(
-                            description=event_data.get('summary', ''),
-                            title='',  # Summary doesn't have a title to remove
-                            entity_names=all_entity_names,
-                            victim_name=event_data.get('victim_organization_name'),
-                            attacker_name=event_data.get('attacking_entity_name'),
-                            industry=event_data.get('victim_organization_industry')
-                        )
-            
+                    notes = []
+                    for column, title in (('description', event_data.get('title', '')),
+                                          ('summary', '')):
+                        if not event_data.get(column):
+                            continue
+                        event_data[column], failure = self._anonymise_or_placeholder(
+                            event_data[column], title, all_entity_names, event_data)
+                        if failure:
+                            anonymisation_failures += 1
+                            notes.append(f"{column}: {failure}")
+                    event_data['anonymisation_notes'] = "; ".join(notes)
+
             # Add entity information if requested
             if include_entities:
                 for event_data in events_data:
@@ -643,7 +661,15 @@ class CyberEventsExporter:
             
             # Convert to DataFrame
             df = pd.DataFrame(events_data)
-            
+
+            if anonymize:
+                # The anonymised description means nothing next to columns that
+                # name the victim: drop every column that carries an identifier
+                # (the entity/source JSON holds names, URLs and article snippets).
+                dropped = [c for c in self.ANONYMISED_DROP_COLUMNS if c in df.columns]
+                df = df.drop(columns=dropped)
+                print(f"[ANONYMISED] Dropped identifying columns: {', '.join(dropped)}")
+
             # Export based on format
             if format.lower() == 'csv':
                 df.to_csv(output_file, index=False, encoding='utf-8')
@@ -652,6 +678,13 @@ class CyberEventsExporter:
             else:
                 raise ValueError(f"Unsupported format: {format}")
             
+            self.last_anonymisation_failures = anonymisation_failures
+            if anonymisation_failures:
+                print(f"[FAILED] {anonymisation_failures} description/summary cell(s) could not be "
+                      f"anonymised; they hold '{ANONYMISATION_FAILED}' placeholders "
+                      f"(see the anonymisation_notes column). Written to {output_file}.")
+                return False
+
             print(f"Successfully exported {len(df)} deduplicated events with details to {output_file}")
             return True
             
@@ -791,7 +824,12 @@ Examples:
                        help='Show export summary and exit')
     
     args = parser.parse_args()
-    
+
+    if args.anonymize and not (args.detailed and args.table == INCIDENT_TABLE):
+        # The plain table export has no anonymiser: it used to ignore --anonymize
+        # and write the identifying text anyway.
+        parser.error("--anonymize is only supported with --detailed on DeduplicatedEvents")
+
     try:
         with CyberEventsExporter(args.db_path) as exporter:
             # Handle special commands
@@ -894,7 +932,8 @@ Examples:
                 if args.exclude_unknown_records:
                     print(f"   Excluded events with unknown records affected")
                 if args.anonymize:
-                    print(f"   Anonymized descriptions (removed entity names, dates, and titles)")
+                    print(f"   Anonymized descriptions (removed entity names, dates, and titles; "
+                          f"identifying columns dropped)")
             else:
                 print(f"\n[WARNING] Completed {success_count}/{total_exports} exports successfully")
                 sys.exit(1)

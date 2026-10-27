@@ -1,157 +1,106 @@
 #!/usr/bin/env python3
+"""Validate every OAIC statistics file; fail loudly on anything unusable.
+
+    python scripts/oaic/cleanup_oaic_data.py [--legacy-dir .] [--dataset PATH]
+
+Checks:
+
+* every legacy ``oaic_cyber_statistics_*.json`` file can be read and is a list
+  of period records - a corrupt file is a FAILURE, never skipped (it used to be
+  possible to get a clean-looking result with a corrupt file left out);
+* the published dataset (``instance/oaic/oaic_statistics.json``) and the
+  refresh state can be read, and no published record contradicts itself;
+* contradictions inside legacy files are listed - they are withheld whenever
+  those files are read (dashboard, bootstrap), never published.
+
+Exit status 1 on an unreadable file or a contradiction in the published
+dataset; 0 otherwise. This replaces the old one-off consolidation, which merged
+three hard-coded file names (long gone) and nulled bad values while reporting
+success. Consolidation is now ``refresh_oaic_statistics.py``: it bootstraps the
+published dataset from the legacy files and promotes only consistent records.
 """
-Clean up and consolidate OAIC data files.
 
-This script:
-1. Uses the cleanest historical data file as the base
-2. Merges in individuals_affected_average/median from PDF scraping
-3. Adds 2025 H1 data from dashboard scraping
-4. Validates all data to ensure no corrupted values
-5. Outputs a single clean OAIC data file
-"""
+from __future__ import annotations
 
-import json
-import glob
-import os
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+import argparse
+import sys
+from pathlib import Path
+from typing import List, Optional
 
-from scripts.oaic.oaic_validators import sanitize_top_sectors
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-
-def validate_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate and clean a single OAIC record."""
-    total = record.get('total_notifications') or 0
-
-    # Null implausible per-sector counts (> period total, or > the plausibility
-    # cap). Uses the shared sanitizer so cleanup, scraper and integrity check
-    # all agree. The old `count <= total * 1.1` guard kept counts that were
-    # ~80-90% of the total, which is impossible for one of five top sectors.
-    if record.get('top_sectors'):
-        record['top_sectors'] = sanitize_top_sectors(
-            record['top_sectors'], total if total > 0 else None
-        )
-
-    # Validate attack type counts
-    attack_fields = ['phishing', 'ransomware', 'hacking', 'brute_force', 'malware', 'compromised_credentials']
-    for field in attack_fields:
-        value = record.get(field)
-        if value is not None and total > 0 and value > total * 1.1:
-            print(f"  Nullifying invalid {field}={value} (total={total})")
-            record[field] = None
-
-    return record
+from scripts.oaic.oaic_consistency import find_contradictions, period_label  # noqa: E402
+from scripts.oaic.oaic_dataset import (  # noqa: E402
+    DEFAULT_DATASET_PATH,
+    DEFAULT_STATE_PATH,
+    OAICDatasetError,
+    legacy_files_newest_first,
+    load_dataset,
+    load_state,
+    read_record_list,
+)
 
 
-def merge_oaic_data() -> List[Dict[str, Any]]:
-    """Merge OAIC data from multiple sources to produce clean output."""
+def validate(legacy_dir: Path = Path("."), dataset_path: Path = DEFAULT_DATASET_PATH,
+             state_path: Path = DEFAULT_STATE_PATH) -> tuple:
+    """``(failures, findings)``: failures make validation fail; findings are informational."""
+    failures: List[str] = []
+    findings: List[str] = []
 
-    # Source 1: Clean historical data (2019-2024)
-    base_file = 'oaic_cyber_statistics_20251030_194752.json'
-    print(f"Loading base historical data from: {base_file}")
-    with open(base_file, 'r', encoding='utf-8') as f:
-        base_data = json.load(f)
-
-    # Source 2: PDF-scraped data with individuals_affected stats (2024)
-    pdf_file = 'oaic_cyber_statistics_20260116_085731.json'
-    print(f"Loading PDF data (for individuals_affected stats) from: {pdf_file}")
-    with open(pdf_file, 'r', encoding='utf-8') as f:
-        pdf_data = json.load(f)
-
-    # Source 3: Dashboard-scraped data (2025 H1)
-    dashboard_file = 'oaic_cyber_statistics_20260116_112846.json'
-    print(f"Loading dashboard data (for 2025 H1) from: {dashboard_file}")
-    with open(dashboard_file, 'r', encoding='utf-8') as f:
-        dashboard_data = json.load(f)
-
-    # Index data by period
-    records_by_period: Dict[str, Dict[str, Any]] = {}
-
-    # Process base data (filter out Q1/Q2 periods, keep only H1/H2)
-    print("\nProcessing base historical data...")
-    for record in base_data:
-        year = record.get('year')
-        period = record.get('period')
-
-        # Skip quarterly data (Q1, Q2) - we only want half-yearly (H1, H2)
-        if period not in ['H1', 'H2']:
-            print(f"  Skipping {year} {period} (not half-yearly)")
+    files = legacy_files_newest_first(legacy_dir)
+    for path in files:
+        try:
+            records = read_record_list(path)
+        except OAICDatasetError as exc:
+            failures.append(f"unreadable legacy file: {exc}")
             continue
+        for record in records:
+            if record.get("period") not in ("H1", "H2"):
+                continue
+            for c in find_contradictions(record):
+                findings.append(f"{Path(path).name} {period_label(record)}: {c.message} "
+                                f"(withheld when read)")
 
-        period_key = f"{year} {period}"
-        record = validate_record(record)
-        records_by_period[period_key] = record
-        print(f"  Added {period_key}")
+    try:
+        dataset = load_dataset(dataset_path)
+    except OAICDatasetError as exc:
+        failures.append(f"unreadable published dataset: {exc}")
+        dataset = None
+    if dataset is None and not failures:
+        findings.append(f"no published dataset at {dataset_path}; run "
+                        "python scripts/oaic/refresh_oaic_statistics.py")
+    for record in (dataset or {}).get("records", []):
+        for c in find_contradictions(record):
+            failures.append(f"published {period_label(record)}: {c.message}")
 
-    # Merge individuals_affected stats from PDF data
-    print("\nMerging individuals_affected stats from PDF data...")
-    for record in pdf_data:
-        year = record.get('year')
-        period = record.get('period')
-        period_key = f"{year} {period}"
+    try:
+        load_state(state_path)
+    except OAICDatasetError as exc:
+        failures.append(f"unreadable refresh state: {exc}")
 
-        if period_key in records_by_period:
-            # Add individuals_affected stats if present
-            if record.get('individuals_affected_average'):
-                records_by_period[period_key]['individuals_affected_average'] = record['individuals_affected_average']
-                print(f"  Added avg to {period_key}: {record['individuals_affected_average']}")
-            if record.get('individuals_affected_median'):
-                records_by_period[period_key]['individuals_affected_median'] = record['individuals_affected_median']
-                print(f"  Added median to {period_key}: {record['individuals_affected_median']}")
-
-    # Add 2025 H1 from dashboard data
-    print("\nAdding 2025 H1 from dashboard data...")
-    for record in dashboard_data:
-        year = record.get('year')
-        period = record.get('period')
-
-        if year == 2025 and period == 'H1':
-            period_key = f"{year} {period}"
-            record = validate_record(record)
-            records_by_period[period_key] = record
-            print(f"  Added {period_key} from dashboard")
-
-    # Sort by year and period
-    sorted_periods = sorted(records_by_period.keys(),
-                           key=lambda x: (int(x.split()[0]), 0 if x.split()[1] == 'H1' else 1))
-
-    result = [records_by_period[p] for p in sorted_periods]
-
-    print(f"\n=== Final merged data: {len(result)} periods ===")
-    for record in result:
-        year = record.get('year')
-        period = record.get('period')
-        total = record.get('total_notifications')
-        sectors = len(record.get('top_sectors', []))
-        avg = record.get('individuals_affected_average')
-        print(f"  {year} {period}: total={total}, sectors={sectors}, avg={avg}")
-
-    return result
+    if not files and dataset is None:
+        failures.append("no OAIC statistics found (no legacy files, no published dataset)")
+    return failures, findings
 
 
-def main():
-    """Main function to clean and consolidate OAIC data."""
-    print("=" * 60)
-    print("OAIC Data Cleanup Script")
-    print("=" * 60)
-    print()
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Validate OAIC statistics files")
+    parser.add_argument("--legacy-dir", type=Path, default=Path("."))
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
+    parser.add_argument("--state", type=Path, default=DEFAULT_STATE_PATH)
+    args = parser.parse_args(argv)
 
-    # Merge data
-    clean_data = merge_oaic_data()
-
-    # Save output
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_file = f'oaic_cyber_statistics_cleaned_{timestamp}.json'
-
-    print(f"\nSaving cleaned data to: {output_file}")
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(clean_data, f, indent=2)
-
-    print(f"\nDone! {len(clean_data)} periods saved.")
-    print("\nTo use this data, run:")
-    print(f"  python build_static_dashboard.py")
-    print("\nThe dashboard builder will automatically use the most recent OAIC file.")
+    failures, findings = validate(args.legacy_dir, args.dataset, args.state)
+    for f in findings:
+        print(f"  note: {f}")
+    for f in failures:
+        print(f"  FAIL: {f}")
+    if failures:
+        print(f"OAIC validation FAILED ({len(failures)} problem(s)).")
+        return 1
+    print(f"OAIC validation passed ({len(findings)} note(s)).")
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

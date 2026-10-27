@@ -48,7 +48,14 @@ logger = logging.getLogger(__name__)
 # Valid stakeholder categories (from ASD risk matrix)
 # Bump when the prompt or the response schema changes: every classification
 # made under another version is then stale and is redone (input_fingerprint).
-PROMPT_VERSION = "asd-v1"
+PROMPT_VERSION = "asd-v2"  # v2: explicit "Insufficient information", no C6 default
+
+# Answer for a field the evidence cannot decide. Stored as-is; never placed in a
+# matrix cell (the dashboard and the Excel matrix report it separately) and
+# never read as C6 - C6 is an unsuccessful or negligible attack the evidence
+# shows, not missing evidence.
+INSUFFICIENT_INFORMATION = "Insufficient information"
+VALID_SEVERITY_CATEGORIES = ["C1", "C2", "C3", "C4", "C5", "C6"]
 
 VALID_STAKEHOLDER_CATEGORIES = [
     "Member(s) of the public",
@@ -108,7 +115,7 @@ VALID_IMPACT_TYPES = [
 ]
 
 # Type aliases for strict validation
-SeverityCategory = Literal["C1", "C2", "C3", "C4", "C5", "C6"]
+SeverityCategory = Literal["C1", "C2", "C3", "C4", "C5", "C6", "Insufficient information"]
 StakeholderCategory = Literal[
     "Member(s) of the public",
     "Small organisation(s)",
@@ -124,7 +131,8 @@ StakeholderCategory = Literal[
     "Government shared services",
     "Regulated critical infrastructure",
     "National security",
-    "Systems of National Significance"
+    "Systems of National Significance",
+    "Insufficient information"
 ]
 ImpactType = Literal[
     "Sustained disruption of essential systems and associated services",
@@ -132,7 +140,8 @@ ImpactType = Literal[
     "Isolated compromise",
     "Coordinated low-level malicious attack",
     "Low-level malicious attack",
-    "Unsuccessful low-level malicious attack"
+    "Unsuccessful low-level malicious attack",
+    "Insufficient information"
 ]
 
 
@@ -151,7 +160,8 @@ class ASDRiskClassification(BaseModel):
     """
     severity_category: SeverityCategory = Field(
         ...,
-        description="ASD severity category from C1 (most severe) to C6 (least severe)"
+        description="ASD severity category from C1 (most severe) to C6 (least severe), "
+                    "or 'Insufficient information' when the evidence cannot decide it"
     )
     primary_stakeholder_category: StakeholderCategory = Field(
         ...,
@@ -206,6 +216,14 @@ class ASDRiskClassifier:
         self.total_tokens = 0
         self.api_calls = 0
         self.cache_hits = 0
+
+        # Outcome of the last process_events() run. ``failed_count`` is what a
+        # caller must check: events that needed a classification and did not get
+        # one (API failure, unparseable answer, save error). Their previous
+        # classification, if any, is left in place with its old fingerprint, so
+        # stale_count() keeps counting them until a run succeeds.
+        self.failed_count = 0
+        self.failed_event_ids: List[str] = []
 
         # Thread-safety
         self._db_lock = threading.Lock()
@@ -379,12 +397,13 @@ IMPORTANT: Use the "Records Affected" field to inform severity:
 - 10,000-100,000 records → Consider C3-C4
 - 1,000-10,000 records → Consider C4-C5
 - <1,000 records → Consider C5-C6
-- Unknown/No data → Default to C6 (least severe)
+- Unknown records affected is NOT evidence of a small breach: judge severity from the
+  other details, and if they cannot decide it answer "Insufficient information"
 
-Stakeholder Categories (select ONE primary category):
+Stakeholder Categories (select ONE primary category, or "Insufficient information"):
 {chr(10).join(f"- {cat}" for cat in VALID_STAKEHOLDER_CATEGORIES)}
 
-Impact Types:
+Impact Types (or "Insufficient information"):
 {chr(10).join(f"- {impact}" for impact in VALID_IMPACT_TYPES)}
 
 Instructions:
@@ -393,7 +412,10 @@ Instructions:
 3. Select ONE primary stakeholder category that best represents the victim
 4. Classify the impact type
 5. Provide detailed reasoning for each classification
-6. If there is insufficient information, default to C6 (least severe) and explain why
+6. If the information is insufficient to decide the severity, the impact type or the
+   stakeholder category, answer "Insufficient information" for that field and explain
+   why in information_quality. Never default to C6: C6 means the evidence shows an
+   unsuccessful or negligible attack, not that evidence is missing.
 
 Return your response as a JSON object with this exact structure:
 {{
@@ -524,17 +546,17 @@ Return your response as a JSON object with this exact structure:
                 return False
         
         # Validate severity category
-        if classification['severity_category'] not in ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']:
+        if classification['severity_category'] not in VALID_SEVERITY_CATEGORIES + [INSUFFICIENT_INFORMATION]:
             logger.warning(f"Invalid severity category: {classification['severity_category']}")
             return False
         
         # Validate stakeholder category
-        if classification['primary_stakeholder_category'] not in VALID_STAKEHOLDER_CATEGORIES:
+        if classification['primary_stakeholder_category'] not in VALID_STAKEHOLDER_CATEGORIES + [INSUFFICIENT_INFORMATION]:
             logger.warning(f"Invalid stakeholder category: {classification['primary_stakeholder_category']}")
             return False
         
         # Validate impact type
-        if classification['impact_type'] not in VALID_IMPACT_TYPES:
+        if classification['impact_type'] not in VALID_IMPACT_TYPES + [INSUFFICIENT_INFORMATION]:
             logger.warning(f"Invalid impact type: {classification['impact_type']}")
             return False
         
@@ -636,7 +658,17 @@ Return your response as a JSON object with this exact structure:
             return None
 
     def process_events(self, limit: int = 5, force_reclassify: bool = False) -> List[Dict[str, Any]]:
-        """Process events and generate classifications using concurrent threads."""
+        """Process events and generate classifications using concurrent threads.
+
+        Returns the successful results. Failures are not hidden in a shorter
+        list: ``self.failed_count`` / ``self.failed_event_ids`` hold the events
+        that could not be classified in this run (reset at the start of each
+        call), and their stale or missing classifications stay counted by
+        :meth:`stale_count`. A caller must treat ``failed_count > 0`` as failure.
+        """
+        self.failed_count = 0
+        self.failed_event_ids = []
+
         # Prioritize unclassified events to ensure they get processed first
         events = self.get_events(limit, prioritize_unclassified=not force_reclassify)
 
@@ -654,23 +686,33 @@ Return your response as a JSON object with this exact structure:
 
             with tqdm(total=len(events), desc="Classifying events", unit="event", smoothing=0) as pbar:
                 for future in as_completed(futures):
+                    event = futures[future]
                     try:
                         result = future.result()
-                        if result is not None:
-                            results.append(result)
-                            pbar.set_postfix({
-                                "classified": len(results),
-                                "api_calls": self.api_calls,
-                                "cache": self.cache_hits,
-                            })
                     except Exception as exc:
-                        event = futures[future]
                         logger.error(f"Classification failed for {event.get('deduplicated_event_id', '?')}: {exc}")
+                        result = None
+                    if result is not None:
+                        results.append(result)
+                    else:
+                        self.failed_count += 1
+                        self.failed_event_ids.append(event.get('deduplicated_event_id', '?'))
+                    pbar.set_postfix({
+                        "classified": len(results),
+                        "failed": self.failed_count,
+                        "api_calls": self.api_calls,
+                        "cache": self.cache_hits,
+                    })
                     pbar.update(1)
 
         # Log summary
         logger.info(f"\nProcessing Summary:")
         logger.info(f"  Events processed: {len(results)}")
+        if self.failed_count:
+            logger.error(f"  FAILED to classify: {self.failed_count} event(s); their "
+                         f"classifications are missing or stale: "
+                         f"{', '.join(self.failed_event_ids[:20])}"
+                         f"{' ...' if self.failed_count > 20 else ''}")
         logger.info(f"  API calls made: {self.api_calls}")
         logger.info(f"  Cache hits: {self.cache_hits}")
         logger.info(f"  Prompt cache entries: {len(self._prompt_cache)}")
@@ -742,192 +784,201 @@ Return your response as a JSON object with this exact structure:
     
     def compile_risk_matrix(self, output_path: Path) -> List[str]:
         """Compile risk matrix from all classifications and export to Excel.
-        
-        Returns list of Excel file paths (overall + per year).
+
+        Returns the Excel file paths written (overall + per year). Each file is
+        written to a temporary file and moved into place only once complete, so
+        a failure never replaces a previous matrix with an empty or partial one.
+
+        Raises:
+            RiskMatrixExportError: one or more matrices could not be compiled or
+                written (after attempting every one); the error lists them and
+                their previous files are left untouched.
         """
-        excel_files = []
+        excel_files: List[str] = []
+        failures: List[str] = []
         Path(output_path).mkdir(parents=True, exist_ok=True)
 
-        # Compile overall risk matrix (the dashboard window, 2020 to date)
-        overall_file = self._compile_risk_matrix_for_year(output_path, "risk_matrix.xlsx", None)
-        if overall_file:
-            excel_files.append(str(overall_file))
-        
-        # Compile risk matrix for each year from 2020 onwards
+        targets: List[Tuple[str, Optional[int]]] = [("risk_matrix.xlsx", None)]
         current_year = datetime.now().year
-        for year in range(2020, current_year + 1):
-            year_file = self._compile_risk_matrix_for_year(
-                output_path, 
-                f"risk_matrix_{year}.xlsx", 
-                year
-            )
-            if year_file:
-                excel_files.append(str(year_file))
-        
-        return excel_files
-    
-    def _compile_risk_matrix_for_year(self, output_path: Path, filename: str, year: Optional[int]) -> Optional[Path]:
-        """Compile risk matrix for a specific year (or all years if year is None)."""
-        excel_file = output_path / filename
-        
-        try:
-            # Get all classifications from database, optionally filtered by year
-            cursor = self.conn.cursor()
-            
-            # The dashboard's reporting population: classifications of active
-            # incidents only (merged, rejected and orphaned ones used to be
-            # counted - 1,201 classifications against 665 active incidents),
-            # in the year asked for or the dashboard window.
-            from cyber_data_collector.reporting.population import (
-                ASD_POPULATION_FROM, calendar_year, dashboard_period, incident_filter,
-            )
-            period = calendar_year(year) if year is not None else dashboard_period()
-            where, params = incident_filter(period, alias="de")
-            query = f"""
-                SELECT
-                    arc.impact_type,
-                    arc.primary_stakeholder_category,
-                    COUNT(*) as count
-                FROM {ASD_POPULATION_FROM}
-                WHERE {where}
-                GROUP BY arc.impact_type, arc.primary_stakeholder_category
-                ORDER BY arc.impact_type, arc.primary_stakeholder_category
-            """
-            cursor.execute(query, params)
+        targets += [(f"risk_matrix_{year}.xlsx", year) for year in range(2020, current_year + 1)]
 
-            rows = cursor.fetchall()
-            
-            if not rows:
-                year_label = f" for year {year}" if year is not None else ""
-                logger.debug(f"No classifications found{year_label}")
-                # Create empty matrix
-                self._create_empty_risk_matrix(excel_file)
-                return excel_file
-            
-            # Create DataFrame
-            df = pd.DataFrame(rows, columns=['impact_type', 'primary_stakeholder_category', 'count'])
-            
-            # Create pivot table: impact_type (rows) x grouped stakeholder categories (columns)
-            # Show only total counts (not severity codes)
-            pivot_data = []
-            
-            for impact_type in VALID_IMPACT_TYPES:
-                row_data = {'Impact Type': impact_type}
-                
-                # Process each stakeholder group
-                for group_name, group_categories in STAKEHOLDER_GROUPS.items():
-                    # Sum counts for all categories in this group
-                    total_count = 0
-                    for stakeholder in group_categories:
-                        subset = df[
-                            (df['impact_type'] == impact_type) & 
-                            (df['primary_stakeholder_category'] == stakeholder)
-                        ]
-                        if len(subset) > 0:
-                            total_count += int(subset.iloc[0]['count'])
-                    
-                    # Store count (only if > 0)
-                    row_data[group_name] = total_count if total_count > 0 else ''
-                
-                pivot_data.append(row_data)
-            
-            # Create DataFrame for risk matrix
-            risk_matrix_df = pd.DataFrame(pivot_data)
-            
-            # Reorder columns: Impact Type first, then grouped stakeholder categories
-            columns = ['Impact Type'] + list(STAKEHOLDER_GROUPS.keys())
-            risk_matrix_df = risk_matrix_df[columns]
-            
-            # Write to Excel with formatting
-            with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
-                risk_matrix_df.to_excel(writer, sheet_name='Risk Matrix', index=False)
-                
-                # Get workbook and worksheet for formatting
-                workbook = writer.book
-                worksheet = writer.sheets['Risk Matrix']
-                
-                # Format header row
-                from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-                
-                header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-                header_font = Font(bold=True, color="FFFFFF", size=11)
-                border = Border(
-                    left=Side(style='thin'),
-                    right=Side(style='thin'),
-                    top=Side(style='thin'),
-                    bottom=Side(style='thin')
-                )
-                center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
-                
-                # Format header row
-                for cell in worksheet[1]:
-                    cell.fill = header_fill
-                    cell.font = header_font
-                    cell.alignment = center_align
-                    cell.border = border
-                
-                # Format data cells
-                for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row):
-                    for cell in row:
-                        cell.border = border
-                        cell.alignment = center_align
-                        if cell.column == 1:  # Impact Type column
-                            cell.font = Font(bold=True)
-                            cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
-                
-                # Auto-adjust column widths
-                for column in worksheet.columns:
-                    max_length = 0
-                    column_letter = column[0].column_letter
-                    for cell in column:
-                        try:
-                            # For numeric cells, use shorter width
-                            if isinstance(cell.value, (int, float)):
-                                max_length = max(max_length, 8)
-                            else:
-                                if len(str(cell.value)) > max_length:
-                                    max_length = len(str(cell.value))
-                        except Exception:
-                            pass
-                    # First column (Impact Type) can be wider, others narrower
-                    if column_letter == 'A':
-                        adjusted_width = min(max_length + 2, 50)
-                    else:
-                        adjusted_width = min(max_length + 2, 15)
-                    worksheet.column_dimensions[column_letter].width = adjusted_width
-                
-                # Format numeric cells (counts) as integers
-                for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=2):
-                    for cell in row:
-                        if isinstance(cell.value, (int, float)):
-                            cell.number_format = '0'  # Integer format
-                
-                # Freeze first row and first column
-                worksheet.freeze_panes = 'B2'
-            
+        for filename, year in targets:
+            try:
+                excel_files.append(str(self._compile_risk_matrix_for_year(output_path, filename, year)))
+            except Exception as exc:
+                label = f"year {year}" if year is not None else "all years"
+                logger.error(f"Risk matrix for {label} NOT written ({filename} left unchanged): {exc}",
+                             exc_info=True)
+                failures.append(f"{filename}: {exc}")
+
+        if failures:
+            raise RiskMatrixExportError(
+                f"{len(failures)} of {len(targets)} risk matrices failed: " + "; ".join(failures))
+        return excel_files
+
+    def _matrix_rows(self, year: Optional[int]) -> List[Any]:
+        """(impact_type, stakeholder, count) for the reporting population.
+
+        Query errors propagate - an unreadable population is not an empty one.
+        """
+        cursor = self.conn.cursor()
+        # The dashboard's reporting population: classifications of active
+        # incidents only (merged, rejected and orphaned ones used to be
+        # counted - 1,201 classifications against 665 active incidents),
+        # in the year asked for or the dashboard window.
+        from cyber_data_collector.reporting.population import (
+            ASD_POPULATION_FROM, calendar_year, dashboard_period, incident_filter,
+        )
+        period = calendar_year(year) if year is not None else dashboard_period()
+        where, params = incident_filter(period, alias="de")
+        query = f"""
+            SELECT
+                arc.impact_type,
+                arc.primary_stakeholder_category,
+                COUNT(*) as count
+            FROM {ASD_POPULATION_FROM}
+            WHERE {where}
+            GROUP BY arc.impact_type, arc.primary_stakeholder_category
+            ORDER BY arc.impact_type, arc.primary_stakeholder_category
+        """
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+    def _compile_risk_matrix_for_year(self, output_path: Path, filename: str, year: Optional[int]) -> Path:
+        """Compile the risk matrix for one year (or all years if ``year`` is None).
+
+        An empty matrix is written only when the query succeeded and the
+        population genuinely has no classifications. Classifications the matrix
+        cannot place (an "Insufficient information" answer, or a value outside
+        the ASD vocabulary) are listed on a "Not placed" sheet, never dropped.
+
+        Raises on any error; the previous file at ``output_path / filename`` is
+        then left untouched.
+        """
+        excel_file = Path(output_path) / filename
+        rows = self._matrix_rows(year)
+
+        if not rows:
             year_label = f" for year {year}" if year is not None else ""
-            logger.debug(f"Exported risk matrix{year_label} to {excel_file}")
-            return excel_file
-            
-        except Exception as e:
-            year_label = f" for year {year}" if year is not None else ""
-            logger.error(f"Error compiling risk matrix{year_label}: {e}", exc_info=True)
-            # Create empty matrix on error
+            logger.debug(f"No classifications found{year_label}")
             self._create_empty_risk_matrix(excel_file)
             return excel_file
-    
-    def _create_empty_risk_matrix(self, excel_file: Path):
-        """Create an empty risk matrix template."""
+
+        df = pd.DataFrame([tuple(r) for r in rows],
+                          columns=['impact_type', 'primary_stakeholder_category', 'count'])
+
+        placed_stakeholders = {cat for cats in STAKEHOLDER_GROUPS.values() for cat in cats}
+        is_placed = (df['impact_type'].isin(VALID_IMPACT_TYPES)
+                     & df['primary_stakeholder_category'].isin(placed_stakeholders))
+        not_placed = df[~is_placed].rename(columns={
+            'impact_type': 'Impact Type', 'primary_stakeholder_category': 'Stakeholder',
+            'count': 'Classifications'})
+
+        # Pivot: impact_type (rows) x grouped stakeholder categories (columns)
+        pivot_data = []
+        for impact_type in VALID_IMPACT_TYPES:
+            row_data = {'Impact Type': impact_type}
+            for group_name, group_categories in STAKEHOLDER_GROUPS.items():
+                total_count = int(df[
+                    (df['impact_type'] == impact_type)
+                    & (df['primary_stakeholder_category'].isin(group_categories))
+                ]['count'].sum())
+                row_data[group_name] = total_count if total_count > 0 else ''
+            pivot_data.append(row_data)
+
+        columns = ['Impact Type'] + list(STAKEHOLDER_GROUPS.keys())
+        risk_matrix_df = pd.DataFrame(pivot_data)[columns]
+
+        def write(path: Path) -> None:
+            with pd.ExcelWriter(path, engine='openpyxl') as writer:
+                risk_matrix_df.to_excel(writer, sheet_name='Risk Matrix', index=False)
+                self._format_matrix_sheet(writer.sheets['Risk Matrix'])
+                if not not_placed.empty:
+                    not_placed.to_excel(writer, sheet_name='Not placed', index=False)
+
+        self._write_atomically(excel_file, write)
+        year_label = f" for year {year}" if year is not None else ""
+        if not not_placed.empty:
+            logger.info(f"Risk matrix{year_label}: {int(not_placed['Classifications'].sum())} "
+                        "classification(s) not placed (insufficient information or "
+                        "outside the ASD vocabulary) - see the 'Not placed' sheet")
+        logger.debug(f"Exported risk matrix{year_label} to {excel_file}")
+        return excel_file
+
+    @staticmethod
+    def _format_matrix_sheet(worksheet) -> None:
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                        top=Side(style='thin'), bottom=Side(style='thin'))
+        center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align
+            cell.border = border
+
+        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row):
+            for cell in row:
+                cell.border = border
+                cell.alignment = center_align
+                if cell.column == 1:  # Impact Type column
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                if isinstance(cell.value, (int, float)):
+                    max_length = max(max_length, 8)
+                elif cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+            limit = 50 if column_letter == 'A' else 15
+            worksheet.column_dimensions[column_letter].width = min(max_length + 2, limit)
+
+        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=2):
+            for cell in row:
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = '0'
+
+        worksheet.freeze_panes = 'B2'
+
+    @staticmethod
+    def _write_atomically(target: Path, write) -> None:
+        """Call ``write(tmp_path)`` then move the temp file over ``target``.
+
+        On any error the temp file is removed and ``target`` is untouched.
+        """
+        target = Path(target)
+        tmp = target.with_name(f".{target.stem}.{uuid.uuid4().hex}.tmp{target.suffix}")
         try:
-            data = {'Impact Type': VALID_IMPACT_TYPES}
-            for group_name in STAKEHOLDER_GROUPS.keys():
-                data[group_name] = ['' for _ in VALID_IMPACT_TYPES]
-            
-            df = pd.DataFrame(data)
-            df.to_excel(excel_file, sheet_name='Risk Matrix', index=False, engine='openpyxl')
-            logger.info(f"Created empty risk matrix template at {excel_file}")
-        except Exception as e:
-            logger.error(f"Error creating empty risk matrix: {e}")
+            write(tmp)
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    def _create_empty_risk_matrix(self, excel_file: Path) -> None:
+        """Write an empty matrix - only for a population with no classifications.
+
+        Errors propagate; nothing is replaced unless the write completes.
+        """
+        data = {'Impact Type': VALID_IMPACT_TYPES}
+        for group_name in STAKEHOLDER_GROUPS.keys():
+            data[group_name] = ['' for _ in VALID_IMPACT_TYPES]
+        df = pd.DataFrame(data)
+        self._write_atomically(
+            excel_file,
+            lambda path: df.to_excel(path, sheet_name='Risk Matrix', index=False, engine='openpyxl'))
+        logger.info(f"No classifications in this population: wrote an empty risk matrix at {excel_file}")
+
+
+class RiskMatrixExportError(RuntimeError):
+    """One or more risk matrices could not be compiled or written."""
 
 
 def main():
@@ -986,7 +1037,8 @@ def main():
             if results:
                 # Export results
                 csv_file, json_file, excel_files = classifier.export_results(results, args.output_dir)
-                print(f"\n[SUCCESS] Classification complete!")
+                print("\n[SUCCESS] Classification complete!" if not classifier.failed_count
+                      else "\n[PARTIAL] Classification finished with failures (see below)")
                 print(f"   Processed {len(results)} events")
                 print(f"   CSV exported to: {csv_file}")
                 print(f"   JSON exported to: {json_file}")
@@ -1002,6 +1054,12 @@ def main():
                 print(f"   Risk matrices compiled from existing classifications:")
                 for excel_file in excel_files:
                     print(f"     - {excel_file}")
+
+            if classifier.failed_count:
+                print(f"\n[FAILED] {classifier.failed_count} event(s) could not be classified; "
+                      f"their classifications are missing or stale "
+                      f"({classifier.stale_count()} active events now need classification).")
+                sys.exit(1)
 
         finally:
             classifier.close()
