@@ -4,64 +4,152 @@ The Sharp Motor Group event (2026-10-02) held 18 records of which only 5 were
 about Sharp Motor Group: 9 were unrelated Cyber Daily articles and 4 were about
 a different company, Sharp Office Systems. Its date came from a stray Partnered
 Health record, and strays like it pull every later duplicate check toward
-wrong matches. A scan found the same defect in other events (Partnered Health
-holding Ochre Medical and NT Health records, Toll holding Manheim ...).
+wrong matches. Labellers later found the same defect elsewhere: Western Sydney
+University holding WA Health records, the University of Tasmania holding
+University of Sydney and Canvas records, NT Health holding an Updoc record.
 
 Three stages, cheapest first:
 
 1. **Suspects (free).** A member is suspect when the organisation Perplexity
-   identified for it does not resolve to the event's victim, vendor or the
-   organisation most of its members name.
-2. **Judgement (one call per suspect event).** The model sees the event's
-   incident and every member, and says which members do not belong. The
-   project rule that one supplier's breach reported about several customers is
-   ONE event is stated, so Canvas/Instructure, Frontier payroll and Pareto Phone
-   style events are not torn apart.
-3. **Repair.** Members judged foreign at or above the certainty bar are split
-   out with the ledger (snapshotted, reversible). A split-off record is folded
-   into an existing event only when exactly one active event for the same
-   organisation lies within ``HOME_WINDOW_DAYS``; otherwise it stays its own.
+   identified for it shares no distinctive name key with the event's victim,
+   vendor or the organisation most of its members name. Only suspects can be
+   split out by the model: same-organisation members are usually misdated
+   copies or follow-ups (Partnered Health, Latitude, OpenAI in the 2026-10-02
+   review), and a different incident at the same organisation is a question
+   for the duplicate and recurrence checks, not this one.
+2. **Judgement (Jev, stored).** For each suspect, Jev answers one question
+   over the record's own page text and Perplexity research, the event's victim,
+   title and other records, and the victim's researched incident timeline:
+   *is this record about the same incident as the event?* Answers are stored
+   in ``ModelJudgements`` (``subject_type='event_member'``) and reused. Scores
+   inside :data:`ESCALATE_BAND` - fixed before calibration - are re-judged by
+   the reasoning model (:mod:`utils.escalation`); the final score is that
+   one's where there is one, else Jev's.
+3. **Repair.** A suspect is split out when its final P(same) is below the
+   **calibrated** cut-off (``evaluation/coherence_calibration.json``, written by
+   ``scripts/calibrate_coherence.py``, recorded with the models and question
+   versions it was measured on). With no matching calibration nothing is
+   split: the run reports what it would do and logs that prominently. Labels
+   in ``evaluation/coherence_labels.csv`` are ground truth: a member labelled
+   ``same`` never leaves, one labelled ``different`` always does.
+
+Guards kept from wrong splits seen in review, applied to model-driven splits
+(labels override them):
+
+* **Brand variants** - a suspect whose organisation shares a distinctive name
+  key with the event's *title* stays ("youX" in "Vroom by YouX Data Breach").
+* **Mislabelled event** - when the departing members are half or more of the
+  event and all name one organisation, the event's *label* is what is wrong,
+  not its contents (12 youX records judged foreign to "Vroom by YouX").
+  Nothing is split; the event is reported for review.
+* **Supplier customers** - the question states the project rule that one
+  supplier's breach reported about several customers is ONE incident
+  (Canvas/Instructure, Frontier payroll / NSW Health), and the event's vendor
+  counts as one of its own organisations when finding suspects.
+* An event is never stripped bare.
+
+Splits go through :meth:`DedupLedger.split_members`, so they are snapshotted,
+reversible and cached as ``different`` rulings that later merge passes
+respect. Strays naming the same organisation leave together as one event.
+Split-off records are *not* folded into another event here: the calibrated
+duplicate check (``check-duplicates``), which runs after this step, decides
+that.
+
+There is **no fallback**: if Jev or the escalation model cannot answer, the
+run raises :class:`CoherenceJudgementError` rather than skip a member or ask
+another model.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
-import os
 import sqlite3
 from collections import Counter
-from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
-
-from pydantic import BaseModel, Field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
-from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.dedup.event_reality import PAGE_CHARS, ROOT, _perplexity
+from cyber_data_collector.utils.llm_models import typesafe_model
 
 logger = logging.getLogger(__name__)
 
-HOME_WINDOW_DAYS = 90
+SUBJECT_TYPE = "event_member"
+QUESTION_ID = "member_same_incident"
+# v1 (2026-10-27, never used to split) read the stored page as the record's
+# subject. Calibrated against 92 labelled suspects it reached no cut-off: at
+# its lowest scores (<= 0.1) a third of the "strays" were records whose stored
+# page is a *different article* - a scraping mismatch (Scouts Victoria's
+# notice stored with a UTAS page, Suncorp Bank's with an HTW page) - while
+# their title and research name the event's incident; the labelling
+# convention, fixed before any score was seen, keeps those. v2 states that
+# convention: a record is identified by its title, its own enrichment summary
+# and its research; the page is supporting evidence only.
+QUESTION_VERSION = "member-coherence-v2"
+ESCALATION_QUESTION_ID = "member_same_incident_escalated"
+ESCALATION_VERSION = "member-coherence-escalation-v2"
+ESCALATE_BAND = (0.1, 0.7)
+HOME_WINDOW_DAYS = 90       # model-judged strays of one organisation further apart leave separately
+MAX_OTHER_RECORDS = 15
+OTHER_SUMMARY_CHARS = 200
+RECORD_SUMMARY_CHARS = 600
+
+LABELS_PATH = ROOT / "evaluation" / "coherence_labels.csv"
+CALIBRATION_PATH = ROOT / "evaluation" / "coherence_calibration.json"
+
 _EMPTY = {"", "none", "null", "unknown", "n/a"}
 
 
-class MemberJudgement(BaseModel):
-    index: int = Field(description="1-based index of the record in the list shown.")
-    belongs: bool = Field(description=(
-        "True if this record reports the SAME real-world incident as the event. "
-        "Follow-up coverage, regulator action and class actions about it belong. A "
-        "breach of one supplier reported about one of its customers belongs to that "
-        "supplier's incident. A different organisation's own breach, a different "
-        "incident at the same organisation, or a roundup item about something else "
-        "does NOT belong."))
-    certainty: float = Field(ge=0.0, le=1.0)
-    actual_incident: str = Field(description="If it does not belong: short name of the incident it is actually about; else ''.")
-    reasoning: str = Field(description="One sentence naming the decisive facts.")
+class CoherenceJudgementError(RuntimeError):
+    """Jev could not judge a member; the run stops before anything is split."""
 
 
-class CoherenceVerdict(BaseModel):
-    event_incident: str = Field(description="Short name of the incident this event is about.")
-    members: List[MemberJudgement]
+class CoherenceConfigError(RuntimeError):
+    """The labels or the calibration file is missing, unreadable or empty.
 
+    Under ``--apply`` this stops the run: without the labels, members a
+    labeller marked 'same' would lose their protection, and an unreadable
+    calibration is a fault, not a reason to quietly report.
+    """
+
+
+INSTRUCTIONS = (
+    "`event` is a stored event in an Australian cyber-incident database. It should hold records "
+    "about ONE real-world incident: the incident its victim suffered that its title and most of "
+    "its records describe (the title is generated and can be wrong). `other_records` are the "
+    "event's other records - the title, date, organisation and a short summary of each. `record` "
+    "is one more of its records, under review. What the record is about is given by its `title`, "
+    "its `summary` and `perplexity` - separate research about it naming the organisation, dates, "
+    "attack details and sources. `page_text` is the page stored for it and is only supporting "
+    "evidence: it is often a privacy policy, an index, or a DIFFERENT article stored by mistake, "
+    "so a page about another incident does not make the record about that incident when its "
+    "title, summary and research describe the event's incident. When title, summary and research "
+    "are vague, the page and the research decide. `organisation_timeline`, when present, is "
+    "researched history of the victim's publicly reported cyber incidents with dates and sources: "
+    "a record matching a different incident in it is about that incident. Decide whether `record` "
+    "reports the SAME real-world incident as the event. Organisation fields can be wrong - judge "
+    "by what the record says happened."
+)
+CRITERIA = {
+    "true": ("Same incident: the record reports the event's incident or follow-up about it - later "
+             "coverage, a notification, regulator action, a class action, an aggregator entry or the "
+             "organisation's own notice. One supplier's breach reported about one of its customers is "
+             "that supplier's incident, so a customer's record belongs to the supplier's event and the "
+             "supplier's record belongs to a customer's event about it. A parent company and its brand "
+             "(Singtel/Optus, TPG/iiNet) are one organisation. A record whose title, summary or "
+             "research points to this incident is the same incident even when its stored page is "
+             "unhelpful or about something else."),
+    "false": ("A different incident: another organisation's own breach or attack, a separate incident "
+              "at the same organisation (a different time, system, attacker or method), or a roundup, "
+              "newsletter or index item about something else."),
+}
+
+
+# ----------------------------------------------------------------------
+# Loading events and members
+# ----------------------------------------------------------------------
 
 def _formal_name(pe: Optional[str]) -> Optional[str]:
     try:
@@ -82,160 +170,486 @@ def load_event_members(conn: sqlite3.Connection, dedup_id: str) -> List[Dict[str
         JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
         LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
         WHERE m.deduplicated_event_id = ?
-        ORDER BY e.event_date
+        ORDER BY e.event_date, e.enriched_event_id
         """, (dedup_id,)).fetchall()
     return [{"id": r[0], "title": r[1] or "", "date": r[2], "body": r[3] or "",
              "org": _formal_name(r[4]), "url": r[5]} for r in rows]
 
 
-def find_suspect_events(conn: sqlite3.Connection, resolver: Optional[EntityResolver] = None,
-                        only: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
-    """Active multi-member events with at least one member naming another organisation."""
-    resolver = resolver or EntityResolver(conn)
-    events = conn.execute(
+def _multi_member_events(conn: sqlite3.Connection) -> List[Tuple]:
+    return conn.execute(
         """SELECT deduplicated_event_id, title, event_date, victim_organization_name, vendor_organization_name
            FROM DeduplicatedEvents d
            WHERE status = 'Active'
              AND (SELECT COUNT(*) FROM EventDeduplicationMap m
-                  WHERE m.deduplicated_event_id = d.deduplicated_event_id) >= 2""").fetchall()
+                  WHERE m.deduplicated_event_id = d.deduplicated_event_id) >= 2
+           ORDER BY deduplicated_event_id""").fetchall()
+
+
+def fitted_resolver(conn: sqlite3.Connection, resolver: Optional[EntityResolver] = None,
+                    events: Optional[Sequence[Tuple]] = None,
+                    members_by_event: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> EntityResolver:
+    """A resolver fitted on every organisation name the multi-member events use."""
+    resolver = resolver or EntityResolver(conn)
+    events = events if events is not None else _multi_member_events(conn)
+    if members_by_event is None:
+        members_by_event = {e[0]: load_event_members(conn, e[0]) for e in events}
+    resolver.fit([m["org"] for ms in members_by_event.values() for m in ms if m["org"]]
+                 + [e[3] for e in events if e[3]] + [e[4] for e in events if e[4]])
+    return resolver
+
+
+def find_suspect_events(conn: sqlite3.Connection, resolver: Optional[EntityResolver] = None,
+                        only: Optional[Sequence[str]] = None,
+                        include: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    """Active multi-member events with at least one member naming another organisation.
+
+    ``include`` adds events by id even when they hold no suspect (events with a
+    labelled member), so labels apply wherever the labelled record still is.
+    """
+    events = _multi_member_events(conn)
     if only:
         events = [e for e in events if any(e[0].startswith(p) for p in only)]
     members_by_event = {e[0]: load_event_members(conn, e[0]) for e in events}
-    resolver.fit([m["org"] for ms in members_by_event.values() for m in ms if m["org"]]
-                 + [e[3] for e in events if e[3]] + [e[4] for e in events if e[4]])
+    resolver = fitted_resolver(conn, resolver, events, members_by_event)
+    wanted = set(include or ())
 
-    suspects = []
+    found = []
     for did, title, event_date, victim, vendor in events:
         members = members_by_event[did]
-        orgs = [m["org"] for m in members if m["org"]]
-        if not orgs:
-            continue
-        majority = Counter(orgs).most_common(1)[0][0]
-        refs = [n for n in (victim, vendor, majority) if n]
-        # Distinctive blocking keys, not are_candidates: its name-similarity
-        # fallback treats "University of Tasmania" and "University of Sydney"
-        # as one organisation, hiding real strays, while a shared key keeps
-        # true variants together ("Singtel Optus"/"Optus", "youX"/"Vroom by YouX").
-        ref_keys = set().union(*(resolver.blocks_for(r) for r in refs))
-        odd = [m for m in members if m["org"] and not (resolver.blocks_for(m["org"]) & ref_keys)]
-        if odd:
-            suspects.append({"id": did, "title": title, "date": event_date, "victim": victim,
-                             "vendor": vendor, "members": members, "suspect_ids": [m["id"] for m in odd]})
-    return suspects
+        odd = suspect_members(resolver, members, victim, vendor)
+        if odd or did in wanted:
+            found.append({"id": did, "title": title, "date": event_date, "victim": victim,
+                          "vendor": vendor, "members": members, "suspect_ids": [m["id"] for m in odd]})
+    return found
 
 
-def _client():
-    if not os.getenv("OPENAI_API_KEY"):
-        return None
-    try:
-        import instructor
-        from openai import OpenAI
-        return instructor.from_openai(OpenAI(api_key=os.environ["OPENAI_API_KEY"]))
-    except ImportError:
-        return None
+def suspect_members(resolver: EntityResolver, members: Sequence[Dict[str, Any]],
+                    victim: Optional[str], vendor: Optional[str]) -> List[Dict[str, Any]]:
+    """Members whose organisation shares no distinctive key with the victim, vendor or majority."""
+    orgs = [m["org"] for m in members if m["org"]]
+    if not orgs:
+        return []
+    majority = Counter(orgs).most_common(1)[0][0]
+    refs = [n for n in (victim, vendor, majority) if n]
+    # Distinctive blocking keys, not are_candidates: its name-similarity
+    # fallback treats "University of Tasmania" and "University of Sydney"
+    # as one organisation, hiding real strays, while a shared key keeps
+    # true variants together ("Singtel Optus"/"Optus", "youX"/"Vroom by YouX").
+    ref_keys = set().union(*(resolver.blocks_for(r) for r in refs))
+    return [m for m in members if m["org"] and not (resolver.blocks_for(m["org"]) & ref_keys)]
 
 
-def render_event(event: Dict[str, Any]) -> str:
-    lines = [f"EVENT: {event['title']}",
-             f"Victim: {event.get('victim') or 'unknown'}   Vendor: {event.get('vendor') or 'none'}   Date: {event.get('date') or 'unknown'}",
-             "", "RECORDS:"]
-    for i, m in enumerate(event["members"], start=1):
-        lines.append(f"[{i}] {m['title']}\n    organisation: {m['org'] or 'unknown'}   date: {m['date'] or 'unknown'}\n"
-                     f"    source: {m['url'] or 'unknown'}\n    text: {m['body'][:260]}")
-    return "\n".join(lines)
+# ----------------------------------------------------------------------
+# What Jev sees
+# ----------------------------------------------------------------------
+
+def member_subject_id(dedup_id: str, enriched_id: str) -> str:
+    return f"{dedup_id}|{enriched_id}"
 
 
-SYSTEM_PROMPT = (
-    "You audit one event in a cyber-incident database. The event should contain only records "
-    "about ONE real-world incident. Some records were merged in by mistake. For EVERY record, "
-    "decide whether it belongs to the event's incident.\n"
-    "Rules: follow-up coverage, statements, regulator action and class actions about the "
-    "incident belong. A breach of ONE supplier's systems reported about its different customers "
-    "is ONE incident - customer records belong to the supplier's incident. A parent company and "
-    "its brand (Singtel/Optus, TEG/Ticketek, TPG/iiNet) are the same organisation. A record about "
-    "a different organisation's own breach, a different incident at the same organisation, or a "
-    "roundup item about something else does NOT belong. Organisation fields can be wrong - judge "
-    "by what the record says happened. Use certainty >= 0.9 only when it is clear."
-)
+def _record(conn: sqlite3.Connection, enriched_id: str) -> Dict[str, Any]:
+    row = conn.execute(
+        """SELECT COALESCE(e.title, ''), e.event_date, COALESCE(r.source_url, ''),
+                  COALESCE(NULLIF(r.raw_content, ''), r.raw_description, ''), e.perplexity_enrichment_data,
+                  COALESCE(e.summary, e.description, '')
+           FROM EnrichedEvents e LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+           WHERE e.enriched_event_id = ?""", (enriched_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"no enriched record {enriched_id}")
+    return {"title": row[0], "date": row[1], "url": row[2], "summary": (row[5] or "")[:RECORD_SUMMARY_CHARS],
+            "perplexity": _perplexity(row[4]), "page_text": (row[3] or "")[:PAGE_CHARS] or "(none stored)"}
 
 
-def judge_event(event: Dict[str, Any], client=None) -> Optional[CoherenceVerdict]:
-    client = client or _client()
-    if client is None:
-        return None
-    try:
-        verdict: CoherenceVerdict = client.chat.completions.create(
-            **chat_params(openai_model()), response_model=CoherenceVerdict,
-            messages=[{"role": "system", "content": SYSTEM_PROMPT},
-                      {"role": "user", "content": render_event(event)}])
-    except Exception as exc:  # noqa: BLE001 - one event must not break a run
-        logger.warning("Coherence judgement failed for %s: %s", event["id"], exc)
-        return None
-    indices = sorted(j.index for j in verdict.members)
-    if indices != list(range(1, len(event["members"]) + 1)):
-        logger.warning("Coherence verdict for %s does not cover every record; ignored", event["id"])
-        return None
-    return verdict
+def build_member_state(conn: sqlite3.Connection, event: Dict[str, Any], enriched_id: str) -> Dict[str, Any]:
+    """Everything Jev sees about one member of one event. Deterministic, so the input hash is stable."""
+    from cyber_data_collector.dedup.org_timeline import timeline_for_event
+
+    others = [m for m in event["members"] if m["id"] != enriched_id]
+    others = sorted(others, key=lambda m: (str(m["date"] or ""), m["id"]))[:MAX_OTHER_RECORDS]
+    state: Dict[str, Any] = {
+        "event": {"title": event.get("title") or "", "date": event.get("date"),
+                  "victim": event.get("victim"), "vendor": event.get("vendor"),
+                  "record_count": len(event["members"])},
+        "other_records": [{"title": m["title"], "date": m["date"], "organisation": m["org"],
+                           "summary": (m["body"] or "")[:OTHER_SUMMARY_CHARS]} for m in others],
+        "record": _record(conn, enriched_id),
+    }
+    timeline = timeline_for_event(conn, event["id"])
+    if timeline:
+        state["organisation_timeline"] = {"organisation": timeline["organisation"],
+                                          "incidents": timeline["timeline"],
+                                          "citations": timeline["citations"]}
+    return state
 
 
-def strays(event: Dict[str, Any], verdict: CoherenceVerdict, min_certainty: float,
-           resolver: Optional[EntityResolver] = None) -> List[Dict[str, Any]]:
-    """Members to split out: suspects the model judged foreign at >= ``min_certainty``.
+def question():
+    from typesafe_sdk import Noul, NoulCriteria
+    return Noul(instructions=INSTRUCTIONS, criteria=NoulCriteria(**CRITERIA))
 
-    Guards, each from a wrong split seen in the 2026-10-02 dry run:
 
-    * Only *suspects* (members naming another organisation) can leave. The
-      model also "split" same-organisation records - a misdated copy of the
-      Partnered Health breach, a Latitude follow-up, OpenAI's later disclosure
-      - which are the same incident.
-    * When the departing members are half or more of the event and all name
-      one incident, the event's *label* is what is wrong, not its contents:
-      12 youX records were judged foreign to "Vroom by YouX" (youX's product).
-      Nothing is split; it is left for review.
-    * When the model's own name for where a member belongs shares a
-      distinctive name with the event's title, it is describing the event
-      itself ("youX Data Breach" leaving "Vroom by YouX Data Breach").
-    * Never strip an event bare.
+def escalation_question() -> str:
+    return (INSTRUCTIONS + f" YES means: {CRITERIA['true']} NO means: {CRITERIA['false']}"
+            " Does `record` report the same real-world cyber incident as the event?")
+
+
+def calibration_identity() -> Dict[str, str]:
+    """What a calibration must have been measured on to apply: question, escalation and both models."""
+    from cyber_data_collector.utils.llm_models import openai_model
+    return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
+            "model": f"{typesafe_model()}+{openai_model()}"}
+
+
+# ----------------------------------------------------------------------
+# Judging
+# ----------------------------------------------------------------------
+
+def judge_members(conn: sqlite3.Connection, items: Sequence[Tuple[Dict[str, Any], str]], judge=None,
+                  escalation_client=None, refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+    """Final P(same) for each (event, member id), escalating the middle band.
+
+    Returns ``{subject_id: {"p_jev", "p_escalated", "p", "error"}}``. Stored
+    answers are reused. A Jev failure raises :class:`CoherenceJudgementError`
+    (nothing is split that run). A failed escalation leaves the member
+    *undecided* - ``p`` is None and ``error`` says why - so it is neither kept
+    nor split on Jev's un-escalated score; it is retried next run and the
+    command exits non-zero.
     """
-    title_keys = resolver.blocks_for(event.get("title")) if resolver else set()
-    suspects = set(event.get("suspect_ids") or [])
-    out = []
-    for j in verdict.members:
-        member = event["members"][j.index - 1]
-        if not j.belongs and j.certainty >= min_certainty and member["id"] in suspects:
-            if title_keys and resolver.blocks_for(j.actual_incident) & title_keys:
+    from cyber_data_collector.utils.escalation import escalate
+    from cyber_data_collector.utils.jev import JevJudge
+
+    owned = judge is None
+    judge = judge or JevJudge(conn)
+    q = {QUESTION_ID: question()}
+    lo, hi = ESCALATE_BAND
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        for i, (event, enriched_id) in enumerate(items, 1):
+            sid = member_subject_id(event["id"], enriched_id)
+            state = build_member_state(conn, event, enriched_id)
+            try:
+                answer = judge.ask(SUBJECT_TYPE, sid, QUESTION_VERSION, state, q, refresh=refresh)[QUESTION_ID]
+            except Exception as exc:  # noqa: BLE001 - re-raised with what failed
+                raise CoherenceJudgementError(f"Jev ({typesafe_model()}) could not judge member {sid}: "
+                                              f"{exc}") from exc
+            p_jev = float(answer.value)
+            if not lo <= p_jev < hi:
+                out[sid] = {"p_jev": p_jev, "p_escalated": None, "p": p_jev, "error": None}
                 continue
-            out.append({**member, "actual_incident": j.actual_incident, "reasoning": j.reasoning,
-                        "certainty": j.certainty})
-    total = len(event["members"])
-    if len(out) >= total:
-        return []
-    if out and len(out) * 2 >= total and len({s["actual_incident"].strip().lower() for s in out}) == 1:
-        logger.info("Coherence: %s looks mislabelled rather than contaminated; left for review", event["id"])
-        return []
+            p_esc = escalate(conn, SUBJECT_TYPE, sid, ESCALATION_QUESTION_ID, ESCALATION_VERSION,
+                             state, escalation_question(), client=escalation_client)
+            if p_esc is None:
+                logger.error("UNDECIDED: escalation failed for member %s (Jev %.3f, inside %s); it is "
+                             "not acted on this run", sid, p_jev, ESCALATE_BAND)
+                out[sid] = {"p_jev": p_jev, "p_escalated": None, "p": None,
+                            "error": "escalation failed (see log); retried next run"}
+            else:
+                out[sid] = {"p_jev": p_jev, "p_escalated": p_esc, "p": p_esc, "error": None}
+            if i % 25 == 0:
+                logger.info("Judged %d/%d members", i, len(items))
+    finally:
+        if owned:
+            judge.close()
     return out
 
 
-def find_home(conn: sqlite3.Connection, resolver: EntityResolver, org: Optional[str],
-              record_date: Optional[str], exclude: Sequence[str]) -> Optional[str]:
-    """The single active event for ``org`` within HOME_WINDOW_DAYS, else None."""
-    if not org:
-        return None
+def stored_final_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
+    """Final score per member subject from storage: the escalation's in the band, else Jev's."""
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for sid, value in conn.execute(
+                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
+                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
+            out[sid] = float(value)
+        return out
+
+    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
+    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
+    lo, hi = ESCALATE_BAND
+    return {s: (escalated[s] if s in escalated and lo <= v < hi else v) for s, v in jev.items()}
+
+
+# ----------------------------------------------------------------------
+# Labels and calibration
+# ----------------------------------------------------------------------
+
+LABEL_VALUES = {"same", "different", "unsure"}
+
+
+def load_labels(path: Path = LABELS_PATH) -> Dict[str, str]:
+    """``{subject_id: label}`` from the labels file; label is same / different / unsure.
+
+    A label describes a record *in a particular event*; it applies while that
+    record is still a member of that event. A missing, unreadable or empty
+    file, a missing column or an unknown label raises
+    :class:`CoherenceConfigError` - it is never read as "no labels".
+    """
+    return {sid: row["label"] for sid, row in _label_rows(path).items()}
+
+
+def load_label_incidents(path: Path = LABELS_PATH) -> Dict[str, str]:
+    """``{subject_id: incident}`` for labelled strays whose real incident is named.
+
+    The optional ``incident`` column names the incident a 'different' record is
+    actually about (transcribed from the labeller's rationale); labelled strays
+    naming one incident leave their event together.
+    """
+    return {sid: row["incident"].strip() for sid, row in _label_rows(path).items()
+            if (row.get("incident") or "").strip()}
+
+
+def _label_rows(path: Path) -> Dict[str, Dict[str, str]]:
     try:
-        when = date.fromisoformat(str(record_date)[:10]) if record_date else None
-    except ValueError:
-        when = None
-    hits = []
-    for did, victim, edate in conn.execute(
-            "SELECT deduplicated_event_id, victim_organization_name, event_date FROM DeduplicatedEvents "
-            "WHERE status = 'Active' AND victim_organization_name IS NOT NULL"):
-        if did in exclude or not resolver.are_candidates(org, victim):
+        with Path(path).open(encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise CoherenceConfigError(f"coherence labels {path} unreadable: {exc}") from exc
+    if not rows:
+        raise CoherenceConfigError(f"coherence labels {path} hold no rows")
+    out: Dict[str, Dict[str, str]] = {}
+    for n, r in enumerate(rows, 2):
+        did, eid, label = r.get("deduplicated_event_id"), r.get("enriched_event_id"), r.get("label")
+        if not did or not eid or label not in LABEL_VALUES:
+            raise CoherenceConfigError(f"coherence labels {path} line {n}: need deduplicated_event_id, "
+                                       f"enriched_event_id and a label in {sorted(LABEL_VALUES)}")
+        out[member_subject_id(did, eid)] = r
+    return out
+
+
+def load_calibration(path: Path = CALIBRATION_PATH) -> Dict[str, Any]:
+    """The calibration file; raises :class:`CoherenceConfigError` if missing, unreadable or empty."""
+    try:
+        cal = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CoherenceConfigError(f"coherence calibration {path} unreadable: {exc}. "
+                                   "Run scripts/calibrate_coherence.py.") from exc
+    if not isinstance(cal, dict) or not cal.get("question_version") or not cal.get("model"):
+        raise CoherenceConfigError(f"coherence calibration {path} is empty or has no model/question identity")
+    return cal
+
+
+def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
+    """The split calibration, only if measured on the current models and questions.
+
+    A calibration for a different model or question version, or one whose
+    labels reached no cut-off meeting the precision target, turns model-judged
+    splitting into a report: that rule is deliberate (an unmeasured cut-off is
+    not used) and is logged at WARNING so a run that split nothing says why.
+    A missing, unreadable or empty file is a fault and raises
+    :class:`CoherenceConfigError`.
+    """
+    cal = load_calibration(path)
+    want = calibration_identity()
+    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
+        logger.warning("REPORT ONLY: coherence calibration is for %s / %s, not %s / %s; nothing will be "
+                       "split except labelled strays until it is recalibrated.",
+                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
+        return None
+    if cal.get("cutoff") is None:
+        logger.warning("REPORT ONLY: the coherence calibration found no cut-off meeting its precision "
+                       "target; nothing will be split except labelled strays.")
+        return None
+    return cal
+
+
+# ----------------------------------------------------------------------
+# Deciding
+# ----------------------------------------------------------------------
+
+def decide_strays(event: Dict[str, Any], scores: Dict[str, Dict[str, Any]], labels: Dict[str, str],
+                  cutoff: Optional[float], resolver: EntityResolver,
+                  incidents: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Which members of one event leave, and why.
+
+    Returns ``{"strays": [...], "held": [...], "note": str|None}``. ``held``
+    lists members the model would split but a guard keeps.
+    """
+    members = {m["id"]: m for m in event["members"]}
+    suspects = set(event.get("suspect_ids") or [])
+    labelled_out, model_out, held = [], [], []
+    for mid, m in members.items():
+        sid = member_subject_id(event["id"], mid)
+        label = labels.get(sid)
+        score = scores.get(sid) or {}
+        entry = {**m, "subject_id": sid, "p_same": score.get("p"), "p_jev": score.get("p_jev"),
+                 "p_escalated": score.get("p_escalated"), "label": label,
+                 "incident": (incidents or {}).get(sid) if label == "different" else None}
+        if label == "different":
+            labelled_out.append({**entry, "basis": "label"})
+        elif label == "same":
             continue
-        if when and edate:
-            try:
-                if abs((date.fromisoformat(str(edate)[:10]) - when).days) > HOME_WINDOW_DAYS:
-                    continue
-            except ValueError:
-                continue
-        hits.append(did)
-    return hits[0] if len(hits) == 1 else None
+        elif (mid in suspects and cutoff is not None and score.get("p") is not None
+              and score["p"] < cutoff):
+            model_out.append({**entry, "basis": "model"})
+
+    note = None
+    undecided = [mid for mid in suspects
+                 if (scores.get(member_subject_id(event["id"], mid)) or {}).get("error")
+                 and labels.get(member_subject_id(event["id"], mid)) is None]
+    if undecided and model_out:
+        # The guards weigh the whole departing set, so with a member undecided
+        # no model-driven split in this event is final; retry next run.
+        note = f"{len(undecided)} member(s) undecided (escalation failed): model-judged splits deferred"
+        held.extend({**s, "guard": "event has an undecided member"} for s in model_out)
+        model_out = []
+    title_keys = resolver.blocks_for(event.get("title"))
+    kept_model = []
+    for s in model_out:
+        if title_keys and resolver.blocks_for(s["org"]) & title_keys:
+            held.append({**s, "guard": "organisation named in the event title"})
+        else:
+            kept_model.append(s)
+    model_out = kept_model
+
+    total = len(members)
+    departing = labelled_out + model_out
+    if model_out and len(departing) * 2 >= total:
+        keys = [frozenset(resolver.blocks_for(s["org"])) for s in departing]
+        first = keys[0]
+        if first and all(k & first for k in keys):
+            note = "mislabelled rather than contaminated: most members leave and all name one organisation"
+            held.extend({**s, "guard": "mislabelled event"} for s in model_out)
+            model_out = []
+    if len(labelled_out) + len(model_out) >= total:
+        held.extend({**s, "guard": "would leave the event with no records"} for s in model_out)
+        model_out = []
+        if len(labelled_out) >= total:
+            logger.warning("Every member of %s is labelled 'different'; nothing split", event["id"])
+            held.extend({**s, "guard": "every member labelled different"} for s in labelled_out)
+            labelled_out = []
+    return {"strays": labelled_out + model_out, "held": held, "note": note}
+
+
+def _date(value: Any):
+    from datetime import date
+    try:
+        return date.fromisoformat(str(value)[:10]) if value else None
+    except ValueError:
+        return None
+
+
+def group_strays(strays: Sequence[Dict[str, Any]], resolver: EntityResolver) -> List[List[Dict[str, Any]]]:
+    """Strays about one incident leave together as one event.
+
+    Labelled strays group by the incident their label names. Model-judged
+    strays group only when they share a distinctive organisation key AND lie
+    within ``HOME_WINDOW_DAYS`` of each other: one organisation can have two
+    incidents in one event (the University of Sydney's December 2025 code
+    library breach and its 2026 Canvas exposure, both inside a UTas event).
+    Groups that leave separately get no 'different' ruling between them, so a
+    later merge pass (``check-duplicates``) can still join them; strays in one
+    group cannot be re-separated without a ruling, hence the conservative rule.
+    """
+    by_incident: Dict[str, List[Dict[str, Any]]] = {}
+    groups: List[Tuple[set, List[Dict[str, Any]]]] = []
+    for s in strays:
+        if s.get("incident"):
+            by_incident.setdefault(s["incident"].strip().lower(), []).append(s)
+            continue
+        keys = resolver.blocks_for(s["org"]) if s["org"] else set()
+        when = _date(s.get("date"))
+        for gkeys, members in groups:
+            near = all(when is None or _date(m.get("date")) is None
+                       or abs((when - _date(m.get("date"))).days) <= HOME_WINDOW_DAYS for m in members)
+            if keys and gkeys & keys and near:
+                gkeys |= keys
+                members.append(s)
+                break
+        else:
+            groups.append((set(keys), [s]))
+    return list(by_incident.values()) + [members for _, members in groups]
+
+
+def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, escalation_client=None,
+                    only: Optional[Sequence[str]] = None, calibration_path: Path = CALIBRATION_PATH,
+                    labels_path: Path = LABELS_PATH, ledger=None) -> Dict[str, Any]:
+    """Judge every suspect member, and split out strays below the calibrated cut-off.
+
+    With a calibration for other models or another question version, only
+    labelled strays are split; without ``apply`` nothing is split. With
+    ``apply``, a missing, unreadable or empty labels or calibration file
+    raises :class:`CoherenceConfigError` before anything is judged. A Jev
+    failure raises :class:`CoherenceJudgementError`; a failed escalation
+    leaves the member undecided (``undecided`` in the result).
+    """
+    labels: Dict[str, str] = {}
+    incidents: Dict[str, str] = {}
+    cal: Optional[Dict[str, Any]] = None
+    for load in ("labels", "calibration"):
+        try:
+            if load == "labels":
+                labels = load_labels(labels_path)
+                incidents = load_label_incidents(labels_path)
+            else:
+                cal = active_calibration(calibration_path)
+        except CoherenceConfigError as exc:
+            if apply:
+                raise
+            logger.warning("REPORT ONLY (no --apply): %s", exc)
+    cutoff = cal["cutoff"] if cal else None
+    labelled_events = {sid.split("|", 1)[0] for sid in labels}
+    resolver = EntityResolver(conn)
+    events = find_suspect_events(conn, resolver, only=only, include=labelled_events)
+    items = [(e, mid) for e in events for mid in e["suspect_ids"]]
+    scores = judge_members(conn, items, judge=judge, escalation_client=escalation_client)
+    undecided = sorted(sid for sid, s in scores.items() if s.get("error"))
+
+    findings, splits = [], []
+    for event in events:
+        decision = decide_strays(event, scores, labels, cutoff, resolver, incidents)
+        if not decision["strays"] and not decision["held"]:
+            continue
+        groups = group_strays(decision["strays"], resolver)
+        entry = {"event": event["id"], "title": event["title"], "victim": event["victim"],
+                 "records": len(event["members"]), "note": decision["note"],
+                 "groups": [[_public(s) for s in g] for g in groups],
+                 "held": [_public(s) for s in decision["held"]], "new_events": []}
+        if apply and groups:
+            entry["new_events"] = split_groups(conn, event["id"], groups, ledger=ledger)
+            splits.extend(entry["new_events"])
+        findings.append(entry)
+    return {"events_judged": len(events), "members_judged": len(scores), "undecided": undecided,
+            "escalated": sum(1 for s in scores.values() if s["p_escalated"] is not None),
+            "calibrated": cal is not None, "cutoff": cutoff, "applied": bool(apply and splits),
+            "strays": sum(len(g) for f in findings for g in f["groups"]),
+            "events_with_strays": sum(1 for f in findings if f["groups"]),
+            "split_records": sum(len(s["records"]) for s in splits), "findings": findings,
+            "scores": scores}
+
+
+def _public(s: Dict[str, Any]) -> Dict[str, Any]:
+    keep = ("id", "title", "date", "org", "url", "p_same", "p_jev", "p_escalated", "label", "incident",
+            "basis", "guard")
+    return {k: s.get(k) for k in keep if k in s}
+
+
+def split_groups(conn: sqlite3.Connection, dedup_id: str, groups: Sequence[Sequence[Dict[str, Any]]],
+                 ledger=None) -> List[Dict[str, Any]]:
+    """Split each group out of ``dedup_id`` with the ledger (snapshotted, rulings cached)."""
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    previous = conn.row_factory
+    conn.row_factory = sqlite3.Row      # the ledger reads columns by name
+    try:
+        ledger = ledger or DedupLedger(conn)
+        out = []
+        for group in groups:
+            ids = [s["id"] for s in group]
+            if any(s.get("basis") == "label" for s in group):
+                why = "labelled a different incident"
+            else:
+                why = (f"P(same) {max(s['p_same'] for s in group):.3f} below the calibrated cut-off "
+                       f"({QUESTION_VERSION})")
+            about = group[0].get("incident") or ", ".join(sorted({s["org"] for s in group if s["org"]}))
+            reason = f"[coherence] stray record(s) about {about or 'another incident'}: {why}"
+            new_id = ledger.split_members(dedup_id, ids, reason=reason, actor="rule")
+            out.append({"new_event": new_id, "records": ids})
+        conn.commit()
+        return out
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.row_factory = previous
