@@ -6,6 +6,10 @@ Idempotent - safe to re-run.
 """
 import json
 import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DB_PATH = "instance/cyber_events.db"
 
@@ -104,16 +108,24 @@ def merge_cluster(conn, label, where_clause):
     if len(rows) <= 1:
         return 0
     rows.sort(key=lambda r: (r[1] is None, r[2] or "9999", -r[4]))
-    rest_ids = [r[0] for r in rows[1:]]
-    placeholders = ",".join("?" * len(rest_ids))
-    cur = conn.execute(
-        f"UPDATE DeduplicatedEvents SET status='Merged' "
-        f"WHERE deduplicated_event_id IN ({placeholders})",
-        rest_ids,
-    )
+    # Through the ledger, like every other merge: it moves the members,
+    # re-dates by consensus, records the decision, and refuses a merge that a
+    # cached 'different' ruling (a past split) forbids. This used to set
+    # status='Merged' directly, which left members behind and could undo splits.
+    from cyber_data_collector.dedup.ledger import DedupLedger
+    conn.row_factory = sqlite3.Row
+    ledger = DedupLedger(conn)
+    merged = 0
+    for row in rows[1:]:
+        try:
+            ledger.merge_events(rows[0][0], row[0], reason=f"cluster fix: {label}", actor="rule")
+            merged += 1
+        except ValueError as exc:   # a cached 'different' ruling wins
+            print(f"  {label}: not merged {row[0][:8]}: {exc}")
+    conn.row_factory = None
     canonical_name = rows[0][1] or "<None>"
-    print(f"  {label}: kept '{canonical_name}' ({rows[0][2]}); merged {cur.rowcount}")
-    return cur.rowcount
+    print(f"  {label}: kept '{canonical_name}' ({rows[0][2]}); merged {merged}")
+    return merged
 
 
 def force_merge_clusters(conn):

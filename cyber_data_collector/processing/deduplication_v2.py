@@ -51,7 +51,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import difflib
 import hashlib
 
@@ -711,6 +711,10 @@ class DeduplicationEngine:
         self.similarity_calculator = SimilarityCalculator()  # Reuse calculator instance
         # Entity mappings: source_entity (lowercase) -> canonical_entity
         self.entity_mappings = {k.lower(): v for k, v in (entity_mappings or {}).items()}
+        # Cached 'different incident' rulings (DedupOverrides, keyed on
+        # enriched_event_id pairs). Every merge path consults them through
+        # merge_decision, so a split cannot be undone by grouping or rebuild.
+        self.different_pairs: Set[frozenset] = set()
     
     def deduplicate(self, events: List[CyberEvent]) -> DeduplicationResult:
         """Perform comprehensive deduplication with validation"""
@@ -793,6 +797,7 @@ class DeduplicationEngine:
 
             # Start a new group with this event
             group = [event1]
+            group_ids = {event1.event_id}
             processed.add(i)
 
             # Find events this one certainly duplicates. Only deterministic,
@@ -802,9 +807,10 @@ class DeduplicationEngine:
             for j, event2 in enumerate(events[i+1:], i+1):
                 if j in processed:
                     continue
-                reason = self.merge_decision(event1, event2)
+                reason = self.merge_decision(event1, event2, members1=group_ids)
                 if reason:
                     group.append(event2)
+                    group_ids.add(event2.event_id)
                     processed.add(j)
                     self.logger.debug(f"Merged ({reason}): {event1.title!r} + {event2.title!r}")
 
@@ -988,7 +994,40 @@ class DeduplicationEngine:
                 brand_stems.add(head)
         return canonicals | brand_stems
 
-    def merge_decision(self, event1: CyberEvent, event2: CyberEvent) -> Optional[str]:
+    # Words that say what happened, not to whom: a title made only of these
+    # ("Data breach", "Cyber attack update") identifies no incident.
+    GENERIC_TITLE_WORDS = frozenset("""
+        data breach breaches cyber cyberattack cyberattacks attack attacks incident incidents
+        security ransomware hack hacked hackers hacking leak leaked leaks exposed exposure
+        customer customers information personal systems system network outage phishing malware
+        scam scams notice update updates statement australian australia the and for with from
+        after into new latest major investigation investigating alleged confirms confirmed report
+        reports reported affected impacted impacts compromise compromised unauthorised
+        unauthorized access event events threat threats response media release news notification
+        notifiable privacy hit hits suffers suffered says said amid over its their our your
+        stolen theft breached targeted target warning warns
+    """.split())
+
+    def _title_identifies_something(self, title: Optional[str]) -> bool:
+        tokens = re.findall(r"[a-z][a-z0-9'&.-]{2,}", (title or "").lower())
+        return any(t.strip("'.-") not in self.GENERIC_TITLE_WORDS for t in tokens)
+
+    def victim_compatibility(self, event1: CyberEvent, event2: CyberEvent) -> str:
+        """'same', 'conflict' (both name a victim, different organisations) or 'unknown'."""
+        if not event1.victim_organization_name or not event2.victim_organization_name:
+            return "unknown"
+        return "same" if self._same_entity(event1, event2) else "conflict"
+
+    def ruled_different(self, members1: Iterable[str], members2: Iterable[str]) -> bool:
+        """True when any record of one side has a cached 'different' ruling against the other."""
+        if not self.different_pairs:
+            return False
+        members2 = set(members2)
+        return any(frozenset((a, b)) in self.different_pairs for a in members1 for b in members2)
+
+    def merge_decision(self, event1: CyberEvent, event2: CyberEvent,
+                       members1: Optional[Iterable[str]] = None,
+                       members2: Optional[Iterable[str]] = None) -> Optional[str]:
         """Why two events are certainly one incident, or None when that is not certain.
 
         Only two deterministic rules remain: an identical title on the same
@@ -1004,13 +1043,31 @@ class DeduplicationEngine:
 
         The 1st of a month is not treated as an exact day: it is how a date
         known only to the month is stored.
+
+        The one decision every merge path uses (grouping new records, the full
+        rebuild, attaching to existing events), with three vetoes first:
+        a cached 'different' ruling between any record of either side
+        (``members1`` / ``members2``, enriched_event_ids; default the events
+        themselves), and conflicting victims. An identical title merges only
+        when the victims agree, or neither is known and the title names
+        something - two universities' events both titled "Data breach" on one
+        day used to merge.
         """
         if not event1.event_date or event1.event_date != event2.event_date:
             return None
+        if self.ruled_different(members1 or {event1.event_id}, members2 or {event2.event_id}):
+            return None
+        victims = self.victim_compatibility(event1, event2)
+        if victims == "conflict":
+            return None
         if (event1.title and event2.title
                 and event1.title.lower().strip() == event2.title.lower().strip()):
-            return "identical title and date"
-        if event1.event_date.day != 1 and self._same_entity(event1, event2):
+            if victims == "same":
+                return "identical title, date and victim"
+            if (not event1.victim_organization_name and not event2.victim_organization_name
+                    and self._title_identifies_something(event1.title)):
+                return "identical specific title and date, no victim recorded"
+        if event1.event_date.day != 1 and victims == "same":
             return "same organisation on the same day"
         return None
 

@@ -262,6 +262,7 @@ class DedupLedger:
         # Recomputing the group from what actually remains fixes both: it is
         # required for correctness regardless, and it frees the collision.
         self._recompute_identity(deduplicated_event_id, exclude=enriched_event_id)
+        self._recompute_facts(deduplicated_event_id)
 
         # A split member frequently duplicates an event that already exists
         # (DeduplicatedEvents has UNIQUE(title, event_date)). Creating a new row
@@ -514,6 +515,7 @@ class DedupLedger:
         # best description of the incident. Safe to rewrite: identity keys on
         # master_enriched_event_id, not on the title.
         self._recompute_identity(target_dedup_id)
+        self._recompute_facts(target_dedup_id)
         self._refresh_counts(target_dedup_id)
         # The target now covers a different set of records, so the roles
         # decided for the old set no longer apply.
@@ -616,6 +618,11 @@ class DedupLedger:
             "WHERE deduplicated_event_id = ?",
             (title, event_date, datetime.now(), dedup_id),
         )
+
+    def _recompute_facts(self, dedup_id: str) -> None:
+        """Re-aggregate the event's facts from its members (see event_facts)."""
+        from cyber_data_collector.dedup.event_facts import recompute_facts
+        recompute_facts(self.conn, dedup_id)
 
     def incident_label_for(self, dedup_id: str) -> Optional[str]:
         """Recover the incident label produced by cluster adjudication.

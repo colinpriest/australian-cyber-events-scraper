@@ -64,24 +64,51 @@ def test_corrected_dates_redate_the_event(conn):
 
 def test_master_correction_reaches_the_event(conn):
     refresh_changed_events(conn)
-    conn.execute("UPDATE EnrichedEvents SET records_affected = 1200 WHERE enriched_event_id = 'r1'")
+    conn.execute("UPDATE EnrichedEvents SET attack_method = 'Phishing' WHERE enriched_event_id = 'r1'")
     refresh_changed_events(conn)
-    assert _event(conn)["records_affected"] == 1200
+    assert _event(conn)["attack_method"] == "Phishing"
 
 
-def test_event_level_correction_is_not_overwritten(conn):
+def test_a_larger_supported_count_from_any_report_reaches_the_event(conn):
+    """The reviewer's case: an incident at 100 records gets a report confirming 10,000."""
     refresh_changed_events(conn)
-    conn.execute("UPDATE DeduplicatedEvents SET records_affected = 900")  # fix_records_affected / human edit
-    conn.execute("UPDATE EnrichedEvents SET records_affected = 1200 WHERE enriched_event_id = 'r1'")
+    conn.execute("UPDATE EnrichedEvents SET records_affected = 10000 WHERE enriched_event_id = 'r2'")
+    refresh_changed_events(conn)
+    assert _event(conn)["records_affected"] == 10000
+
+
+def test_explicit_correction_is_kept(conn):
+    from cyber_data_collector.dedup.event_facts import set_fact
+    refresh_changed_events(conn)
+    set_fact(conn, "d1", "records_affected", "900", reason="regulator figure")
+    conn.execute("UPDATE EnrichedEvents SET records_affected = 12000 WHERE enriched_event_id = 'r1'")
     refresh_changed_events(conn)
     assert _event(conn)["records_affected"] == 900
 
 
-def test_non_master_change_does_not_copy_fields(conn):
+def test_a_new_member_refreshes_the_facts(conn):
+    """Membership change, not only content change, triggers recomputation."""
     refresh_changed_events(conn)
-    conn.execute("UPDATE EnrichedEvents SET records_affected = 1200 WHERE enriched_event_id = 'r2'")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, title, event_date, records_affected, "
+                 "perplexity_enrichment_data, status) VALUES ('r3', 'Acme', '2024-03-12', 10000, '{}', 'Active')")
+    conn.execute("INSERT INTO EventDeduplicationMap VALUES ('r3', 'd1')")
+    report = refresh_changed_events(conn)
+    assert report.baselined == 1 and _event(conn)["records_affected"] == 10000
+
+
+def test_implausible_counts_are_not_promoted(conn):
+    refresh_changed_events(conn)
+    conn.execute("UPDATE EnrichedEvents SET records_affected = 5000000000 WHERE enriched_event_id = 'r2'")
     refresh_changed_events(conn)
     assert _event(conn)["records_affected"] == 5000
+
+
+def test_non_master_change_does_not_copy_master_fields(conn):
+    refresh_changed_events(conn)
+    conn.execute("UPDATE EnrichedEvents SET attack_method = 'Phishing' WHERE enriched_event_id = 'r2'")
+    conn.execute("UPDATE DeduplicatedEvents SET attack_method = 'Ransomware'")
+    refresh_changed_events(conn)
+    assert _event(conn)["attack_method"] == "Ransomware"
 
 
 def test_new_research_marks_roles_outdated(conn):

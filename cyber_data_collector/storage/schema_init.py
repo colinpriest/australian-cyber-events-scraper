@@ -88,10 +88,12 @@ def initialize_database(db_path: str) -> InitReport:
 
 def _module_schema_steps(conn: sqlite3.Connection) -> None:
     """The schema steps each module runs for itself, run once here up front."""
-    from cyber_data_collector.dedup import corroboration, org_timeline, page_classifier, record_fingerprints
+    from cyber_data_collector.dedup import (
+        corroboration, event_facts, org_timeline, page_classifier, record_fingerprints,
+    )
     from cyber_data_collector.dedup.schema import migrate as migrate_dedup
     from cyber_data_collector.utils import jev
 
     migrate_dedup(conn)
-    for module in (jev, org_timeline, corroboration, page_classifier, record_fingerprints):
+    for module in (jev, org_timeline, corroboration, page_classifier, record_fingerprints, event_facts):
         module.ensure_schema(conn)

@@ -45,8 +45,10 @@ TRACKED_FIELDS = (
 # Fields re-derived from every member rather than copied from the master.
 IDENTITY_FIELDS = ("title", "event_date")
 # Fields an event copies from its master record (DeduplicatedEvents column = EnrichedEvents column).
+# records_affected is not copied: it is aggregated across all members by
+# event_facts (the largest supported count), not taken from the master.
 MASTER_COPIED_FIELDS = (
-    "description", "summary", "event_type", "severity", "records_affected",
+    "description", "summary", "event_type", "severity",
     "attacking_entity_name", "attack_method", "is_australian_event", "is_specific_event",
 )
 
@@ -66,11 +68,13 @@ class RefreshReport:
     changed_records: int = 0
     refreshed_events: List[str] = field(default_factory=list)
     fields_updated: Dict[str, int] = field(default_factory=dict)
+    facts_changed: int = 0
 
     def summary(self) -> str:
         fields = ", ".join(f"{k} x{v}" for k, v in sorted(self.fields_updated.items())) or "none"
         return (f"{self.changed_records} changed record(s) -> {len(self.refreshed_events)} event(s) "
-                f"refreshed (fields: {fields}); {self.baselined} record(s) baselined")
+                f"refreshed (fields: {fields}); {self.baselined} record(s) baselined; "
+                f"facts recomputed on {self.facts_changed} event(s)")
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -144,6 +148,13 @@ def refresh_changed_events(conn: sqlite3.Connection, dry_run: bool = False) -> R
                 for name in updated:
                     report.fields_updated[name] = report.fields_updated.get(name, 0) + 1
                 report.refreshed_events.append(dedup_id)
+            # Facts are aggregated over all members: recompute every event
+            # whose membership changed (records attached, merged or split - by
+            # any route) and every event with a changed member.
+            from cyber_data_collector.dedup.event_facts import refresh_facts
+            conn.row_factory = previous_factory
+            report.facts_changed = len(refresh_facts(conn, also=changed_by_event))
+            conn.row_factory = sqlite3.Row
             conn.executemany(
                 "INSERT OR REPLACE INTO RecordFingerprints "
                 "(enriched_event_id, fingerprint, values_json, recorded_at) VALUES (?, ?, ?, ?)",

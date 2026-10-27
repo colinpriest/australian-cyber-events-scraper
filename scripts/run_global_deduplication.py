@@ -511,11 +511,11 @@ class DeduplicationMigration:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 storage = DeduplicationStorage(conn)
-                engine = DeduplicationEngine(
+                engine = self._engine_with_rulings(conn, DeduplicationEngine(
                     similarity_threshold=0.75,
                     llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
                     validators=[DeduplicationValidator()]
-                )
+                ))
 
                 # Step 1: Deduplicate new events among themselves
                 logger.info(f"🔄 Step 1/2: Deduplicating {len(new_events)} new events among themselves...")
@@ -527,6 +527,11 @@ class DeduplicationMigration:
 
                 matched_ids = set()
                 cursor = conn.cursor()
+                # Records already in each existing event, for the split veto.
+                existing_members: Dict[str, Set[str]] = {}
+                for dedup_id, enriched_id in cursor.execute(
+                        "SELECT deduplicated_event_id, enriched_event_id FROM EventDeduplicationMap"):
+                    existing_members.setdefault(dedup_id, set()).add(enriched_id)
                 # Every record each unique new event stands for. When the event
                 # matches an existing one, all of them are attached to it: this
                 # used to attach only the lead record, so the rest of the group
@@ -546,12 +551,10 @@ class DeduplicationMigration:
                     group = group_of.get(new_event.event_id, [new_event])
                     members = {e.event_id for e in group}
                     for existing in existing_dedup_events:
-                        if not engine.merge_decision(new_event, existing):
-                            continue
-                        if self._ruled_different(cursor, members, existing.event_id):
-                            continue
-                        best_match = existing
-                        break
+                        if engine.merge_decision(new_event, existing, members1=members,
+                                                 members2=existing_members.get(existing.event_id, ())):
+                            best_match = existing
+                            break
 
                     if best_match:
                         # Merge the whole group into the existing deduplicated event
@@ -619,35 +622,21 @@ class DeduplicationMigration:
             return False
 
     @staticmethod
-    def _ruled_different(cursor: sqlite3.Cursor, enriched_ids: Set[str], dedup_event_id: str) -> bool:
-        """True when a cached 'different' ruling separates these records from the event.
+    def _engine_with_rulings(conn: sqlite3.Connection, engine: DeduplicationEngine) -> DeduplicationEngine:
+        """Give the engine every active 'different' ruling (DedupOverrides).
 
-        Splits are recorded as 'different' overrides; without this check an
-        incremental run could re-attach a split record to the event it was
-        split from.
+        Splits are recorded as these rulings; loading them into the one shared
+        merge decision is what stops grouping, a full rebuild or an incremental
+        attachment from re-joining records a split separated.
         """
-        if not enriched_ids:
-            return False
-        placeholders = ",".join("?" * len(enriched_ids))
-        ids = list(enriched_ids)
         try:
-            row = cursor.execute(
-                f"""
-                SELECT 1 FROM DedupOverrides o
-                WHERE o.active = 1 AND o.verdict = 'different'
-                  AND ((o.left_enriched_event_id IN ({placeholders})
-                        AND o.right_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap
-                                                          WHERE deduplicated_event_id = ?))
-                    OR (o.right_enriched_event_id IN ({placeholders})
-                        AND o.left_enriched_event_id IN (SELECT enriched_event_id FROM EventDeduplicationMap
-                                                         WHERE deduplicated_event_id = ?)))
-                LIMIT 1
-                """,
-                ids + [dedup_event_id] + ids + [dedup_event_id],
-            ).fetchone()
+            rows = conn.execute(
+                "SELECT left_enriched_event_id, right_enriched_event_id FROM DedupOverrides "
+                "WHERE active = 1 AND verdict = 'different'").fetchall()
         except sqlite3.OperationalError:  # no overrides table yet
-            return False
-        return row is not None
+            rows = []
+        engine.different_pairs = {frozenset(row) for row in rows}
+        return engine
 
     def _merge_into_existing(self, cursor: sqlite3.Cursor,
                              new_event: CyberEvent, existing_dedup: CyberEvent,
@@ -762,11 +751,11 @@ class DeduplicationMigration:
 
                 # Create deduplication engine
                 logger.info("🔧 Initializing deduplication engine...")
-                engine = DeduplicationEngine(
+                engine = self._engine_with_rulings(conn, DeduplicationEngine(
                     similarity_threshold=0.75,
                     llm_arbiter=LLMArbiter(api_key=os.getenv('OPENAI_API_KEY')),
                     validators=[DeduplicationValidator()]
-                )
+                ))
 
                 # Run deduplication
                 logger.info(f"🔄 Processing {len(enriched_events)} events...")
