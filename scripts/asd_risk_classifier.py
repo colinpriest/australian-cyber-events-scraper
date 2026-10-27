@@ -237,11 +237,11 @@ class ASDRiskClassifier:
         self._ensure_fingerprint_column()
 
     def _ensure_fingerprint_column(self) -> None:
-        """Add ASDRiskClassifications.input_fingerprint to older databases."""
-        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(ASDRiskClassifications)")}
-        if columns and "input_fingerprint" not in columns:
-            self.conn.execute("ALTER TABLE ASDRiskClassifications ADD COLUMN input_fingerprint TEXT")
-            self.conn.commit()
+        """Bring an older ASDRiskClassifications up to date: the input_fingerprint
+        column, and a severity CHECK that accepts "Insufficient information"
+        (the base schema refused it, failing every such answer)."""
+        from cyber_data_collector.storage import asd_schema
+        asd_schema.ensure_schema(self.conn)
 
     def input_fingerprint(self, event: Dict[str, Any]) -> str:
         """Hash of everything a classification depends on: the prompt built from
@@ -1006,8 +1006,8 @@ def main():
     parser.add_argument(
         '--limit',
         type=int,
-        default=5,
-        help='Number of events to process (default: 5)'
+        default=None,
+        help='Most events to process (default: every new or changed event)'
     )
     
     parser.add_argument(
