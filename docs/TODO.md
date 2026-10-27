@@ -4,15 +4,12 @@ Open work found while building the calibrated filters (2026-10-27). Each item
 names the evidence that showed the problem. Done items move to the README or
 `docs/` with the commit that closed them.
 
-## In progress (2026-10-27, night)
-
-- **Events that affect more than one organisation.** Supplier breaches
-  (ProctorU: ten universities; Canvas/Instructure; Frontier payroll) are one
-  incident with several victims; being built (find, judge and attach each
-  victim; count once per victim in the recurrence analysis).
-
 ## Done tonight (2026-10-27; timelines and victims: see `docs/10-victim-attribution-and-timelines.md`)
 
+- Supplier incidents: every affected organisation found, judged (Jev +
+  escalation, calibrated) and attached; same-incident fragments merged; each
+  organisation counted once in the recurrence analysis and entity dashboard
+  (`find-supplier-victims`, docs/10-supplier-incidents.md).
 - Timelines scoped to Australia for multinationals and refusals; aliases
   limited to spellings of the same name; supplier-breach instruction
   (`timeline-v2`). Failed refreshes are recorded and flagged to judgements.
@@ -65,6 +62,14 @@ names the evidence that showed the problem. Done items move to the README or
   is a different article from the record's own title and research (Scouts
   Victoria with a UTAS page, Suncorp Bank with an HTW page, Service NSW with
   an IN SPORT page). Find out where the scraper attaches the wrong page.
+- **Supplier incidents: held victims and loose detection.** Victims held
+  because they still have their own event near the incident (QLD Department of
+  Education, University of Sydney, NDIA) need that pair resolved (`merge` or a
+  `different` ruling). Detection by record text is loose, so most detected
+  "supplier incidents" have no candidates. The co-victim cut-off is high (0.96,
+  recall 0.11): the errors above it are brands or units of a victim already
+  recorded; a better question needs fresh labels. Attachments have no undo
+  command (`SupplierVictimAttachments.previous_role` records the prior role).
 - **Replacement records need the refresh to become events.** The source gate
   queues proper reporting for real incidents whose only evidence was a junk
   page; until scraping, enrichment and deduplication run, those incidents are
