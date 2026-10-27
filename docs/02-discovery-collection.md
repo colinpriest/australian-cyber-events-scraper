@@ -557,9 +557,17 @@ URL scraping runs concurrently using `asyncio.as_completed()` with a per-task ti
 
 The pipeline applies multiple filtering stages to remove non-relevant content while minimising false negatives (discarding real cyber events).
 
-### 5.1 Random Forest ML Filter
+### 5.0 Jev page gate (current)
 
-**Source file:** `cyber_data_collector/filtering/rf_event_filter.py`
+After scraping, each new record's stored page is judged by Jev with the calibrated
+source-gate question ("does this page itself report a specific incident?"). Google pages
+below the calibrated cut-off are rejected; other sources are scored and kept (report-only)
+unless an evaluation accepts them. Nothing is dropped before scraping. Full description:
+[docs/04-event-filtering.md, section 3.0](04-event-filtering.md).
+
+### 5.1 Random Forest ML Filter (retired 2026-10-27, historical)
+
+**Source file:** `cyber_data_collector/filtering/rf_event_filter.py` (no longer used by discovery)
 
 **What it is:** A trained Random Forest classifier that predicts whether a raw event is a genuine cyber security incident based on text features.
 
@@ -944,21 +952,61 @@ The discovery stage processes events month by month rather than as a single bulk
 
 ### Per-Month Processing Steps
 
-For each month:
+Before any month, every run checks that OpenAI and Jev are configured (it stops otherwise)
+and **drains the retry queue** (below). Then, for each month:
 
 1. **Configure date range:** First day to last day of the month.
-2. **Collect raw events:** All enabled data sources are queried concurrently using `asyncio.as_completed()`.
-3. **Store raw events:** Each event is checked for duplicates (by source type + URL + title) and stored in the `RawEvents` table.
-4. **Scrape URLs:** Playwright scrapes full content for all raw events that have a URL but no content yet.
-5. **Apply Random Forest filter:** Scraped content is evaluated by the ML model; events classified as non-cyber are marked as filtered.
-6. **Process events:** Entity extraction (GPT-4o-mini) and LLM classification (GPT-4o-mini) are run on all events.
-7. **Store enriched events:** Processed events are stored in the `EnrichedEvents` table with entities linked via `EntitiesV2`.
-8. **Confidence filter:** Events with confidence score below 0.6 are excluded.
-9. **Mark month processed:** The month is recorded as processed with counts and processing notes.
+2. **Collect raw events:** All enabled data sources are queried concurrently. Each source's
+   outcome is recorded in `SourceMonthDiscovery` (`complete` or `failed`, with what failed).
+3. **Store raw events:** Each event is checked for duplicates (by source type + URL + title),
+   stored in `RawEvents`, and registered in `DiscoveryRecordState` with its source and month.
+4. **Scrape URLs:** Playwright scrapes full content for raw events with a URL but no content.
+   Only blocked social/profile domains are skipped; nothing else is dropped before scraping.
+5. **Page gate:** Jev judges each new record's stored page (section 5.0).
+6. **Process events:** Entity extraction and LLM classification.
+7. **Store enriched events:** only events the classifier judged (`classification_status =
+   'classified'`) are stored; anything else is a failure, never a stored incident.
+8. **Mark month processed:** only if every source's search completed without failure.
 
 ### Failure handling
 
-If any step fails for a month, the month is NOT marked as processed. Failed raw events that could not be enriched remain unprocessed for retry on the next pipeline run.
+**Search failures.** A data source reports every failure that loses results (a failed query,
+an exhausted Google quota, an unparseable Perplexity answer, an OAIC article or Webber page
+that could not be fetched, a source that is enabled but not configured) with
+`DataSource.note_failure`. Such a source-month is recorded `failed` and the month is **not**
+marked processed, so the next run searches it again - an empty or partial result is never
+recorded as the month's answer.
+
+**Record failures: the durable retry queue** (`processing/retry_queue.py`). The queue is
+every stored record that is neither processed nor rejected (`RawEvents.is_processed = 0`),
+whatever run stored it. Every discovery run processes the due ones first through the same
+scrape -> gate -> classify -> store path, so a record is finished even if no later search
+finds it again (OAIC, for example, skips stored URLs). Per record, `DiscoveryRecordState`
+keeps:
+
+| Column | Meaning |
+|---|---|
+| `source_type`, `discovery_year`, `discovery_month` | where and when it was found |
+| `temporary_failures` | provider failures: timeouts, 429/5xx, connection errors, API-budget refusals, Jev outages - **never** a reason to give up |
+| `attempts` | permanent failures (the record itself: invalid output for its content, a request refused as invalid, a store that fails) |
+| `last_stage`, `last_error`, `last_error_kind` | the latest failure |
+| `next_attempt_at` | back-off: temporary 15 min doubling to 12 h; permanent 1 h doubling to 7 days |
+| `quarantined_at`, `completed_at` | outcome |
+
+After 3 permanent failures the record is quarantined: marked processed with
+`Rejected at retry_quarantine: ...` (so it leaves every queue) and logged as an error.
+
+**Completion per source and month.** The view `SourceMonthCompletion` gives, per source and
+discovery month, records `stored`, `processed`, `rejected`, `pending`, `failing` and
+`quarantined`. `MonthProcessed` keeps its meaning (the month's searches ran);
+`SourceMonthDiscovery` says whether each search completed; together they show whether a month
+is complete.
+
+```bash
+python scripts/discovery_queue.py status [--all]   # incomplete source-months, quarantined records
+python scripts/discovery_queue.py drain            # process due records now, without searching
+python scripts/discovery_queue.py release          # return quarantined records to the queue
+```
 
 If more than 50% of events fail to store as enriched, the pipeline raises a `RuntimeError` and stops to prevent data quality issues.
 
@@ -1032,6 +1080,9 @@ Extracted entities are stored in `EntitiesV2` and linked to enriched events:
 ### Month Processing Tracking
 
 The pipeline tracks which months have been processed to enable incremental operation and avoid redundant collection.
+`MonthProcessed` records that a month's searches ran without failure; `SourceMonthDiscovery`
+records each source's search of each month; `DiscoveryRecordState` and the
+`SourceMonthCompletion` view track every record found until it is finished (section 7).
 
 ---
 

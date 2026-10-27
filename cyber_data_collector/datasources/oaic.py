@@ -113,6 +113,7 @@ class OAICDataSource(DataSource):
                 # Resolve URL (cheap, no I/O — just URL parsing)
                 actual_url = self._resolve_article_url(link_info['url'])
                 if not actual_url:
+                    self.logger.debug("OAIC link is not a news article: %s", link_info.get('url'))
                     continue
 
                 # Skip articles already in the database BEFORE we hit the rate
@@ -128,6 +129,10 @@ class OAICDataSource(DataSource):
                 scraped_count += 1
 
                 event = self._scrape_article_page(actual_url, link_info['text'], pub_date_parsed)
+                if event is None:
+                    # Not stored, so its URL is not "known": the next search of
+                    # this month fetches it again.
+                    self.note_failure(f"OAIC article could not be scraped: {actual_url}")
                 if event:
                     # Include all events from articles published in the date range.
                     # Do NOT filter by event_date - late-reported incidents may have
@@ -143,7 +148,7 @@ class OAICDataSource(DataSource):
             return all_events
 
         except Exception as exc:
-            self.logger.error(f"OAIC scraping failed: {exc}")
+            self.note_failure("OAIC scraping failed", exc)
             return []
 
     def _extract_article_links(self, soup: BeautifulSoup) -> List[Dict[str, str]]:

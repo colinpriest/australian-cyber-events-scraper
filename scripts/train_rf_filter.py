@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Train, evaluate and version the Random Forest discovery filter.
+"""Train, evaluate and version the Random Forest discovery filter (RETIRED).
+
+The filter is retired: discovery uses the Jev page gate
+(``cyber_data_collector/filtering/page_gate.py``). This script is kept so the
+evaluation that retired it can be reproduced.
 
 Every model is written as a new immutable bundle (see
 ``cyber_data_collector/filtering/rf_bundle.py``) with its provenance, file
@@ -104,16 +108,41 @@ def adopt_legacy(args, frame) -> int:
     return 0
 
 
+class TrainingMembershipUnknown(RuntimeError):
+    """A bundle's training records cannot be identified, so no record can be shown to be held out."""
+
+
+def held_out_records(bundle_id: str, manifest: dict, frame, bundles_dir: Path = None):
+    """The labelled records a bundle never saw, by organisation.
+
+    Training membership comes from the bundle's ``training_records.csv``; for
+    the adopted 2025-09 bundle (``kind: legacy``) it is the 2025-09 training
+    file's records (``origin == 'training_csv'``), as when it was adopted.
+    Without either, membership is unknown and evaluation is refused: treating
+    every record as held out would score the model on data it was trained on.
+    """
+    import pandas as pd
+
+    records = (bundles_dir or rb.BUNDLES_DIR) / bundle_id / "training_records.csv"
+    if records.exists():
+        trained = pd.read_csv(records)
+    elif manifest.get("kind") == "legacy":
+        trained = frame[frame["origin"] == "training_csv"]
+    else:
+        raise TrainingMembershipUnknown(
+            f"{records} is missing and bundle {bundle_id} is not the adopted legacy model: its training "
+            "records are unknown, so a held-out evaluation cannot be made")
+    held = frame[~frame["group"].isin(set(trained["group"])) & ~frame["raw_event_id"].isin(set(trained["raw_event_id"]))]
+    return held.reset_index(drop=True)
+
+
 def evaluate(args, frame) -> int:
     bundle = rb.load_bundle(args.evaluate)
-    trained_ids = set()
-    records = rb.BUNDLES_DIR / args.evaluate / "training_records.csv"
-    if records.exists():
-        import pandas as pd
-        trained = pd.read_csv(records)
-        trained_ids = set(trained["raw_event_id"])
-        frame = frame[~frame["group"].isin(set(trained["group"]))]
-    frame = frame[~frame["raw_event_id"].isin(trained_ids)].reset_index(drop=True)
+    try:
+        frame = held_out_records(args.evaluate, bundle.manifest, frame)
+    except TrainingMembershipUnknown as exc:
+        print(f"REFUSED: {exc}")
+        return 1
     _print(f"{args.evaluate} on {len(frame)} records from organisations it never saw",
            rb.evaluate_objects(bundle.model, bundle.vectorizer, bundle.encoder, frame))
     return 0

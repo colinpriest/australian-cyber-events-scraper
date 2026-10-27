@@ -146,6 +146,12 @@ class CyberEvent(BaseModel):
         "unclassified",
         description="'classified' once the LLM judged it, 'failed' if the LLM call errored (not an acceptance)",
     )
+    classification_error: Optional[str] = Field(None, description="Error text when classification_status is 'failed'")
+    classification_error_kind: Optional[str] = Field(
+        None,
+        description="'temporary' (provider failure: timeout, 429/5xx, connection, budget) or 'permanent' "
+                    "(the record itself could not be processed) when classification_status is 'failed'",
+    )
 
     model_config = ConfigDict(json_encoders={datetime: lambda value: value.isoformat()})
 

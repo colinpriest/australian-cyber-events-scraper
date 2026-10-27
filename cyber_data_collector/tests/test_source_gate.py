@@ -95,6 +95,9 @@ def _labels(tmp_path, rows=""):
     return path
 
 
+UNRELATED = "elsewhere,reports_incident,r,t\n"
+
+
 def _found(calls):
     def search(query, model):
         calls.append(query)
@@ -112,7 +115,8 @@ def test_only_google_records_are_judged(conn, tmp_path):
 def test_gate_removes_junk_and_keeps_articles(conn, tmp_path):
     calls = []
     result = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
-                              calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path), search=_found(calls))
+                              calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path, UNRELATED),
+                              search=_found(calls))
     actions = {r["enriched_event_id"]: r["action"] for r in result["removed"]}
     assert actions == {"help": "event rejected (its only record)",
                        "policy": "deactivated before deduplication",
@@ -149,3 +153,88 @@ def test_a_page_too_short_to_judge_is_left_alone(conn, tmp_path):
                               labels_path=_labels(tmp_path))
     assert "help" not in {r["enriched_event_id"] for r in result["below_cutoff"]}
     assert result["unjudgeable"] == 1
+
+
+# --- reviewer findings 6, 9, 10: no silent fallbacks -------------------------
+
+def test_apply_refuses_without_readable_labels(conn, tmp_path):
+    for path in (tmp_path / "missing.csv", _labels(tmp_path)):  # missing, then header-only
+        with pytest.raises(sg.LabelsUnavailable):
+            sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                             calibration_path=_cal(tmp_path), labels_path=path, search=_found([]))
+    status = dict(conn.execute("SELECT enriched_event_id, status FROM EnrichedEvents"))
+    assert set(status.values()) == {"Active"}
+
+
+def test_unreadable_calibration_is_report_only_and_logged(conn, tmp_path, caplog):
+    bad = tmp_path / "cal.json"
+    bad.write_text("{not json")
+    result = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                              calibration_path=bad, labels_path=_labels(tmp_path, UNRELATED), search=_found([]))
+    assert result["removed"] == [] and not result["calibrated"]
+    assert any(r.levelname == "ERROR" and "REPORT-ONLY" in r.getMessage() for r in caplog.records)
+
+
+def test_unjudged_page_stops_the_run(conn, tmp_path):
+    class Flaky(FakeJev):
+        def system_one(self, state, questions, model=None):
+            if state["url"] == "https://acme/home":
+                raise ConnectionError("TypeSafe unreachable")
+            return super().system_one(state, questions, model)
+
+    with pytest.raises(RuntimeError, match="could not be judged"):
+        sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=Flaky(JEV)), calibration_path=_cal(tmp_path),
+                         labels_path=_labels(tmp_path, UNRELATED), search=_found([]))
+    assert conn.execute("SELECT status FROM EnrichedEvents WHERE enriched_event_id = 'menu'").fetchone()[0] == "Active"
+
+
+def test_failed_replacement_search_is_retried_after_the_record_is_gone(conn, tmp_path):
+    def broken(query, model):
+        raise ConnectionError("Perplexity unreachable")
+
+    labels = _labels(tmp_path, UNRELATED)
+    first = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                             calibration_path=_cal(tmp_path), labels_path=labels, search=broken)
+    assert "policy" in {r["enriched_event_id"] for r in first["removed"]}
+    status = conn.execute("SELECT status FROM SourceReplacements WHERE enriched_event_id = 'policy'").fetchone()[0]
+    assert status == sg.STATUS_PENDING
+    # Next run: 'policy' is inactive and no longer judged, but its search is retried.
+    calls = []
+    second = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                              calibration_path=_cal(tmp_path), labels_path=labels, search=_found(calls))
+    assert {r["replaces"] for r in second["replacements_queued"]} == {"policy"} and len(calls) == 1
+    row = conn.execute("SELECT status, attempts FROM SourceReplacements WHERE enriched_event_id = 'policy'").fetchone()
+    assert tuple(row) == (sg.STATUS_SEARCHED, 2)
+
+
+def test_apply_without_any_search_refuses_before_removing(conn, tmp_path, monkeypatch):
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    with pytest.raises(sg.ReplacementSearchUnavailable):
+        sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                         calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path, UNRELATED))
+    assert set(dict(conn.execute("SELECT enriched_event_id, status FROM EnrichedEvents")).values()) == {"Active"}
+
+
+def test_malformed_research_date_never_suppresses_the_search(conn):
+    # A different Lush attack years earlier must not count as covering an undated incident.
+    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('ev-lush-2016', 'Lush 2016 breach', '2016-01-01', 'Lush', "
+                 "'Active', NULL)")
+    conn.execute("UPDATE EnrichedEvents SET perplexity_enrichment_data = ? WHERE enriched_event_id = 'policy'",
+                 (json.dumps({"formal_entity_name": "Lush Retail", "overall_confidence": 0.8,
+                              "earliest_event_date": "early 2024", "reasoning": "Akira claimed Lush data."}),))
+    calls = []
+    assert sg.replace_evidence(conn, "policy", None, search=_found(calls)) is not None and len(calls) == 1
+
+
+def test_an_event_being_rejected_does_not_cover_its_own_incident(conn, tmp_path):
+    # The help page's event holds only that record, so it is rejected and cannot "cover" the incident.
+    conn.execute("UPDATE EnrichedEvents SET perplexity_enrichment_data = ? WHERE enriched_event_id = 'help'",
+                 (json.dumps({"formal_entity_name": "Service NSW", "overall_confidence": 0.9,
+                              "earliest_event_date": "2024-01-26", "reasoning": "x"}),))
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'Service NSW' "
+                 "WHERE deduplicated_event_id = 'ev-help'")
+    calls = []
+    result = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                              calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path, UNRELATED),
+                              search=_found(calls))
+    assert "help" in {r["replaces"] for r in result["replacements_queued"]}

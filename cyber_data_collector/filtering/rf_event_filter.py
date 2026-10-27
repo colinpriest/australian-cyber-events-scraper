@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Random Forest Event Filter
+Random Forest Event Filter - RETIRED (2026-10-27)
+
+Discovery no longer uses this filter. The only bundle, ``rf-legacy-2025-09``,
+failed acceptance (drop precision 0.53, 5.9% of real incidents lost on
+organisation-separated labels) and retraining did not fix it. Discovery now
+uses the calibrated Jev page gate (``filtering/page_gate.py``). The module,
+the bundles and ``scripts/train_rf_filter.py`` are kept so the evaluation can
+be reproduced; nothing in the pipeline imports them.
 
 This module provides a Random Forest-based filter for cyber events that replaces
 the existing 3-stage progressive filtering system with a machine learning approach.
