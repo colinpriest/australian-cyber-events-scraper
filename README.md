@@ -288,7 +288,10 @@ australian-cyber-events-scraper/
 │   │   ├── oaic_data_scraper.py       # OAIC PDF report scraper (<= 2024 H2)
 │   │   ├── OAIC_dashboard_scraper.py  # OAIC Power BI dashboard scraper (<= 2025 H1)
 │   │   ├── oaic_datagov_scraper.py    # OAIC data.gov.au XLSX ingester (2025 H2 onward)
-│   │   └── cleanup_oaic_data.py       # OAIC data validation
+│   │   ├── refresh_oaic_statistics.py # Routine refresh into the published dataset
+│   │   ├── oaic_dataset.py            # Published dataset: promote-on-pass, refresh state
+│   │   ├── oaic_consistency.py        # Shared internal-consistency rules
+│   │   └── cleanup_oaic_data.py       # OAIC data validation (fails on corrupt files)
 │   ├── export/
 │   │   ├── export_events_excel.py     # Export to Excel with LLM summaries
 │   │   └── export_cyber_events.py     # Full database export (CSV/Excel)
@@ -318,6 +321,17 @@ python scripts/asd_risk_classifier.py --limit 50          # Limit to 50 events
 python scripts/asd_risk_classifier.py --force-reclassify  # Re-classify all events
 python scripts/asd_risk_classifier.py --output-dir my_matrices
 ```
+
+When the evidence cannot decide a severity, impact or stakeholder the answer
+is `Insufficient information` (prompt `asd-v2`), never a default C6; such
+classifications are listed under the matrix (dashboard) and on a "Not placed"
+sheet (Excel), not put in a cell. `ASDRiskClassifier.process_events` sets
+`failed_count` / `failed_event_ids` for events it could not classify (their
+old classifications stay stale and counted by `stale_count()`); the script
+exits 1 if any failed. Each risk-matrix workbook is written to a temporary
+file and moved into place, so a failure raises `RiskMatrixExportError` and
+leaves the previous workbook untouched; an empty matrix is written only for a
+population with no classifications.
 
 ### Global Deduplication
 
@@ -992,6 +1006,14 @@ stores every answer in `ModelJudgements` and re-asks only events whose
 evidence changed. It requires `TYPESAFE_API_KEY` and exits non-zero if any
 event could not be judged.
 
+Unknown, missing or unrecognised severity is never scored as 0: severity
+averages (by industry, by attack type, per month) use known severities only and
+each chart says how many events it excluded. Personal-information rates use only
+incidents with a well-formed `personal_info_types_json` as the denominator;
+malformed and unclassified incidents are excluded from numerator and
+denominator alike and counted on the chart (OAIC rates are over the semester's
+total notifications).
+
 ### Database
 
 ```bash
@@ -1041,6 +1063,14 @@ python scripts/quality_report.py --no-record     # read-only
 From code: `from cyber_data_collector.quality import publication_allowed`;
 `allowed, reasons = publication_allowed(conn)`. Details and the first run's
 results: [docs/10-quality-gate.md](docs/10-quality-gate.md).
+
+A check that cannot run or cannot read its input is a **FAIL**, never a pass:
+an unreadable OAIC file fails every OAIC check, a database error during the
+dashboard check fails it, and a missing `--db` fails without creating a file
+(the database is opened read-only). Checks that genuinely do not apply (an
+in-memory or incomplete database, no published OAIC dataset yet) are reported
+as `SKIP` and counted separately. `oaic-published-dataset-consistent` fails on
+any contradiction in the published OAIC dataset.
 
 ### Reporting population: one definition for every dashboard and export
 
@@ -1261,9 +1291,40 @@ python scripts/oaic/OAIC_dashboard_scraper.py --semester "Jan-Jun 2025"
 # Ingest OAIC statistics published on data.gov.au (2025 H2 onward - see below)
 python scripts/oaic/oaic_datagov_scraper.py --existing-data oaic_cyber_statistics_<latest>.json
 
-# Validate and consolidate OAIC data (run after scraping)
+# Validate every OAIC file (exit 1 on a corrupt file or a published contradiction)
 python scripts/oaic/cleanup_oaic_data.py
+
+# Routine refresh: data.gov.au -> checked -> published dataset (exit 1 on any failure)
+python scripts/oaic/refresh_oaic_statistics.py
 ```
+
+#### Published OAIC dataset: validated, promoted only on pass, dated
+
+The dashboard reads one published dataset, `instance/oaic/oaic_statistics.json`
+(`scripts/oaic/oaic_dataset.py`). Every ingester (data.gov.au, Power BI, PDF)
+promotes into it through the same internal-consistency rules
+(`scripts/oaic/oaic_consistency.py`): source split vs total, monthly counts vs
+the semester, sector / method / individuals-affected parts within their whole,
+cyber incidents within malicious attacks, percentages within 0-100. A record
+that fails is rejected with its reasons and its period keeps the last valid
+record; the file is replaced atomically and never by a failed run. Each attempt
+and each period's last successful refresh are recorded in
+`instance/oaic/oaic_refresh_state.json`, and the dashboard shows "OAIC
+statistics last refreshed <date> (latest period <period>)", plus a warning when
+the last attempt failed. The first refresh bootstraps the dataset from the legacy
+`oaic_cyber_statistics_*.json` files.
+
+Contradictions are never published: when files or the dataset are read, every
+figure involved in a contradiction is withheld (the whole period if it
+contradicts its own total) and listed on the dashboard. Legacy files are merged
+only between records that report the same total (2022 H1 used to combine a
+250-notification PDF total with a 397-notification Power BI monthly series).
+Power BI per-method counts are no longer estimated (they were percentages of
+cyber incidents multiplied by malicious attacks, ~1.6x too high); they are
+stored as `None` with the published percentages in `cyber_incident_method_pct`,
+and older Power BI method counts are withheld. A malformed semester is an
+error, not "the current year's H1"; the Power BI semester list is derived and
+stops at Jan-Jun 2025 (later periods come from data.gov.au).
 
 #### Where each OAIC period comes from
 
@@ -1302,7 +1363,7 @@ Two caveats on data.gov.au periods:
 ### Export
 
 ```bash
-# Clean 7-column Excel export with LLM summaries and anonymization
+# Excel export with LLM summaries, anonymisation and an Export Notes column
 python scripts/export/export_events_excel.py
 python scripts/export/export_events_excel.py --exclude-unknown-records --limit 100
 
@@ -1310,6 +1371,16 @@ python scripts/export/export_events_excel.py --exclude-unknown-records --limit 1
 python scripts/export/export_cyber_events.py --format csv --output events.csv --detailed
 python scripts/export/export_cyber_events.py --format excel --output events.xlsx --detailed --anonymize
 ```
+
+An anonymised column never carries the original text. A failed anonymisation
+(LLM error, empty answer, an answer still naming the victim or attacker or
+repeating the title, a worker crash) writes `[anonymisation failed] (reason)`,
+is counted, and makes the script exit 1; `--no-llm` writes `[not anonymised]`;
+an LLM export without `OPENAI_API_KEY` fails instead of falling back to raw
+text. `--anonymize` requires `--detailed` and drops the identifying columns
+(title, victim, attacker, entity and source JSON). Source text comes only from
+exact relationships (`EventDeduplicationMap`, `DeduplicatedEventSources`) -
+never title matching; an event with none says so in Export Notes.
 
 ### Setup
 

@@ -27,6 +27,10 @@ from urllib.parse import urljoin, urlparse, unquote
 import requests
 from bs4 import BeautifulSoup
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.oaic.oaic_consistency import find_contradictions  # noqa: E402
+from scripts.oaic.oaic_dataset import promote_records, write_json_atomically  # noqa: E402
+
 # PDF parsing libraries
 try:
     import pdfplumber
@@ -57,6 +61,7 @@ class OAICDataScraper:
         self.base_url = "https://www.oaic.gov.au"
         self.publications_url = "https://www.oaic.gov.au/privacy/notifiable-data-breaches/notifiable-data-breaches-publications"
         self.pdf_dir = pdf_dir
+        self.skipped_links: List[str] = []
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -79,6 +84,7 @@ class OAICDataScraper:
 
         soup = BeautifulSoup(response.content, 'html.parser')
         reports = []
+        self.skipped_links = []
 
         # Find all links that contain "data-breaches-report" or similar patterns
         report_links = soup.find_all('a', href=re.compile(r'notifiable-data-breaches-report'))
@@ -97,6 +103,10 @@ class OAICDataScraper:
 
             # Extract date information from title or URL
             period_info = self._extract_period_info(title, href)
+            if not period_info:
+                # Not filed under a guessed period: reported and left out.
+                self.skipped_links.append(f"{title} ({href}): no recognisable reporting period")
+                continue
 
             if period_info:
                 reports.append({
@@ -110,6 +120,8 @@ class OAICDataScraper:
                 })
 
         print(f"Found {len(reports)} OAIC data breach reports")
+        for skipped in self.skipped_links:
+            print(f"  Skipped report link - {skipped}")
         return sorted(reports, key=lambda x: (x['year'], x['start_month']))
 
     def _extract_period_info(self, title: str, url: str) -> Optional[Dict]:
@@ -264,11 +276,9 @@ class OAICDataScraper:
                         except (ValueError, IndexError):
                             continue
 
-            # Calculate cyber incidents total from percentage if we don't already have it
-            if not stats['cyber_incidents_total'] and stats['cyber_incidents_percentage'] and stats['total_notifications']:
-                stats['cyber_incidents_total'] = round(
-                    (stats['cyber_incidents_percentage'] / 100) * stats['total_notifications']
-                )
+            # A count the report does not state stays None. (It used to be
+            # estimated as percentage x total, a rounded guess stored as if it
+            # had been published; the percentage itself is kept.)
 
             # Extract top sectors (basic extraction)
             sector_patterns = [
@@ -903,6 +913,25 @@ class OAICDataScraper:
             return None
 
 
+def split_contradicting_records(data: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    """``(consistent, rejected)``; rejected records carry ``_contradictions``.
+
+    Quarterly records (2018-2019) are checked as their own periods: the
+    half-year rules (period must be H1/H2) do not apply to them.
+    """
+    consistent, rejected = [], []
+    for record in data:
+        probe = dict(record)
+        if probe.get('period') not in ('H1', 'H2'):
+            probe['period'] = 'H1'  # only so the arithmetic checks run on a quarter
+        problems = [c.message for c in find_contradictions(probe)]
+        if problems:
+            rejected.append({**record, '_contradictions': problems})
+        else:
+            consistent.append(record)
+    return consistent, rejected
+
+
 def main():
     """Main function to run the OAIC data scraper."""
     parser = argparse.ArgumentParser(
@@ -936,8 +965,18 @@ def main():
             print("No data was scraped. Check the OAIC website or your date range.")
             sys.exit(1)
 
-        # Save data in requested formats
+        # Contradicting records are not published (they used to be written and
+        # then picked up by the dashboard). They are kept aside for review.
+        data, rejected = split_contradicting_records(data)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if rejected:
+            rejected_file = f"{args.filename}_{timestamp}.json.rejected"
+            write_json_atomically(Path(rejected_file), rejected)
+            for r in rejected:
+                print(f"  REJECTED {r['year']} {r['period']}: {'; '.join(r['_contradictions'])}")
+            print(f"  {len(rejected)} contradicting record(s) set aside in {rejected_file}")
+
+        # Save data in requested formats
 
         if args.output in ['csv', 'both']:
             csv_filename = f"{args.filename}_{timestamp}.csv"
@@ -947,10 +986,28 @@ def main():
             json_filename = f"{args.filename}_{timestamp}.json"
             scraper.save_to_json(data, json_filename)
 
+        # Publish the half-year records (quarterly 2018-2019 reports are not
+        # half-year periods and are not part of the published series).
+        half_years = [r for r in data if r.get('period') in ('H1', 'H2')]
+        quarters = {f"{r.get('year')} {r.get('period')}": "quarterly report, not a half-year period"
+                    for r in data if r.get('period') not in ('H1', 'H2')}
+        skipped = dict(quarters)
+        skipped.update({link: "no recognisable reporting period" for link in scraper.skipped_links})
+        promotion = promote_records(
+            half_years, "pdf", skipped=skipped,
+            errors=[f"{r['year']} {r['period']}: contradicts itself ({'; '.join(r['_contradictions'])})"
+                    for r in rejected])
+        print(f"Published dataset: promoted {promotion.accepted}; "
+              f"rejected {sorted(promotion.rejected)}")
+
         # Print summary unless disabled
         if not args.no_summary:
             scraper.print_summary(data)
 
+        if not promotion.ok:
+            print(f"\n[FAILED] OAIC scrape finished with rejected or skipped inputs "
+                  f"({len(rejected)} contradicting record(s)); see above.")
+            sys.exit(1)
         print(f"\nSuccessfully scraped OAIC data breach statistics!")
         print(f"{len(data)} reports processed")
 
