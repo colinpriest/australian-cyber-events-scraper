@@ -352,9 +352,8 @@ def industry_for(conn, victim: Optional[str]) -> Optional[str]:
         return siblings[0]["ind"]
 
     if row and row["entity_type"]:
-        raw = str(row["entity_type"]).split(".")[-1]
-        if raw and raw.isalpha():
-            return raw.title()
+        from cyber_data_collector.utils.enum_values import industry_from_entity_type
+        return industry_from_entity_type(row["entity_type"])
     return None
 
 
