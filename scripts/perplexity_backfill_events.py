@@ -24,7 +24,13 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from cyber_data_collector.storage.cyber_event_data_v2 import CyberEventDataV2
+from cyber_data_collector.processing.enrichment_gate import (
+    MAX_ENRICHMENT_ATTEMPTS,
+    GateResult,
+    evaluate_enrichment,
+)
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
+from cyber_data_collector.processing.record_evidence import RecordEvidence
 from cyber_data_collector.utils import ConfigManager
 
 # Configure logging
@@ -33,6 +39,16 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _parse_day(value: Optional[str]) -> Optional[date]:
+    """Best-effort ``YYYY-MM-DD`` prefix of a stored timestamp."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 class PerplexityBackfillProcessor:
@@ -51,6 +67,7 @@ class PerplexityBackfillProcessor:
             'total_candidates': 0,
             'enriched_successfully': 0,
             'enriched_failed': 0,
+            'quarantined': 0,
             'skipped': 0,
             'updated_fields': {
                 'event_date': 0,
@@ -84,14 +101,29 @@ class PerplexityBackfillProcessor:
                     ee.confidence_score,
                     ee.perplexity_validated,
                     ee.attacking_entity_name,
-                    ee.attack_method
+                    ee.attack_method,
+                    ee.raw_event_id,
+                    COALESCE(ee.perplexity_attempt_count, 0) AS perplexity_attempt_count,
+                    -- The persisted record: enrichment reads the scraped article
+                    -- stored here, not the processed description above.
+                    re.raw_title,
+                    re.raw_description,
+                    re.raw_content,
+                    re.source_url,
+                    re.source_type,
+                    CAST(re.discovered_at AS TEXT) AS discovered_at
                 FROM EnrichedEvents ee
+                LEFT JOIN RawEvents re ON re.raw_event_id = ee.raw_event_id
                 WHERE ee.status = 'Active'
                   AND (ee.perplexity_validated IS NULL OR ee.perplexity_validated = FALSE)
                   AND ee.is_specific_event = TRUE
+                  -- Quarantined records have used up their attempts; they are
+                  -- reported, not retried, until a human releases them.
+                  AND COALESCE(ee.perplexity_status, '') != 'quarantined'
+                  AND COALESCE(ee.perplexity_attempt_count, 0) < ?
             """
 
-            params = []
+            params = [MAX_ENRICHMENT_ATTEMPTS]
 
             if priority_only:
                 # Only process high-priority events (placeholder dates or missing entity)
@@ -107,6 +139,7 @@ class PerplexityBackfillProcessor:
             query += """
                 ORDER BY
                     CASE WHEN CAST(strftime('%d', ee.event_date) AS INTEGER) = 1 THEN 0 ELSE 1 END,
+                    COALESCE(ee.perplexity_attempt_count, 0) ASC,
                     ee.event_date DESC,
                     ee.confidence_score ASC
             """
@@ -120,33 +153,75 @@ class PerplexityBackfillProcessor:
             logger.info(f"Found {len(events)} events needing enrichment")
             return events
 
+    def _record_failure(self, event: Dict, reason: str) -> None:
+        """Record a failed attempt (or just log it on a dry run)."""
+        logger.warning(f"Enrichment not accepted for '{(event.get('title') or '')[:60]}': {reason}")
+        if self.dry_run:
+            return
+        try:
+            status = self.db.record_enrichment_failure(event['enriched_event_id'], reason)
+            if status == 'quarantined':
+                self.stats['quarantined'] += 1
+        except Exception as exc:  # bookkeeping must not abort the batch
+            logger.error(f"Could not record failed attempt for {event.get('enriched_event_id')}: {exc}")
+
     async def enrich_event(self, event: Dict) -> Optional[Dict]:
-        """Enrich a single event with Perplexity."""
+        """Enrich a single event with Perplexity and gate the answer.
+
+        The answer is judged against the record's *persisted* text, and only an
+        answer that passes the acceptance gate is returned.  Anything else is
+        recorded as a failed attempt (retried on later runs, quarantined after
+        MAX_ENRICHMENT_ATTEMPTS) and None is returned.
+        """
 
         logger.info(f"Enriching event: {event['title'][:60]}...")
 
         # Extract current entity name from title or description
         current_entity = self._extract_entity_name(event)
 
-        # Call Perplexity for enrichment
-        enrichment = await self.perplexity_engine.enrich_event(
-            title=event['title'],
-            description=event.get('description') or event.get('summary', ''),
-            current_date=str(event.get('event_date')) if event.get('event_date') else None,
-            current_entity=current_entity
-        )
+        # What is actually stored for this record: the scraped article if
+        # there is one, otherwise a snippet that the prompt labels as such.
+        evidence = RecordEvidence.from_row(event)
 
-        if not enrichment:
-            logger.warning(f"Failed to enrich event: {event['title'][:60]}...")
+        # Call Perplexity for enrichment
+        try:
+            enrichment = await self.perplexity_engine.enrich_event(
+                title=event['title'],
+                description=event.get('description') or event.get('summary', ''),
+                current_date=str(event.get('event_date')) if event.get('event_date') else None,
+                current_entity=current_entity,
+                evidence=evidence,
+            )
+        except Exception as exc:
+            self._record_failure(event, f"request failed: {str(exc)[:300]}")
             return None
 
+        if enrichment is None:
+            # No attempt was made (client unavailable); nothing to count.
+            logger.warning(f"Perplexity made no attempt for event: {event['title'][:60]}...")
+            return None
+
+        gate = evaluate_enrichment(
+            enrichment,
+            record_text=evidence.match_text(),
+            reference_date=_parse_day(evidence.discovered_at),
+        )
+        if not gate.is_accepted:
+            self._record_failure(event, gate.failure_reason or "enrichment rejected by the acceptance gate")
+            return None
+
+        for fact, why in gate.rejected_facts.items():
+            logger.info(f"  Dropped {fact}: {why}")
         logger.info(
-            f"Enriched successfully (overall confidence: {enrichment.overall_confidence:.2f})"
+            f"Enriched successfully (overall confidence: {gate.sanitized.overall_confidence:.2f}, "
+            f"reliability: {gate.reliability})"
         )
 
         return {
             'enriched_event_id': event['enriched_event_id'],
-            'enrichment': enrichment,
+            'enrichment': gate.sanitized,
+            'gate': gate,
+            'evidence': evidence,
             'original_event': event
         }
 
@@ -166,7 +241,12 @@ class PerplexityBackfillProcessor:
         return None
 
     def apply_enrichment_to_database(self, enriched_data: Dict) -> bool:
-        """Apply Perplexity enrichment to the database."""
+        """Store an enrichment that has already passed the acceptance gate.
+
+        Facts are written only if they do not weaken what is stored, and the
+        record is marked validated with a reliability computed from the
+        accepted facts - never a default.
+        """
 
         if self.dry_run:
             logger.info(f"[DRY RUN] Would update event: {enriched_data['original_event']['title'][:60]}...")
@@ -174,81 +254,36 @@ class PerplexityBackfillProcessor:
             return True
 
         event_id = enriched_data['enriched_event_id']
-        enrichment = enriched_data['enrichment']
         original_event = enriched_data['original_event']
+        gate: GateResult = enriched_data['gate']
 
-        updates = []
-        values = []
+        try:
+            outcome = self.db.record_enrichment_success(event_id, gate)
+        except Exception as exc:
+            self._record_failure(original_event, f"storage error: {str(exc)[:300]}")
+            return False
 
-        # Update event_date if Perplexity has higher confidence
-        if enrichment.earliest_event_date and enrichment.date_confidence and enrichment.date_confidence >= 0.6:
-            updates.append("event_date = ?")
-            values.append(enrichment.earliest_event_date)
-            updates.append("date_confidence = ?")
-            values.append(enrichment.date_confidence)
-            self.stats['updated_fields']['event_date'] += 1
+        field_for_group = {
+            'date': 'event_date', 'entity': 'entity_name', 'threat_actor': 'threat_actor',
+            'attack_method': 'attack_method', 'victim_count': 'victim_count',
+        }
+        for group in outcome['applied']:
+            self.stats['updated_fields'][field_for_group[group]] += 1
+        if gate.sanitized and gate.sanitized.formal_entity_name:
+            logger.info(
+                f"  Formal entity name: {gate.sanitized.formal_entity_name} "
+                f"(confidence: {(gate.sanitized.entity_confidence or 0.0):.2f})"
+            )
 
-        # Update entity name if available (would need to link to EntitiesV2 table)
-        # For now, we'll store it in a comment or log it
-        if enrichment.formal_entity_name and enrichment.entity_confidence and enrichment.entity_confidence >= 0.6:
-            updates.append("entity_confidence = ?")
-            values.append(enrichment.entity_confidence)
-            self.stats['updated_fields']['entity_name'] += 1
-            logger.info(f"  Formal entity name: {enrichment.formal_entity_name} (confidence: {enrichment.entity_confidence:.2f})")
-
-        # Update threat actor
-        if enrichment.threat_actor and enrichment.threat_actor_confidence and enrichment.threat_actor_confidence >= 0.6:
-            updates.append("attacking_entity_name = ?")
-            values.append(enrichment.threat_actor)
-            self.stats['updated_fields']['threat_actor'] += 1
-
-        # Update attack method
-        if enrichment.attack_method and enrichment.attack_method_confidence and enrichment.attack_method_confidence >= 0.6:
-            updates.append("attack_method = ?")
-            values.append(enrichment.attack_method)
-            self.stats['updated_fields']['attack_method'] += 1
-
-        # Update victim count
-        if enrichment.victim_count and enrichment.victim_count_confidence and enrichment.victim_count_confidence >= 0.6:
-            updates.append("records_affected = ?")
-            values.append(enrichment.victim_count)
-            self.stats['updated_fields']['victim_count'] += 1
-
-        # Always update Perplexity validation metadata
-        updates.append("perplexity_validated = ?")
-        values.append(True)
-        updates.append("perplexity_validated_at = ?")
-        values.append(datetime.now().isoformat())
-        updates.append("perplexity_enrichment_data = ?")
-        values.append(json.dumps(enrichment.model_dump(), default=str))
-        updates.append("data_source_reliability = ?")
-        values.append(0.85)  # Perplexity gets high reliability score
-
-        # Execute update
-        if updates:
-            with self.db._lock:
-                cursor = self.db._conn.cursor()
-                query = f"""
-                    UPDATE EnrichedEvents
-                    SET {', '.join(updates)}, updated_at = ?
-                    WHERE enriched_event_id = ?
-                """
-                values.extend([datetime.now().isoformat(), event_id])
-
-                cursor.execute(query, values)
-                self.db._conn.commit()
-
-            logger.info(f"  Updated {len(updates)} fields for event: {original_event['title'][:60]}...")
-            return True
-
-        return False
+        logger.info(f"  Updated {len(outcome['applied'])} fields for event: {original_event['title'][:60]}...")
+        return True
 
     def _log_enrichment_changes(self, enriched_data: Dict):
         """Log what changes would be made (for dry run)."""
         enrichment = enriched_data['enrichment']
         original = enriched_data['original_event']
 
-        logger.info(f"  Proposed changes:")
+        logger.info(f"  Proposed changes (accepted facts only):")
         if enrichment.earliest_event_date:
             logger.info(f"    Date: {original.get('event_date')} -> {enrichment.earliest_event_date} (conf: {enrichment.date_confidence:.2f})")
         if enrichment.formal_entity_name:
@@ -295,6 +330,7 @@ class PerplexityBackfillProcessor:
                     return False
                 except Exception as exc:
                     logger.warning(f"Failed to enrich event {event.get('enriched_event_id')}: {exc}")
+                    self._record_failure(event, f"unexpected error: {str(exc)[:300]}")
                     return False
 
         tasks = [asyncio.create_task(_enrich_one(event)) for event in events]
@@ -308,7 +344,28 @@ class PerplexityBackfillProcessor:
             if progress_log_every and completed % progress_log_every == 0:
                 logger.info(f"Progress: {completed}/{total} events processed ({enriched_count} enriched)")
 
+        self.report_quarantined()
         return {'enriched': enriched_count, 'failed': failed_count}
+
+    def report_quarantined(self, limit: int = 20) -> List[Dict]:
+        """Log the records that have used up their enrichment attempts."""
+        try:
+            quarantined = self.db.get_quarantined_enrichments()
+        except Exception as exc:
+            logger.warning(f"Could not read quarantined enrichments: {exc}")
+            return []
+        if quarantined:
+            logger.warning(
+                f"{len(quarantined)} event(s) quarantined after {MAX_ENRICHMENT_ATTEMPTS} failed "
+                "Perplexity attempts; they will not be retried until released "
+                "(--release-quarantine):"
+            )
+            for row in quarantined[:limit]:
+                logger.warning(f"  {row['enriched_event_id']}: {(row.get('title') or '')[:60]} "
+                               f"- {row.get('perplexity_last_error')}")
+            if len(quarantined) > limit:
+                logger.warning(f"  ... and {len(quarantined) - limit} more")
+        return quarantined
 
     async def process_backfill(
         self,
@@ -365,6 +422,7 @@ class PerplexityBackfillProcessor:
         logger.info(f"Total candidates: {self.stats['total_candidates']}")
         logger.info(f"Successfully enriched: {self.stats['enriched_successfully']}")
         logger.info(f"Failed to enrich: {self.stats['enriched_failed']}")
+        logger.info(f"Quarantined this run: {self.stats['quarantined']}")
         logger.info(f"Skipped: {self.stats['skipped']}")
         logger.info("\nFields updated:")
         for field, count in self.stats['updated_fields'].items():
@@ -379,6 +437,12 @@ async def main():
     parser.add_argument("--limit", type=int, help="Limit number of events to process")
     parser.add_argument("--priority-only", action="store_true", help="Only process high-priority events (placeholder dates)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
+    parser.add_argument("--requeue-empty", action="store_true",
+                        help="Un-validate records stored as validated with no facts (old unparseable/empty answers) so they are enriched again")
+    parser.add_argument("--report-quarantine", action="store_true",
+                        help="List quarantined records and exit")
+    parser.add_argument("--release-quarantine", action="store_true",
+                        help="Put quarantined records back in the retry queue")
 
     args = parser.parse_args()
 
@@ -388,6 +452,19 @@ async def main():
     
     # Initialize database
     db = CyberEventDataV2()
+
+    # Maintenance actions that need no Perplexity key.
+    if args.requeue_empty:
+        logger.info(f"Re-queued {db.requeue_empty_validations()} empty validation(s)")
+    if args.release_quarantine:
+        logger.info(f"Released {db.release_quarantined_enrichments()} quarantined record(s)")
+    if args.report_quarantine:
+        rows = db.get_quarantined_enrichments()
+        logger.info(f"{len(rows)} quarantined record(s)")
+        for row in rows:
+            logger.info(f"  {row['enriched_event_id']}: {(row.get('title') or '')[:60]} - {row.get('perplexity_last_error')}")
+        db.close()
+        return 0
 
     # Initialize Perplexity engine with API key from .env
     api_key = env_config.get("PERPLEXITY_API_KEY")
