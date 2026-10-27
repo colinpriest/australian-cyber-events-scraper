@@ -397,13 +397,50 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
     """
     with sqlite3.connect(db_path) as conn:
         df = pd.read_sql_query(query, conn)
-
-    if df.empty:
-        raise RuntimeError("No victim events found for recurrent timing analysis.")
+        if df.empty:
+            raise RuntimeError("No victim events found for recurrent timing analysis.")
+        df = one_organisation_per_event(conn, df)
 
     df["event_date"] = pd.to_datetime(df["event_date"]).dt.date
-    df = df.drop_duplicates(["entity_id", "deduplicated_event_id"]).copy()
     return add_entity_covariates(df)
+
+
+# Entity attributes taken from the organisation's representative variant.
+_ENTITY_COLUMNS = ("entity_name", "employee_count", "turnover", "entity_kind", "size_estimate",
+                   "size_confidence", "size_employees", "size_revenue_aud")
+
+
+def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
+    """One row per (organisation, event): a multi-victim incident counts once per victim
+    organisation, and never twice for one organisation.
+
+    Victim roles are per entity, and one organisation can be stored under name
+    variants ("Optus", "Singtel Optus Pty Limited"). Variants are joined by
+    :func:`victim_counting.organisation_groups` (the strict same-organisation
+    test, aliases first) and keyed on one representative entity, whose
+    attributes (size, kind) every row then carries. Without this a variant
+    pair on one event lists the incident twice under the organisation, and a
+    variant pair across two events splits a genuine repeat into two
+    single-event "organisations".
+    """
+    from cyber_data_collector.dedup.victim_counting import organisation_groups, within_event_duplicates
+
+    groups = organisation_groups(conn, df["entity_id"].tolist())
+    df = df.copy()
+    # Two victims of one event that are one organisation under two names
+    # ("Australian Red Cross" / "Australian Red Cross Society") count once.
+    drop = within_event_duplicates(conn, zip(df["entity_id"], df["entity_name"], df["deduplicated_event_id"]))
+    if drop:
+        df = df[[(int(e), d) not in drop for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]]
+    df["entity_id"] = df["entity_id"].map(lambda e: groups.get(int(e), int(e)))
+    reps = sorted(set(df["entity_id"]))
+    attrs = pd.read_sql_query(
+        f"SELECT entity_id, {', '.join(_ENTITY_COLUMNS)} FROM EntitiesV2 "
+        f"WHERE entity_id IN ({','.join('?' * len(reps))})", conn, params=reps).set_index("entity_id")
+    for column in _ENTITY_COLUMNS:
+        if column in df.columns:
+            df[column] = df["entity_id"].map(attrs[column])
+    return df.drop_duplicates(["entity_id", "deduplicated_event_id"]).reset_index(drop=True)
 
 
 def collapse_entity_same_day_events(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

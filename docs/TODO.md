@@ -17,13 +17,11 @@ names the evidence that showed the problem. Done items move to the README or
 
 ## To do
 
-- **Find events that affect more than one organisation.** A supplier breach
-  (ProctorU 2020: ten Australian universities; Canvas/Instructure; Frontier
-  payroll) is one incident with several co-equal victims. The schema supports
-  several `victim` roles per event, but nothing finds the other victims or
-  splits a vendor breach recorded under one customer. Needed: detect
-  supplier-breach events, research the affected customers, attach each as a
-  victim, and make sure the recurrence analysis counts it once per victim.
+- **Find events that affect more than one organisation.** Done as
+  `find-supplier-victims` (docs/10-supplier-incidents.md). Open: victims held
+  because they still have their own event near the incident need that pair
+  resolved (merge or a `different` ruling); and detection by record text is
+  loose, so most detected "supplier incidents" have no candidates.
 - **Calibrate victim attribution.** `check-victim-attribution` (Jev + timeline)
   is report-only because no victim attributions are labelled. Wrong victims
   still in the data: UN Women Australia under UWA, a NSW driver-licence

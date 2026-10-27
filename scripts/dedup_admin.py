@@ -2664,6 +2664,78 @@ def cmd_check_duplicates(args) -> int:
     return 0
 
 
+def cmd_find_supplier_victims(args) -> int:
+    """Find every organisation affected by each supplier incident; see supplier_victims.
+
+    Without ``--apply`` it reports. With ``--apply`` it merges the same supplier
+    incident recorded under several customers and attaches accepted customers as
+    victims - only with readable labels and a calibration measured on the current
+    models and questions; otherwise it refuses (exit 2) and says why. Findings
+    are written to ``instance/supplier_victim_findings.json``.
+    """
+    import os
+
+    from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.utils import jev
+
+    jev.require()   # fails loudly; never skip or switch model
+    if not os.getenv("OPENAI_API_KEY"):
+        print("OPENAI_API_KEY is not set: the middle band cannot be escalated. Refusing to run.")
+        return 2
+    if args.research and not os.getenv("PERPLEXITY_API_KEY"):
+        print("PERPLEXITY_API_KEY is not set: --research cannot search. Refusing to run.")
+        return 2
+    apply = args.apply and not args.dry_run
+    conn = _connect(args.db)
+    refresher = _make_refresher(args) if apply else None
+    try:
+        result = sv.find_supplier_victims(conn, apply=apply, research=args.research,
+                                          role_refresher=refresher, limit=args.limit)
+    except sv.CalibrationError as exc:
+        print(f"Refusing to apply: {exc}")
+        return 2
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+    out = Path(args.db).parent / "supplier_victim_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    print(f"{result['supplier_incidents']} supplier incident(s); {result['victim_candidates']} victim "
+          f"candidate(s), {result['pair_candidates']} other event(s) that may be the same incident.")
+    print(f"Judged {result['judged']['victim']} victim and {result['judged']['same_incident']} event "
+          f"candidate(s); escalated {result['escalated']['victim']} + {result['escalated']['same_incident']}.")
+    for m in result["merged"]:
+        if "refused" in m:
+            print(f"  merge refused  {m['source'][:8]} -> {m['target'][:8]}: {m['refused']}")
+        else:
+            print(f"  merged  {m['source'][:8]} -> {m['target'][:8]}  victims carried: "
+                  f"{', '.join(m['carried_victims']) or '-'}")
+    for a in result["attached"]:
+        print(f"  victim  {a['deduplicated_event_id'][:8]}  + {a['victim']}  ({a['decided_by']}, "
+              f"p={a['p_affected'] if a['p_affected'] is None else round(a['p_affected'], 3)})")
+    for h in result["held"]:
+        print(f"  held    {h['deduplicated_event_id'][:8]}  {h['victim']}: own event {h['own_event'][:8]}")
+    for v in result["variants"]:
+        print(f"  variant {v['deduplicated_event_id'][:8]}  {v['candidate']} = {v['victim']} (not attached)")
+    if apply:
+        print(f"Merged {sum(1 for m in result['merged'] if 'refused' not in m)} event(s), attached "
+              f"{len(result['attached'])} victim(s), held {len(result['held'])}, "
+              f"{len(result['variants'])} other name(s) for existing victims (cut-offs "
+              f"{result['cutoffs']}); findings in {out}")
+    else:
+        print(f"Report only (pass --apply to act); findings in {out}")
+    problems = (len(result["failed"]["victim"]) + len(result["failed"]["same_incident"])
+                + len(result["search_failures"]))
+    undecided = len(result["undecided"]["victim"]) + len(result["undecided"]["same_incident"])
+    if undecided:
+        print(f"WARNING: {undecided} item(s) in the escalation band have no escalated answer and are "
+              "undecided (never acted on).")
+    if problems:
+        print(f"ERROR: {problems} judgement(s) or search(es) failed; see the log and {out}.")
+        return 1
+    return 0
+
+
 def cmd_check_victims(args) -> int:
     """Make each event's victim agree with the victim its own records name.
 
@@ -3035,6 +3107,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Merge (only with a calibration matching the current model and "
                         "question; otherwise report only)")
     p.set_defaults(func=cmd_check_duplicates)
+
+    p = sub.add_parser("find-supplier-victims",
+                       help="Find every organisation affected by each supplier/third-party "
+                            "incident (Jev, calibrated); with --apply merge the same supplier "
+                            "incident recorded under several customers and attach co-victims")
+    p.add_argument("--apply", action="store_true",
+                   help="Act (only with readable labels and a calibration matching the current "
+                        "models and questions; otherwise refuse with exit 2)")
+    p.add_argument("--dry-run", action="store_true", help="Report only (the default)")
+    p.add_argument("--research", action="store_true",
+                   help="One stored Perplexity search per supplier incident for the "
+                        "organisations it affected (reused on later runs)")
+    p.add_argument("--limit", type=int, default=None, help="Only the first N supplier incidents")
+    p.set_defaults(func=cmd_find_supplier_victims)
 
     p = sub.add_parser("check-victims",
                        help="Re-attribute events whose records all name a different "

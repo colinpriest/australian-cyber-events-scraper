@@ -606,6 +606,40 @@ Every Jev and escalation answer is stored in `ModelJudgements` with the
 question as sent, a hash of the input, the version that answered and the full
 distribution, and reused unless the question, the input or the model changes.
 
+### Supplier incidents: every affected organisation, one incident
+
+A supplier breach (ProctorU 2020 and ten universities; Frontier Software's
+payroll; Canvas/Instructure; HWL Ebsworth's clients) is one incident with
+several co-equal victims. `find-supplier-victims` detects supplier incidents
+(a vendor, or text describing a third-party compromise), gathers candidate
+victims from the records' links, Perplexity's research and - with
+`--research` - one stored search per incident, and finds other events that are
+the same incident under another customer. Jev judges each (middle band
+escalated; a failed escalation leaves the item undecided). With `--apply` and a
+calibration for the current models and questions it merges those events
+through the ledger and attaches the accepted customers as `victim` roles, with
+an audit row each; a victim that still has its own separate event near the
+incident is held rather than counted twice.
+
+```bash
+python scripts/dedup_admin.py find-supplier-victims --research            # report
+python scripts/dedup_admin.py find-supplier-victims --research --apply    # act (calibrated)
+python scripts/calibrate_supplier_victims.py sample | packet --out DIR | calibrate
+```
+
+Calibrated 2026-10-27 on 187 blind-labelled items
+(`evaluation/supplier_victim_labels.csv`): same-incident merges at **0.87**
+(30/31 labelled merges right, recall 0.79, bootstrap out-of-sample 0.94);
+co-victims only at **0.96** (7/7, recall 0.11, bootstrap 0.90 - weak: brands
+and units of a recorded victim score high), so most attached victims come from
+the labels. `--apply` refuses (exit 2) without readable labels and a matching
+calibration.
+
+The analysis and the by-entity dashboard count a multi-victim incident once per
+victim organisation and never twice for one organisation stored under two
+names (`dedup/victim_counting.py`). Detail:
+[docs/10-supplier-incidents.md](docs/10-supplier-incidents.md).
+
 ### Stray records: event coherence
 
 The opposite of a missed merge: an event holding records about a *different*
@@ -1335,6 +1369,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 | [06-deduplication.md](docs/06-deduplication.md) | Entity-based deduplication, similarity matching, and merge logic |
 | [07-ASD-risk-classification.md](docs/07-ASD-risk-classification.md) | ASD risk matrix framework and GPT-4o classification |
 | [08-dashboard-generation.md](docs/08-dashboard-generation.md) | Dashboard SQL queries, Chart.js charts, and OAIC comparison |
+| [10-supplier-incidents.md](docs/10-supplier-incidents.md) | Supplier incidents: co-victims, same-incident merges, calibration, counting once per organisation |
 | [data-dictionary.md](docs/data-dictionary.md) | Complete database schema, table definitions, and field descriptions |
 
 These documents contain sufficient detail for independent review and replication of each pipeline stage.
