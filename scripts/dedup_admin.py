@@ -1767,9 +1767,8 @@ def _industry_for(conn: sqlite3.Connection, victim: str) -> Optional[str]:
         return siblings[0]["ind"]
 
     if row and row["entity_type"]:
-        raw = str(row["entity_type"]).split(".")[-1]
-        if raw and raw.isalpha():
-            return raw.title()
+        from cyber_data_collector.utils.enum_values import industry_from_entity_type
+        return industry_from_entity_type(row["entity_type"])
     return None
 
 
@@ -2691,6 +2690,50 @@ def cmd_restore_dedup_state(args) -> int:
     return 0
 
 
+def cmd_rescrape_short_pages(args) -> int:
+    """Re-fetch Google pages with too little stored text for the source gate; see page_rescrape."""
+    from cyber_data_collector.processing.page_rescrape import (
+        MAX_ATTEMPTS, ScraperUnavailable, rescrape_short_pages,
+    )
+
+    conn = _connect(args.db)
+    try:
+        try:
+            report = rescrape_short_pages(conn, limit=args.limit, dry_run=args.dry_run,
+                                          concurrency=args.concurrency)
+        except ScraperUnavailable as exc:
+            print(f"ERROR: re-scraping could not run: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        conn.close()
+    if args.dry_run:
+        print(f"{report.candidates} Google page(s) under the gate's minimum text would be re-fetched.")
+        return 0
+    print(f"Re-fetched {report.attempted} of {report.candidates} short Google page(s): "
+          f"{len(report.stored)} stored, {len(report.failed)} failed "
+          f"({report.gave_up} given up after {MAX_ATTEMPTS} attempts or unfetchable). "
+          "Run check-sources to judge the stored pages.")
+    return 0
+
+
+def cmd_normalise_enums(args) -> int:
+    """Rewrite qualified enum names ('EventSeverity.MEDIUM') to their values; idempotent."""
+    from cyber_data_collector.utils.enum_values import normalise_stored_enums
+
+    conn = _connect(args.db)
+    try:
+        changed = normalise_stored_enums(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    verb = "Would rewrite" if args.dry_run else "Rewrote"
+    if not changed:
+        print("No legacy enum spellings stored.")
+        return 0
+    for where, n in sorted(changed.items()):
+        print(f"{verb} {n} row(s) in {where}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     from cyber_data_collector.utils.api_budget import ensure_configured
     ensure_configured()   # API_BUDGET_<PROVIDER> limits when run on its own
@@ -2999,6 +3042,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "victim than the event's (no API calls)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_check_victims)
+
+    p = sub.add_parser("rescrape-short-pages",
+                       help="Re-fetch Google-sourced pages whose stored text is too short for the "
+                            "source gate; store only real, longer page text (no Perplexity "
+                            "substitutes); give up on a page after 3 failed attempts")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--concurrency", type=int, default=3)
+    p.add_argument("--dry-run", action="store_true", help="Count the pages; fetch nothing")
+    p.set_defaults(func=cmd_rescrape_short_pages)
+
+    p = sub.add_parser("normalise-enums",
+                       help="Rewrite stored qualified enum names (EventSeverity.MEDIUM, "
+                            "CyberEventType.OTHER, EntityType.X) to their values in every "
+                            "table and in RawEvents.source_metadata (no API calls; idempotent)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_normalise_enums)
 
     p = sub.add_parser("restore-dedup-state",
                        help="Restore curated dedup tables and ASD classifications "

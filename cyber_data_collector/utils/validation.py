@@ -10,6 +10,7 @@ import logging
 import json
 import re
 from datetime import date, datetime
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,10 @@ def safe_str(value: Any, default: Optional[str] = None, max_length: int = 0) -> 
     """
     if value is None:
         return default
+    if isinstance(value, Enum):
+        # str() of a (str, Enum) member is its qualified name on Python 3.11+
+        # ("EventSeverity.MEDIUM"), which this function then truncated.
+        value = value.value
     result = str(value).strip()
     if not result:
         return default
@@ -295,8 +300,13 @@ def validate_enrichment_data_for_storage(
     validated["summary"] = safe_str(validated.get("summary"))
 
     # Ensure event_type and severity are strings or None
-    validated["event_type"] = safe_str(validated.get("event_type"), max_length=50)
-    validated["severity"] = safe_str(validated.get("severity"), max_length=20)
+    from cyber_data_collector.models.events import CyberEventType, EventSeverity
+    from cyber_data_collector.utils.enum_values import canonical_enum_value
+
+    validated["event_type"] = safe_str(canonical_enum_value(validated.get("event_type"), CyberEventType),
+                                       max_length=50)
+    validated["severity"] = safe_str(canonical_enum_value(validated.get("severity"), EventSeverity),
+                                     max_length=20)
 
     # Validate event_date – must be ISO format string or None
     raw_date = validated.get("event_date")

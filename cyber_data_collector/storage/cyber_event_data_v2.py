@@ -17,6 +17,9 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from cyber_data_collector.models.events import CyberEventType, EntityType, EventSeverity
+from cyber_data_collector.utils.enum_values import canonical_enum_value, canonical_metadata
+
 
 #: Columns added to EnrichedEvents to track Perplexity enrichment attempts.
 #: Timestamps are TEXT, not TIMESTAMP: the connection uses PARSE_DECLTYPES,
@@ -141,7 +144,7 @@ class CyberEventDataV2:
                     raw_data.get('content'),
                     raw_data.get('event_date'),
                     raw_data.get('source_url'),
-                    json.dumps(raw_data.get('metadata', {}), default=self._json_default),
+                    json.dumps(canonical_metadata(raw_data.get('metadata', {})), default=self._json_default),
                     datetime.now().isoformat(),
                     False
                 ))
@@ -372,8 +375,10 @@ class CyberEventDataV2:
                     enriched_data.get('title'),
                     enriched_data.get('description'),
                     enriched_data.get('summary'),
-                    enriched_data.get('event_type'),
-                    enriched_data.get('severity'),
+                    # Re-enrichment copies these from RawEvents.source_metadata,
+                    # where old records hold "EventSeverity.MEDIUM"; store values.
+                    canonical_enum_value(enriched_data.get('event_type'), CyberEventType),
+                    canonical_enum_value(enriched_data.get('severity'), EventSeverity),
                     enriched_data.get('event_date'),  # Can now be None/NULL
                     enriched_data.get('records_affected'),
                     enriched_data.get('is_australian_event', False),
@@ -615,7 +620,7 @@ class CyberEventDataV2:
                 VALUES (?, ?, ?, ?, ?)
             """, (
                 entity_name,
-                entity_data.get('type'),
+                canonical_enum_value(entity_data.get('type'), EntityType),
                 entity_data.get('is_australian', False),
                 entity_data.get('confidence_score', 0.0),
                 datetime.now().isoformat()

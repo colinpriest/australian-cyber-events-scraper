@@ -5,6 +5,7 @@ import re
 import time
 from typing import Optional, List, Dict, Any
 import logging
+import os
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -38,6 +39,104 @@ BLOCKED_DOMAINS = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+#: ``content_origin`` values reported by :meth:`PlaywrightScraper.get_page_text`.
+ORIGIN_PAGE = "page"                                  # the requested URL's own HTML
+ORIGIN_PDF = "pdf"                                    # the requested URL's own PDF
+ORIGIN_PERPLEXITY_ALTERNATIVE = "perplexity_alternative"  # ANOTHER page, found by Perplexity
+
+
+class AlternativeSourceText(str):
+    """Text fetched from a different page than the one requested.
+
+    Returned only by the opt-in Perplexity fallback. It is a ``str`` so callers
+    that store text keep working, but it carries where it came from, so the
+    caller can (and must) record that the stored text is not the record's own
+    page - see :func:`content_origin_of`.
+    """
+
+    origin = ORIGIN_PERPLEXITY_ALTERNATIVE
+
+    def __new__(cls, text: str, source_url: str, requested_url: str):
+        obj = super().__new__(cls, text)
+        obj.source_url = source_url
+        obj.requested_url = requested_url
+        return obj
+
+
+def content_origin_of(text: Optional[str]) -> Dict[str, Optional[str]]:
+    """``{"content_origin", "content_source_url"}`` to store beside scraped text.
+
+    Plain text from the scraper is the requested page's own; an
+    :class:`AlternativeSourceText` is not.
+    """
+    if isinstance(text, AlternativeSourceText):
+        return {"content_origin": text.origin, "content_source_url": text.source_url}
+    return {"content_origin": ORIGIN_PAGE if text else None, "content_source_url": None}
+
+
+# Text that is an interstitial, not the page: bot checks, block pages, error
+# pages, cookie walls and paywalls. Matched only on short texts (or texts
+# dominated by cookie notices), since a real article can mention any of these.
+_BLOCK_PAGE_RE = re.compile(
+    r"access denied|attention required|just a moment\.\.\.|checking (?:if the site connection is secure"
+    r"|your browser)|enable (?:javascript|cookies)|verify (?:that )?you are (?:a )?human|are you a robot"
+    r"|captcha|request unsuccessful|incapsula|pardon our interruption|403 forbidden|404 not found"
+    r"|page (?:you (?:are looking for|requested) )?(?:was |could )?not (?:be )?found|page not found"
+    r"|this site can.t be reached|unusual traffic|you have been blocked|ddos protection"
+    r"|subscribe (?:now )?to (?:continue|read)|log ?in to (?:continue|read)",
+    re.IGNORECASE,
+)
+BLOCK_PAGE_MAX_CHARS = 2000
+
+# Words too common in incident coverage to identify one incident.
+_GENERIC_WORDS = frozenset("""
+the and for with from that this into over after about their its are was were has have had
+cyber attack attacks attacked breach breaches breached data security incident incidents hack hacked
+hackers ransomware leak leaked leaks exposed exposure customer customers information personal
+australia australian australians limited ltd pty group company inc corp corporation services
+news report reports confirms confirmed says said suffers suffered hit hits targeted major
+""".split())
+
+
+def distinctive_tokens(terms: Optional[List[str]]) -> List[List[str]]:
+    """Per term, its words that can identify an organisation or incident."""
+    out = []
+    for term in terms or []:
+        words = [w for w in re.findall(r"[a-z0-9]+", str(term).lower()) if len(w) >= 3 and w not in _GENERIC_WORDS]
+        if words:
+            out.append(words)
+    return out
+
+
+def mentions_expected(text: str, expected_terms: Optional[List[str]]) -> bool:
+    """Does ``text`` name what the record is about?
+
+    True when every distinctive word of at least one expected term (the victim
+    organisation, or the record's title) appears in the text. An alternative
+    page that names none of them is about something else.
+    """
+    found = set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    return any(all(w in found for w in words) for words in distinctive_tokens(expected_terms))
+
+
+def looks_like_block_page(text: Optional[str]) -> bool:
+    """True when scraped text is a block page, error page or cookie wall rather than content."""
+    if not text or not text.strip():
+        return True
+    # Share of the text, by characters, on lines about cookies: a cookie wall
+    # is mostly that; an article with a one-line cookie notice is not.
+    total = len(text.strip())
+    cookie_chars = sum(len(ln) for ln in text.splitlines() if "cookie" in ln.lower())
+    if cookie_chars / total > 0.3:
+        return True
+    return len(text.strip()) < BLOCK_PAGE_MAX_CHARS and bool(_BLOCK_PAGE_RE.search(text))
+
+
+BLOCKED_DOMAIN_ERROR = "blocked domain (social/profile/marketplace)"
+
+
 def is_blocked_domain(url: str) -> bool:
     """True if the URL is from a domain we should never attempt to scrape."""
     if not url:
@@ -52,9 +151,26 @@ class PlaywrightScraper:
     avoiding common detection mechanisms.
     """
 
-    def __init__(self, headless=True):
-        """Initializes the scraper."""
+    def __init__(self, headless=True, allow_perplexity_fallback: bool = False):
+        """Initializes the scraper.
+
+        Args:
+            headless: Run the browser headless.
+            allow_perplexity_fallback: When a page cannot be fetched, ask
+                Perplexity for *another* page covering the same story and return
+                that page's text as an :class:`AlternativeSourceText`. Off by
+                default: a failed fetch is reported as a failure, never filled in
+                from a different source. A caller that turns it on must store the
+                origin (:func:`content_origin_of`). Requires PERPLEXITY_API_KEY
+                and the openai package; raises if either is missing.
+        """
         self.headless = headless
+        self.allow_perplexity_fallback = allow_perplexity_fallback
+        if allow_perplexity_fallback:
+            if openai is None:
+                raise RuntimeError("allow_perplexity_fallback=True needs the openai package")
+            if not os.environ.get("PERPLEXITY_API_KEY"):
+                raise RuntimeError("allow_perplexity_fallback=True needs PERPLEXITY_API_KEY")
         self.playwright = None
         self.browser = None
         self.pdf_extractor = PDFExtractor() if PDFExtractor else None
@@ -120,6 +236,7 @@ class PlaywrightScraper:
         timeout: int = 30,
         event_date: str = None,
         return_metadata: bool = False,
+        expected_terms: Optional[List[str]] = None,
     ) -> Optional[str] | tuple[Optional[str], Dict[str, bool]]:
         """
         Visits a URL and extracts the primary text content from the page.
@@ -128,19 +245,33 @@ class PlaywrightScraper:
         Args:
             url: The URL to scrape.
             timeout: The maximum time to wait for the page to load in seconds.
+            expected_terms: Names (victim organisation, incident title) an
+                alternative page must mention before the opt-in Perplexity
+                fallback accepts it. Without them the fallback is not used.
 
         Returns:
             The extracted text content of the page, or None if scraping fails.
-            If return_metadata is True, returns (content, metadata) with Perplexity fallback flags.
+            If return_metadata is True, returns (content, metadata): the
+            Perplexity fallback flags, ``content_origin`` (``page``, ``pdf``,
+            ``perplexity_alternative`` or None), ``content_source_url`` (the
+            page the text came from, when not the requested one) and ``error``
+            (why nothing usable was fetched).
         """
         perplexity_attempted = False
         perplexity_succeeded = False
+        error: Optional[str] = None
 
-        def _format_return(text: Optional[str]):
+        def _format_return(text: Optional[str], origin: Optional[str] = ORIGIN_PAGE):
             if return_metadata:
+                if isinstance(text, AlternativeSourceText):
+                    origin_meta = content_origin_of(text)
+                else:
+                    origin_meta = {"content_origin": origin if text else None, "content_source_url": None}
                 return text, {
                     "perplexity_attempted": perplexity_attempted,
                     "perplexity_succeeded": perplexity_succeeded,
+                    "error": None if text else (error or "no text extracted"),
+                    **origin_meta,
                 }
             return text
 
@@ -149,6 +280,7 @@ class PlaywrightScraper:
         # Saves 2-5 sec per URL by avoiding both Playwright and Perplexity calls.
         if self._is_blocked_domain(url):
             self.logger.info(f"Skipping scrape (social/profile/marketplace domain): {url}")
+            error = BLOCKED_DOMAIN_ERROR
             return _format_return(None)
 
         # Check if URL points to a PDF file
@@ -158,7 +290,7 @@ class PlaywrightScraper:
                 result = self.pdf_extractor.extract_from_url(url, timeout=timeout)
                 if result and result['success']:
                     self.logger.info(f"Successfully extracted {len(result['text'])} chars from PDF using {result['extraction_method']}")
-                    return _format_return(result['text'])
+                    return _format_return(result['text'], ORIGIN_PDF)
                 else:
                     # INFO: a single PDF failing (403 from publisher, image-
                     # only PDF, etc.) is an expected outcome and not user-
@@ -166,18 +298,20 @@ class PlaywrightScraper:
                     # extract from the article HTML. Stays in the log file
                     # for diagnostics but doesn't pollute the run summary.
                     self.logger.info(f"PDF extraction failed: {result.get('error')}")
+                    error = f"PDF extraction failed: {result.get('error')}"
                     return _format_return(None)
             except Exception as e:
                 # Unexpected exception (not just a controlled failure
                 # result) - keep at WARNING since this is the unhappy path.
                 self.logger.warning(f"PDF extraction error: {e}")
+                error = f"PDF extraction error: {e}"
                 return _format_return(None)
 
         # For sites known to heavily block scrapers, try Perplexity first
-        if self._is_stubborn_site(url):
+        if self.allow_perplexity_fallback and self._is_stubborn_site(url):
             self.logger.info(f"Stubborn site detected, trying Perplexity first: {url}")
             perplexity_attempted = True
-            perplexity_content = await self._perplexity_fallback(url, event_date)
+            perplexity_content = await self._perplexity_fallback(url, event_date, expected_terms)
             if perplexity_content and len(perplexity_content) > 200:
                 perplexity_succeeded = True
                 return _format_return(perplexity_content)
@@ -303,13 +437,17 @@ class PlaywrightScraper:
                             await asyncio.sleep(random.uniform(8, 15))
                             # Try again with different headers or user agent
                             await context.close()
-                            perplexity_attempted = True
-                            retry_content = await self._retry_with_different_approach(url, timeout, event_date)
-                            perplexity_succeeded = bool(retry_content)
+                            retry_content = await self._retry_with_different_approach(url, timeout, event_date, expected_terms)
+                            if isinstance(retry_content, AlternativeSourceText):
+                                perplexity_attempted = perplexity_succeeded = True
+                            if not retry_content:
+                                error = "HTTP 403 (also on retry with a different browser context)"
                             return _format_return(retry_content)
                         else:
+                            error = "HTTP 403"
                             return _format_return(None)
                     elif response and response.status >= 400:
+                        error = f"HTTP {response.status}"
                         return _format_return(None)
                     else:
                         break  # Success
@@ -319,6 +457,7 @@ class PlaywrightScraper:
                         await asyncio.sleep(random.uniform(3, 8))
                         continue
                     else:
+                        error = f"timed out after {max_retries} attempts"
                         return _format_return(None)
 
             # Random delay to appear more human
@@ -364,16 +503,21 @@ class PlaywrightScraper:
             return _format_return(cleaned_text)
 
         except PlaywrightTimeoutError:
-            # Try Perplexity fallback for timeouts
-            perplexity_attempted = True
-            perplexity_content = await self._perplexity_fallback(url, event_date)
-            perplexity_succeeded = bool(perplexity_content)
-            return _format_return(perplexity_content)
-        except Exception as e:
-            # Check if it's a 403/404 error and try Perplexity fallback
-            if "403" in str(e) or "404" in str(e) or "Forbidden" in str(e) or "Not Found" in str(e):
+            error = "timed out while reading the page"
+            # Perplexity fallback (opt-in): another page about the same story.
+            if self.allow_perplexity_fallback:
                 perplexity_attempted = True
-                perplexity_content = await self._perplexity_fallback(url, event_date)
+                perplexity_content = await self._perplexity_fallback(url, event_date, expected_terms)
+                perplexity_succeeded = bool(perplexity_content)
+                return _format_return(perplexity_content)
+            return _format_return(None)
+        except Exception as e:
+            error = f"{type(e).__name__}: {str(e)[:200]}"
+            # Check if it's a 403/404 error and try the opt-in Perplexity fallback
+            if self.allow_perplexity_fallback and (
+                    "403" in str(e) or "404" in str(e) or "Forbidden" in str(e) or "Not Found" in str(e)):
+                perplexity_attempted = True
+                perplexity_content = await self._perplexity_fallback(url, event_date, expected_terms)
                 perplexity_succeeded = bool(perplexity_content)
                 return _format_return(perplexity_content)
             return _format_return(None)
@@ -467,7 +611,8 @@ class PlaywrightScraper:
             # ABC can be sensitive to rapid requests
             await asyncio.sleep(random.uniform(2, 4))
 
-    async def _retry_with_different_approach(self, url: str, timeout: int, event_date: str = None) -> Optional[str]:
+    async def _retry_with_different_approach(self, url: str, timeout: int, event_date: str = None,
+                                             expected_terms: Optional[List[str]] = None) -> Optional[str]:
         """Retry scraping with a completely different browser context."""
         # Create a new context with different fingerprint
         context = await self.browser.new_context(
@@ -498,10 +643,12 @@ class PlaywrightScraper:
             )
 
             if response and response.status >= 400:
-                # Try Perplexity fallback for HTTP errors
+                # Try the opt-in Perplexity fallback for HTTP errors
                 await page.close()
                 await context.close()
-                return await self._perplexity_fallback(url, event_date)
+                if not self.allow_perplexity_fallback:
+                    return None
+                return await self._perplexity_fallback(url, event_date, expected_terms)
 
             # Longer wait and scroll
             await asyncio.sleep(random.uniform(5, 8))
@@ -534,17 +681,29 @@ class PlaywrightScraper:
             except Exception:
                 pass
 
-    async def _perplexity_fallback(self, failed_url: str, event_date: str = None) -> Optional[str]:
-        """Use Perplexity to find alternative URLs when original URL fails."""
-        if not openai:
+    async def _perplexity_fallback(self, failed_url: str, event_date: str = None,
+                                   expected_terms: Optional[List[str]] = None) -> Optional[AlternativeSourceText]:
+        """Find ANOTHER page covering the same story when the original URL fails.
+
+        Opt-in (``allow_perplexity_fallback``); returns None when it is off.
+        The text returned is an :class:`AlternativeSourceText` naming the page
+        it came from - it is not the requested page and must not be stored as
+        if it were.
+        """
+        if not self.allow_perplexity_fallback:
+            self.logger.info("Perplexity fallback is off for this scraper; not replacing %s", failed_url)
+            return None
+        if not distinctive_tokens(expected_terms):
+            # Nothing to check an alternative page against: a page about some
+            # other story would be accepted on length alone.
+            self.logger.warning("Perplexity fallback for %s needs expected_terms (organisation or title) "
+                                "to verify an alternative page; not used", failed_url)
             return None
 
         try:
-            # Get Perplexity API key from environment
-            import os
-            api_key = os.environ.get('PERPLEXITY_API_KEY')
-            if not api_key:
-                return None
+            from cyber_data_collector.utils.llm_models import perplexity_model
+
+            api_key = os.environ['PERPLEXITY_API_KEY']
 
             client = openai.OpenAI(
                 api_key=api_key,
@@ -568,7 +727,7 @@ I need you to:
 The original URL is broken/inaccessible, so I need alternative sources covering the identical incident."""
 
             response = client.chat.completions.create(
-                model="sonar-pro",
+                model=perplexity_model(),
                 messages=[
                     {
                         "role": "system",
@@ -604,17 +763,18 @@ Return your response as a simple list of alternative URLs, one per line. Only in
                 try:
                     # Simple attempt with basic headers to test if URL works
                     alt_content = await self._simple_url_test(alt_url)
-                    if alt_content and len(alt_content) > 500:  # Valid content
+                    if (alt_content and len(alt_content) > 500 and not looks_like_block_page(alt_content)
+                            and mentions_expected(alt_content, expected_terms)):
                         # Update the database to record the alternative URL
                         await self._record_alternative_url(failed_url, alt_url)
-                        return alt_content
+                        return AlternativeSourceText(alt_content, source_url=alt_url, requested_url=failed_url)
                 except Exception:
                     continue
 
             return None
 
         except Exception as e:
-            logger.debug(f"Perplexity fallback failed: {e}")
+            self.logger.warning(f"Perplexity fallback failed for {failed_url}: {e}")
             return None
 
     def _extract_story_hint_from_url(self, url: str) -> str:

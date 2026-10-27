@@ -24,6 +24,7 @@ This module is the single path both stages now go through:
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -40,6 +41,24 @@ BASIS_SNIPPET_ONLY = "snippet_only"
 BASIS_NONE = "none"
 #: Set on events that never went through :func:`prepare_records_for_processing`.
 BASIS_UNSCRAPED = "unscraped"
+
+#: ``RawEvents.source_metadata["content_origin"]`` when the stored text is not
+#: the record's own page but another page an (opt-in) Perplexity search found.
+#: Matches ``entity_scraper.ORIGIN_PERPLEXITY_ALTERNATIVE``.
+ORIGIN_PERPLEXITY_ALTERNATIVE = "perplexity_alternative"
+
+
+def content_origin(source_metadata: Any) -> Tuple[Optional[str], Optional[str]]:
+    """``(content_origin, content_source_url)`` recorded in ``source_metadata``."""
+    meta = source_metadata
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            return None, None
+    if not isinstance(meta, dict):
+        return None, None
+    return meta.get("content_origin"), meta.get("content_source_url")
 
 REJECTION_PREFIX = "Rejected at "
 
@@ -67,6 +86,8 @@ class RecordEvidence:
         snippet: The discovery description (a search snippet for Google).
         reason: Human-readable account of why this basis was chosen.
         rejection: ``(stage, reason)`` if the record was rejected earlier.
+        content_origin: ``perplexity_alternative`` when the stored text came
+            from another page than ``url`` (see ``content_source_url``).
     """
 
     raw_event_id: Optional[str]
@@ -79,6 +100,13 @@ class RecordEvidence:
     reason: str
     discovered_at: Optional[str] = None
     rejection: Optional[Tuple[str, str]] = None
+    content_origin: Optional[str] = None
+    content_source_url: Optional[str] = None
+
+    @property
+    def is_alternative_source(self) -> bool:
+        """True when the stored text is another page's, not the record's own."""
+        return self.content_origin == ORIGIN_PERPLEXITY_ALTERNATIVE
 
     @property
     def has_article(self) -> bool:
@@ -103,10 +131,14 @@ class RecordEvidence:
 
         content = (pick("raw_content") or "").strip()
         description = (pick("raw_description") or "").strip()
+        origin, origin_url = content_origin(pick("source_metadata"))
         if len(content) >= MIN_ARTICLE_CHARS:
             basis, article = BASIS_ARTICLE, content
             snippet = description or None
             reason = f"scraped article text ({len(content)} chars)"
+            if origin == ORIGIN_PERPLEXITY_ALTERNATIVE:
+                reason = (f"text of another page ({origin_url or 'unknown URL'}) found by a Perplexity "
+                          f"search because the record's own page could not be fetched ({len(content)} chars)")
         elif content:
             # Fetched, but too little to judge from: say so, keep it as snippet.
             basis, article = BASIS_SNIPPET_ONLY, None
@@ -130,6 +162,8 @@ class RecordEvidence:
             reason=reason,
             discovered_at=pick("discovered_at"),
             rejection=parse_rejection(pick("processing_error"), pick("is_processed")),
+            content_origin=origin,
+            content_source_url=origin_url,
         )
 
     def match_text(self) -> str:
@@ -138,6 +172,14 @@ class RecordEvidence:
 
     def prompt_block(self, max_chars: int = 4000) -> str:
         """Render the evidence for an LLM prompt, labelled by what it is."""
+        if self.has_article and self.article_text and self.is_alternative_source:
+            text = self.article_text[:max_chars]
+            return (
+                f"ALTERNATIVE-SOURCE TEXT: the record's own page ({self.url or 'unknown'}) could not be "
+                f"fetched; this is another page ({self.content_source_url or 'unknown URL'}) that a "
+                "search judged to cover the same story. It may describe a different incident - "
+                f"check it matches the record's title before relying on it:\n{text}"
+            )
         if self.has_article and self.article_text:
             text = self.article_text[:max_chars]
             return (
@@ -169,7 +211,8 @@ def load_record_evidence(db: Any, raw_event_id: str) -> Optional[RecordEvidence]
         cursor = db._conn.cursor()
         cursor.execute(
             "SELECT raw_event_id, source_type, raw_title, raw_description, raw_content, "
-            "source_url, CAST(discovered_at AS TEXT) AS discovered_at, is_processed, processing_error "
+            "source_url, CAST(discovered_at AS TEXT) AS discovered_at, is_processed, processing_error, "
+            "source_metadata "
             "FROM RawEvents WHERE raw_event_id = ?",
             (raw_event_id,),
         )

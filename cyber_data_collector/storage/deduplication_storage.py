@@ -23,6 +23,8 @@ from ..processing.deduplication_v2 import DeduplicationResult, MergeGroup, Valid
 # Import the simplified CyberEvent from deduplication_v2
 from ..processing.deduplication_v2 import CyberEvent
 from ..utils.validation import llm_validate_records_affected
+from ..models.events import CyberEventType, EventSeverity
+from ..utils.enum_values import canonical_enum_value
 
 logger = logging.getLogger(__name__)
 
@@ -324,8 +326,8 @@ class DeduplicationStorage:
                 'title': event.title,
                 'summary': event.summary,
                 'event_date': event.event_date,
-                'event_type': event.event_type,
-                'severity': event.severity,
+                'event_type': canonical_enum_value(event.event_type, CyberEventType),
+                'severity': canonical_enum_value(event.severity, EventSeverity),
                 'records_affected': validated_records,  # Use validated value
                 'victim_organization_name': event.victim_organization_name if hasattr(event, 'victim_organization_name') else None,
                 'victim_organization_industry': event.victim_organization_industry if hasattr(event, 'victim_organization_industry') else None,
