@@ -14,8 +14,12 @@ estimate. The result, with the Jev model and question version, goes to
 ``evaluation/duplicate_calibration.json``; the pipeline merges only while
 both still match.
 
+Calibrate on the database **as it was when the pairs were labelled**: after
+merging, labelled ``same`` pairs no longer exist as pairs. The file name of
+that snapshot is recorded in the output.
+
 Usage (from the project root):
-    python scripts/calibrate_duplicates.py --precision 0.95
+    python scripts/calibrate_duplicates.py --db <labelling-time snapshot> --precision 0.95
 """
 
 from __future__ import annotations
@@ -34,20 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.dedup import duplicate_judgement as dj  # noqa: E402
 from cyber_data_collector.utils.llm_models import (  # noqa: E402
-    add_model_arguments, apply_model_arguments, typesafe_model,
+    add_model_arguments, apply_model_arguments,
 )
 from scripts.calibrate_event_reality import choose_cutoff  # noqa: E402
-
-
-def stored_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
-    out: Dict[str, float] = {}
-    for pid, value in conn.execute(
-            """SELECT subject_id, value FROM ModelJudgements
-               WHERE subject_type = 'event_pair' AND question_id = ? AND question_version = ?
-                 AND model_requested = ? ORDER BY created_at""",
-            (dj.QUESTION_ID, dj.QUESTION_VERSION, typesafe_model())):
-        out[pid] = float(value)            # latest wins
-    return out
 
 
 def merge_cutoff(rows: List[Dict], precision: float, min_merges: int):
@@ -100,7 +93,8 @@ def main(argv=None) -> int:
     apply_model_arguments(args)
 
     labels = dj.labelled_pairs()
-    probs = stored_probabilities(sqlite3.connect(args.db))
+    # The final score the pipeline acts on: the escalation's in the middle band, else Jev's.
+    probs = dj.stored_final_probabilities(sqlite3.connect(args.db))
     rows = [{"pair_id": pid, "p": probs[pid], "same": label == "same"}
             for pid, label in labels.items() if label in ("same", "different") and pid in probs]
     unsure = sum(1 for label in labels.values() if label == "unsure")
@@ -108,7 +102,8 @@ def main(argv=None) -> int:
 
     chosen, curve = merge_cutoff(rows, args.precision, args.min_merges)
     boot = bootstrap(rows, args.precision, args.min_merges)
-    result = {"question_version": dj.QUESTION_VERSION, "model": typesafe_model(),
+    result = {**dj.calibration_identity(), "escalate_band": list(dj.ESCALATE_BAND),
+              "calibrated_on_database": Path(args.db).name,
               "cutoff": chosen["cutoff"] if chosen else None, "precision_target": args.precision,
               "min_merges": args.min_merges, "at_cutoff": chosen, "bootstrap_out_of_sample_precision": boot,
               "labelled_used": len(rows), "labelled_same": sum(r["same"] for r in rows),

@@ -147,7 +147,7 @@ class JevJudge:
         row = self.conn.execute(
             """SELECT primitive, answer, value, confidence, probabilities_json, model
                FROM ModelJudgements WHERE question_id = ? AND input_hash = ?
-               ORDER BY created_at DESC LIMIT 1""", (question_id, digest)).fetchone()
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""", (question_id, digest)).fetchone()
         if row is None:
             return None
         return Judgement(question_id, row[0], row[1], row[2], row[3],

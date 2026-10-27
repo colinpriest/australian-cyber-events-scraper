@@ -102,6 +102,16 @@ class DeduplicationMigration:
                 from cyber_data_collector.dedup import page_classifier
                 from cyber_data_collector.dedup.non_incident import deactivate_unmapped_non_incidents
                 with sqlite3.connect(self.db_path) as conn:
+                    # Google results become evidence only if the page itself
+                    # reports an incident (calibrated Jev gate; report-only
+                    # without a calibration). See source_gate.
+                    from cyber_data_collector.utils import jev
+                    if jev.available():
+                        from cyber_data_collector.dedup.source_gate import check_sources
+                        gate = check_sources(conn, apply=True, only_unmapped=True)
+                        self.migration_report['statistics']['source_gate_removed'] = len(gate['removed'])
+                        self.migration_report['statistics']['source_gate_replacements'] = len(
+                            gate['replacements_queued'])
                     # Roundup / guidance / profile pages among the new records
                     # are classified first, so their verdicts feed the gate.
                     suspects = page_classifier.pending_suspects(conn, only_unmapped=True)

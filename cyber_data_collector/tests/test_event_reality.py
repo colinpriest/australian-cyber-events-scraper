@@ -17,6 +17,9 @@ from cyber_data_collector.dedup.ledger import DedupLedger  # noqa: E402
 from cyber_data_collector.utils.jev import JevJudge  # noqa: E402
 
 
+NO_ESCALATION = object()   # never called: the fake Jev scores sit outside the escalation band
+
+
 def NO_FINDINGS(query, model):
     return {"answer": "FOUND: no\nINCIDENT: none found", "citations": []}
 
@@ -43,6 +46,9 @@ def conn(monkeypatch):
         CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT PRIMARY KEY, title TEXT, event_date TEXT,
             victim_organization_name TEXT, status TEXT, updated_at TEXT);
         CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY, entity_name TEXT);
+        CREATE TABLE DeduplicatedEventEntities (deduplicated_event_id TEXT, entity_id INTEGER,
+            relationship_type TEXT);
         CREATE TABLE EnrichedEvents (enriched_event_id TEXT PRIMARY KEY, raw_event_id TEXT, title TEXT,
             perplexity_enrichment_data TEXT, status TEXT, updated_at TEXT);
         CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT, raw_content TEXT,
@@ -65,9 +71,11 @@ def conn(monkeypatch):
     return c
 
 
-def _calibration(tmp_path, cutoff, model="jev-1.14.0", version=er.QUESTION_VERSION):
+def _calibration(tmp_path, cutoff, model=None, version=None):
+    identity = er.calibration_identity()
     path = tmp_path / "cal.json"
-    path.write_text(json.dumps({"cutoff": cutoff, "model": model, "question_version": version}))
+    path.write_text(json.dumps({"cutoff": cutoff, "model": model or identity["model"],
+                                "question_version": version or identity["question_version"]}))
     return path
 
 
@@ -83,7 +91,7 @@ def test_state_carries_page_text_and_perplexity_research(conn):
 def test_without_calibration_nothing_is_rejected(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=True, judge=judge, calibration_path=tmp_path / "missing.json",
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True, judge=judge, calibration_path=tmp_path / "missing.json",
                              search=NO_FINDINGS)
     assert result["judged"] == 2 and not result["calibrated"] and not result["applied"]
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2
@@ -91,7 +99,7 @@ def test_without_calibration_nothing_is_rejected(conn, tmp_path, monkeypatch):
 
 def test_calibration_for_another_model_or_question_is_ignored(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
-    assert er.active_calibration(_calibration(tmp_path, 0.3, model="jev-1.13.0")) is None
+    assert er.active_calibration(_calibration(tmp_path, 0.3, model="jev-1.13.0+gpt-5.5-2026-04-23")) is None
     assert er.active_calibration(_calibration(tmp_path, 0.3, version="event-reality-v0")) is None
     assert er.active_calibration(_calibration(tmp_path, 0.3))["cutoff"] == 0.3
 
@@ -99,7 +107,7 @@ def test_calibration_for_another_model_or_question_is_ignored(conn, tmp_path, mo
 def test_calibrated_cutoff_rejects_only_below_it(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
                              search=NO_FINDINGS)
 
     assert result["applied"] and [r["deduplicated_event_id"] for r in result["rejections"]] == ["act"]
@@ -117,7 +125,7 @@ def test_only_low_screen_scores_are_searched_and_v2_sees_the_result(conn, tmp_pa
         queries.append(query)
         return {"answer": "FOUND: no\nINCIDENT: none found", "citations": ["https://example.com/x"]}
 
-    er.check_events(conn, judge=JevJudge(conn, client=fake), calibration_path=tmp_path / "none.json",
+    er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, judge=JevJudge(conn, client=fake), calibration_path=tmp_path / "none.json",
                     search=search)
 
     assert len(queries) == 1 and "Business - ACT Government" in queries[0]
@@ -161,7 +169,7 @@ def test_an_event_labelled_real_is_never_rejected(conn, tmp_path, monkeypatch):
     labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
                       "act,real,confirmed elsewhere,packet,test\n", encoding="utf-8")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
                              search=NO_FINDINGS, labels_path=labels)
     assert result["rejections"] == [] and not result["applied"]
     assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'act'").fetchone()[0] == "Active"
@@ -170,7 +178,7 @@ def test_an_event_labelled_real_is_never_rejected(conn, tmp_path, monkeypatch):
 def test_report_only_without_apply(conn, tmp_path, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
     judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
-    result = er.check_events(conn, apply=False, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=False, judge=judge, calibration_path=_calibration(tmp_path, 0.3),
                              search=NO_FINDINGS)
     assert len(result["rejections"]) == 1 and not result["applied"]
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2

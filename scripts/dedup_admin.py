@@ -2515,6 +2515,70 @@ def cmd_check_events(args) -> int:
     return 0
 
 
+def cmd_check_sources(args) -> int:
+    """Google source gate; see cyber_data_collector.dedup.source_gate."""
+    from cyber_data_collector.dedup.source_gate import check_sources
+    from cyber_data_collector.utils import jev
+
+    if not jev.available():
+        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
+        return 0
+    conn = _connect(args.db)
+    try:
+        result = check_sources(conn, apply=args.apply, only_unmapped=args.unmapped_only)
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "source_gate_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    if not result["calibrated"]:
+        print(f"Judged {result['judged']} of {result['records']} Google record(s). No calibration for this "
+              "model and question: nothing removed. Run scripts/calibrate_source_gate.py.")
+        return 0
+    verb = "Removed" if args.apply else "Would remove"
+    print(f"{verb} {len(result['below_cutoff'] if not args.apply else result['removed'])} of {result['judged']} "
+          f"Google record(s) below cut-off {result['cutoff']}; {len(result['replacements_queued'])} replacement "
+          f"source(s) queued; findings in {out}")
+    return 0
+
+
+def cmd_research_timelines(args) -> int:
+    """Research each multi-event organisation's incident history once; see org_timeline."""
+    from cyber_data_collector.dedup.org_timeline import organisations_with_several_events, research_all
+
+    conn = _connect(args.db)
+    try:
+        done = research_all(conn)
+        total = len(organisations_with_several_events(conn))
+    finally:
+        conn.close()
+    print(f"{done} of {total} organisations with several events have a stored timeline.")
+    return 0
+
+
+def cmd_check_victim_attribution(args) -> int:
+    """Report events whose recorded victim Jev doubts; see victim_judgement. Changes nothing."""
+    from cyber_data_collector.dedup.victim_judgement import check_victim_attribution
+    from cyber_data_collector.utils import jev
+
+    if not jev.available():
+        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
+        return 0
+    conn = _connect(args.db)
+    try:
+        result = check_victim_attribution(conn)
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "victim_attribution_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    for f in result["reported"]:
+        print(f"  {f['p_recorded_victim']:.3f}  {f['victim'][:30]:30}  {(f['title'] or '')[:60]}")
+    print(f"Judged {result['judged']} event(s); {len(result['reported'])} reported (not calibrated: "
+          f"nothing changed); findings in {out}")
+    return 0
+
+
 def cmd_check_duplicates(args) -> int:
     """Judge same-victim event pairs with Jev; merge at the calibrated cut-off.
 
@@ -2868,6 +2932,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Reject below the cut-off (only with a calibration matching the "
                         "current model and question; otherwise report only)")
     p.set_defaults(func=cmd_check_events)
+
+    p = sub.add_parser("check-sources",
+                       help="Ask Jev whether each Google-sourced page itself reports an incident; "
+                            "remove records below the calibrated cut-off and queue replacement sources")
+    p.add_argument("--apply", action="store_true",
+                   help="Remove (only with a calibration matching the current model and question)")
+    p.add_argument("--unmapped-only", action="store_true",
+                   help="Only records not yet in an event (the ingestion gate)")
+    p.set_defaults(func=cmd_check_sources)
+
+    p = sub.add_parser("research-timelines",
+                       help="Research (or reuse) the incident timeline of every organisation "
+                            "with several events (Perplexity; stored)")
+    p.set_defaults(func=cmd_research_timelines)
+
+    p = sub.add_parser("check-victim-attribution",
+                       help="Ask Jev whether each event's recorded victim (with a researched "
+                            "timeline) is really the organisation affected; report only")
+    p.set_defaults(func=cmd_check_victim_attribution)
 
     p = sub.add_parser("check-duplicates",
                        help="Ask Jev whether each pair of events sharing a victim is one "

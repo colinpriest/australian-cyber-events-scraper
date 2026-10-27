@@ -101,7 +101,7 @@ def _probabilities(conn: sqlite3.Connection, ids: List[str],
             """SELECT value FROM ModelJudgements
                WHERE subject_type = 'deduplicated_event' AND subject_id = ? AND question_id = ?
                  AND question_version = ? AND model_requested = ?
-               ORDER BY created_at DESC LIMIT 1""",
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""",
             (did, er.QUESTION_ID, version, typesafe_model())).fetchone()
         if row is not None:
             out[did] = float(row[0])
@@ -134,11 +134,37 @@ def choose_cutoff(rows: List[Dict], precision: float, min_rejections: int) -> Tu
     return (max(ok, key=lambda t: t["cutoff"]) if ok else None), table
 
 
+def bootstrap(rows: List[Dict], precision: float, min_rejections: int, n: int = 1000,
+              seed: int = 1) -> Dict[str, Optional[float]]:
+    """Out-of-bag weighted precision of the whole choose-then-test procedure, resampling within strata."""
+    rng = random.Random(seed)
+    strata: Dict[str, List[Dict]] = {}
+    for r in rows:
+        strata.setdefault(r["stratum"], []).append(r)
+    oob: List[float] = []
+    for _ in range(n):
+        boot = [rng.choice(rs) for rs in strata.values() for _ in rs]
+        chosen, _ = choose_cutoff(boot, precision, min_rejections)
+        if chosen is None:
+            continue
+        ids = {id(r) for r in boot}
+        out = [r for r in rows if id(r) not in ids and r["p"] < chosen["cutoff"]]
+        weight = sum(r["weight"] for r in out)
+        if weight:
+            oob.append(sum(r["weight"] for r in out if r["not_incident"]) / weight)
+    oob.sort()
+    if not oob:
+        return {"replicates": 0, "median": None, "mean": None, "p05": None}
+    return {"replicates": len(oob), "median": oob[len(oob) // 2], "mean": sum(oob) / len(oob),
+            "p05": oob[int(0.05 * len(oob))]}
+
+
 def cmd_calibrate(args) -> int:
     sample = {r["deduplicated_event_id"]: r for r in csv.DictReader(SAMPLE_PATH.open(encoding="utf-8"))}
     labels = {r["deduplicated_event_id"]: r for r in csv.DictReader(er.LABELS_PATH.open(encoding="utf-8"))}
     conn = sqlite3.connect(args.db)
-    probs = _probabilities(conn, list(sample))
+    # The final score the pipeline acts on: the escalation's in the middle band, else Jev's.
+    probs = er.stored_final_probabilities(conn, list(sample))
 
     rows = []
     unsure = missing = 0
@@ -155,13 +181,17 @@ def cmd_calibrate(args) -> int:
                      "p": probs[did], "not_incident": label == "not_incident"})
 
     chosen, table = choose_cutoff(rows, args.precision, args.min_rejections)
+    boot = bootstrap(rows, args.precision, args.min_rejections)
+    print(f"Bootstrap out-of-sample weighted precision: {boot}")
     result = {
-        "question_version": er.QUESTION_VERSION, "model": typesafe_model(),
+        **er.calibration_identity(), "escalate_band": list(er.ESCALATE_BAND),
+        "calibrated_on_database": Path(args.db).name,
         "cutoff": chosen["cutoff"] if chosen else None,
         "precision_target": args.precision, "min_rejections": args.min_rejections,
         "at_cutoff": chosen, "labelled_used": len(rows), "unsure_excluded": unsure,
         "missing": missing, "labels_file": str(er.LABELS_PATH.relative_to(er.ROOT)),
         "sample_file": str(SAMPLE_PATH.relative_to(er.ROOT)), "generated": datetime.now().isoformat(),
+        "bootstrap_out_of_sample_precision": boot,
         "curve": table,
     }
     er.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
