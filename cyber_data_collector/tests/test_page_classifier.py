@@ -15,6 +15,17 @@ from cyber_data_collector.dedup.non_incident import find_non_incident_events
     ("Latest fraud and scam alerts - NAB", "https://www.nab.com.au/security/x", True),
     ("Your Community Health: Home Page", "https://www.yourch.org.au/", True),
     ("Mackay Sugar cyber attack flagged as broader risk", "https://www.cyberdaily.au/security/13734-x", False),
+    # Government service pages stored as second "attacks" on the agency.
+    ("Business - ACT Government", "https://www.act.gov.au/business", True),
+    ("Report identity theft, scams or cybercrime - Service NSW",
+     "https://www.service.nsw.gov.au/transaction/report-identity-theft-scams-or-cybercrime", True),
+    ("Data matching activities for third party organisation data breaches",
+     "https://www.servicesaustralia.gov.au/data-matching-activities-for-third-party-organisation-data-breaches", True),
+    # Titles with no incident vocabulary are page titles.
+    ("Free three-year-old preschool - ACT Government", "https://example.com/preschool", True),
+    ("Untitled Event", "https://www.itnews.com.au/news/x", True),
+    # A regulator's news release is reporting, not a service page.
+    ("OAIC statement on Optus data breach", "https://www.oaic.gov.au/news/media-centre/optus", False),
 ])
 def test_is_suspect(title, url, expected):
     assert pc.is_suspect(title, url) is expected

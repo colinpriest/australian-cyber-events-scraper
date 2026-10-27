@@ -2479,6 +2479,30 @@ def cmd_reject_non_incidents(args) -> int:
     return 0
 
 
+def cmd_check_victims(args) -> int:
+    """Make each event's victim agree with the victim its own records name.
+
+    See :mod:`cyber_data_collector.dedup.victim_agreement` for the guards.
+    Findings are written to ``instance/victim_agreement_findings.json``.
+    """
+    from cyber_data_collector.dedup.victim_agreement import check_victims
+
+    conn = _connect(args.db)
+    try:
+        findings = check_victims(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    for f in findings:
+        print(f"  {f['event_date'] or '----------'}  {f['deduplicated_event_id'][:8]}  "
+              f"{f['old_victim']!r} -> {f['new_victim']!r}  ({f['support']})  {(f['title'] or '')[:60]}")
+    out = Path(args.db).parent / "victim_agreement_findings.json"
+    out.write_text(json.dumps({"dry_run": args.dry_run, "generated": datetime.now().isoformat(),
+                               "findings": findings}, indent=2, default=str), encoding="utf-8")
+    verb = "Would re-attribute" if args.dry_run else "Re-attributed"
+    print(f"{verb} {len(findings)} event(s); findings in {out}")
+    return 0
+
+
 def cmd_restore_dedup_state(args) -> int:
     """Put curated dedup state back from a backup after a destructive rebuild.
 
@@ -2768,6 +2792,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "(cyber_data_collector/dedup/vendor_source_blocklist.txt)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_reject_non_incidents)
+
+    p = sub.add_parser("check-victims",
+                       help="Re-attribute events whose records all name a different "
+                            "victim than the event's (no API calls)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_check_victims)
 
     p = sub.add_parser("restore-dedup-state",
                        help="Restore curated dedup tables and ASD classifications "
