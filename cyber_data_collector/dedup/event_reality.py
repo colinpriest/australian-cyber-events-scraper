@@ -330,6 +330,17 @@ def labelled_non_incidents(path: Path = LABELS_PATH) -> set:
         return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "not_incident"}
 
 
+def labelled_out_of_scope(path: Path = LABELS_PATH) -> set:
+    """Events labelled real incidents outside the dataset's scope (not Australian).
+
+    Rejected whatever Jev scores - the question asks whether an incident is
+    real, not whether it belongs here - and left out of calibration, where
+    they would count as real (NHS Dumfries and Galloway, 2026-10-28)."""
+    import csv
+    with Path(path).open(encoding="utf-8") as fh:
+        return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "out_of_scope"}
+
+
 def labelling_snapshot(conn: sqlite3.Connection, cal: Optional[Dict[str, Any]],
                        snapshot_path: Optional[Path] = None) -> Optional[Path]:
     """The database the labels were made on (``calibrated_on_database``, beside
@@ -461,6 +472,9 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
             unchanged = gained is not None and did not in gained
             (labelled_out if unchanged or probabilities[did] < LABELLED_NON_INCIDENT_MAX_P
              else needs_review).append(entry)
+        for did in sorted(labelled_out_of_scope(labels_path) & set(probabilities) - already - protected):
+            labelled_out.append({"deduplicated_event_id": did, "title": titles.get(did),
+                                 "p_real": probabilities[did], "label": "out_of_scope"})
         below = below + labelled_out
     applied = bool(apply and cal and below)
     if applied:

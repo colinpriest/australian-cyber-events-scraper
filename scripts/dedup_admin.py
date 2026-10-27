@@ -2572,6 +2572,26 @@ def cmd_check_sources(args) -> int:
     return 0
 
 
+def cmd_label_evidence(args) -> int:
+    """Queue and attach the reporting labellers cited for evidence-less events; see dedup.label_evidence."""
+    from cyber_data_collector.dedup import label_evidence
+
+    conn = _connect(args.db)
+    try:
+        result = label_evidence.run(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    prefix = "[dry run] " if args.dry_run else ""
+    print(f"{prefix}{len(result['queued'])} cited report(s) queued; "
+          f"{sum(1 for a in result['attached'] if a['action'] == 'attached')} of {len(result['attached'])} "
+          "queued report(s) attached to their labelled event")
+    detail = label_evidence.summary(result)
+    if detail:
+        print(detail)
+    blocked = [a for a in result["attached"] if a.get("blocked")]
+    return 1 if blocked else 0
+
+
 def cmd_reconcile_timelines(args) -> int:
     """Reconcile events against organisation timelines and resolve the mismatches; see timeline_reconciliation.
 
@@ -3175,6 +3195,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--unmapped-only", action="store_true",
                    help="Only records not yet in an event (the ingestion gate)")
     p.set_defaults(func=cmd_check_sources)
+
+    p = sub.add_parser("label-evidence",
+                       help="For labelled-real events with no active record, queue the report the label "
+                            "cites; once processed, merge it into the labelled event and split out the "
+                            "event's inactive records")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_label_evidence)
 
     p = sub.add_parser("reconcile-timelines",
                        help="Match each organisation's events to its researched timeline; report "
