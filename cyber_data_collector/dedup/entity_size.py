@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.utils.llm_models import chat_params, openai_model, perplexity_model
 from cyber_data_collector.dedup.victim_selection import (
     is_non_organisation,
     is_threat_actor,
@@ -57,7 +57,7 @@ from cyber_data_collector.dedup.victim_selection import (
 
 logger = logging.getLogger(__name__)
 
-RESEARCH_MODEL = "sonar-pro"
+# The Perplexity research model is PERPLEXITY_MODEL (llm_models.perplexity_model), read per instance.
 
 # Entity kinds that have no meaningful organisational size. Decided by rule so
 # no API call is spent on them - roughly a third of the table.
@@ -253,11 +253,11 @@ class EntitySizeResearcher:
         perplexity_key: Optional[str] = None,
         openai_client=None,
         model: Optional[str] = None,
-        research_model: str = RESEARCH_MODEL,
+        research_model: Optional[str] = None,
     ):
         self.perplexity_key = perplexity_key or os.getenv("PERPLEXITY_API_KEY")
         self.model = model or openai_model()
-        self.research_model = research_model
+        self.research_model = research_model or perplexity_model()
         self._client = openai_client
         self._client_ready = openai_client is not None
         self._lock = threading.Lock()

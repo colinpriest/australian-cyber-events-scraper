@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import requests
 from cyber_data_collector.models.vulnerability_taxonomy import VULNERABILITY_CATEGORIES, validate_vulnerability_category
+from cyber_data_collector.utils.llm_models import perplexity_model
 from cyber_data_collector.utils.validation import validate_records_affected, validate_and_correct_enrichment_data
 
 
@@ -162,16 +163,22 @@ class PerplexityEventEnricher:
             if match:
                 return match.group(1)
         
-        # Fallback to first few words of title
-        words = title.split()[:3]
-        return " ".join(words) if words else "Unknown Entity"
+        # No recognisable name: say so in the query rather than presenting the
+        # title's first words as the organisation.
+        return "the organisation named in the title"
     
     async def query_perplexity_for_details(self, event: Dict, missing_fields: List[str]) -> Dict:
-        """Ask Perplexity to fill in missing details."""
+        """Ask Perplexity (``PERPLEXITY_MODEL``) to fill in missing details.
+
+        Raises:
+            RuntimeError: If the request fails or the API returns an error or
+                an unusable body.  A failed request is not reported as "no
+                additional information found".
+        """
         query = self._construct_perplexity_query(event, missing_fields)
         
         payload = {
-            "model": "sonar-pro",
+            "model": perplexity_model(),
             "messages": [
                 {
                     "role": "user",
@@ -189,26 +196,21 @@ class PerplexityEventEnricher:
                 json=payload,
                 timeout=30
             )
-            
-            if response.status_code != 200:
-                self.logger.error(f"Perplexity API error: {response.status_code} - {response.text}")
-                return {}
-            
-            data = response.json()
-            
-            if 'choices' not in data or not data['choices']:
-                self.logger.error(f"Invalid API response: {data}")
-                return {}
-            
-            content = data['choices'][0]['message']['content']
-
-            # Get event title for validation logging
-            event_title = event.get('title', 'Unknown Event')
-            return self._parse_perplexity_response(content, missing_fields, event_title)
-            
         except Exception as e:
-            self.logger.error(f"Perplexity API error: {e}")
-            return {}
+            raise RuntimeError(f"Perplexity request failed: {e}") from e
+
+        if response.status_code != 200:
+            raise RuntimeError(f"Perplexity API error: {response.status_code} - {response.text[:300]}")
+
+        data = response.json()
+        if 'choices' not in data or not data['choices']:
+            raise RuntimeError(f"Invalid Perplexity API response: {str(data)[:300]}")
+
+        content = data['choices'][0]['message']['content']
+
+        # Get event title for validation logging
+        event_title = event.get('title', 'Unknown Event')
+        return self._parse_perplexity_response(content, missing_fields, event_title)
     
     def _parse_perplexity_response(self, response: str, missing_fields: List[str], event_title: str = "") -> Dict:
         """Extract structured data from Perplexity response."""

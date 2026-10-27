@@ -32,7 +32,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
-from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.utils.llm_models import chat_params, openai_model, perplexity_model
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,7 @@ class DateResearcher:
                 "https://api.perplexity.ai/chat/completions",
                 headers={"Authorization": f"Bearer {self.perplexity_key}",
                          "Content-Type": "application/json"},
-                json={"model": "sonar-pro",
+                json={"model": perplexity_model(),
                       "messages": [{"role": "user", "content": query}],
                       "max_tokens": 400, "temperature": 0.0},
                 timeout=60)
