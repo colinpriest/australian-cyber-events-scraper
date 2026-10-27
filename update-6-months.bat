@@ -4,11 +4,9 @@ rem code, so a later step (status) can never hide an earlier failure.
 rem Exit codes from the pipeline: 0 ok, 2 degraded (finished with failed
 rem steps - see the log), anything else failed.
 
-python scripts/oaic/OAIC_dashboard_scraper.py --from-2025
-if errorlevel 1 (
-    echo OAIC dashboard scrape FAILED - stopping.
-    exit /b %errorlevel%
-)
+rem OAIC statistics are refreshed (from data.gov.au, validated, last valid
+rem dataset kept on failure) inside the pipeline; the Power BI dashboard
+rem stopped after 2025 H1.
 
 python pipeline.py refresh --days 180 --max-events 1000
 if errorlevel 1 (
