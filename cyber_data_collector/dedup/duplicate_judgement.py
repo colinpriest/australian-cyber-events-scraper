@@ -152,8 +152,12 @@ def calibration_identity() -> Dict[str, str]:
 
 
 def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], probabilities: Dict[str, float],
-                  client=None) -> Dict[str, float]:
-    """Re-judge with the reasoning model every pair Jev scores inside ESCALATE_BAND."""
+                  client=None, failed: Optional[List[str]] = None) -> Dict[str, float]:
+    """Re-judge with the reasoning model every pair Jev scores inside ESCALATE_BAND.
+
+    Pairs whose escalation fails are appended to ``failed`` and left undecided
+    (retried next run) - never merged on Jev's mid-band score.
+    """
     from cyber_data_collector.utils.escalation import escalate
 
     lo, hi = ESCALATE_BAND
@@ -166,6 +170,8 @@ def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], pro
                          build_pair_state(conn, pair), escalation_question(), client=client)
         if value is not None:
             out[pair["pair_id"]] = value
+        elif failed is not None:
+            failed.append(pair["pair_id"])
     logger.info("Escalated %d pair(s) Jev scored in %s", len(out), ESCALATE_BAND)
     return out
 
@@ -220,18 +226,25 @@ def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
 
 
 def labelled_pairs(path: Path = LABELS_PATH) -> Dict[str, str]:
+    """Labelled pairs. Unreadable or empty labels raise: without them a pair
+    labelled 'different' could be merged, so merging must not proceed."""
     try:
         with Path(path).open(encoding="utf-8") as fh:
-            return {r["pair_id"]: r["label"] for r in csv.DictReader(fh)}
-    except OSError:
-        return {}
+            labels = {r["pair_id"]: r["label"] for r in csv.DictReader(fh)}
+    except (OSError, ValueError, KeyError) as exc:
+        raise RuntimeError(f"duplicate labels unreadable ({path}): {exc}; refusing to merge") from exc
+    if not labels:
+        raise RuntimeError(f"duplicate labels empty ({path}); refusing to merge")
+    return labels
 
 
 def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
     """The merge calibration, only if measured on the current model and question."""
     try:
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.error("Duplicate calibration unreadable (%s): %s - REPORT ONLY, nothing will be acted on",
+                     path, exc)
         return None
     want = calibration_identity()
     if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
@@ -296,8 +309,9 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     research_all(conn, search=timeline_search)
     pairs = candidate_pairs(conn)
     jev_scores = judge_pairs(conn, pairs, judge=judge)
-    escalated = escalate_band(conn, pairs, jev_scores, client=escalation_client)
-    probabilities = {p: escalated.get(p, v) for p, v in jev_scores.items()}
+    escalation_failed: List[str] = []
+    escalated = escalate_band(conn, pairs, jev_scores, client=escalation_client, failed=escalation_failed)
+    probabilities = {p: escalated.get(p, v) for p, v in jev_scores.items() if p not in escalation_failed}
     labels = labelled_pairs(labels_path)
     different = {p for p, label in labels.items() if label == "different"}
     cal = active_calibration(calibration_path)
@@ -312,5 +326,6 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     if apply and cal and chosen:
         merged = merge_components(conn, _components([(by_id[p]["a"], by_id[p]["b"]) for p in chosen]),
                                   different)
-    return {"pairs": len(pairs), "judged": len(probabilities), "escalated": len(escalated), "cutoff": cutoff,
+    return {"pairs": len(pairs), "judged": len(probabilities), "escalated": len(escalated),
+            "escalation_failed": escalation_failed, "cutoff": cutoff,
             "calibrated": cal is not None, "proposals": proposals, "merged": merged}

@@ -216,8 +216,13 @@ def calibration_identity() -> Dict[str, str]:
             "model": f"{typesafe_model()}+{openai_model()}"}
 
 
-def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None) -> Dict[str, float]:
-    """Re-judge with the reasoning model every event Jev scores inside ESCALATE_BAND."""
+def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None,
+                  failed: Optional[List[str]] = None) -> Dict[str, float]:
+    """Re-judge with the reasoning model every event Jev scores inside ESCALATE_BAND.
+
+    Events whose escalation fails are appended to ``failed``: they are left
+    undecided (retried next run), never decided on Jev's mid-band score.
+    """
     from cyber_data_collector.utils.escalation import escalate
 
     lo, hi = ESCALATE_BAND
@@ -229,6 +234,8 @@ def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], cli
                          escalation_question(), client=client)
         if value is not None:
             out[did] = value
+        elif failed is not None:
+            failed.append(did)
         if i % 10 == 0:
             logger.info("Escalated %d/%d mid-band events", i, len(band))
     logger.info("Escalated %d of %d events Jev scored in %s", len(out), len(band), ESCALATE_BAND)
@@ -278,7 +285,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     """The calibration, only if it was measured on the current model and question."""
     try:
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        logger.error("Event reality calibration unreadable (%s): %s - REPORT ONLY, nothing will be acted on",
+                     path, exc)
         return None
     want = calibration_identity()
     if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
@@ -302,9 +311,13 @@ def protected_events(path: Path = LABELS_PATH) -> set:
     import csv
     try:
         with Path(path).open(encoding="utf-8") as fh:
-            return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "real"}
-    except OSError:
-        return set()
+            rows = list(csv.DictReader(fh))
+    except (OSError, ValueError) as exc:
+        # Without the labels nothing protects known incidents: refuse to act.
+        raise RuntimeError(f"event reality labels unreadable ({path}): {exc}; refusing to reject") from exc
+    if not rows:
+        raise RuntimeError(f"event reality labels empty ({path}); refusing to reject")
+    return {r["deduplicated_event_id"] for r in rows if r.get("label") == "real"}
 
 
 def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
@@ -378,12 +391,13 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     corroborated = corroborate_low(conn, screen, search=search)
     research_all(conn, search=timeline_search)
     jev_scores = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
-    escalated = escalate_band(conn, jev_scores, client=escalation_client)
-    probabilities = {d: escalated.get(d, p) for d, p in jev_scores.items()}
+    escalation_failed: List[str] = []
+    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
+    probabilities = {d: escalated.get(d, p) for d, p in jev_scores.items() if d not in escalation_failed}
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
-    protected = protected_events(labels_path)
+    protected = protected_events(labels_path) if apply else set()
     below = [] if cutoff is None else [
         {"deduplicated_event_id": did, "title": titles.get(did), "p_real": p}
         for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
@@ -393,6 +407,6 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
         reject_events(conn, below)
     restored = restore_protected(conn, protected) if apply else []
     return {"judged": len(probabilities), "corroborated": corroborated, "escalated": len(escalated),
-            "cutoff": cutoff,
+            "escalation_failed": escalation_failed, "cutoff": cutoff,
             "calibrated": cal is not None, "applied": applied, "rejections": below,
             "restored_protected": restored}

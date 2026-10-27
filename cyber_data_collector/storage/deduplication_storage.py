@@ -70,13 +70,8 @@ class DeduplicationStorage:
         existing_tables = [row[0] for row in cursor.fetchall()]
         missing_tables = [t for t in required_tables if t not in existing_tables]
 
-        if missing_tables:
-            self.logger.warning(f"Missing tables: {missing_tables}")
-            # Create missing tables if needed
-            self._create_missing_tables(missing_tables)
-
         # Validate column schemas for existing tables (detect old/wrong schemas)
-        tables_to_recreate = []
+        # before creating anything, so indexes are built on complete tables.
         expected_columns = {
             'DeduplicationClusters': {
                 'cluster_id', 'deduplicated_event_id', 'cluster_size',
@@ -95,17 +90,36 @@ class DeduplicationStorage:
                 actual_cols = {row[1] for row in cursor.fetchall()}
                 missing_cols = required_cols - actual_cols
                 if missing_cols:
-                    self.logger.warning(
-                        f"Table {table_name} has wrong schema (missing columns: {missing_cols}). "
-                        f"Dropping and recreating."
-                    )
-                    cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
-                    self.conn.commit()
-                    tables_to_recreate.append(table_name)
+                    # Never drop: these tables hold incident lineage. Dropping
+                    # and recreating on a schema mismatch used to erase it.
+                    self._add_missing_columns(cursor, table_name, missing_cols)
 
-        if tables_to_recreate:
-            self._create_missing_tables(tables_to_recreate)
+        # Create missing tables (and the indexes) once existing ones are complete
+        if missing_tables:
+            self.logger.warning(f"Missing tables: {missing_tables}")
+            self._create_missing_tables(missing_tables)
     
+    # Columns that can be added to an existing table without losing data.
+    _ADDABLE_COLUMNS = {
+        'cluster_size': "INTEGER", 'average_similarity': "REAL",
+        'deduplication_timestamp': "TIMESTAMP", 'algorithm_version': "VARCHAR(20)",
+        'contribution_type': "VARCHAR(50)", 'similarity_score': "REAL",
+        'data_source_weight': "REAL DEFAULT 1.0", 'created_at': "TIMESTAMP",
+        'raw_event_id': "TEXT", 'enriched_event_id': "TEXT",
+    }
+
+    def _add_missing_columns(self, cursor: sqlite3.Cursor, table_name: str, missing_cols: set) -> None:
+        """Add missing columns in place; refuse (raise) when one cannot be added safely."""
+        unaddable = sorted(c for c in missing_cols if c not in self._ADDABLE_COLUMNS)
+        if unaddable:
+            raise RuntimeError(
+                f"{table_name} lacks key column(s) {unaddable}; refusing to drop or rebuild it "
+                f"(it holds incident lineage). Migrate it explicitly: python pipeline.py init")
+        for column in sorted(missing_cols):
+            self.logger.warning(f"Adding missing column {table_name}.{column}")
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column} {self._ADDABLE_COLUMNS[column]}")
+        self.conn.commit()
+
     def _create_missing_tables(self, missing_tables: List[str]) -> None:
         """Create missing tables with proper schema"""
         cursor = self.conn.cursor()
@@ -202,18 +216,12 @@ class DeduplicationStorage:
             # Start transaction
             cursor = self.conn.cursor()
             
-            # Remove any duplicates before storing (keep first occurrence)
-            events_to_store, skipped_duplicates = self._remove_duplicate_events(result.unique_events)
-            if skipped_duplicates:
-                self.logger.warning(f"Removed {len(skipped_duplicates)} duplicate events before storage")
-                for dup in skipped_duplicates[:5]:  # Log first 5
-                    validation_errors.append(ValidationError(
-                        error_type="DUPLICATE_SKIPPED",
-                        message=f"Skipped duplicate: {dup['title'][:50]} on {dup['date']}",
-                        context=dup
-                    ))
-                if len(skipped_duplicates) > 5:
-                    self.logger.warning(f"  ... and {len(skipped_duplicates) - 5} more duplicates skipped")
+            # Every unique event is stored. Events sharing a title and date
+            # used to be dropped here as "duplicates", but the merge decision
+            # deliberately keeps them apart when it cannot show they are one
+            # incident (two universities' "Data breach" on one day) - dropping
+            # one silently lost that incident and orphaned its records.
+            events_to_store = list(result.unique_events)
 
             # Store unique events. Returns a map of source event_id ->
             # generated deduplicated_event_id so lineage rows can satisfy the
@@ -229,15 +237,25 @@ class DeduplicationStorage:
             # column can never silently sit at 0 the way it did previously.
             self._refresh_source_counts(cursor)
 
-            # Commit transaction
-            self.conn.commit()
-            
-            # Post-storage validation
+            # Validate inside the transaction, before committing: invalid
+            # results used to be committed and reported as success.
             post_validation = self._validate_storage_integrity_locked()
             if post_validation:
+                self.conn.rollback()
                 validation_errors.extend(post_validation)
-                self.logger.warning(f"Post-storage validation found issues: {len(post_validation)}")
-            
+                for error in post_validation:
+                    self.logger.error(f"Storage integrity: {error.error_type}: {error.message}")
+                return StorageResult(
+                    success=False,
+                    stored_events=0,
+                    merge_groups_created=0,
+                    validation_errors=validation_errors,
+                    processing_time_seconds=(datetime.now() - start_time).total_seconds(),
+                    storage_timestamp=datetime.now(),
+                )
+
+            self.conn.commit()
+
             processing_time = (datetime.now() - start_time).total_seconds()
             
             self.logger.info(f"Stored {stored_events} events and {merge_groups_created} merge groups")

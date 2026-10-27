@@ -730,8 +730,10 @@ class DedupLedger:
                 """,
                 (OverrideVerdict.DIFFERENT.value, left_dedup_id, right_dedup_id, right_dedup_id, left_dedup_id),
             ).fetchone()
-        except sqlite3.Error:
-            return None
+        except sqlite3.Error as exc:
+            # An unreadable ruling must not read as "no ruling": that let split
+            # incidents merge again. Stop the merge instead.
+            raise RuntimeError(f"cannot read DedupOverrides to check split rulings: {exc}") from exc
         if row is None:
             return None
         return f"{row[0][:8]} vs {row[1][:8]}: {row[2] or 'no reason'}"
@@ -744,8 +746,8 @@ class DedupLedger:
                 "SELECT left_enriched_event_id, right_enriched_event_id, verdict "
                 "FROM DedupOverrides WHERE active = 1"
             ).fetchall()
-        except sqlite3.Error:
-            return overrides
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"cannot read DedupOverrides: {exc}") from exc
         for row in rows:
             key = frozenset((row["left_enriched_event_id"], row["right_enriched_event_id"]))
             overrides[key] = row["verdict"] == OverrideVerdict.SAME.value

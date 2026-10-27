@@ -26,7 +26,7 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -2521,6 +2521,15 @@ def cmd_reject_non_incidents(args) -> int:
     return 0
 
 
+def _escalation_failures(result: Dict[str, Any]) -> int:
+    """Non-zero when any escalation failed: those items were left undecided."""
+    failed = result.get("escalation_failed") or []
+    if failed:
+        print(f"{len(failed)} escalation(s) FAILED; those items were left undecided and are retried next run")
+        return 1
+    return 0
+
+
 def cmd_check_events(args) -> int:
     """Judge every active event with Jev; reject below the calibrated cut-off.
 
@@ -2548,7 +2557,7 @@ def cmd_check_events(args) -> int:
     verb = "Rejected" if result["applied"] else "Would reject"
     print(f"{verb} {len(result['rejections'])} of {result['judged']} event(s) "
           f"below cut-off {result['cutoff']}; findings in {out}")
-    return 0
+    return _escalation_failures(result)
 
 
 def cmd_check_sources(args) -> int:
@@ -2661,7 +2670,7 @@ def cmd_check_duplicates(args) -> int:
         print(f"  {p['p_same']:.3f}  {p['organisation'][:30]:30}  {p['gap_days']}d  {p['pair_id'][:8]}|...")
     print(f"{len(result['merged'])} merge(s) applied of {len(result['proposals'])} proposed pair(s) at "
           f"cut-off {result['cutoff']}; findings in {out}")
-    return 0
+    return _escalation_failures(result)
 
 
 def cmd_check_victims(args) -> int:
