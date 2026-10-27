@@ -205,23 +205,36 @@ def _research(conn: sqlite3.Connection, enriched_id: str) -> Dict[str, Any]:
 
 
 def _covered(conn: sqlite3.Connection, org: str, when: Optional[date], exclude_event: Optional[str]) -> bool:
-    """Does another active event about this organisation lie near this date?"""
+    """Does another active event about this organisation lie near this date?
+
+    Names are matched as organisations, not strings: research gives formal
+    names ("Medibank Private Limited") where events carry trading names
+    ("Medibank"). Exact matching re-searched incidents the database already
+    held - 246 searches on the first run (2026-10-27) for 57 emptied events.
+    """
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+    from cyber_data_collector.dedup.victim_agreement import denotes
+
+    resolver = EntityResolver(conn)
     rows = conn.execute(
-        """SELECT d.deduplicated_event_id, d.event_date FROM DeduplicatedEvents d
-           WHERE d.status = 'Active' AND d.deduplicated_event_id != COALESCE(?, '')
-             AND (d.victim_organization_name = ? COLLATE NOCASE
-                  OR EXISTS (SELECT 1 FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id)
-                             WHERE dee.deduplicated_event_id = d.deduplicated_event_id
-                               AND dee.relationship_type = 'victim' AND v.entity_name = ? COLLATE NOCASE))""",
-        (exclude_event, org, org)).fetchall()
-    for _, event_date in rows:
-        if when is None:
-            return True
-        try:
-            other = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            continue
-        if abs((other - when).days) <= COVERAGE_WINDOW_DAYS:
+        """SELECT d.event_date, d.victim_organization_name,
+                  (SELECT GROUP_CONCAT(v.entity_name, '|') FROM DeduplicatedEventEntities dee
+                     JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+                    WHERE dee.deduplicated_event_id = d.deduplicated_event_id
+                      AND dee.relationship_type = 'victim')
+           FROM DeduplicatedEvents d
+           WHERE d.status = 'Active' AND d.deduplicated_event_id != COALESCE(?, '')""",
+        (exclude_event,)).fetchall()
+    for event_date, scalar, role_names in rows:
+        if when is not None:
+            try:
+                other = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue
+            if abs((other - when).days) > COVERAGE_WINDOW_DAYS:
+                continue
+        names = [n for n in [scalar, *(role_names or "").split("|")] if n]
+        if any(denotes(resolver, org, n) for n in names):
             return True
     return False
 
