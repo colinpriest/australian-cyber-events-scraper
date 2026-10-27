@@ -452,8 +452,13 @@ def prune_redundant_replacements(conn: sqlite3.Connection) -> List[str]:
 
 # --- the gate ----------------------------------------------------------------
 
-def _remove(conn: sqlite3.Connection, record: Dict[str, Any]) -> str:
-    """Take one junk record out of the data. Returns what was done."""
+def _remove(conn: sqlite3.Connection, record: Dict[str, Any], keep_events: frozenset = frozenset()) -> str:
+    """Take one junk record out of the data. Returns what was done.
+
+    ``keep_events`` are events labelled real incidents: when the junk page is
+    such an event's only record, the record goes but the event stays, waiting
+    for its replacement evidence (rejecting it contradicted the event label,
+    and check-events then restored it with the junk page)."""
     from cyber_data_collector.dedup.event_reality import reject_events
     from cyber_data_collector.dedup.ledger import DedupLedger
 
@@ -466,6 +471,11 @@ def _remove(conn: sqlite3.Connection, record: Dict[str, Any]) -> str:
         return "deactivated before deduplication"
     members = conn.execute("SELECT COUNT(*) FROM EventDeduplicationMap WHERE deduplicated_event_id = ?",
                            (did,)).fetchone()[0]
+    if members <= 1 and did in keep_events:
+        conn.execute("UPDATE EnrichedEvents SET status = 'Inactive', updated_at = ? WHERE enriched_event_id = ?",
+                     (now, eid))
+        conn.commit()
+        return "deactivated; event kept (labelled a real incident) for its replacement evidence"
     if members <= 1:
         reject_events(conn, [{"deduplicated_event_id": did}])
         return "event rejected (its only record)"
@@ -477,7 +487,7 @@ def _remove(conn: sqlite3.Connection, record: Dict[str, Any]) -> str:
 
 def check_sources(conn: sqlite3.Connection, apply: bool = False, only_unmapped: bool = False, judge=None,
                   calibration_path: Path = CALIBRATION_PATH, labels_path: Path = LABELS_PATH,
-                  search=None) -> Dict[str, Any]:
+                  search=None, event_labels_path: Optional[Path] = None) -> Dict[str, Any]:
     """Judge Google records; remove those below the calibrated cut-off and replace lost evidence."""
     # Removal without the labels would drop their protection silently.
     known = labels(labels_path, required=apply)
@@ -510,12 +520,14 @@ def check_sources(conn: sqlite3.Connection, apply: bool = False, only_unmapped: 
                                        (did,)).fetchone()[0]}
         # Secure the replacement (found, or a durable pending search) first,
         # then remove the record.
+        from cyber_data_collector.dedup import event_reality
+        labelled_real = frozenset(event_reality.protected_events(event_labels_path or event_reality.LABELS_PATH))
         for rec in below:
             raw_id = replace_evidence(conn, rec["enriched_event_id"], rec["deduplicated_event_id"], search=search,
                                       exclude_events=doomed)
             if raw_id:
                 replacements.append({"replaces": rec["enriched_event_id"], "raw_event_id": raw_id})
-            rec["action"] = _remove(conn, rec)
+            rec["action"] = _remove(conn, rec, labelled_real)
             removed.append(rec)
         pruned = prune_redundant_replacements(conn)
     return {"records": len(records), "judged": len(probabilities),

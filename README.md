@@ -507,7 +507,11 @@ that deletes, merges or re-attributes acts only at a cut-off **calibrated on
 labelled examples from this database**, recorded with the models and question
 versions it was measured on; change a model or a question and the step falls
 back to reporting until it is recalibrated. Labels are ground truth: an item
-labelled one way is never acted on the other way.
+labelled one way is never acted on the other way. A labelled non-incident is
+rejected whatever it scores, unless it holds a record it did not hold when
+labelled (checked against the labelling snapshot; then it is held for review).
+A labelled junk page that is the only record of a labelled-real event is
+removed and the event kept for its replacement evidence.
 
 | Order | Step | What it decides | Model | Cut-off (2026-10-27) | Precision on labels | Recall | Out-of-sample* |
 |---|---|---|---|---|---|---|---|

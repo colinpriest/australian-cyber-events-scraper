@@ -238,3 +238,18 @@ def test_an_event_being_rejected_does_not_cover_its_own_incident(conn, tmp_path)
                               calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path, UNRELATED),
                               search=_found(calls))
     assert "help" in {r["replaces"] for r in result["replacements_queued"]}
+
+
+def test_a_labelled_real_event_keeps_going_without_its_junk_page(conn, tmp_path):
+    """Rejecting it contradicted the event label, and check-events then restored the junk page with it."""
+    event_labels = tmp_path / "event_labels.csv"
+    event_labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                            "ev-help,real,reported elsewhere,packet,test\n", encoding="utf-8")
+    result = sg.check_sources(conn, apply=True, judge=JevJudge(conn, client=FakeJev(JEV)),
+                              calibration_path=_cal(tmp_path), labels_path=_labels(tmp_path, UNRELATED),
+                              search=_found([]), event_labels_path=event_labels)
+    actions = {r["enriched_event_id"]: r["action"] for r in result["removed"]}
+    assert actions["help"].startswith("deactivated; event kept")
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'ev-help'").fetchone()[0] \
+        == "Active"
+    assert conn.execute("SELECT status FROM EnrichedEvents WHERE enriched_event_id = 'help'").fetchone()[0] == "Inactive"
