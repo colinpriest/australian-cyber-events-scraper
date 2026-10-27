@@ -13,6 +13,7 @@ cohort from a mutable database and is labelled unavailable, not confirmatory.
 
 from __future__ import annotations
 
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -103,7 +104,7 @@ def _read_evidence(db_path: Path, as_of: Optional[date] = None) -> tuple[dict[st
     seen: dict[str, date] = {}
     if not Path(db_path).is_file():
         return evidence, seen
-    with sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
         conn.execute("PRAGMA query_only=ON")
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {"EventDeduplicationMap", "EnrichedEvents", "RawEvents", "DeduplicatedEvents"} <= tables:

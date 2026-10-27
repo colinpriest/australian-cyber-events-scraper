@@ -1287,43 +1287,47 @@ shows any run left stale. Rebuild the page alone with
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
 
-Current headline result (data to 2026-10-02, after victim corrections, the
-calibrated event-reality filter and calibrated Jev duplicate merges; 623
-victim entities, 50 with more than one event, 74 observed repeats):
+Current headline result (data to 2026-10-28, after the 2026-10-28 live run:
+victim attribution, supplier co-victims counted once per organisation,
+calibrated duplicate and supplier merges, and labelled non-incidents rejected;
+615 victim entities, 45 with more than one event, 57 observed repeats):
 
-- The broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460` adjusted model does
-  not reject constant elapsed-time risk (`p = 0.106`).
-- The sensitivity model that splits the first six months into `0-90` and
-  `91-180` does (`p = 0.007`).
-- The delayed early peak: `91-180` days runs at about 9.8 repeats per 100
-  entity-years, against 2.4 in `0-90` and 2.4-4.2 after six months. Adjusted,
-  that is `4.23x` the first 90 days (`95% CI 1.40-12.74`) and `2.36x` the
-  pooled post-180 period (`95% CI 1.30-4.28`, two-sided `p = 0.005`).
-- How the cleaning moved it:
+- **The delayed early peak reported on 2026-10-27 does not survive the
+  cleaning.** Neither banding rejects constant elapsed-time risk: the broad
+  `0-180 / 181-365 / 366-730 / 731-1460 / >1460` model gives `p = 0.120`, the
+  `0-90 / 91-180` split `p = 0.122`.
+- `91-180` days runs at 3.95 repeats per 100 entity-years (6 repeats), against
+  1.84 in `0-90` (3 repeats) and 1.80-4.42 after six months. Adjusted, `91-180`
+  is `1.13x` the pooled post-180 period (`95% CI 0.47-2.70`, two-sided
+  `p = 0.79`) and `2.21x` the first 90 days (`0.55-8.83`).
+- With `0-90 / 91-365 / ...` bands (`analysis/recurrent_timing_90d`) the
+  adjusted test gives `p = 0.080`; the directional U-shape test `p = 0.76`.
+- How the data and the counting moved it:
 
-  | Data state | Repeats | 0-90 repeats | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
-  |---|---|---|---|---|
-  | 2026-10-02 refresh, before cleaning | 102 | 11 | 0.147 | 1.74x (1.01-2.98) |
-  | + victim corrections (`check-victims`) | 97 | 7 | 0.041 | 1.75x (1.02-3.02) |
-  | + 69 non-incident events rejected | 86 | 7 | 0.029 | 2.13x (1.21-3.75) |
-  | + 15 duplicate merges (`check-duplicates`) | 74 | 4 | 0.007 | 2.36x (1.30-4.28) |
+  | Data state | Repeats | 0-90 | 91-180 | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
+  |---|---|---|---|---|---|
+  | 2026-10-02 refresh, before cleaning | 102 | 11 | - | 0.147 | 1.74x (1.01-2.98) |
+  | + victim corrections, 69 rejections, 15 merges (2026-10-27) | 74 | 4 | - | 0.007 | 2.36x (1.30-4.28) |
+  | same data, each organisation counted once (`victim_counting.py`) | 61 | 4 | 10 | 0.026 | 1.79x (0.88-3.63) |
+  | + 2026-10-28 live run | 57 | 3 | 6 | 0.122 | 1.13x (0.47-2.70) |
 
-- **Read the trend with care.** Each cleaning step lowered the `0-90` band
-  most, because that is where re-reporting artefacts concentrate: a wrong
-  victim, an agency web page or a follow-up story dated by its publication
-  creates a "repeat" weeks after the real incident. The steps themselves are
-  gap-blind - every event and every same-victim pair is judged, whatever its
-  gap, and merges were made at gaps of 0 to 4,603 days - but the result rests
-  on that cleaning, and on 4 repeats in the first 90 days. Report the table,
-  not only the last row.
-- The 4 remaining `0-90` repeats: Service NSW (its *Report identity theft*
-  page, labelled a separate item rather than the March 2020 breach), the
-  University of Western Australia (a mixed 2022 event beside DieNet's 2025
-  DDoS claim), the Commonwealth Bank (an AI-document loan fraud beside a
-  stolen-card sale) and "Australian Government" (a collective victim).
-- The explanatory story - attackers returning, incomplete remediation, later
-  training and eventual complacency - is plausible data storytelling, not
-  proven mechanism. The analysis tests timing patterns, not causality.
+- **What the peak was made of.** Five of the ten `91-180` repeats on the
+  pre-run data left: Westpac, CBA and ANZ pairs built from a callback-scam
+  campaign (labelled not an incident, now rejected) and a dark-web listing of
+  "stolen banking info of 65,000 Australians" (now merged), a University of
+  Tasmania pair from two supplier breaches, and a University of Sydney pair;
+  one (UWA, after re-dating) moved in. The earlier peak rested largely on
+  non-incident and attribution artefacts, as the 2026-10-27 table warned.
+- **Still in the short bands and still suspect**: Oz Hair & Beauty (3 days;
+  recorded as victim of a superannuation credential-stuffing campaign,
+  which victim attribution scored 0.02 and flagged but could not replace) and
+  youX (14 days; one event is the March 2025 S3 exposure misdated to February
+  2026). Excluding victim attributions the model scores below 0.5 (extended
+  analysis) leaves 1 and 3 repeats in `0-90` and `91-180`.
+- The prospective test registered on 2026-10-27 (574 frozen organisations,
+  `timing_peak_registration.json`) is unaffected and pending until
+  2028-10-27; it is now the only way the peak could be confirmed.
+- The analysis tests timing patterns, not causality.
 
 ### Safety Vault (snapshot/restore around destructive operations)
 

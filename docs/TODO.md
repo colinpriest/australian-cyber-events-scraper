@@ -6,6 +6,11 @@ names the evidence that showed the problem. Done items move to the README or
 
 ## Done tonight (2026-10-27; timelines and victims: see `docs/10-victim-attribution-and-timelines.md`)
 
+- Labels win both ways: an unchanged labelled non-incident is rejected
+  whatever it scores (12 on the live database); only events that gained
+  records since labelling are held for review.
+- `ASDRiskClassifications` accepts "Insufficient information" (the base
+  schema's CHECK refused every asd-v2 answer of that kind).
 - Supplier incidents: every affected organisation found, judged (Jev +
   escalation, calibrated) and attached; same-incident fragments merged; each
   organisation counted once in the recurrence analysis and entity dashboard
@@ -26,6 +31,35 @@ names the evidence that showed the problem. Done items move to the README or
   18-21, 29, 33-37); validated OAIC refresh in the pipeline.
 
 ## To do
+
+- **Publication gate blocked on the live database (2026-10-28): three
+  labelled-real events whose only page is labelled junk.** The two label sets
+  collide, so no state satisfies both and the gate reports 3 contradictions
+  (threshold 2). Each page is now deactivated and its event kept
+  (`check-sources`), which ends the reject/restore loop, but the page stays
+  mapped as the event's only record. Needs a decision per event:
+  - Home Affairs / ZircoDATA 2024 (`84c30c63`): only page is the ACSC
+    ransomware playbook; Perplexity research too weak to search for a
+    replacement. Find the Cyber Daily report the label cites and ingest it.
+  - University of Sydney third-party breach 2023 (`793cba68`): replacement
+    found (iTnews) and queued; the next refresh should ingest it and merge it in.
+  - NHS Dumfries and Galloway 2024 (`a8862fc9`): labelled real but not an
+    Australian incident - probably reject as out of scope, and relabel.
+  Until then `run_full_pipeline.py` keeps the last published dashboard.
+- **Short-gap repeats still made by data errors.** Oz Hair & Beauty is the
+  recorded victim of a superannuation credential-stuffing campaign (victim
+  attribution scored it 0.02 and flagged it, with no replacement), a 3-day
+  "repeat"; youX's "Vroom by YouX Data Breach" (`4f6211e9`) is the March 2025
+  S3 exposure dated 2026-02-01 (labelled so in `duplicate_labels.csv`), a
+  14-day "repeat" and a duplicate of `6f4facfe`. Flagged victims should leave
+  the analysis or be demoted; calibrated re-dating is still report-only.
+- **ASD "Insufficient information" share.** Under prompt `asd-v2`, 101 of 637
+  incidents in the dashboard window (about one in six) could not be placed and
+  are listed under the matrix; before, they defaulted to C6. Review a sample:
+  is the evidence genuinely too thin, or is the prompt too strict?
+- **Inactive records still mapped to active events.** Exports
+  (`export_events_excel.py`) and `event_reality.build_state` read every mapped
+  record; `event_facts` and fingerprints read active ones only. Make them agree.
 
 - **Apply the reliability recompute after labelling a sample.**
   `perplexity_backfill_events.py --recompute-reliability` is merged and
