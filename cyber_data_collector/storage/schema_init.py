@@ -5,8 +5,8 @@ SQL files in ``storage/migrations/`` in order, recording each in
 ``SchemaMigrations`` (version, checksum, time), then the idempotent schema
 steps the modules own (dedup v3 tables and columns, Jev judgements, timelines,
 corroborations, page classifications, record fingerprints, the discovery
-retry queue, enrichment tracking). Safe to run on an existing database: every statement is
-``IF NOT EXISTS`` or guarded, and an applied migration is never re-run - but a
+retry queue, enrichment tracking, the ASD severity constraint). Safe to run on
+an existing database: every statement is ``IF NOT EXISTS`` or guarded, and an applied migration is never re-run - but a
 migration file edited after it was applied is reported, because the database
 then no longer matches the file that describes it.
 """
@@ -93,9 +93,11 @@ def _module_schema_steps(conn: sqlite3.Connection) -> None:
     )
     from cyber_data_collector.dedup.schema import migrate as migrate_dedup
     from cyber_data_collector.processing import retry_queue
+    from cyber_data_collector.storage import asd_schema
     from cyber_data_collector.utils import jev
 
     migrate_dedup(conn)
+    asd_schema.ensure_schema(conn)
     for module in (jev, org_timeline, corroboration, page_classifier, record_fingerprints, event_facts,
                    retry_queue):
         module.ensure_schema(conn)
