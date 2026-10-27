@@ -31,7 +31,9 @@ That's it for day-to-day use. Everything else is optional.
 git clone https://github.com/colinpriest/australian-cyber-events-scraper.git
 cd australian-cyber-events-scraper
 
-pip install -r requirements.txt
+pip install -r requirements.lock      # exact versions the tests pass with
+# (requirements.txt holds the ranges; regenerate the lock with
+#  python scripts/setup/lock_dependencies.py after changing it)
 
 # For OAIC Power BI dashboard scraping (optional):
 playwright install chromium
@@ -39,7 +41,17 @@ playwright install chromium
 # Configure API keys
 cp .env.example .env
 # Edit .env with your keys
+
+# Create the database (or upgrade an existing one) - idempotent
+python pipeline.py init
 ```
+
+`init` applies the numbered SQL migrations in
+`cyber_data_collector/storage/migrations/` (recorded in `SchemaMigrations`
+with a checksum) and then every module's own schema step. CI
+(`.github/workflows/ci.yml`) installs from the lock, initialises an empty
+database and runs the tests, including a clean-install smoke test that takes
+mocked source responses through storage, deduplication and status.
 
 ---
 
@@ -126,7 +138,14 @@ FROM ModelJudgements WHERE question_id = 'page_kind';
 python pipeline.py refresh          # Rolling 90-day refresh (recommended)
 python pipeline.py status           # Show last ingest and latest event
 python pipeline.py rebuild --force  # Wipe and fully rebuild (destructive)
+python pipeline.py init             # Create or upgrade the database schema
 ```
+
+Every command acts on one database, resolved once: `--db-path`, else
+`DATABASE_URL`, else `instance/cyber_events.db`. `rebuild` takes a verified
+backup of that database before wiping it, and the wipe, the backup and the
+rebuild all use the same file (it used to wipe the default database whatever
+`--db-path` said).
 
 ---
 
@@ -179,6 +198,8 @@ python run_full_pipeline.py --skip-classification
 | `--skip-entity-sizing` | Skip estimating size bands for new entities | False |
 | `--entity-size-limit N` | Cap entities sized per run | No limit |
 | `--continue-on-error` | Continue if a phase fails | False |
+| `--enrich-limit N` | Most records automatic Perplexity enrichment takes per run (0 = no limit); the rest waits for the next run | 500 |
+| `--api-budget P=N ...` | Requests allowed this run per paid API (`openai`, `perplexity`, `typesafe`); also `API_BUDGET_<PROVIDER>` | Unlimited |
 | `--source SOURCE [SOURCE ...]` | Data sources to use | All |
 | `--max-events N` | Max events per source per month | 1000 |
 | `--days N` | Lookback window in days (0 = full history) | 0 |
@@ -201,9 +222,9 @@ python run_full_pipeline.py --skip-classification
                                [Dashboard Generation]
 ```
 
-1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, GDELT. Scrapes full content. Runs GPT-4o-mini and Random Forest filtering.
+1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, GDELT. Scrapes full content. Runs the fast-model classification; the Random Forest filter runs report-only (see [Random Forest filter](#random-forest-filter-versioned-bundles)).
 2. **Perplexity Enrichment** — Extracts formal entity names, threat actors, attack methods via multi-source verification.
-3. **Global Deduplication** — Entity-based matching: same entity + same date, or same entity + similar titles (0.15 threshold). Uses earliest date for merged events.
+3. **Global Deduplication** — Merges only what is certain: an identical title on the same date, or the same organisation (by identity) on the same exact day. Everything else is decided by the calibrated Jev duplicate check that follows. See [Global Deduplication](#global-deduplication).
 4. **ASD Risk Classification** — Assigns C1–C6 severity categories using the Australian Signals Directorate risk matrix. Incremental (skips already-classified events).
 5. **Dashboard Generation** — Static HTML dashboard with Chart.js visualizations and ASD risk matrices for all years.
 
@@ -304,6 +325,39 @@ python scripts/run_global_deduplication.py --force      # Full rebuild (reproces
 python scripts/run_global_deduplication.py --dry-run   # Preview without changes
 python scripts/run_global_deduplication.py --verbose    # Enable verbose logging
 ```
+
+**What merges here.** Only two deterministic rules, shared by the full
+rebuild and the incremental matcher (`DeduplicationEngine.merge_decision`):
+
+- an identical title on the same date;
+- the same victim organisation on the same exact day. "Same" means identity -
+  legal-suffix and spelling variants, known aliases, compound names sharing a
+  whole member - never a shared word: the old fallback treated any two titles
+  containing "university", "council", "hospital" or "health" as one
+  organisation. An event with no recorded victim matches nothing. The 1st of a
+  month does not count as an exact day, because it is how a month-only date is
+  stored.
+
+The fuzzy rules (titles 15% alike, descriptions 20-35% alike) are gone; those
+pairs stay separate and the calibrated `check-duplicates` step decides them
+with both events' evidence, date provenance and the organisation's timeline.
+Incremental matching also respects cached `different` rulings, and attaches
+every record of a matched group (only the lead record used to be attached,
+which left 34 live records in no event).
+
+**Membership check.** A run fails if any active record belongs to no event or
+to more than one; records removed by a merge or rejection are not counted.
+
+**Records that change after placement.** `RecordFingerprints` remembers what
+each placed record looked like. When a record is re-enriched (a corrected date,
+victim research or record count), its events are refreshed with their ids
+kept: title and date re-derived from all members, fields copied from the master
+record updated unless corrected at event level since, and entity roles marked
+outdated for the hygiene phase's `classify-entities --stale-only`. ASD
+classifications store a fingerprint of their inputs (event fields, prompt
+version, model) and are redone when it changes; Jev judgements already key on
+an input hash. So re-enrichment improves the published results without a full
+rebuild.
 
 > **Note on the incremental-mode warning.** `run_full_pipeline.py` warns when
 > dedup output is under 10% of input. In incremental mode `output_events`
@@ -717,6 +771,60 @@ python scripts/perplexity_backfill_events.py --report-quarantine
 python scripts/perplexity_backfill_events.py --release-quarantine
 python scripts/perplexity_backfill_events.py --requeue-empty   # old empty "validated" rows
 ```
+
+### Random Forest filter: versioned bundles
+
+The discovery filter loads an immutable bundle from
+`machine_learning_filter/bundles/<id>/` (model, vectorizer, encoder, a
+manifest with provenance, file hashes, evaluation and acceptance, and
+reference predictions), named by `machine_learning_filter/ACTIVE_BUNDLE`.
+Loading checks the hashes and, after any library upgrade, that the reference
+predictions still reproduce; files are never re-pickled (the old loader
+rewrote them to silence scikit-learn's version warning).
+
+A bundle drops records only if it passed acceptance on organisation-separated
+labelled data (out-of-fold predictions grouped by victim organisation): drop
+precision at least 0.90 and real-incident loss at most 0.02. Otherwise it
+runs **report-only**: it logs what it would have dropped and keeps everything.
+
+| Bundle | Evaluated on | Drop precision | Real incidents lost | Accepted |
+|---|---|---|---|---|
+| `rf-legacy-2025-09` (the 2025-09 model, unchanged) | 458 labelled records from organisations it never saw | 0.53 | 5.9% | no |
+| retrained on all 580 labels, same features | 5-fold grouped cross-validation | 0.68 | 43% | no |
+
+It dropped real incidents about as often as junk, and more labels do not fix
+TF-IDF features on this little data. The active bundle is the 2025-09 model,
+report-only. This matters because filter rejections now stop records (see
+above); the calibrated Jev steps after deduplication do this job with measured
+precision.
+
+```bash
+python scripts/train_rf_filter.py                        # train + grouped evaluation -> new bundle
+python scripts/train_rf_filter.py --activate             # ... and make it active
+python scripts/train_rf_filter.py --evaluate <bundle_id> # held-out evaluation of a bundle
+```
+
+### API request budgets
+
+`--api-budget openai=3000 perplexity=1500 typesafe=20000` (or
+`API_BUDGET_OPENAI` etc. in `.env`) caps the requests each paid API may
+receive in one run. Every request to those hosts reserves a unit before it is
+sent - the hook is on the HTTP libraries, so threads, SDK retries and fallback
+searches all count - and once a budget is spent the request is refused without
+being sent. Nothing is lost: each step stores what it finished, and a refused
+enrichment is not counted as a failed attempt, so the next run continues where
+this one stopped. A run that hit a budget ends **degraded** (exit code 2). The
+end-of-run log lists requests per provider. Token costs are still reported by
+the token tracker; they cannot be capped directly because the GPT-5 snapshots
+have no listed price.
+
+### Dashboard safety
+
+Dashboards embed scraped titles, organisation names and descriptions. Data is
+embedded with `utils/html_safe.script_json` (a title containing `</script>`
+used to end the entity dashboard's data script), links are drawn only for
+http(s) URLs (`javascript:` URLs are shown as text), and recurrence reports are
+escaped before Markdown conversion. Tests use hostile text in every builder.
 
 ### Records-affected sanity repair
 
