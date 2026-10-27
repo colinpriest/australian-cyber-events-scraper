@@ -594,6 +594,11 @@ class UnifiedPipeline:
         duplicates = ["check-duplicates"]
         if not getattr(args, 'report_event_rejections', False):
             duplicates.append("--apply")
+        # Stray records (calibrated Jev; after victims are corrected, before
+        # check-duplicates re-homes what it splits off).
+        coherence = ["check-coherence"]
+        if not getattr(args, 'report_event_rejections', False):
+            coherence.append("--apply")
         sources = ["check-sources"]
         if not getattr(args, 'report_event_rejections', False):
             sources.append("--apply")
@@ -607,7 +612,7 @@ class UnifiedPipeline:
         # cannot be judged by the source gate or the page classifier.
         steps = [["rescrape-short-pages"], ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"],
-                 ["check-victims"], duplicates, ["check-victim-attribution"]]
+                 ["check-victims"], coherence, duplicates, ["check-victim-attribution"]]
         for step in steps:
             try:
                 if dedup_admin.main(base + step) != 0:

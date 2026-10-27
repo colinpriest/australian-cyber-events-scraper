@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sqlite3
 import sys
 from datetime import datetime
@@ -1437,92 +1438,79 @@ def cmd_reconcile_entities(args) -> int:
 
 
 CANDIDATE_CLUSTER_FINDINGS = Path("instance/dedup_candidate_clusters.json")
-COHERENCE_FINDINGS = Path("instance/dedup_coherence_findings.json")
-
-
 def cmd_check_coherence(args) -> int:
     """Split out stray records - members describing a different incident.
 
     See :mod:`cyber_data_collector.dedup.coherence`. Suspects are found for
-    free (a member naming another organisation); one model call per suspect
-    event decides which members do not belong; those at or above
-    --min-certainty are split out with the ledger and, where exactly one
-    existing event for the same organisation lies within 90 days, folded into
-    it. Findings are written to instance/dedup_coherence_findings.json.
+    free (a member naming another organisation); Jev judges each suspect
+    (escalating its middle band to the reasoning model) and, with ``--apply``,
+    suspects below the calibrated cut-off and members labelled 'different' are
+    split out with the ledger. Without a calibration matching the current
+    models only labelled strays are split. Findings are written next to the
+    database as ``dedup_coherence_findings.json``.
+
+    No fallback: a missing TypeSafe key or SDK or OpenAI key (exit 2), a Jev
+    failure after the SDK's retries, or - with ``--apply`` - a missing,
+    unreadable or empty labels or calibration file (exit 1) stops the command
+    before anything is split. A failed escalation leaves that member
+    undecided: it is not acted on, and the command exits 1.
     """
+    from cyber_data_collector.utils import jev
+
+    missing = []
+    if not os.getenv("TYPESAFE_API_KEY"):
+        missing.append("TYPESAFE_API_KEY")
+    elif not jev.available():
+        missing.append("the typesafe-sdk package")
+    if not os.getenv("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY (escalation model)")
+    if missing:
+        print(f"check-coherence cannot run: {', '.join(missing)} missing. Nothing judged or split.",
+              file=sys.stderr)
+        return 2
     conn = _connect(args.db)
     refresher = _make_refresher(args)
     try:
         ledger = DedupLedger(conn, role_refresher=refresher)
-        resolver = EntityResolver(conn)
-        suspects = coherence.find_suspect_events(conn, resolver, only=args.event or None)
-        suspects.sort(key=lambda e: -len(e["suspect_ids"]))
-        if args.limit:
-            suspects = suspects[: args.limit]
-        print(f"{len(suspects)} event(s) with a member naming another organisation")
-
-        findings, split_n, homed = [], 0, 0
-        for event in suspects:
-            verdict = coherence.judge_event(event)
-            if verdict is None:
-                continue
-            out = coherence.strays(event, verdict, args.min_certainty, resolver=resolver)
-            if not out:
-                continue
-            print(f"\n[{event['id'][:8]}] {event['title'][:70]}  ({len(event['members'])} records; "
-                  f"incident: {verdict.event_incident[:50]})")
-            entry = {"event": event["id"], "title": event["title"], "incident": verdict.event_incident,
-                     "strays": []}
-            # Strays naming the same incident leave together as one event
-            # (one-by-one splits cached rulings between them and they could
-            # never be regrouped).
-            groups: Dict[str, List[Dict]] = {}
-            for s in out:
-                print(f"    - {s['certainty']:.2f}  {s['title'][:60]}  -> {s['actual_incident'][:45]}")
-                groups.setdefault(s["actual_incident"].strip().lower() or s["id"], []).append(s)
-            for label, members in groups.items():
-                records = [{"enriched_id": s["id"], "title": s["title"], "org": s["org"],
-                            "actual_incident": s["actual_incident"], "certainty": s["certainty"],
-                            "reasoning": s["reasoning"], "new_event": None, "merged_into": None}
-                           for s in members]
-                if not args.dry_run:
-                    first = members[0]
-                    new_id = ledger.split_members(
-                        event["id"], [s["id"] for s in members],
-                        reason=(f"[coherence {first['certainty']:.2f}] about "
-                                f"{first['actual_incident']}: {first['reasoning']}"),
-                        actor="pipeline")
-                    split_n += len(members)
-                    home = coherence.find_home(conn, resolver, first["org"], first["date"],
-                                               exclude=[event["id"], new_id])
-                    if home:
-                        try:
-                            ledger.merge_events(
-                                home, new_id,
-                                reason=f"[coherence] stray records re-homed: {first['actual_incident']}",
-                                actor="pipeline")
-                            homed += 1
-                        except ValueError as exc:   # a cached 'different' ruling forbids it
-                            logger.info("Not re-homing %s: %s", new_id, exc)
-                            home = None
-                    for r in records:
-                        r["new_event"], r["merged_into"] = new_id, home
-                    conn.commit()
-                entry["strays"].extend(records)
-            findings.append(entry)
-
-        COHERENCE_FINDINGS.parent.mkdir(parents=True, exist_ok=True)
-        COHERENCE_FINDINGS.write_text(json.dumps(findings, indent=2, ensure_ascii=False, default=str),
-                                      encoding="utf-8")
-        total = sum(len(f["strays"]) for f in findings)
-        if args.dry_run:
-            print(f"\nDRY RUN: {total} stray record(s) in {len(findings)} event(s) would be split out")
-        else:
-            print(f"\n{split_n} stray record(s) split out of {len(findings)} event(s); "
-                  f"{homed} folded into an existing event for their organisation")
+        try:
+            result = coherence.check_coherence(conn, apply=args.apply, only=args.event or None,
+                                               ledger=ledger)
+        except (coherence.CoherenceJudgementError, coherence.CoherenceConfigError) as exc:
+            print(f"check-coherence failed: {exc}. Nothing split; stored judgements are kept.",
+                  file=sys.stderr)
+            return 1
     finally:
         _flush_refresher(conn, refresher)
         conn.close()
+
+    for f in result["findings"]:
+        print(f"\n[{f['event'][:8]}] {(f['title'] or '')[:70]}  ({f['records']} records; victim {f['victim']})")
+        for i, group in enumerate(f["groups"]):
+            for s in group:
+                score = "label" if s.get("basis") == "label" else f"{s['p_same']:.3f}"
+                print(f"    - [{i + 1}] {score:>6}  {(s['org'] or '?')[:30]:30} {s['title'][:55]}")
+        for s in f["held"]:
+            score = "label" if s.get("label") else f"{s['p_same']:.3f}"
+            print(f"    = held {score:>6}  {(s['org'] or '?')[:30]:30} {s['title'][:45]}  ({s['guard']})")
+        if f["note"]:
+            print(f"    note: {f['note']}")
+    out = Path(args.db).parent / "dedup_coherence_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), "apply": args.apply,
+                               **{k: v for k, v in result.items() if k != "scores"}},
+                              indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"\nJudged {result['members_judged']} suspect member(s) in {result['events_judged']} event(s) "
+          f"({result['escalated']} escalated).")
+    if not result["calibrated"]:
+        print("REPORT ONLY for model-judged strays: no coherence calibration for this model and question "
+              "(run scripts/calibrate_coherence.py); only labelled strays can be split.")
+    verb = "Split out" if args.apply else "Would split out"
+    print(f"{verb} {result['strays']} stray record(s) from {result['events_with_strays']} event(s)"
+          + (f" at cut-off {result['cutoff']}" if result["cutoff"] is not None else "")
+          + f"; findings in {out}")
+    if result["undecided"]:
+        print(f"check-coherence: {len(result['undecided'])} member(s) UNDECIDED - escalation failed; they "
+              "were not acted on and will be retried next run.", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -3004,15 +2992,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_ancestry)
 
     p = sub.add_parser("check-coherence",
-                       help="Split out stray records that describe a different "
-                            "incident from the event they are in")
+                       help="Ask Jev whether each suspect member is about its event's incident "
+                            "and split out strays below the calibrated cut-off")
     p.add_argument("--event", action="append", default=None,
                    help="Only this event (dedup id or prefix); repeatable.")
-    # Every correct split in the 2026-10-02 review came at certainty 1.00; the
-    # wrong ones (supplier customers, follow-ups) at 0.90-0.95.
-    p.add_argument("--min-certainty", type=float, default=0.99)
-    p.add_argument("--limit", type=int, default=None)
-    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--apply", action="store_true",
+                   help="Split (model-judged strays only with a calibration matching the current "
+                        "models and question; labelled strays always). Otherwise report only.")
     p.set_defaults(func=cmd_check_coherence)
 
     p = sub.add_parser("adjudicate-candidates",

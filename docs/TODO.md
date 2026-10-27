@@ -22,10 +22,6 @@ moves to the README when merged and run on the live database.
   breaches.** Perplexity declined to list Microsoft's incidents and found none
   for the Australian Digital Health Agency; UWA's timeline omits the 2020
   ProctorU breach.
-- **Stray records inside events.** WSU holding WA Health and Instacart records,
-  University of Tasmania holding University of Sydney Canvas records, NT Health
-  holding an Updoc record. `check-coherence` is being moved to Jev, calibrated
-  and added to the refresh.
 - **Events that affect more than one organisation.** Supplier breaches
   (ProctorU: ten universities; Canvas/Instructure; Frontier payroll) are one
   incident with several victims; nothing finds the other victims, and the
@@ -44,6 +40,25 @@ moves to the README when merged and run on the live database.
 
 ## To do
 
+- **Strays at the same organisation.** `check-coherence` is calibrated
+  (docs/09 section 8j) but splits only *suspects* - records naming another
+  organisation. Labels show the gate keeps real strays: 7 of 28 non-suspects
+  dated over 180 days from their event are another incident at the same
+  organisation (Optus's 2019 White Pages record in its 2022 breach, Okta's
+  2023 support breach in its 2022 Sitel event, AFP's HWL Ebsworth exposure in
+  its 2022 leak) - about 28 records when weighted - while 21 of the 28 are
+  misdated copies the gate rightly protects. Needed: score far-dated
+  same-organisation members too, label them, and calibrate a separate cut-off
+  before letting them leave. The "Instacart record in WSU" a labeller
+  mentioned is not in the database (no record names Instacart).
+- **Check coherence question v2 on fresh labels.** v2 was written after v1
+  failed on the same 92 labelled suspects (it restates the labelling
+  convention about mismatched stored pages); the next labelling round should
+  measure it on suspects it has not seen.
+- **Mismatched stored pages.** Labellers found many records whose stored page
+  is a different article from the record's own title and research (Scouts
+  Victoria with a UTAS page, Suncorp Bank with an HTW page, Service NSW with
+  an IN SPORT page). Find out where the scraper attaches the wrong page.
 - **Replacement records need the refresh to become events.** The source gate
   queues proper reporting for real incidents whose only evidence was a junk
   page; until scraping, enrichment and deduplication run, those incidents are
