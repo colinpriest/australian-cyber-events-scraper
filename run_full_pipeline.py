@@ -789,6 +789,11 @@ class UnifiedPipeline:
 
                 self.results['classification']['events_classified'] = new_classifications
                 self.results['classification']['cache_hits'] = cache_hits
+                if classifier.failed_count:
+                    # The failed events keep their old (stale) classification
+                    # and are retried next run; the phase must not say success.
+                    raise RuntimeError(f"{classifier.failed_count} event(s) could not be classified "
+                                       f"(e.g. {classifier.failed_event_ids[:3]}); they stay stale")
                 self.results['classification']['success'] = True
 
                 logger.info(f"\nClassification complete:")
@@ -990,6 +995,17 @@ class UnifiedPipeline:
                 message = f"Breach-source classification did not complete ({code})"
                 logger.error(message)
                 self.results['classification'].setdefault('errors', []).append(message)
+
+        # Phase 2c: OAIC statistics (data.gov.au), validated; a failing extract
+        # keeps the last valid dataset and the run ends degraded.
+        if not args.discover_only and not args.classify_only and not args.dashboard_only:
+            import subprocess
+            oaic = subprocess.run([sys.executable, "scripts/oaic/refresh_oaic_statistics.py"])
+            if oaic.returncode != 0:
+                message = (f"OAIC statistics refresh failed (exit {oaic.returncode}); "
+                           "the last valid dataset is kept")
+                logger.error(message)
+                self.results['dashboard'].setdefault('errors', []).append(message)
 
         # Phase 3: Dashboard
         if not args.discover_only and not args.classify_only:
