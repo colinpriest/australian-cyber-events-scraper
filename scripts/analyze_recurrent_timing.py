@@ -1517,6 +1517,13 @@ def write_report(
         "",
         "This analysis is conditional on an entity having at least one observed victim event. "
         "Single-event entities contribute right-censored post-event spells.",
+        "The primary model includes recorded organisation size. Size is a proxy for "
+        "differences in visibility, attack exposure and target value, not a direct measure "
+        "of those factors; residual confounding remains possible. The ordinal size term "
+        "assumes equal log-rate steps between categories, UNKNOWN has a separate indicator, "
+        "and current recorded size may differ from size at an incident's date. "
+        "Unadjusted rates, plots, parametric models and size-dropped variants below are "
+        "descriptive diagnostics and do not control for this confounding.",
         "",
         "## Data Quality Summary",
         "",
@@ -1537,7 +1544,7 @@ def write_report(
             f"- covariates used: {', '.join(adjusted_lrt.get('covariates_used') or ['none'])}",
             f"- covariates skipped: {json.dumps(adjusted_lrt.get('covariates_skipped', {}), sort_keys=True)}",
             "",
-            "Piecewise recurrence rates are per 100 entity-years:",
+            "Unadjusted descriptive piecewise recurrence rates are per 100 entity-years:",
             "",
             piecewise[
                 [
@@ -1710,9 +1717,9 @@ def write_report(
             [
                 "## U-Shape Covariate Sensitivity",
                 "",
-                "These variants test whether the wide U-shape confidence intervals are mainly caused by including organisation size or industry/sector controls.",
+                "These variants compare covariate specifications. Variants dropping size are unadjusted for size and are diagnostics only; they are not evidence of a size-adjusted recurrence pattern.",
                 "",
-                "Adjusted phase comparisons by covariate set:",
+                "Phase comparisons by covariate set:",
                 "",
                 variant_display.to_markdown(index=False, floatfmt=".3f"),
                 "",
@@ -1846,7 +1853,7 @@ def write_report(
 
     lines.extend(
         [
-            "## Parametric Survival Model Comparison",
+            "## Unadjusted Parametric Survival Model Comparison (Descriptive)",
             "",
             f"Best AIC model: {best['model']}. Lower AIC/BIC means better censored likelihood fit after penalising parameters.",
             "",

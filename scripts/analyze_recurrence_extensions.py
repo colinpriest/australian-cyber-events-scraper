@@ -110,6 +110,21 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def size_reference(events: pd.DataFrame) -> pd.DataFrame:
+    """Count organisations once; conflicting or absent size is UNKNOWN."""
+    if "entity_id" not in events:
+        return pd.DataFrame(columns=["organisation_size", "organisations", "weight"])
+    values = events["org_size"] if "org_size" in events else pd.Series("UNKNOWN", index=events.index)
+    labels = values.fillna("UNKNOWN").astype(str).str.strip().str.upper()
+    labels = labels.where(labels.isin(["SMALL", "MEDIUM", "LARGE", "HUGE"]), "UNKNOWN")
+    sizes = pd.DataFrame({"entity_id": events["entity_id"], "size": labels}).dropna(subset=["entity_id"])
+    categories = sizes.groupby("entity_id")["size"].agg(lambda s: s.iloc[0] if s.nunique() == 1 else "UNKNOWN")
+    counts = categories.value_counts().reindex(["SMALL", "MEDIUM", "LARGE", "HUGE", "UNKNOWN"], fill_value=0)
+    total = int(counts.sum())
+    return pd.DataFrame({"organisation_size": counts.index, "organisations": counts.values,
+                         "weight": counts.values / total if total else np.zeros(len(counts))})
+
+
 def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                  bootstrap: int = 200, date_draws: int = 100,
                  seed: int = 20261027) -> dict[str, Any]:
@@ -125,6 +140,8 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         events, coverage = observed_by(raw_events, end)
         if events.empty:
             raise RuntimeError("No victim events were available by the analysis cutoff")
+        reference = size_reference(events)
+        reference.to_csv(out_dir / "organisation_size_reference.csv", index=False)
         results = {}
         for name, module in (
             ("timing_and_date_precision", timing_precision),
@@ -144,6 +161,7 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         "bootstrap_replicates": bootstrap,
         "date_draws": date_draws,
         "observation_coverage": coverage,
+        "organisation_size_reference": reference.to_dict(orient="records"),
         "analyses": results,
     }
     safe_summary = _json_safe(summary)
@@ -156,6 +174,16 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         "The analyses describe recorded incidents among organisations with at least "
         "one recorded victim event. They do not estimate the probability of an "
         "attack across all Australian organisations.", "",
+        "Organisation size is included in comparisons using the recorded size "
+        "categories. The standard population is the organisations in this observed "
+        "cohort, counted once each; UNKNOWN remains a separate category. Size is an "
+        "imperfect proxy for visibility, attack exposure and target value, which are "
+        "not directly measured. Current size estimates may differ from size at the "
+        "incident date, and residual confounding remains possible.", "",
+        "| Recorded size | Organisations | Standard population weight |",
+        "|---|---:|---:|",
+        *[f"| {row.organisation_size} | {row.organisations} | {row.weight:.1%} |"
+          for row in reference.itertuples(index=False)], "",
         f"Retained {coverage['retained_attributions']} victim-event attributions; "
         f"excluded {coverage['excluded_after_incident_cutoff']} after the incident-date "
         f"cutoff and {coverage['excluded_first_discovered_after_cutoff']} first discovered "

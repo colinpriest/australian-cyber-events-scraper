@@ -18,6 +18,12 @@ from scipy.stats import chi2
 YEAR_DAYS = 365.25
 UNKNOWN = "Unknown"
 AMBIGUOUS = "Multiple or ambiguous"
+SIZE_LEVELS = ("SMALL", "MEDIUM", "LARGE", "HUGE", "UNKNOWN")
+
+
+def _size(value: Any) -> str:
+    label = str(value).strip().upper() if pd.notna(value) else "UNKNOWN"
+    return label if label in SIZE_LEVELS else "UNKNOWN"
 
 
 def _source_history(db_path: Path, censor_date: date) -> tuple[pd.DataFrame, str]:
@@ -106,7 +112,12 @@ def prepare_events(events: pd.DataFrame, censor_date: date, labels: dict[str, st
     df = df[~df["deduplicated_event_id"].astype(str).isin(future_only or set())]
     df = df.drop_duplicates(["entity_id", "deduplicated_event_id"])
     df["source_label"] = df["deduplicated_event_id"].astype(str).map(labels or {}).fillna(UNKNOWN)
-    df["size_label"] = df["org_size"].where(df["org_size"].notna(), df["size_estimate"])
+    df["size_label"] = df["org_size"].map(_size)
+    # A single fixed current size per organisation is required for comparisons.
+    # Contradictory input labels become UNKNOWN rather than assigning different
+    # incident histories to different size strata.
+    sizes = df.groupby("entity_id")["size_label"].agg(lambda s: s.iloc[0] if s.nunique() == 1 else "UNKNOWN")
+    df["size_label"] = df["entity_id"].map(sizes)
     if df.empty:
         return pd.DataFrame(columns=["entity_id", "event_date", "event_type", "event_ids", "source", "size"])
     grouped = df.groupby(["entity_id", "event_date"], sort=True, as_index=False).agg(
@@ -285,6 +296,125 @@ def _table(frame: pd.DataFrame, max_rows: int = 30) -> str:
     return "\n".join(lines)
 
 
+def size_weights(days: pd.DataFrame) -> dict[str, float]:
+    """Fixed distribution of unique organisations, including unknown size."""
+    entities = days.drop_duplicates("entity_id")
+    if entities.empty:
+        return {}
+    counts = entities["size"].map(_size).value_counts()
+    return {s: float(counts.get(s, 0) / len(entities)) for s in SIZE_LEVELS if counts.get(s, 0)}
+
+
+def standardize_rates(group: pd.DataFrame, weights: dict[str, float]) -> tuple[float | None, float]:
+    """Direct standardization; never extrapolate a missing reference stratum."""
+    stats = group.groupby("size", dropna=False).agg(events=("event", "sum"), days=("exposure_days", "sum"))
+    available = {str(s): r for s, r in stats.iterrows() if r["days"] > 0}
+    covered = sum(weight for size, weight in weights.items() if size in available)
+    if not weights or covered < 1 - 1e-10:
+        return None, float(covered)
+    return float(sum(weight * 36525 * available[size]["events"] / available[size]["days"]
+                     for size, weight in weights.items())), float(covered)
+
+
+def size_comparisons(spells: pd.DataFrame, weights: dict[str, float]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Size-stratified and fixed-weight rates for order, source, and cohort."""
+    columns = ["dimension", "group", "size", "organisations", "spells", "repeats", "exposure_days",
+               "rate_per_100_entity_years", "poisson_ci_low", "poisson_ci_high"]
+    standards = ["dimension", "group", "organisations", "repeats", "reference_weight_covered",
+                 "standardized_rate_per_100_entity_years", "status"]
+    if spells.empty:
+        return pd.DataFrame(columns=columns), pd.DataFrame(columns=standards)
+    work = spells.copy()
+    work["order_group"] = np.where(work["prior_event_number"] == 1, "First observed", "Second or later observed")
+    years = pd.to_datetime(work["event_date"]).dt.year
+    work["calendar_cohort"] = pd.cut(years, bins=[-np.inf, 2018, 2021, 2023, np.inf],
+                                     labels=["Through 2018", "2019–2021", "2022–2023", "2024 onward"]).astype(str)
+    strata, adjusted = [], []
+    for field, dimension in (("order_group", "Event order"), ("source", "Prior incident source"),
+                             ("calendar_cohort", "Prior incident calendar cohort")):
+        for name, group in work.groupby(field, dropna=False, sort=True):
+            standard, covered = standardize_rates(group, weights)
+            adjusted.append(dict(dimension=dimension, group=str(name), organisations=group.entity_id.nunique(),
+                                 repeats=int(group.event.sum()), reference_weight_covered=covered,
+                                 standardized_rate_per_100_entity_years=standard,
+                                 status="available" if standard is not None else "unavailable: missing size exposure"))
+            for size, stratum in group.groupby("size", dropna=False, sort=True):
+                n, exposure = int(stratum.event.sum()), float(stratum.exposure_days.sum())
+                rate, low, high = _rate(n, exposure)
+                strata.append(dict(dimension=dimension, group=str(name), size=str(size),
+                                   organisations=stratum.entity_id.nunique(), spells=len(stratum), repeats=n,
+                                   exposure_days=exposure, rate_per_100_entity_years=rate,
+                                   poisson_ci_low=low, poisson_ci_high=high))
+    return pd.DataFrame(strata, columns=columns), pd.DataFrame(adjusted, columns=standards)
+
+
+def transitions_by_size(spells: pd.DataFrame) -> pd.DataFrame:
+    """Conditional transition counts by fixed organisation size, unknown included."""
+    cols = ["size", "prior_attack_type", "next_attack_type", "transitions", "organisations", "share_of_prior_type_within_size"]
+    observed = spells[spells["event"] == 1]
+    if observed.empty:
+        return pd.DataFrame(columns=cols)
+    result = observed.groupby(["size", "event_type", "next_type"], dropna=False, as_index=False).agg(
+        transitions=("event", "sum"), organisations=("entity_id", "nunique"))
+    result.rename(columns={"event_type": "prior_attack_type", "next_type": "next_attack_type"}, inplace=True)
+    result["share_of_prior_type_within_size"] = result.transitions / result.groupby(["size", "prior_attack_type"]).transitions.transform("sum")
+    return result.sort_values(["size", "prior_attack_type", "next_attack_type"])[cols].reset_index(drop=True)
+
+
+def size_bias_simulations(days: pd.DataFrame, censor_date: date, weights: dict[str, float],
+                          seed: int, replicates: int) -> pd.DataFrame:
+    """Size-stratified and standardized reporting/history simulations.
+
+    Weights stay fixed across every draw and scenario; unsupported standardized
+    estimates are missing rather than imputed. Percentiles summarize simulated
+    scenarios, not statistical uncertainty or unobserved true incidents.
+    """
+    columns = ["family", "scenario", "order_group", "size", "replicates", "valid_rate_draws",
+               "median_repeats", "median_rate", "p05_rate", "p95_rate", "reference_weight_covered"]
+    if days.empty:
+        return pd.DataFrame(columns=columns)
+    if replicates < 1:
+        raise ValueError("bias replicates must be at least 1")
+    rng = np.random.default_rng(seed)
+    ids = days.entity_id.drop_duplicates().tolist()
+    records: dict[tuple[str, str, str, str], list[tuple[int, float | None, float]]] = {}
+    scenarios = [("reporting", "uniform 75% follow-up observation", None),
+                 ("reporting", "lower observation for small organisations", None),
+                 ("history", "0% missing prior history", 0.0),
+                 ("history", "25% missing prior history", .25),
+                 ("history", "50% missing prior history", .5)]
+    for family, scenario, probability in scenarios:
+        for _ in range(1 if probability == 0.0 else replicates):
+            if family == "reporting":
+                sample = _observed_rows(days, rng, scenario)
+                spells = make_spells(sample, censor_date)
+                groups = [("All observed orders", spells)]
+            else:
+                shifts = dict(zip(ids, (rng.random(len(ids)) < probability).astype(int)))
+                spells = make_spells(days, censor_date, shifts)
+                groups = [("First", spells[spells.prior_event_number == 1]),
+                          ("Later", spells[spells.prior_event_number >= 2])]
+            for order, group in groups:
+                for size in weights:
+                    stratum = group[group["size"] == size]
+                    n, exposure = int(stratum.event.sum()), float(stratum.exposure_days.sum())
+                    rate = n * 36525 / exposure if exposure else None
+                    records.setdefault((family, scenario, order, size), []).append((n, rate, 1.0 if exposure else 0.0))
+                standard, covered = standardize_rates(group, weights)
+                records.setdefault((family, scenario, order, "STANDARDIZED"), []).append((int(group.event.sum()), standard, covered))
+    rows = []
+    for (family, scenario, order, size), draws in records.items():
+        rates = [r for _, r, _ in draws if r is not None and np.isfinite(r)]
+        rows.append(dict(family=family, scenario=scenario, order_group=order, size=size,
+                         replicates=len(draws), valid_rate_draws=len(rates),
+                         median_repeats=float(np.median([n for n, _, _ in draws])),
+                         median_rate=float(np.median(rates)) if rates else None,
+                         p05_rate=float(np.quantile(rates, .05)) if rates else None,
+                         p95_rate=float(np.quantile(rates, .95)) if rates else None,
+                         reference_weight_covered=float(np.median([c for _, _, c in draws]))))
+    return pd.DataFrame(rows, columns=columns)
+
+
 def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path, seed: int, **kwargs: Any) -> dict[str, Any]:
     """Run requests 4, 5 and 7, producing report-ready Markdown and CSVs."""
     out = Path(out_dir)
@@ -299,24 +429,44 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path, s
     days = prepare_events(events, censor_date, labels, future_only)
     spells = make_spells(days, censor_date)
     reps = int(kwargs.get("bias_replicates", 100))
+    weights = size_weights(days)
+    size_strata, standardized = size_comparisons(spells, weights)
     tables = {
         "event_order_rates.csv": order_rates(spells),
         "attack_type_transitions.csv": transition_table(spells),
         "observation_bias_strata.csv": observation_strata(spells),
         "observation_bias_thinning.csv": reporting_sensitivity(days, censor_date, seed, reps),
         "prior_history_sensitivity.csv": prior_history_sensitivity(days, censor_date, seed, reps),
+        "recurrence_order_source_calendar_by_size.csv": size_strata,
+        "recurrence_order_source_calendar_standardized.csv": standardized,
+        "attack_type_transitions_by_size.csv": transitions_by_size(spells),
+        "observation_bias_by_size.csv": size_bias_simulations(days, censor_date, weights, seed, reps),
+        "recurrence_size_reference_weights.csv": pd.DataFrame(
+            [{"size": size, "unique_organisations": int(days.loc[days["size"] == size, "entity_id"].nunique()),
+              "weight": weight} for size, weight in weights.items()],
+            columns=["size", "unique_organisations", "weight"]),
     }
     for name, frame in tables.items():
         frame.to_csv(out / name, index=False)
     lines = [
         "## Event order and attack-type transitions", "",
-        "Rates compare observed incident histories. Spells end at the next recorded incident or the censor date; "
-        "censored spells contribute exposure. Exact Poisson intervals are descriptive and do not account for "
-        "dependence between repeated incidents at one organisation.", "",
-        _table(tables["event_order_rates.csv"]), "",
-        "The next table is conditional on a subsequent observed incident. Unknown types remain Unknown; "
-        "different or unknown types on the same day are labelled Multiple or ambiguous rather than ordered.", "",
-        _table(tables["attack_type_transitions.csv"]), "",
+        "Comparisons use the same reference distribution of baseline unique organisations by current recorded size "
+        "(SMALL, MEDIUM, LARGE, HUGE, UNKNOWN), including unknown size as its own stratum. "
+        "Contradictory size labels for an organisation are treated as UNKNOWN. Direct standardized rates "
+        "are unavailable if any reference stratum lacks exposure; no missing stratum is extrapolated. "
+        "Size helps account for differences associated with visibility, exposure and target value, but "
+        "those factors are not directly measured here and size adjustment cannot remove all confounding. "
+        "The reference weights are in `recurrence_size_reference_weights.csv`.", "",
+        "These first/later recorded-incident rates are standardized to that common size distribution. "
+        "Spells end at the next recorded incident or the censor date; censored spells contribute exposure. "
+        "Use the size-stratified CSV to inspect sparse groups; Poisson intervals do not account for "
+        "dependence between incidents at one organisation.", "",
+        _table(standardized[standardized.dimension == "Event order"]), "",
+        "Transition counts and within-size conditional shares appear in `attack_type_transitions_by_size.csv`. "
+        "These are conditional on a subsequent observed incident. Unknown types remain Unknown; "
+        "different or unknown types on the same day are labelled Multiple or ambiguous. "
+        "Cells are sparse and are not causal estimates.", "",
+        _table(tables["attack_type_transitions_by_size.csv"], max_rows=20), "",
         "## Reporting and observation bias", "",
         f"Source history: {source_status}; {len(future_only)} event IDs with all known discovery dates after "
         f"the cutoff excluded; {undated_sources} source records lack discovery dates. Organisation sizes "
@@ -324,20 +474,27 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path, s
         "Source groups refer to the prior incident, are mutually exclusive, and show source availability—not "
         "the chance that an incident was reported. Calendar groups are the prior incident's cohort, not "
         "calendar-time-adjusted rate ratios. Missing source history is Unknown.", "",
-        _table(tables["observation_bias_strata.csv"]), "",
+        "The following source and calendar rates are standardized to the same fixed size weights. "
+        "Size-specific rates and exposure are in `recurrence_order_source_calendar_by_size.csv`.", "",
+        _table(standardized[standardized.dimension != "Event order"]), "",
         "The following simulations remove some already recorded follow-ups under stated hypothetical "
         "observation probabilities: 75% for all follow-ups, or 50% for small and medium organisations and "
         "100% for other recorded sizes, including Unknown. First observed incidents are retained. "
         "They illustrate sensitivity and do not estimate or reconstruct unreported attacks.", "",
-        _table(tables["observation_bias_thinning.csv"]), "",
+        "The following table uses fixed size standardization for each simulation draw; "
+        "the full size-specific results, support and valid draw counts are in `observation_bias_by_size.csv`. "
+        "A missing rate means one or more reference size groups have no exposure.", "",
+        _table(tables["observation_bias_by_size.csv"].query("family == 'reporting' and size == 'STANDARDIZED'")), "",
         "The prior-history scenarios hypothetically assign an unobserved earlier incident to a fraction of "
         "organisations; they relabel existing spells without fabricating dates or exposure. They are not corrections "
         "or estimates of the true unobserved history.", "",
-        _table(tables["prior_history_sensitivity.csv"]), "",
+        _table(tables["observation_bias_by_size.csv"].query("family == 'history' and size == 'STANDARDIZED'")), "",
+        "The original aggregate CSVs are unadjusted descriptive counts, supplied for continuity; "
+        "they should not be used as size-adjusted comparisons.", "",
         "These are associations in a selected, publicly reported dataset, conditional on an observed first incident. "
         "They do not establish causal effects or population attack risk. Sparse groups and reporting changes can be important.",
     ]
     return {"section": "\n".join(lines), "outputs": [str(out / name) for name in tables],
             "source_history_status": source_status, "future_only_events_excluded": len(future_only),
             "undated_source_records": undated_sources, "same_day_type_ambiguities": int((days["event_type"] == AMBIGUOUS).sum()),
-            "bias_replicates": reps}
+            "bias_replicates": reps, "size_reference_weights": weights}

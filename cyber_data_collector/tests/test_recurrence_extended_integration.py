@@ -34,6 +34,33 @@ def test_observation_cutoff_filters_late_discovery_and_incident_dates():
     assert info['retained_unknown_discovery_date'] == 1
 
 
+def test_size_reference_counts_entities_once_and_keeps_unknown():
+    events = pd.DataFrame({'entity_id': ['a', 'a', 'b', 'c', 'c', 'd'],
+                           'org_size': ['large', 'LARGE', None, 'HUGE', 'SMALL', 'invalid']})
+    reference = runner.size_reference(events).set_index('organisation_size')
+    assert reference.loc['LARGE', 'organisations'] == 1
+    assert reference.loc['UNKNOWN', 'organisations'] == 3
+    assert reference.loc['UNKNOWN', 'weight'] == .75
+
+
+def test_all_analyses_use_the_same_size_reference():
+    events = pd.DataFrame({
+        'entity_id': ['a', 'a', 'b', 'c', 'c'],
+        'deduplicated_event_id': ['1', '2', '3', '4', '5'],
+        'event_date': [date(2024, 1, 1), date(2024, 2, 1), date(2024, 1, 1),
+                       date(2024, 1, 1), date(2024, 2, 1)],
+        'org_size': ['LARGE', 'LARGE', None, 'HUGE', 'SMALL'],
+    })
+    end = date(2024, 3, 1)
+    expected = runner.size_reference(events).set_index('organisation_size')['weight'].to_dict()
+    timing = runner.timing_precision.standard_size_weights(events)
+    linkage = runner.linkage_supplier._size_weights(
+        runner.linkage_supplier._entity_totals(runner.linkage_supplier._prepare(events, end), end))
+    sequence = runner.sequence_bias.size_weights(runner.sequence_bias.prepare_events(events, end))
+    for weights in (timing, linkage, sequence):
+        assert all(abs(weights.get(group, 0) - weight) < 1e-12 for group, weight in expected.items())
+
+
 def test_snapshot_includes_committed_wal_changes(tmp_path):
     source = tmp_path / 'source.db'
     db = sqlite3.connect(source)
