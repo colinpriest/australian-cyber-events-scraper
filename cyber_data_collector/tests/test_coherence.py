@@ -140,6 +140,14 @@ def test_member_state_carries_record_evidence_and_the_event(conn):
     assert "organisation_timeline" not in state
 
 
+def test_member_state_carries_the_victims_timeline_in_judgement_shape(conn, monkeypatch):
+    from cyber_data_collector.dedup import org_timeline
+    shown = {"organisation": "Sharp Motor Group", "incidents": "2025-05: ransomware", "citations": ["u"]}
+    monkeypatch.setattr(org_timeline, "timeline_for_event", lambda c, d: dict(shown))
+    event = next(e for e in co.find_suspect_events(conn) if e["id"] == "sharp")
+    assert co.build_member_state(conn, event, "x1")["organisation_timeline"] == shown
+
+
 def test_judgements_are_stored_and_reused(conn):
     event = next(e for e in co.find_suspect_events(conn) if e["id"] == "sharp")
     fake = FakeTypeSafe({"Mathspace": 0.02})
