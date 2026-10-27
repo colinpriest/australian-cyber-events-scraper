@@ -279,6 +279,7 @@ australian-cyber-events-scraper/
 │   ├── build_static_dashboard.py  # HTML dashboard generation
 │   ├── analyze_recurrent_timing.py # Repeat-event survival/recurrent timing analysis
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
+│   ├── quality_report.py          # Quality metrics, history and the publication gate
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
 │   ├── run_global_deduplication.py    # Standalone deduplication runner
@@ -1017,6 +1018,30 @@ member on Python 3.11+; the enums now stringify to their values, storage
 canonicalises on write, and `normalise-enums` rewrites stored rows (including
 `RawEvents.source_metadata`, which re-enrichment copies from) idempotently.
 
+### Quality report and publication gate
+
+`scripts/quality_report.py` measures data quality on every run, stores each
+metric in `QualityRuns` / `QualityMetrics` (so trends are one query away), and
+decides whether outputs may be published: source coverage per month, events
+with no evidence, retry backlogs, short-gap same-victim pairs and identical
+titles, invalid and placeholder dates, stale ASD classifications / roles /
+facts, every `check_data_integrity.py` check, contradictions of the labelled
+outcomes in `evaluation/*_labels.csv`, and fixed synthetic cases for the
+deterministic merge, records-affected, fact and date-provenance functions.
+Thresholds are committed in `cyber_data_collector/quality/thresholds.json`;
+blocking ones are integrity, label contradictions (> 2), synthetic cases,
+future or malformed dates and stale ASD classifications (> 5%). A check that
+cannot run is *not measured*, which blocks like a failure - never a pass.
+
+```bash
+python scripts/quality_report.py                 # exit 1 when blocked; writes instance/quality_report.{json,md,html}
+python scripts/quality_report.py --no-record     # read-only
+```
+
+From code: `from cyber_data_collector.quality import publication_allowed`;
+`allowed, reasons = publication_allowed(conn)`. Details and the first run's
+results: [docs/10-quality-gate.md](docs/10-quality-gate.md).
+
 ### Reporting population: one definition for every dashboard and export
 
 `DeduplicatedEvents` is the whole history of deduplication, not a list of
@@ -1382,6 +1407,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 | [06-deduplication.md](docs/06-deduplication.md) | Entity-based deduplication, similarity matching, and merge logic |
 | [07-ASD-risk-classification.md](docs/07-ASD-risk-classification.md) | ASD risk matrix framework and GPT-4o classification |
 | [08-dashboard-generation.md](docs/08-dashboard-generation.md) | Dashboard SQL queries, Chart.js charts, and OAIC comparison |
+| [10-quality-gate.md](docs/10-quality-gate.md) | Continuous quality metrics, label regression, synthetic cases and the publication gate |
 | [data-dictionary.md](docs/data-dictionary.md) | Complete database schema, table definitions, and field descriptions |
 
 These documents contain sufficient detail for independent review and replication of each pipeline stage.
