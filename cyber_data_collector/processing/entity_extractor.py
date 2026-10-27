@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from cyber_data_collector.models.events import AffectedEntity, CyberEvent, EntityType
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
-from .llm_classifier import LLMClassifier
+from .llm_classifier import LLMClassifier, failed_copy
 
 
 class EntityExtractionRequest(BaseModel):
@@ -44,11 +44,12 @@ class EntityExtractor:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     async def extract_entities(self, events: List[CyberEvent]) -> List[CyberEvent]:
-        if not self.llm_classifier.client:
-            return events
-
         if not events:
             return events
+
+        if not self.llm_classifier.client:
+            # No silent fallback: events without entities used to carry on.
+            raise RuntimeError("OpenAI API key not configured: entities cannot be extracted")
 
         enhanced_events: List[CyberEvent] = []
         
@@ -60,8 +61,11 @@ class EntityExtractor:
                 try:
                     return await self._extract_entities_for_event(event)
                 except Exception as exc:
+                    # Not a silent pass: the event is flagged failed, so it is
+                    # neither classified nor stored without its entities; the
+                    # discovery retry queue tries it again.
                     self.logger.error("Failed to extract entities for event %s: %s", event.event_id, exc)
-                    return event  # Return original event on error
+                    return failed_copy(event, exc)
         
         # Create tasks for all events
         tasks = [process_event_with_semaphore(event) for event in events]
@@ -130,7 +134,7 @@ class EntityExtractor:
                 )
         except asyncio.TimeoutError:
             self.logger.warning(f"Entity extraction timed out for event: {event.title[:50]}...")
-            return event  # Return original event on timeout
+            raise
 
         event_copy = event.model_copy(deep=True)
         enhanced_entities: List[AffectedEntity] = []
@@ -145,10 +149,13 @@ class EntityExtractor:
             )
             enhanced_entities.append(entity)
 
-        if enhanced_entities:
-            event_copy.affected_entities = enhanced_entities
-            event_copy.primary_entity = enhanced_entities[0]
-        else:
-            event_copy.primary_entity = event.primary_entity
+        # The extraction's answer replaces whatever discovery guessed (a search
+        # result's entity name, an OAIC title heuristic) and its confidence.
+        # Finding nothing leaves the identity unresolved - it is not filled
+        # back in from the guess.
+        event_copy.affected_entities = enhanced_entities
+        event_copy.primary_entity = enhanced_entities[0] if enhanced_entities else None
+        if not enhanced_entities:
+            self.logger.debug("No entities extracted for '%s': identity left unresolved", event.title[:50])
 
         return event_copy

@@ -80,7 +80,7 @@ class WebberInsuranceDataSource(DataSource):
             return all_events
 
         except Exception as exc:
-            self.logger.error(f"Webber Insurance scraping failed: {exc}")
+            self.note_failure("Webber Insurance scraping failed", exc)
             return []
 
     def _extract_all_event_links(self, soup: BeautifulSoup) -> List[Dict[str, str]]:
@@ -261,6 +261,7 @@ class WebberInsuranceDataSource(DataSource):
             except Exception as fallback_e:
                 self.logger.warning(f"Perplexity fallback also failed for {url}: {fallback_e}")
 
+            self.note_failure(f"Webber Insurance detail page could not be read: {url}", e)
             return None
 
     def _perplexity_fallback(self, failed_url: str, section_date: Optional[datetime] = None) -> Optional[str]:

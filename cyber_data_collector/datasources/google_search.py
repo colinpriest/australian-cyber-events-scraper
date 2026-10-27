@@ -85,10 +85,8 @@ class GoogleSearchDataSource(DataSource):
         with GoogleSearchDataSource._quota_lock:
             quota_exceeded = GoogleSearchDataSource._daily_quota_exceeded
         if quota_exceeded:
-            self.logger.info(
-                "Google Search skipped - daily quota was exceeded earlier. "
-                "Will retry automatically tomorrow."
-            )
+            self.note_failure("Google Search skipped - daily quota was exceeded earlier; the month is searched again "
+                              "on a later run")
             return []
 
         queries = self._generate_google_queries(date_range)
@@ -99,18 +97,19 @@ class GoogleSearchDataSource(DataSource):
             with GoogleSearchDataSource._quota_lock:
                 quota_exceeded = GoogleSearchDataSource._daily_quota_exceeded
             if quota_exceeded:
-                self.logger.info("Stopping remaining Google queries due to quota limit")
+                self.note_failure("Google daily quota exceeded; remaining queries not run")
                 break
 
             try:
                 await self.rate_limiter.wait("google_search")
                 results = await self._execute_google_search(query, date_range)
                 if results is None:  # Quota exceeded signal
+                    self.note_failure(f"Google daily quota exceeded at query '{query[:60]}'; remaining queries not run")
                     break
                 events = self._process_search_results(results)
                 all_events.extend(events)
             except Exception as exc:
-                self.logger.error("Google search failed for query '%s': %s", query, exc)
+                self.note_failure(f"Google search failed for query '{query[:60]}'", exc)
 
         return all_events
 
@@ -190,10 +189,10 @@ class GoogleSearchDataSource(DataSource):
                 if exc.response is not None and exc.response.status_code in (429, 403):
                     self._set_quota_exceeded()
                     return None
-                self.logger.error("Google API request failed: %s", exc)
+                self.note_failure(f"Google API request failed for query '{query[:60]}'", exc)
                 break
             except Exception as exc:
-                self.logger.error("Google API request failed: %s", exc)
+                self.note_failure(f"Google API request failed for query '{query[:60]}'", exc)
                 break
 
         return all_results

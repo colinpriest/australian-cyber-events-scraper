@@ -94,6 +94,10 @@ Without filtering, false positives would overwhelm the dataset, consume expensiv
 
 ## 2. Filtering Architecture Overview
 
+> **Current order (2026-10-27):** scrape -> Jev page gate (section 3.0; enforced for Google,
+> report-only elsewhere) -> entity extraction and LLM classification -> store. The Random
+> Forest pre- and post-filters and the 0.6 confidence threshold described below are retired.
+
 ### 2.1 Why Multiple Filtering Stages Are Needed
 
 A single filtering pass is insufficient because:
@@ -204,10 +208,67 @@ The post-LLM RF filter serves as a safety net. It re-evaluates the combined text
 
 ---
 
-## 3. Stage 1: Random Forest ML Filter (Post-Scrape)
+## 3. Stage 1: Discovery page filter
 
-**Source file:** `cyber_data_collector/filtering/rf_event_filter.py`
-**Integration point:** `cyber_data_collector/pipelines/discovery.py`, method `_apply_rf_content_filter()`
+### 3.0 Current design: the Jev page gate (replaces the Random Forest filter)
+
+**Source files:** `cyber_data_collector/filtering/page_gate.py`; integration in
+`cyber_data_collector/pipelines/discovery.py` (`_apply_page_gate`); the question and
+calibration are the source gate's (`cyber_data_collector/dedup/source_gate.py`).
+
+**Why the Random Forest filter was retired (2026-10-27).** Its only bundle,
+`rf-legacy-2025-09`, failed acceptance on organisation-separated labels: drop precision
+0.53 and 5.9% of real incidents lost; retraining on all 580 labels with the same features
+gave 0.68 precision and 43% loss. It dropped real incidents about as often as junk. The
+module, bundles and `scripts/train_rf_filter.py` stay in the repository so that evaluation
+can be reproduced (`--evaluate` now refuses a bundle whose training records are unknown);
+nothing in the pipeline imports them. Sections 3.1-3.12 below describe the retired filter.
+
+**The question.** "Does this page *itself* report one specific cyber incident?" - asked of
+Jev with the page's own scraped text, title, URL and search snippet, built exactly as the
+calibrated source gate builds it (same question id `page_reports_incident`, version
+`source-gate-v1`, same 3,000-character page excerpt), so the probability means what it meant
+when the cut-off was calibrated. Answers are stored in `ModelJudgements`
+(subject `raw_event`) and reused on reruns.
+
+**Decision per record:**
+
+| Situation | Outcome |
+|---|---|
+| Before scraping | Nothing is dropped on title or URL (only blocked social/profile domains are skipped). |
+| Page text under 300 characters | Not judged; kept. |
+| `GoogleSearch` page, P below the calibrated cut-off (0.58) | **Rejected** at stage `page_gate` (`Rejected at page_gate: ...`, durable). |
+| Any other source below the cut-off | Score recorded, record **kept** (*would drop*, report-only). |
+| Calibration missing, unreadable, or for another model / question version | Report-only for every source, logged at every run. |
+| `DISCOVERY_PAGE_GATE_MODE=report-only` | Report-only by explicit choice, logged at every run. |
+
+The cut-off was calibrated on 170 labelled Google pages (precision 0.953 on 100 labelled
+removals, recall 0.97, out-of-sample 0.95). Another source is enforced only if
+`evaluation/page_gate_source_evaluation.json` (written by
+`scripts/evaluate_page_gate_sources.py`) accepts it for the same model, question version and
+cut-off. That evaluation maps the event-reality labels to member records: a drop from a
+`not_incident` event is correct, a drop from a `real` event is counted wrong (a lower bound,
+since a real event can hold a junk page), with a bootstrap over victim organisations. See
+that file for the current numbers.
+
+**No silent fallback.** Without a TypeSafe key or SDK, discovery stops before searching
+(`PageGateUnavailable`); a Jev error that survives three attempts stops the run, and the
+record stays in the retry queue as a temporary failure. A TypeSafe *budget* refusal holds the
+remaining records for the next run (the documented budget behaviour; the run ends
+degraded). Nothing switches to another model or keeps/drops a record unjudged.
+
+**Reporting.** Every decision is logged to `ProcessingLog` (stage `page_gate`, status
+`rejected` / `would_drop` / `kept` / `not_judged`, with the probability and cut-off), and
+`print_filtering_statistics()` prints judged / not judgeable / kept / would drop / dropped
+per source.
+
+**No confidence threshold.** The old "final filtering by confidence" (0.6) ran after the
+records were stored and excluded nothing downstream; an uncalibrated cut-off may not drop
+records, so it was removed rather than moved.
+
+### Retired: Random Forest ML Filter (historical reference)
+
+**Source file:** `cyber_data_collector/filtering/rf_event_filter.py` (retired; not imported by the pipeline)
 
 ### 3.1 Purpose
 

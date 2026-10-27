@@ -118,3 +118,20 @@ def test_the_committed_active_bundle_loads_and_is_report_only():
     """The 2025-09 model failed acceptance (drop precision 0.53, real loss 0.06)."""
     rf = RfEventFilter()
     assert rf.bundle_id == "rf-legacy-2025-09" and rf.is_loaded and not rf.enforcing
+
+
+def test_evaluation_refuses_when_training_membership_is_unknown(tmp_path):
+    """Without training_records.csv nothing can be shown to be held out (reviewer finding 38)."""
+    from scripts.train_rf_filter import TrainingMembershipUnknown, held_out_records
+
+    frame = pd.DataFrame({"raw_event_id": ["a", "b", "c"], "group": ["acme", "acme", "borealis"],
+                          "origin": ["training_csv", "labels", "labels"]})
+    with pytest.raises(TrainingMembershipUnknown):
+        held_out_records("rf-new", {"kind": "trained"}, frame, bundles_dir=tmp_path)
+    # The adopted legacy model's training records are the 2025-09 file's; their organisations are excluded too.
+    legacy = held_out_records("rf-legacy", {"kind": "legacy"}, frame, bundles_dir=tmp_path)
+    assert list(legacy["raw_event_id"]) == ["c"]
+    (tmp_path / "rf-new").mkdir()
+    pd.DataFrame({"raw_event_id": ["c"], "group": ["borealis"]}).to_csv(tmp_path / "rf-new" / "training_records.csv")
+    trained = held_out_records("rf-new", {"kind": "trained"}, frame, bundles_dir=tmp_path)
+    assert list(trained["raw_event_id"]) == ["a", "b"]
