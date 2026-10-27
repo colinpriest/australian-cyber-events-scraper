@@ -7,6 +7,8 @@ This script implements the survival/recurrent-event analysis behind the
 2. Fit a primary piecewise exponential model for elapsed time since prior event.
 3. Compare censored parametric survival models.
 4. Write summary tables, plots, and a Markdown report.
+5. Rebuild ``dashboard/recurrence.html``, which shows every run folder under
+   the output's parent (one per elapsed-time banding) side by side.
 
 The analysis is conditional on an entity having at least one observed event.
 It does not estimate attack risk for the full population of Australian entities.
@@ -23,6 +25,7 @@ import argparse
 import json
 import math
 import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -37,10 +40,14 @@ import pandas as pd
 from scipy import optimize, stats
 from scipy.special import gammaln
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.build_recurrence_dashboard import DEFAULT_OUT as DEFAULT_DASHBOARD_OUT
+from scripts.build_recurrence_dashboard import build_html as build_recurrence_dashboard
+
 
 DEFAULT_DB = "instance/cyber_events.db"
 DEFAULT_OUT_DIR = "analysis/recurrent_timing"
-DEFAULT_CENSOR_DATE = "2026-08-05"
 DEFAULT_ELAPSED_BOUNDS = (0, 180, 365, 730, 1460, math.inf)
 DELAYED_PEAK_ELAPSED_BOUNDS = (0, 90, 180, 365, 730, 1460, math.inf)
 DEFAULT_CALENDAR_BOUNDS = ("2012-01-01", "2019-01-01", "2022-01-01", "2024-01-01")
@@ -334,6 +341,19 @@ def delayed_peak_phase_for_bounds(lo: float, hi: float) -> str:
     if lo >= 180:
         return "post_180"
     return "not_applicable"
+
+
+def last_ingest_date(db_path: Path) -> date:
+    """Date of the most recent ingest, the point up to which the data is complete.
+
+    Censoring at a hard-coded date goes stale after every refresh: events
+    ingested since then would be dropped and their spells cut short.
+    """
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT MAX(discovered_at) FROM RawEvents").fetchone()
+    if not row or not row[0]:
+        raise RuntimeError("RawEvents has no discovered_at; pass --censor-date explicitly.")
+    return parse_date(str(row[0])[:10])
 
 
 def load_victim_events(db_path: Path) -> pd.DataFrame:
@@ -1855,7 +1875,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite database path.")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="Directory for analysis outputs.")
-    parser.add_argument("--censor-date", default=DEFAULT_CENSOR_DATE, help="Right-censoring date, YYYY-MM-DD.")
+    parser.add_argument(
+        "--censor-date",
+        default=None,
+        help="Right-censoring date, YYYY-MM-DD (default: date of the last ingest in RawEvents).",
+    )
     parser.add_argument(
         "--elapsed-bounds",
         type=parse_elapsed_bounds,
@@ -1864,12 +1888,17 @@ def main() -> int:
     )
     parser.add_argument("--bootstrap", type=int, default=500, help="Entity bootstrap replicates for piecewise hazard CI.")
     parser.add_argument("--seed", type=int, default=20260805, help="Bootstrap random seed.")
+    parser.add_argument(
+        "--dashboard-out",
+        default=DEFAULT_DASHBOARD_OUT,
+        help="HTML page combining every run under the output's parent folder ('' to skip).",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    censor_date = parse_date(args.censor_date)
+    censor_date = parse_date(args.censor_date) if args.censor_date else last_ingest_date(db_path)
     elapsed_bounds = args.elapsed_bounds
 
     events = load_victim_events(db_path)
@@ -2022,6 +2051,12 @@ def main() -> int:
     print(f"Wrote recurrent timing analysis to {out_dir}")
     print(f"Adjusted elapsed-time LRT p-value: {adjusted_lrt['p_value']:.4g}")
     print(f"Best parametric AIC model: {model_table.iloc[0]['model']}")
+
+    if args.dashboard_out:
+        dashboard_path = Path(args.dashboard_out)
+        dashboard_path.parent.mkdir(parents=True, exist_ok=True)
+        dashboard_path.write_text(build_recurrence_dashboard(out_dir.parent), encoding="utf-8")
+        print(f"Rebuilt recurrence dashboard: {dashboard_path.resolve()}")
     return 0
 
 

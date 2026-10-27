@@ -208,6 +208,7 @@ australian-cyber-events-scraper/
 │   ├── asd_risk_classifier.py     # Standalone ASD risk classification
 │   ├── build_static_dashboard.py  # HTML dashboard generation
 │   ├── analyze_recurrent_timing.py # Repeat-event survival/recurrent timing analysis
+│   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
 │   ├── run_global_deduplication.py    # Standalone deduplication runner
@@ -725,23 +726,44 @@ Main outputs are written under `analysis/recurrent_timing/`:
 | `delayed_peak_sensitivity_adjusted_contrasts.csv` | Formal 91-180 day delayed-peak contrasts |
 | `piecewise_hazard.png`, `survival_curve.png`, `parametric_hazards.png` | Diagnostic plots |
 
-Current headline result from the cleaned/deduplicated database:
+Every run also rebuilds **`dashboard/recurrence.html`**: one self-contained
+page with the headline tests for every banding side by side, then each run's
+full report with its plots inline. It reads the run folders on disk, so after
+a data refresh rerun all three bandings (main, `_90_180_peak`, and `_90d` with
+`--elapsed-bounds 0,90,365,730,1460,inf`); the overview's censor-date column
+shows any run left stale. Rebuild the page alone with
+`python scripts/build_recurrence_dashboard.py`, or skip it with
+`--dashboard-out ''`.
+
+The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
+so a rerun after a refresh uses the new data without editing the script.
+
+Current headline result (data to 2026-10-02: 652 victim entities, 60 with more
+than one event, 102 observed repeats):
 
 - The broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460` adjusted model does
-  not reject constant elapsed-time risk (`p = 0.1527`).
-- A sensitivity model that splits the first six months into `0-90` and
-  `91-180` does reject constant elapsed-time risk after adjustment
-  (`p = 0.0321`).
-- The strongest feature is a delayed early peak: the `91-180` day window has an
-  adjusted repeat-event rate about `2.91x` the first `0-90` days
-  (`95% CI 1.13-7.50`, directional `p = 0.014`).
-- The `91-180` day window is also estimated at about `1.53x` the pooled
-  post-180 period, but that comparison is weaker (`95% CI 0.86-2.70`,
-  directional `p = 0.073`).
-- The explanatory story - immediate lockdown/high alert, attackers returning,
-  incomplete remediation, later training and eventual complacency - is
-  plausible data storytelling, not proven mechanism. The analysis tests timing
-  patterns, not causality.
+  not reject constant elapsed-time risk (`p = 0.1985`).
+- The sensitivity model that splits the first six months into `0-90` and
+  `91-180` no longer rejects it either (`p = 0.1474`; it was `p = 0.0321` on
+  the August 2026 data).
+- The `91-180` peak itself persists - about 10 repeats per 100 entity-years,
+  against 4-5 after six months - and is now the stronger contrast: about
+  `1.74x` the pooled post-180 period (`95% CI 1.01-2.98`, directional
+  `p = 0.022`).
+- The early *dip* has gone. `0-90` day repeats rose from 6 to 11, so `91-180`
+  versus `0-90` is now `1.75x` (`95% CI 0.82-3.73`, not significant; it was
+  `2.91x`). What remains is elevated risk across the first six months, not a
+  lockdown-then-return shape.
+- Treat the short-gap band with caution. Of the 11 repeats inside 90 days,
+  several are data artefacts rather than second attacks: non-incident pages
+  attributed to the victim (ACT Government preschool page, a Service NSW
+  "report cybercrime" page, an OAIC data-matching notice under Spectrum
+  Medical Imaging) and wrong-victim attributions (TPG's December 2022 breach
+  under Optus, Sharp Office Systems under Sharp Motor Group). That band is
+  where false repeats create signal rather than noise.
+- The explanatory story - attackers returning, incomplete remediation, later
+  training and eventual complacency - is plausible data storytelling, not
+  proven mechanism. The analysis tests timing patterns, not causality.
 
 ### Safety Vault (snapshot/restore around destructive operations)
 
