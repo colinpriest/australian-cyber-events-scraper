@@ -201,6 +201,7 @@ class EventDiscoveryEnrichmentPipeline:
     """Main pipeline for discovering and enriching cyber events"""
 
     def __init__(self, db_path: str = "instance/cyber_events.db"):
+        self.db_path = str(db_path)
         self.db = CyberEventDataV2(db_path)
         self.config_manager = ConfigManager()
         self.env_config = self.config_manager.load()
@@ -354,7 +355,7 @@ class EventDiscoveryEnrichmentPipeline:
             await self._initialize_data_sources_metadata(source_types)
 
             # Create collector and capture ALL stages of processing
-            collector = CyberDataCollector(collection_config, ".env")
+            collector = CyberDataCollector(collection_config, ".env", db_path=self.db_path)
 
             # Inject known URLs so OAIC source can skip already-stored articles
             if 'oaic' in collector.data_sources:
@@ -2381,9 +2382,8 @@ Examples:
                         help='Disable Australian-only filtering for enrichment')
 
     args = parser.parse_args()
-    env_config = ConfigManager(".env").load()
-    if not args.db_path:
-        args.db_path = env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
+    from cyber_data_collector.utils.config_manager import resolve_db_path
+    args.db_path = resolve_db_path(args.db_path)
 
     # If no phase specified, run all phases
     if not any([args.discover, args.scrape, args.enrich]):

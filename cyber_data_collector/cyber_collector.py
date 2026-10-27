@@ -28,7 +28,8 @@ from cyber_data_collector.utils.validation import safe_json_dumps
 class CyberDataCollector:
     """Main class for collecting Australian cyber events from multiple sources."""
 
-    def __init__(self, config: CollectionConfig, env_path: str = ".env") -> None:
+    def __init__(self, config: CollectionConfig, env_path: str = ".env",
+                 db_path: Optional[str] = None) -> None:
         self.config = config
         self.env_config = ConfigManager(env_path).load()
         setup_logging("logs/cyber_collector.log")
@@ -43,7 +44,10 @@ class CyberDataCollector:
         self.data_sources: Dict[str, DataSource] = {}
         self._initialize_data_sources()
 
-        self.database_manager = DatabaseManager(self.env_config.get("DATABASE_URL"))
+        # The caller's database, when it has one: resolving DATABASE_URL here
+        # opened the default database even for a run given --db-path.
+        self.database_manager = DatabaseManager(
+            f"sqlite:///{db_path}" if db_path else self.env_config.get("DATABASE_URL"))
         self.cache_manager = CacheManager()
 
         self.collected_events: List[CyberEvent] = []

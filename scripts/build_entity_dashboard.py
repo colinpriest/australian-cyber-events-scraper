@@ -43,6 +43,8 @@ from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -332,7 +334,7 @@ def build_html(rows: List[Dict[str, Any]], stats: Dict[str, Any]) -> str:
            + (f"By size: {by_size}. " if by_size else "")
            + f"Generated {datetime.now():%Y-%m-%d %H:%M}.")
     return PAGE.format(sub=html.escape(sub),
-                       rows=json.dumps(rows, ensure_ascii=False))
+                       rows=script_json(rows, ensure_ascii=False))
 
 
 def main() -> int:

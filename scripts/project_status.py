@@ -14,12 +14,11 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Tuple
 
-from cyber_data_collector.utils import ConfigManager
+from cyber_data_collector.utils.config_manager import resolve_db_path
 
 
 def _resolve_db_path(db_path: Optional[str]) -> str:
-    env_config = ConfigManager(".env").load()
-    return db_path or env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
+    return resolve_db_path(db_path)
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:

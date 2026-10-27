@@ -27,6 +27,11 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
+
 from scripts.oaic.oaic_validators import sanitize_top_sectors
 
 # Match the YYYYMMDD_HHMMSS scrape stamp embedded in OAIC output filenames.
@@ -2637,46 +2642,46 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     """Return full static HTML content embedding data and rendering charts."""
     # Subtitle shown on the monthly trend charts when an incomplete latest
     # month was dropped (see compute_incomplete_month_cutoff).
-    incomplete_note = json.dumps((data.get('incomplete_month') or {}).get('note') or '')
+    incomplete_note = script_json((data.get('incomplete_month') or {}).get('note') or '')
     header = dashboard_header_dates(end_date, data.get('incomplete_month'), data.get('extraction_date'))
-    mc = json.dumps(data['monthly_counts'])
-    mbf = json.dumps(data.get('monthly_bf'))
-    sev = json.dumps(data['severity_trends'])
-    ra = json.dumps(data['records_affected'])
-    etm = json.dumps(data['event_type_mix'])
-    oetm = json.dumps(data['overall_event_type_mix'])
-    ent = json.dumps(data['entity_types'])
-    rh = json.dumps(data['records_histogram'])
-    mspm = json.dumps(data['max_severity_per_month'])
-    medspm = json.dumps(data['median_severity_per_month'])
-    mrpm = json.dumps(data['max_records_per_month'])
-    sbi = json.dumps(data['severity_by_industry'])
-    sbat = json.dumps(data['severity_by_attack_type'])
-    rbat = json.dumps(data['records_by_attack_type'])
-    mcs = json.dumps(data['monthly_counts_stats'])
-    etc = json.dumps(data['event_type_correlation'])
-    oaic_comp = json.dumps(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
-    oaic_ci = json.dumps(data.get('oaic_cyber_incidents', {'periods': [], 'cyber_incidents': [], 'total_notifications': []}))
-    oaic_at = json.dumps(data.get('oaic_attack_types', {'periods': [], 'attack_types': {}}))
-    oaic_sec = json.dumps(data.get('oaic_sectors', {'sectors': [], 'oaic_counts': [], 'database_counts': []}))
-    oaic_ind_aff = json.dumps(data.get('oaic_individuals_affected', {'periods': [], 'averages': [], 'medians': [], 'db_averages': []}))
+    mc = script_json(data['monthly_counts'])
+    mbf = script_json(data.get('monthly_bf'))
+    sev = script_json(data['severity_trends'])
+    ra = script_json(data['records_affected'])
+    etm = script_json(data['event_type_mix'])
+    oetm = script_json(data['overall_event_type_mix'])
+    ent = script_json(data['entity_types'])
+    rh = script_json(data['records_histogram'])
+    mspm = script_json(data['max_severity_per_month'])
+    medspm = script_json(data['median_severity_per_month'])
+    mrpm = script_json(data['max_records_per_month'])
+    sbi = script_json(data['severity_by_industry'])
+    sbat = script_json(data['severity_by_attack_type'])
+    rbat = script_json(data['records_by_attack_type'])
+    mcs = script_json(data['monthly_counts_stats'])
+    etc = script_json(data['event_type_correlation'])
+    oaic_comp = script_json(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
+    oaic_ci = script_json(data.get('oaic_cyber_incidents', {'periods': [], 'cyber_incidents': [], 'total_notifications': []}))
+    oaic_at = script_json(data.get('oaic_attack_types', {'periods': [], 'attack_types': {}}))
+    oaic_sec = script_json(data.get('oaic_sectors', {'sectors': [], 'oaic_counts': [], 'database_counts': []}))
+    oaic_ind_aff = script_json(data.get('oaic_individuals_affected', {'periods': [], 'averages': [], 'medians': [], 'db_averages': []}))
     # New comparison data structures (added 2026-05-03)
-    oaic_monthly = json.dumps(data.get('oaic_monthly_comparison',
+    oaic_monthly = script_json(data.get('oaic_monthly_comparison',
         {'months': [], 'oaic_counts': [], 'db_counts': []}))
-    oaic_indaff_dist = json.dumps(data.get('oaic_individuals_affected_distribution',
+    oaic_indaff_dist = script_json(data.get('oaic_individuals_affected_distribution',
         {'buckets': [], 'oaic_counts': [], 'db_counts': []}))
-    oaic_source_split = json.dumps(data.get('oaic_source_split',
+    oaic_source_split = script_json(data.get('oaic_source_split',
         {'periods': [], 'oaic_human': [], 'oaic_malicious': [], 'oaic_system': [],
          'db_human': [], 'db_malicious': [], 'db_system': []}))
-    oaic_t2id = json.dumps(data.get('oaic_time_to_identify',
+    oaic_t2id = script_json(data.get('oaic_time_to_identify',
         {'periods': [], 'buckets': [], 'series': {}}))
-    oaic_t2n = json.dumps(data.get('oaic_time_to_notify',
+    oaic_t2n = script_json(data.get('oaic_time_to_notify',
         {'periods': [], 'buckets': [], 'series': {}}))
-    oaic_pi_types = json.dumps(data.get('oaic_personal_info_types',
+    oaic_pi_types = script_json(data.get('oaic_personal_info_types',
         {'periods': [], 'series': {}, 'db_series': {}}))
-    asd_all = json.dumps(data.get('asd_risk_all', {}))
-    asd_current = json.dumps(data.get('asd_risk_current', {}))
-    asd_previous = json.dumps(data.get('asd_risk_previous', {}))
+    asd_all = script_json(data.get('asd_risk_all', {}))
+    asd_current = script_json(data.get('asd_risk_current', {}))
+    asd_previous = script_json(data.get('asd_risk_previous', {}))
 
     template = """<!DOCTYPE html>
 <html lang="en">
@@ -2983,11 +2988,13 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 
       let html = '<div class="table-responsive"><table class="table table-sm table-bordered align-middle text-center mb-1">';
       html += '<thead><tr><th class="text-start">Impact Type</th>';
-      groups.forEach(group => { html += `<th class="group-header">${group}</th>`; });
+      const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+        c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
+      groups.forEach(group => { html += `<th class="group-header">${esc(group)}</th>`; });
       html += '</tr></thead><tbody>';
 
       matrixRows.forEach(row => {
-        html += `<tr><th scope="row" class="text-start impact-label">${row.impact_type}</th>`;
+        html += `<tr><th scope="row" class="text-start impact-label">${esc(row.impact_type)}</th>`;
         groups.forEach(group => {
           const value = (row.counts && row.counts[group]) ? row.counts[group] : 0;
           const display = value > 0 ? value : '';

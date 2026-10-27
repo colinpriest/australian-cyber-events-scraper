@@ -1042,9 +1042,8 @@ Examples:
     add_model_arguments(parser)
     args = parser.parse_args()
     apply_model_arguments(args)
-    env_config = ConfigManager(".env").load()
-    if not args.db_path:
-        args.db_path = env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
+    from cyber_data_collector.utils.config_manager import resolve_db_path
+    args.db_path = resolve_db_path(args.db_path)
     if args.source:
         args.source = [source for group in args.source for source in group]
 

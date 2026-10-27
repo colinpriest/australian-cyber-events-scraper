@@ -11,6 +11,23 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_DB_PATH = "instance/cyber_events.db"
+
+
+def resolve_db_path(explicit: Optional[Union[str, os.PathLike]] = None,
+                    env_path: Union[str, os.PathLike] = ".env") -> str:
+    """The database every component of one run must use.
+
+    An explicit path wins; otherwise ``DATABASE_URL`` (from the environment or
+    ``.env``); otherwise the default. Resolve it once at the entry point and
+    pass the result down - a component that resolved its own path is how
+    ``rebuild --db-path scratch.db`` came to wipe the default database.
+    """
+    if explicit:
+        return str(explicit)
+    return ConfigManager(env_path).load().get("DATABASE_PATH") or DEFAULT_DB_PATH
+
+
 class ConfigManager:
     """Utility class for loading environment configuration."""
 
