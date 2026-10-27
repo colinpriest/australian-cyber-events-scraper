@@ -45,6 +45,7 @@ from cyber_data_collector.processing.enrichment_gate import (
     PRECISION_MONTH,
     CorruptStoredEnrichment,
     evaluate_enrichment,
+    names_organisation,
     plan_enrichment_update,
     valid_source_urls,
 )
@@ -252,6 +253,17 @@ class TestSupportCheck:
                        record_text=record, organisations=["P&N Bank"])
         assert result.decisions["entity"].is_accepted
         assert result.decisions["entity"].source_url == "https://bank.example.com/x"
+
+    def test_organisation_names_match_on_all_their_words(self):
+        assert not names_organisation("Western Sydney University", "A Sydney council was hacked.")
+        assert names_organisation("Western Sydney University", "Western Sydney University said ...")
+        assert not names_organisation("P&N Bank", "The bank said ...")
+        assert names_organisation("P&N Bank", "P&N Bank said ...")
+        assert not names_organisation("Toyota Motor Corporation", "Toyota customers were told ...")
+        # Relaxed (only to decide which pages are about the incident): first
+        # word distinctive and present, with at least half the words.
+        assert names_organisation("Toyota Motor Corporation", "Toyota customers were told ...", is_relaxed=True)
+        assert not names_organisation("Western Sydney University", "Sydney news", is_relaxed=True)
 
     def test_a_citation_that_was_not_retrieved_is_an_error_not_a_silent_rejection(self):
         answer = _answer(sources_consulted=[RELATED_URL])

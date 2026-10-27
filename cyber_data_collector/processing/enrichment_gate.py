@@ -270,12 +270,18 @@ class _SourceText:
         self.published = published
 
 
-def names_organisation(name: str, source: Any) -> bool:
+def names_organisation(name: str, source: Any, *, is_relaxed: bool = False) -> bool:
     """True when *source* (text or :class:`_SourceText`) names the organisation *name*.
 
-    The whole normalised name, or every distinctive word of it ("police",
-    "nurses" for "Police & Nurses Limited").  A name made only of generic
-    words ("P&N Bank" -> "bank") must appear as a phrase.
+    The whole normalised name, or every word of it other than legal suffixes
+    ("police", "nurses" for "Police & Nurses Limited"; "western", "sydney",
+    "university" for "Western Sydney University").  A name with no
+    distinctive word ("P&N Bank") must appear as a phrase.
+
+    ``is_relaxed`` (used only to decide which pages are about the record's
+    incident, never to accept a name as a fact) also accepts a name whose
+    first word is distinctive and present with at least half of its words -
+    "Toyota" in a text for "Toyota Motor Corporation".
     """
     padded = source.padded if isinstance(source, _SourceText) else f" {_normalise(str(source))} "
     needle = _normalise(str(name or ""))
@@ -283,8 +289,14 @@ def names_organisation(name: str, source: Any) -> bool:
         return False
     if f" {needle} " in padded:
         return True
-    distinctive = [t for t in needle.split() if len(t) > 2 and t not in _GENERIC_ORG_WORDS]
-    return bool(distinctive) and all(f" {t} " in padded for t in distinctive)
+    words = [t for t in needle.split() if len(t) > 2 and t not in _CORPORATE_NOISE]
+    if not any(t not in _GENERIC_ORG_WORDS for t in words):
+        return False
+    present = [t for t in words if f" {t} " in padded]
+    if len(present) == len(words):
+        return True
+    return (is_relaxed and words[0] not in _GENERIC_ORG_WORDS and words[0] in present
+            and 2 * len(present) >= len(words))
 
 
 def _text_supports_string(value: str, source: Any) -> bool:
@@ -677,14 +689,15 @@ def evaluate_enrichment(
     # this incident only if it names one of them.
     candidates = [enrichment.formal_entity_name] + list(organisations)
     anchors = list(dict.fromkeys(n.strip() for n in candidates
-                                 if isinstance(n, str) and n.strip() and names_organisation(n, record)))
+                                 if isinstance(n, str) and n.strip()
+                                 and names_organisation(n, record, is_relaxed=True)))
     readable = [url for url in sources if getattr(cited_documents[url], "is_usable", False)]
     relevant: List[_SourceText] = []
     for url in readable:
         document = cited_documents[url]
         text = _SourceText(SUPPORT_CITED_DOCUMENT, url, document.text or "",
                            published=_as_day(getattr(document, "published_date", None)))
-        if any(names_organisation(anchor, text) for anchor in anchors):
+        if any(names_organisation(anchor, text, is_relaxed=True) for anchor in anchors):
             relevant.append(text)
     documents_note = (f"{len(sources)} cited, {len(readable)} read, {len(relevant)} about the incident"
                       + ("" if anchors else " (the record names no known organisation)"))
