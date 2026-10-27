@@ -498,18 +498,18 @@ class UnifiedPipeline:
         article mentions Optus. Run before the recurrence check, which groups
         events by victim.
 
-        1. ``classify-pages`` - every unclassified suspect page, not only new
-           ones, since the suspect patterns widen over time (the fast OpenAI model, one
-           call per page, each verdict stored and never paid for twice).
-        2. ``reject-non-incidents`` - events made only of confident
-           non-incident pages. **Report-only** unless
-           ``--hygiene-apply-rejections``: judged on the page's own text,
-           2026-10-27, it would have rejected 74 events, many of them real
-           incidents whose stored page is the victim's privacy policy or home
-           page while the incident came from Perplexity's research (LUSH,
-           Nexia, Legal Aid ACT). A page verdict says what the page is, not
-           whether the event happened; that needs an event-level judgement
-           with corroboration, measured before it deletes anything.
+        1. ``classify-pages`` - every unclassified suspect page (Jev, or the
+           fast OpenAI model without a TypeSafe key; each verdict stored and
+           never paid for twice). Verdicts describe pages; they reject nothing.
+        2. ``check-events --apply`` - Jev judges whether each event is a real
+           incident from every record's page text *and* Perplexity research,
+           and events below the **calibrated** cut-off are rejected. Without a
+           calibration measured on the current Jev model and question
+           (``evaluation/event_reality_calibration.json``) it only reports.
+           It replaces the page gate (``reject-non-incidents``), which on
+           2026-10-27 would have rejected real incidents whose stored page was
+           a privacy policy or home page (LUSH, Nexia, Legal Aid ACT).
+           ``--report-event-rejections`` keeps it report-only regardless.
         3. ``check-victims`` - deterministic, no API calls.
 
         Never fails the phase.
@@ -519,14 +519,14 @@ class UnifiedPipeline:
             return
         from scripts import dedup_admin
         base = ["--db", self.db_path]
-        reject = ["reject-non-incidents"]
-        if not getattr(args, 'hygiene_apply_rejections', False):
-            reject.append("--dry-run")
-        steps = [reject, ["check-victims"]]
-        if os.getenv('OPENAI_API_KEY'):
+        check = ["check-events"]
+        if not getattr(args, 'report_event_rejections', False):
+            check.append("--apply")
+        steps = [check, ["check-victims"]]
+        if os.getenv('OPENAI_API_KEY') or os.getenv('TYPESAFE_API_KEY'):
             steps.insert(0, ["classify-pages"])
         else:
-            logger.warning("OPENAI_API_KEY not set; new suspect pages left unclassified")
+            logger.warning("No OpenAI or TypeSafe key; new suspect pages left unclassified")
         for step in steps:
             try:
                 if dedup_admin.main(base + step) != 0:
@@ -930,9 +930,9 @@ Examples:
     parser.add_argument('--skip-data-hygiene', action='store_true',
                         help='Skip rejecting non-incident pages and correcting victims '
                              'that the event\'s own records contradict')
-    parser.add_argument('--hygiene-apply-rejections', action='store_true',
-                        help='Reject events made only of non-incident pages (default: '
-                             'report them only; see run_data_hygiene)')
+    parser.add_argument('--report-event-rejections', action='store_true',
+                        help='Report events Jev judges not to be incidents without rejecting '
+                             'them, even when a calibrated cut-off exists')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')

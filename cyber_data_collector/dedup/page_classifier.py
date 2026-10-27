@@ -151,11 +151,21 @@ def is_non_incident_verdict(verdict: Optional[Tuple[str, float]]) -> bool:
     return bool(verdict) and verdict[0] in NON_INCIDENT_KINDS and verdict[1] >= MIN_CONFIDENCE
 
 
-def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False) -> List[Tuple[str, str, str, str, str]]:
+def current_model() -> str:
+    """The model that classifies pages now: Jev when configured, else the fast OpenAI model."""
+    from cyber_data_collector.utils import jev
+    from cyber_data_collector.utils.llm_models import openai_fast_model, typesafe_model
+    return typesafe_model() if jev.available() else openai_fast_model()
+
+
+def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False,
+                     model: Optional[str] = None) -> List[Tuple[str, str, str, str, str]]:
     """Active suspect records with no current verdict: (id, title, url, page text, summary).
 
-    A verdict from an earlier ``QUESTION_VERSION`` does not count as current.
+    A verdict counts as current only for this ``QUESTION_VERSION`` and this
+    classifier ``model``, so changing either re-asks.
     """
+    model = model or current_model()
     ensure_schema(conn)
     rows = conn.execute(
         f"""
@@ -167,9 +177,9 @@ def pending_suspects(conn: sqlite3.Connection, only_unmapped: bool = False) -> L
         WHERE e.status = 'Active'
           AND NOT EXISTS (SELECT 1 FROM PageClassifications p
                           WHERE p.enriched_event_id = e.enriched_event_id
-                            AND p.question_version = ?)
+                            AND p.question_version = ? AND p.model = ?)
           {"AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m WHERE m.enriched_event_id = e.enriched_event_id)" if only_unmapped else ""}
-        """, (QUESTION_VERSION,)
+        """, (QUESTION_VERSION, model)
     ).fetchall()
     return [tuple(r) for r in rows if is_suspect(r[1], r[2])]
 

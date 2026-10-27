@@ -2483,6 +2483,38 @@ def cmd_reject_non_incidents(args) -> int:
     return 0
 
 
+def cmd_check_events(args) -> int:
+    """Judge every active event with Jev; reject below the calibrated cut-off.
+
+    See :mod:`cyber_data_collector.dedup.event_reality`. Findings are written
+    to ``instance/event_reality_findings.json``.
+    """
+    from cyber_data_collector.dedup.event_reality import check_events
+    from cyber_data_collector.utils import jev
+
+    if not jev.available():
+        print("TYPESAFE_API_KEY not set or typesafe-sdk missing; nothing judged.")
+        return 0
+    conn = _connect(args.db)
+    try:
+        result = check_events(conn, apply=args.apply)
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "event_reality_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    if not result["calibrated"]:
+        print(f"Judged {result['judged']} event(s). No calibration for this model and question: "
+              "nothing rejected. Run scripts/calibrate_event_reality.py.")
+        return 0
+    for f in result["rejections"]:
+        print(f"  {f['p_real']:.3f}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
+    verb = "Rejected" if result["applied"] else "Would reject"
+    print(f"{verb} {len(result['rejections'])} of {result['judged']} event(s) "
+          f"below cut-off {result['cutoff']}; findings in {out}")
+    return 0
+
+
 def cmd_check_victims(args) -> int:
     """Make each event's victim agree with the victim its own records name.
 
@@ -2797,6 +2829,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "(cyber_data_collector/dedup/vendor_source_blocklist.txt)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_reject_non_incidents)
+
+    p = sub.add_parser("check-events",
+                       help="Ask Jev whether each active event is a real cyber incident "
+                            "and reject those below the calibrated cut-off")
+    p.add_argument("--apply", action="store_true",
+                   help="Reject below the cut-off (only with a calibration matching the "
+                        "current model and question; otherwise report only)")
+    p.set_defaults(func=cmd_check_events)
 
     p = sub.add_parser("check-victims",
                        help="Re-attribute events whose records all name a different "
