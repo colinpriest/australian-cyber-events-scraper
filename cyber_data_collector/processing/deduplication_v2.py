@@ -795,89 +795,18 @@ class DeduplicationEngine:
             group = [event1]
             processed.add(i)
 
-            # Find similar events
+            # Find events this one certainly duplicates. Only deterministic,
+            # evidence-backed merges happen here (see merge_decision); anything
+            # uncertain stays a separate event for the calibrated Jev duplicate
+            # check (dedup/duplicate_judgement.py) that runs right after.
             for j, event2 in enumerate(events[i+1:], i+1):
                 if j in processed:
                     continue
-
-                # RULE 1: Same entity + same date → ALWAYS merge (regardless of title)
-                same_entity = self._same_entity(event1, event2)
-                same_date = event1.event_date and event2.event_date and event1.event_date == event2.event_date
-
-                if same_entity and same_date:
+                reason = self.merge_decision(event1, event2)
+                if reason:
                     group.append(event2)
                     processed.add(j)
-                    self.logger.debug(f"RULE 1: Merged same entity+date: {event1.victim_organization_name} on {event1.event_date}")
-                    continue
-
-                # Check for exact duplicates (same title and date - case insensitive)
-                if (event1.title.lower().strip() == event2.title.lower().strip() and
-                    event1.event_date == event2.event_date):
-                    group.append(event2)
-                    processed.add(j)
-                    continue
-
-                # RULE 2: Same entity + similar descriptions → MERGE (even if dates differ)
-                if same_entity:
-                    # For same entity, be MORE aggressive about merging (lower threshold)
-                    # Check title/description similarity
-                    title_sim = self._quick_title_similarity(event1.title, event2.title)
-
-                    # If titles have any reasonable overlap for same entity, likely same incident
-                    # Use very low threshold (0.15) since we're already confident it's the same organization
-                    if title_sim >= 0.15:  # Very low threshold for same entity
-                        group.append(event2)
-                        processed.add(j)
-                        self.logger.debug(f"RULE 2: Merged same entity+similar desc: {event1.victim_organization_name or event2.victim_organization_name or 'via title'} (title_sim={title_sim:.2f})")
-                        continue
-
-                    # RULE 2b: Same entity + low title similarity but high description similarity → MERGE
-                    # This catches cases like Ticketmaster where titles are completely different
-                    # but the scraped text clearly describes the same incident
-                    if event1.description and event2.description:
-                        desc_sim = self._quick_title_similarity(event1.description, event2.description)
-                        # Use threshold of 0.20 for description similarity when same entity
-                        if desc_sim >= 0.20:
-                            group.append(event2)
-                            processed.add(j)
-                            self.logger.debug(f"RULE 2b: Merged same entity+similar content: {event1.victim_organization_name or event2.victim_organization_name or 'via title'} (title_sim={title_sim:.2f}, desc_sim={desc_sim:.2f})")
-                            continue
-
-                # RULE 3: Description-based similarity fallback (even when entity names missing/don't match)
-                # This catches cases where entity extraction failed but the actual scraped content
-                # clearly describes the same incident (e.g., one event has NULL organization name)
-                if event1.description and event2.description:
-                    desc_sim = self._quick_title_similarity(event1.description, event2.description)
-                    # Use HIGHER threshold (0.35) when entities don't match to avoid false positives
-                    # Also check that dates are reasonably close (within 90 days)
-                    if desc_sim >= 0.35:
-                        if event1.event_date and event2.event_date:
-                            date_diff = abs((event1.event_date - event2.event_date).days)
-                            if date_diff <= 90:  # Events within 3 months
-                                group.append(event2)
-                                processed.add(j)
-                                entity_info = event1.victim_organization_name or event2.victim_organization_name or "unknown entity"
-                                self.logger.debug(f"RULE 3: Merged via high description similarity: {entity_info} (desc_sim={desc_sim:.2f}, date_diff={date_diff}d)")
-                                continue
-
-                # Quick pre-filter: skip events with very different dates (>365 days apart)
-                # BUT only if they're different entities
-                if not same_entity and event1.event_date and event2.event_date:
-                    date_diff = abs((event1.event_date - event2.event_date).days)
-                    if date_diff > 365:
-                        continue  # Skip detailed comparison
-
-                # Quick pre-filter: check title similarity first (cheap operation)
-                title_sim = self._quick_title_similarity(event1.title, event2.title)
-                if title_sim < 0.3:  # Very different titles
-                    continue  # Skip detailed comparison
-
-                # Calculate full similarity for potentially similar events
-                similarity = self._calculate_event_similarity(event1, event2)
-
-                if similarity.overall_score >= self.similarity_threshold:
-                    group.append(event2)
-                    processed.add(j)
+                    self.logger.debug(f"Merged ({reason}): {event1.title!r} + {event2.title!r}")
 
             groups.append(group)
 
@@ -1023,7 +952,7 @@ class DeduplicationEngine:
         'royal', 'general', 'united', 'central', 'regional',
     })
 
-    def _entity_components(self, name: Optional[str]) -> Set[str]:
+    def _entity_components(self, name: Optional[str], brand_stems: bool = True) -> Set[str]:
         """Return the set of canonical components that make up *name*.
 
         For "ANZ; CBA; NAB; Westpac" returns {"anz", "cba", "nab", "westpac"};
@@ -1041,6 +970,8 @@ class DeduplicationEngine:
         parts = self._split_compound_entity(normalized) or [normalized]
         canonicals = {self._canonicalize_entity(p) for p in parts}
         canonicals = {c for c in canonicals if c}
+        if not brand_stems:
+            return canonicals
 
         # Brand-stem hints: for each multi-word canonical name, also include
         # the first word as a synthetic component IF it is long enough (>=5 chars)
@@ -1057,100 +988,64 @@ class DeduplicationEngine:
                 brand_stems.add(head)
         return canonicals | brand_stems
 
+    def merge_decision(self, event1: CyberEvent, event2: CyberEvent) -> Optional[str]:
+        """Why two events are certainly one incident, or None when that is not certain.
+
+        Only two deterministic rules remain: an identical title on the same
+        date, and the same organisation (by identity, not by shared words) on
+        the same exact day. The fuzzy rules that used to run here merged events
+        whose titles were 15% alike or whose descriptions were 20-35% alike - a
+        reviewer reproduced different organisations merged because both titles
+        contained "university", and one organisation's incidents years apart
+        merged on title overlap. Uncertain pairs are now kept apart and decided
+        by the calibrated Jev duplicate check, which sees both events'
+        evidence, how each date was determined and the organisation's
+        researched incident timeline.
+
+        The 1st of a month is not treated as an exact day: it is how a date
+        known only to the month is stored.
+        """
+        if not event1.event_date or event1.event_date != event2.event_date:
+            return None
+        if (event1.title and event2.title
+                and event1.title.lower().strip() == event2.title.lower().strip()):
+            return "identical title and date"
+        if event1.event_date.day != 1 and self._same_entity(event1, event2):
+            return "same organisation on the same day"
+        return None
+
     def _same_entity(self, event1: CyberEvent, event2: CyberEvent) -> bool:
+        """True when both events name the same victim organisation, by identity.
+
+        Names are compared as organisations - legal-suffix and spelling
+        variants, acronyms, known aliases - never by words they share: the old
+        title-keyword fallback treated any two titles containing "university",
+        "council", "hospital" or "health" as the same organisation. An event
+        with no recorded victim matches nothing; it is not guessed from its
+        title. Names stating different lines of business (Sharp Motor Group /
+        Sharp Office Systems) are different organisations.
         """
-        Check if two events have the same victim organization.
+        from cyber_data_collector.dedup.entity_merge import lines_of_business_conflict
+        from cyber_data_collector.dedup.entity_resolution import EntityResolver
 
-        IMPORTANT: This is a KEY method for deduplication - events with the same victim
-        organization are more likely to be the same incident (RULE 1 and RULE 2).
-
-        Returns True if:
-        - Both have victim_organization_name AND they match (case-insensitive)
-        - Handles variations like "Ticketmaster LLC" vs "Live Nation Entertainment, Inc."
-        - If organization names missing/don't match, checks if titles reference same company
-        """
-        # Normalize entity names using mappings (e.g., Ticketmaster -> Live Nation)
-        name1_raw = event1.victim_organization_name
-        name2_raw = event2.victim_organization_name
-        name1_normalized = self._normalize_entity_name(name1_raw)
-        name2_normalized = self._normalize_entity_name(name2_raw)
-
-        # Component-set match: handles legal-suffix variants, smart quotes, and
-        # compound names ("ANZ; CBA; NAB; Westpac" vs "ANZ, CBA, NAB, Westpac").
-        # Two events are the same entity if their canonical component sets
-        # intersect (i.e. at least one canonical brand is shared).
-        components1 = self._entity_components(name1_raw)
-        components2 = self._entity_components(name2_raw)
-        if components1 and components2 and components1 & components2:
-            self.logger.debug(
-                f"Component-set match: {sorted(components1)} ∩ {sorted(components2)} "
-                f"= {sorted(components1 & components2)}"
-            )
+        name1 = self._normalize_entity_name(event1.victim_organization_name)
+        name2 = self._normalize_entity_name(event2.victim_organization_name)
+        if not name1 or not name2:
+            return False
+        if lines_of_business_conflict(name1, name2):
+            return False
+        if name1.lower().strip() == name2.lower().strip():
             return True
-
-        # Try organization name matching (only if both have organization names)
-        if name1_normalized and name2_normalized:
-            name1 = name1_normalized.lower().strip()
-            name2 = name2_normalized.lower().strip()
-
-            # Exact match
-            if name1 == name2:
-                return True
-
-            # Check if one name contains the other (e.g., "Ticketmaster LLC" vs "Ticketmaster")
-            # But avoid matching "Bank" with "Commonwealth Bank"
-            if len(name1) >= 5 and len(name2) >= 5:  # Avoid matching short generic words
-                if name1 in name2 or name2 in name1:
-                    return True
-
-            # Check for known parent-subsidiary/related company relationships
-            # E.g., Ticketmaster is owned by Live Nation
-            related_companies = [
-                {'ticketmaster', 'live nation'},
-                # Add more related companies as needed
-            ]
-
-            for related_set in related_companies:
-                # Check if both organizations match companies in the same related set
-                name1_matches = any(company in name1 for company in related_set)
-                name2_matches = any(company in name2 for company in related_set)
-                if name1_matches and name2_matches:
-                    self.logger.debug(
-                        f"Matched related companies: '{event1.victim_organization_name}' "
-                        f"and '{event2.victim_organization_name}'"
-                    )
-                    return True
-
-        # FALLBACK: If organization names are NULL or don't match, check if titles
-        # reference the same company (e.g., both mention "Ticketmaster")
-        # This handles cases where enrichment failed to extract organization correctly
-        # IMPORTANT: This runs even if one/both organization names are NULL
-        if event1.title and event2.title:
-            title1_lower = event1.title.lower()
-            title2_lower = event2.title.lower()
-
-            # Common company names to check for
-            # Add more as needed for better matching
-            # NOTE: Also add keywords from EntityMappings table (e.g., Nitro PDF -> Nitro Software)
-            company_keywords = [
-                'ticketmaster', 'live nation', 'medibank', 'optus', 'singtel',
-                'latitude', 'myob', 'canva', 'woolworths', 'coles',
-                'nitro', 'nitro pdf', 'nitro software',  # Nitro variants
-                'qantas', 'telstra', 'commonwealth bank', 'westpac', 'nab', 'anz',
-                'bunnings', 'kmart', 'target', 'myer', 'david jones',
-                'toyota', 'mazda', 'ford', 'holden',
-                'university', 'council', 'hospital', 'health',
-            ]
-
-            for keyword in company_keywords:
-                if keyword in title1_lower and keyword in title2_lower:
-                    self.logger.debug(
-                        f"Matched entities via title keyword '{keyword}': "
-                        f"'{event1.title}' and '{event2.title}'"
-                    )
-                    return True
-
-        return False
+        # Compound names ("ANZ; CBA; NAB; Westpac" vs "ANZ, CBA, NAB, Westpac")
+        # match when they share a whole canonical component. Not brand stems:
+        # the first-word stem of "University of Sydney" is "university".
+        components1 = self._entity_components(event1.victim_organization_name, brand_stems=False)
+        components2 = self._entity_components(event2.victim_organization_name, brand_stems=False)
+        if components1 and components2 and components1 & components2:
+            return True
+        if not hasattr(self, "_resolver"):
+            self._resolver = EntityResolver()
+        return self._resolver.same_organisation(name1, name2)
 
     def _quick_title_similarity(self, title1: str, title2: str) -> float:
         """Fast title similarity check for pre-filtering"""

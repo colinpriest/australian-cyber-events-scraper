@@ -429,147 +429,127 @@ Move a multi-record incident out with one `split` naming all its records:
 splitting them one at a time caches rulings *between* them, and the safeguard
 then (correctly) refuses to regroup them.
 
-### Automatic hygiene: non-incident pages and contradicted victims
+### Calibrated data-quality filters
 
-Two defects put false repeat attacks into the short-gap band of the
-recurrence analysis: an agency's own web pages stored as later "attacks" on it
-("Business - ACT Government", Service NSW's *Report identity theft* form), and
-incidents filed under the wrong organisation (TPG's December 2022 breach under
-Optus because the article mentions Optus; Sharp Office Systems under Sharp
-Motor Group because a canonicalisation rule folded them on "sharp").
-`run_full_pipeline.py` now corrects both after every deduplication, before the
-recurrence check (`--skip-data-hygiene` to opt out):
+Every refresh cleans the data after deduplication and before the recurrence
+check (`run_full_pipeline.py`, `--skip-data-hygiene` to opt out). Each step
+that deletes, merges or re-attributes acts only at a cut-off **calibrated on
+labelled examples from this database**, recorded with the models and question
+versions it was measured on; change a model or a question and the step falls
+back to reporting until it is recalibrated. Labels are ground truth: an item
+labelled one way is never acted on the other way.
 
-```bash
-python scripts/dedup_admin.py classify-pages          # Jev (or fast model) on each suspect page
-python scripts/dedup_admin.py reject-non-incidents    # events made only of non-incident pages
-python scripts/dedup_admin.py check-victims --dry-run # deterministic, no API calls
-```
+| Order | Step | What it decides | Model | Cut-off (2026-10-27) | Precision on labels | Recall | Out-of-sample* |
+|---|---|---|---|---|---|---|---|
+| 0 | `check-sources --apply` | Does a Google result's page itself report an incident? | Jev | remove below **0.58** | 0.953 (95/100) | 0.97 | 0.95 |
+| 1 | `classify-pages` | What kind of page each suspect record is (informs, removes nothing) | Jev | - | - | - | - |
+| 2 | `check-events --apply` | Is the event a real, specific incident? | Jev + escalation | reject below **0.28** | 0.954 (68/72) | 0.71 | 0.91 |
+| 3 | `check-victims` | Do the records name a different victim? (deterministic rule) | none | - | 8/9 reviewed | - | - |
+| 4 | `check-duplicates --apply` | Are two events about one organisation the same incident? | Jev + escalation | merge at **0.81** | 1.00 (16/16) | 0.94 | 0.97 |
+| 5 | `check-victim-attribution` | Is the recorded victim really the affected organisation? | Jev | report only (no labels yet) | - | - | - |
 
-- **Pages.** Government service pages and titles with no incident vocabulary
-  are now suspects. The classifier judges the page's **own scraped text**: the
-  enrichment summary it was shown before had been written by an earlier model
-  as if every page reported an incident, so every service page passed. Verdicts
-  carry a `question_version`; changing the question or the evidence re-asks.
-  Page verdicts describe pages; they no longer reject anything. On
-  2026-10-27 a page-based rule would have rejected 74 events, many of them
-  real incidents whose stored page is the victim's privacy policy or home page
-  while the incident came from Perplexity's research (LUSH, Nexia, Legal Aid
-  ACT).
-- **Events.** `check-events` asks Jev whether each event is a real, specific
-  cyber incident, showing it every record's page text *and* Perplexity
-  research, and rejects events below a **calibrated** cut-off. With no
-  calibration for the current Jev model and question version it only reports
-  (`instance/event_reality_findings.json`). See *Event-reality calibration*.
-- **Victims.** When no record names the event's victim and two thirds of the
-  records name one other organisation (Perplexity's researched victim, found
-  in the records' own text), that organisation becomes the victim. Guarded
-  against legal and parent names (a title naming the current victim keeps
-  it), suppliers in supply-chain breaches, and parties the role pass labelled
-  vendor, product or regulator. The same rule runs inside role
-  reclassification, so a later pass cannot restore the wrong victim.
-- **Entities.** Names sharing a brand word across lines of business are no
-  longer folded together, directly or by chaining through a bare name.
-
-### Event-reality calibration
-
-The cut-off for rejecting events is measured on this database, never assumed.
+\*Mean precision of the whole choose-then-test procedure on held-out labels
+(stratified bootstrap), the honest estimate - choosing a cut-off on the labels
+it is scored on flatters it.
 
 ```bash
-python scripts/dedup_admin.py check-events             # Jev P(real) for every active event, stored
-python scripts/calibrate_event_reality.py sample       # stratified sample -> evaluation/event_reality_sample.csv
-# label it -> evaluation/event_reality_labels.csv  (real / not_incident / unsure, with rationale)
-python scripts/calibrate_event_reality.py calibrate    # -> evaluation/event_reality_calibration.json
+python scripts/dedup_admin.py check-sources [--apply] [--unmapped-only]
+python scripts/dedup_admin.py check-events [--apply]
+python scripts/dedup_admin.py check-victims [--dry-run]
+python scripts/dedup_admin.py check-duplicates [--apply]
+python scripts/dedup_admin.py check-victim-attribution
+python scripts/dedup_admin.py research-timelines
+python scripts/dedup_admin.py reconcile-timelines [--queue-gaps]
 ```
 
-The sample is stratified on Jev's stored P(real): every event below 0.5 (a
-census, since any cut-off lies there), plus seeded samples of the 0.5-0.8 and
-0.8+ bands, weighted up to their bands. The cut-off is the largest at which
-the events it would reject are, weighted, at least 95% labelled
-`not_incident`, with at least 10 labelled rejections. The calibration file
-records the Jev model and question version; `check-events --apply` (and the
-refresh) rejects only while both match.
+**Labels** (all blind to the model being calibrated, each with a written
+reason; reviewed where flagged): `evaluation/source_gate_labels.csv` (170
+pages), `evaluation/event_reality_labels.csv` (168 events),
+`evaluation/duplicate_labels.csv` (157 pairs - every same-victim pair).
+Labellers were Claude Opus 5.5 subagents working from the stored evidence plus
+web searches; conventions worth reviewing are noted in each file's rationales
+(dark-web sale claims naming no victim = unsure; campaigns naming no victim,
+physical-security incidents and non-cyber fraud = not an incident).
 
-Two question versions, run in sequence by `check-events`:
+**Calibrating** (`scripts/calibrate_source_gate.py`,
+`calibrate_event_reality.py`, `calibrate_duplicates.py`): samples are
+stratified on the model's own stored score (a census of the low band, where
+any cut-off lies, plus seeded samples above it, weighted back), labelled, and
+the cut-off is the largest (or, for merges, smallest) at which at least 95% of
+the labelled items it would act on are correct. Labels describe the database
+as it was when labelled - after rejections and merges the labelled items no
+longer exist as active events or pairs - so recalibration runs on the backup
+taken at labelling time (`scripts/prepare_calibration_snapshot.py`, which
+carries stored research over); the snapshot used is recorded.
 
-1. **Screen** (`event-reality-v1`): stored evidence only. Every event below
-   0.5 gets a Perplexity search for public reporting of that incident
-   (`EventCorroborations`: query, answer, citations and model are stored and
-   reused, because a live search cannot be replayed).
-2. **Judgement** (`event-reality-v2-corroborated`): the same evidence plus that
-   search. This is the version calibrated and used to reject.
+**What each step fixed**:
 
-The sample is stratified on the screen score, so it does not depend on the
-question being calibrated and the same labels serve every later version.
+- *Source gate.* Google matches results on a snippet, which picks up incident
+  words from menus, footers and policies; enrichment then attached the
+  organisation's real incident to the page. Service NSW's "Report identity
+  theft" help page became a second Service NSW attack weeks after its real
+  March 2020 breach; LUSH's privacy policy became LUSH's breach. Applied: 469
+  of 1,074 Google records removed (65 events left with no evidence, 404 junk
+  records split out of events that keep other evidence). Pages with under 300
+  characters of stored text are not judged. Where a removed record pointed at
+  a real incident no other event covers, a targeted search queues proper
+  reporting for normal ingestion (80 queued; 54 became events' evidence on the
+  next pass).
+- *Event reality.* Jev sees every record's page text, Perplexity research, a
+  corroboration search (for events its screen scores below 0.5) and the
+  victim's researched incident timeline; scores in 0.1-0.7 are re-judged by
+  GPT-5.5 with reasoning. A page saying what an event is not is no evidence the
+  event did not happen - for real incidents the stored page is often a privacy
+  policy - so judging events, not pages, is what made rejection safe: on stored
+  evidence alone no cut-off reached 95% precision (0.78 at best).
+- *Victims.* When no record names the event's victim and two thirds name one
+  other organisation, that organisation becomes the victim (guarded against
+  legal and parent names, suppliers, products and regulators). Fixed TPG's
+  breach filed under Optus, Henning Harders under Toll, Sharp Office Systems
+  under Sharp Motor Group. Canonicalisation no longer folds names sharing a
+  brand word across lines of business.
+- *Duplicates.* Every pair of events sharing a victim, with both events'
+  evidence, the gap in days, **how each date was determined** (stated,
+  researched, publication or discovery date; day, month or year precision -
+  `dedup/date_provenance.py`) and the organisation's timeline; 0.2-0.8
+  escalated. Merged ACT Government's help pages into its June 2023 Barracuda
+  breach and Services Australia's notice into Spectrum Medical Imaging's
+  breach; the older GPT recurrence check had proposed those at 0.55 and 0.78,
+  under its unmeasured 0.85 bar.
 
-168 events were labelled (87 `not_incident`, 76 `real`, 5 `unsure`) by Claude
-Opus 5.5 subagents blind to Jev's scores, from each event's records plus web
-searches; every label carries its rationale and source in
-`evaluation/event_reality_labels.csv`, for review.
+### Investigation tier: organisation timelines and escalation
 
-| 2026-10-27 | Weighted AUC | Cut-off | Labelled rejections | Weighted precision |
-|---|---|---|---|---|
-| v1, stored evidence | 0.957 | none qualifies | 80 at 0.25, 18 of them real | 0.78 |
-| v2, + corroboration | 0.954 | **0.25** | 68, 3 of them real | **0.956** (95% CI 0.88-0.98) |
+Judging an event or a pair in isolation cannot answer what decides it: how
+many incidents did this organisation actually have, and when? The labellers
+answered that by searching - Western Sydney University had four separate
+incidents (2023, August 2024, January 2025, June 2025).
 
-Corroboration barely changes the overall ranking but fixes its low end, which
-is the part that deletes: 15 real incidents the screen scored below 0.25
-(Apunipima, ASIC/Accellion, Ventia, Western Sydney University, LUSH ...) move
-above it. The three real events v2 still rejects are garbled records: a title
-cut off mid-sentence, an event titled after the UK Electoral Commission breach
-with "Gucci" as victim, and an unconfirmed dark-web sale claim about NBN data.
-At 0.25, 70 of 790 active events would be rejected.
+- **Timelines** (`dedup/org_timeline.py`): one Perplexity search per
+  organisation with several events, for its full incident history - dated,
+  with what happened, how it became public and a source. Stored in
+  `OrganisationTimelines` (a live search cannot be replayed) and shown to Jev
+  for reality, duplicate and victim judgements. **Kept current**: a timeline is
+  re-researched whenever a record about the organisation arrives after it was
+  researched (a timeline that predates an incident does not list it, and the
+  judgements treat "matches nothing in the researched history" as evidence
+  against an event). Every version is kept; the latest is used; a new version
+  changes the judgements' input, so affected events and pairs are re-judged
+  automatically.
+- **Escalation** (`utils/escalation.py`): cases Jev scores in a fixed middle
+  band go to the strong OpenAI model with reasoning on, over the same evidence;
+  its probability replaces Jev's and is stored with its rationale.
+- **Reconciliation** (`dedup/timeline_reconciliation.py`,
+  `reconcile-timelines`): matches each event to its organisation's timeline
+  and reports what disagrees - events matching no incident (classified as a
+  gap in the research, the wrong organisation, or not an incident), incidents
+  with no event (coverage gaps; `--queue-gaps` queues reporting of them) and
+  date conflicts. Report-only: re-attribution, rejection and re-dating from it
+  need labelled outcomes first (see `docs/TODO.md`). Its verdicts appear on the
+  timeline dashboard.
 
-The cut-off is chosen on the labels it is scored on, which flatters it. A
-stratified bootstrap of the whole choose-then-test procedure gives an
-**out-of-sample precision of about 0.95 (median 0.947, mean 0.90)** - at, or
-slightly under, the target. Expect roughly 3-5 of the 70 rejections to be real
-incidents; every rejection is snapshotted and reversible.
-
-**Applied 2026-10-27:** 72 events fell below the cut-off and were rejected.
-Three of them were labelled `real`, so they were restored: an event the
-labelled set calls real is never rejected, whatever Jev scores, and one this
-filter already rejected is restored from its snapshot on the next run. Of the
-three, only one was otherwise lost (an NBN Co infrastructure-data sale claim);
-the April 2025 superannuation attacks are covered by four other events, and
-the UK Electoral Commission breach is not an Australian incident. Net: 69
-events rejected, 721 active. The rejections are listed in
-`instance/event_reality_findings.json`.
-
-Labelling conventions worth reviewing: dark-web sale claims with no named
-victim were `unsure`; campaigns naming no targeted organisation, physical
-security incidents and non-cyber fraud were `not_incident`; real incidents
-outside Australia were `real` (Australian-ness is a separate filter).
-
-### Jev duplicate judgement (same-victim pairs)
-
-```bash
-python scripts/dedup_admin.py check-duplicates           # P(same incident) for every same-victim pair, stored
-python scripts/calibrate_duplicates.py --precision 0.95  # -> evaluation/duplicate_calibration.json
-python scripts/dedup_admin.py check-duplicates --apply   # merge (also run by the refresh)
-```
-
-Every pair of active events sharing a victim is a candidate (157 on
-2026-10-27). Jev sees both events' evidence - page text, Perplexity research,
-stored corroboration searches - the gap in days, and **how each date was
-determined**: whether a record's date was stated in it, came from Perplexity's
-research, or is just the publication or discovery date, and whether it is
-known to the day or only to the month or year (stored as the 1st). A gap built
-from publication dates or month-only placeholders is weak evidence of two
-incidents; that provenance is derived in `dedup/date_provenance.py`.
-
-Merges need a calibrated cut-off. All 157 pairs were labelled blind to Jev
-(17 `same`, 139 `different`, 1 `unsure`; reasons and sources in
-`evaluation/duplicate_labels.csv`). The lowest cut-off at which merges are at
-least 95% truly the same is **0.75**: it merges 9 labelled pairs, all
-correctly (recall 0.53; 95% CI 0.70-1.00, wide because there are only 9;
-bootstrap out-of-sample precision mean 0.90). Labelled pairs are ground truth:
-`different` is never merged and `same` always is, so today the labels decide
-every merge and the cut-off governs pairs new data creates. Applied
-2026-10-27: 15 merges (721 -> 706 active events), including the ACT Government
-pages into one Barracuda-breach event and Services Australia's notice into
-Spectrum Medical Imaging's breach. The GPT recurrence check had proposed
-those at 0.55 and 0.78, below its unmeasured 0.85 bar.
+Every Jev and escalation answer is stored in `ModelJudgements` with the
+question as sent, a hash of the input, the version that answered and the full
+distribution, and reused unless the question, the input or the model changes.
 
 ### Stray records: event coherence
 
