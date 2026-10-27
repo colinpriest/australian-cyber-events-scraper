@@ -333,13 +333,7 @@ class UnifiedPipeline:
             # Sanity check: a high failure rate suggests the API is
             # rate-limiting, the prompt has issues, or the network is
             # flaky. Surface it as a warning so the user notices.
-            attempted = enriched_count + failed_count
-            if attempted >= 10 and failed_count / attempted > 0.25:
-                message = (f"Perplexity enrichment failure rate {failed_count}/{attempted} "
-                           f"({failed_count / attempted:.0%}) above 25% threshold. Check API key + network.")
-                logger.warning(message)
-                # Completed, but not cleanly: the exit code says so (2).
-                self.results['reenrichment']['errors'].append(message)
+            self._record_enrichment_problems(counts)
             return True
 
         except Exception as e:
@@ -351,6 +345,27 @@ class UnifiedPipeline:
                     db.close()
                 except Exception:
                     pass
+
+    def _record_enrichment_problems(self, counts: Dict[str, int]) -> None:
+        """Record enrichment failures as errors, so the run ends degraded.
+
+        Failed database writes and corrupt stored baselines are never an
+        acceptable loss; a failure rate above 25% means the API, key, prompt or
+        network is wrong. All three used to leave the phase reporting success.
+        """
+        broken = counts.get('storage_failed', 0) + counts.get('corrupt_baseline', 0)
+        if broken:
+            message = (f"Perplexity enrichment: {counts.get('storage_failed', 0)} failed database write(s), "
+                       f"{counts.get('corrupt_baseline', 0)} corrupt stored enrichment(s) (quarantined)")
+            logger.error(message)
+            self.results['reenrichment']['errors'].append(message)
+        enriched, failed = counts.get('enriched', 0), counts.get('failed', 0)
+        attempted = enriched + failed
+        if attempted >= 10 and failed / attempted > 0.25:
+            message = (f"Perplexity enrichment failure rate {failed}/{attempted} "
+                       f"({failed / attempted:.0%}) above 25%. Check API key + network.")
+            logger.error(message)
+            self.results['reenrichment']['errors'].append(message)
 
     async def run_reenrichment_phase(self, args) -> bool:
         """Run re-enrichment on existing events with updated Perplexity prompt."""
@@ -404,13 +419,7 @@ class UnifiedPipeline:
             self.results['reenrichment']['events_enriched'] = enriched_count
             self.results['reenrichment']['events_failed'] = failed_count
 
-            attempted = enriched_count + failed_count
-            if attempted >= 10 and failed_count / attempted > 0.25:
-                logger.warning(
-                    f"Re-enrichment failure rate {failed_count}/{attempted} "
-                    f"({failed_count / attempted:.0%}) above 25% threshold. "
-                    "Check Perplexity API key + network."
-                )
+            self._record_enrichment_problems(counts)
             return True
 
         except Exception as e:
