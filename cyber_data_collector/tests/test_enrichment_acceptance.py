@@ -522,17 +522,26 @@ class TestClassifierReceivesPersistedEvidence:
 
 
 # ---------------------------------------------------------------------------
-# Discovery: scrape -> persist -> classify from the stored record
-# (Playwright, Random Forest and the collector are faked)
+# Discovery: scrape -> persist -> page gate -> classify from the stored record
+# (Playwright, Jev and the collector are faked)
 # ---------------------------------------------------------------------------
 
-class _FakeFilter:
-    """RF filter: anything whose content mentions 'recipe' is non-cyber."""
+class _FakeJudge:
+    """Jev: a page whose text mentions 'recipe' does not report an incident."""
 
-    def should_keep_event(self, source_type, title, description, content, url, metadata=None):
-        relevant = "recipe" not in (content or "").lower() and "recipe" not in (title or "").lower()
-        return SimpleNamespace(is_cyber_relevant=relevant, confidence_score=0.9 if relevant else 0.1,
-                               reasoning="fake", stage="fake", risk_level="low")
+    def ask(self, subject_type, subject_id, question_version, state, questions):
+        p = 0.05 if "recipe" in state["page_text"].lower() else 0.95
+        return {qid: SimpleNamespace(value=p) for qid in questions}
+
+
+def _fake_gate(conn, tmp_path):
+    from cyber_data_collector.dedup import source_gate
+    from cyber_data_collector.filtering.page_gate import DiscoveryPageGate
+
+    cal = tmp_path / "cal.json"
+    cal.write_text(json.dumps({**source_gate.calibration_identity(), "cutoff": 0.58}), encoding="utf-8")
+    return DiscoveryPageGate(conn, judge=_FakeJudge(), mode="enforce", calibration_path=cal,
+                             evaluation_path=tmp_path / "none.json")
 
 
 class _FakeScraper:
@@ -562,11 +571,15 @@ class _FakeCollector:
 
 
 @pytest.fixture
-def pipeline(db, monkeypatch):
+def pipeline(db, monkeypatch, tmp_path):
+    from cyber_data_collector.processing.retry_queue import RetryQueue
+
     instance = discovery.EventDiscoveryEnrichmentPipeline.__new__(discovery.EventDiscoveryEnrichmentPipeline)
     instance.db = db
-    instance.filter_system = _FakeFilter()
-    instance.stats = {"errors": 0}
+    instance.page_gate = _fake_gate(db._conn, tmp_path)
+    instance.retry_queue = RetryQueue.for_db(db)
+    instance.stats = {"errors": 0, "records_failed_temporary": 0, "records_failed_permanent": 0,
+                      "records_quarantined": 0}
     monkeypatch.setattr(discovery, "PlaywrightScraper", _FakeScraper)
     return instance
 
@@ -600,7 +613,7 @@ class TestDiscoveryHonoursScrapedContentAndRejections:
         assert seen.evidence_basis == BASIS_SNIPPET_ONLY
         assert seen.evidence_text is None  # the snippet is not passed off as the article
 
-    def test_content_filter_rejection_stops_the_record(self, pipeline, db):
+    def test_page_gate_rejection_stops_the_record(self, pipeline, db):
         good = _add_record(db, title="Acme breach", content=None, url="https://news.example.com.au/acme")
         junk = _add_record(db, title="Help centre", content=None, url="https://help.example.com.au/page")
         _FakeScraper.pages = {
@@ -611,18 +624,20 @@ class TestDiscoveryHonoursScrapedContentAndRejections:
         ledger = AcceptanceLedger()
 
         asyncio.run(pipeline._scrape_raw_events_for_month([good, junk], ledger))
+        assert not ledger.is_rejected(junk)  # nothing is judged before the page gate
+        pipeline._apply_page_gate([good, junk], ledger, "test")
         collector = _FakeCollector()
         out = asyncio.run(pipeline._process_persisted_records(collector, events, ledger))
 
         assert [e.raw_event_id for e in collector.received] == [good]
         assert [e.raw_event_id for e in out] == [good]
-        assert ledger.get(junk).stage == "rf_content_filter"
+        assert ledger.get(junk).stage == "page_gate"
         # ... and the rejection is durable: processed, marked, and out of the queue.
         with db._lock:
             row = db._conn.execute(
                 "SELECT is_processed, processing_error FROM RawEvents WHERE raw_event_id = ?", (junk,)
             ).fetchone()
-        assert row["is_processed"] and row["processing_error"].startswith("Rejected at rf_content_filter")
+        assert row["is_processed"] and row["processing_error"].startswith("Rejected at page_gate")
         assert junk not in [r["raw_event_id"] for r in db.get_raw_events_for_processing(australian_only=False)]
 
     def test_blocked_domain_stops_the_record(self, pipeline, db):

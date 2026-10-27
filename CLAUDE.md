@@ -102,7 +102,7 @@ australian-cyber-events-scraper/
 │   │   ├── enrichment_validator.py
 │   │   └── enrichment_audit_storage.py
 │   ├── filtering/
-│   │   ├── rf_event_filter.py     # Random Forest ML filter
+│   │   ├── page_gate.py           # Jev discovery page gate (rf_event_filter.py: retired)
 │   │   ├── progressive_filter.py
 │   │   └── confidence_filter.py
 │   ├── models/                    # CyberEvent, EventSeverity, CyberEventType
@@ -199,7 +199,8 @@ The pipeline executes five distinct phases:
 | DeduplicationV2 | cyber_data_collector/processing/deduplication_v2.py | Entity-based deduplication | Merging duplicate events |
 | CyberEventDataV2 | cyber_data_collector/storage/cyber_event_data_v2.py | Thread-safe SQLite operations | Persisting/querying events |
 | DatabaseManager | cyber_data_collector/storage/database.py | Event persistence layer | Saving enriched events |
-| RfEventFilter | cyber_data_collector/filtering/rf_event_filter.py | Random Forest ML pre-filter | Filtering non-cyber events |
+| DiscoveryPageGate | cyber_data_collector/filtering/page_gate.py | Calibrated Jev page filter (RF filter retired) | Filtering non-incident pages at discovery |
+| RetryQueue | cyber_data_collector/processing/retry_queue.py | Durable retry of stored-but-unprocessed records | Finishing records after failures |
 | PlaywrightScraper | cyber_data_collector/utils/entity_scraper.py | Browser-based content scraping | Scraping JS-heavy sites |
 | ConfigManager | cyber_data_collector/utils/config_manager.py | Environment config loading | Accessing API keys and settings |
 

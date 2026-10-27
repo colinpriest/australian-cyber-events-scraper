@@ -66,6 +66,17 @@ MAX_ARTICLE_PROMPT_CHARS = 6000
 SNIPPET_ONLY_CONFIDENCE_CAP = 0.5
 
 
+def failed_copy(event: CyberEvent, exc: BaseException) -> CyberEvent:
+    """The event flagged as not classified, with the error and its kind."""
+    from cyber_data_collector.processing.retry_queue import classify_failure
+
+    return event.model_copy(update={
+        "classification_status": "failed",
+        "classification_error": f"{type(exc).__name__}: {exc}"[:500],
+        "classification_error_kind": classify_failure(exc),
+    })
+
+
 class LLMClassifier:
     """LLM-based event classification and enhancement."""
 
@@ -80,11 +91,13 @@ class LLMClassifier:
     async def classify_events(self, events: List[CyberEvent]) -> List[CyberEvent]:
         """Classify and enhance events using the configured LLM with concurrent processing."""
 
-        if not self.client:
-            return events
-
         if not events:
             return events
+
+        if not self.client:
+            # No silent fallback: returning the events unclassified let them be
+            # stored as if the model had accepted them.
+            raise RuntimeError("OpenAI API key not configured: events cannot be classified")
 
         enhanced_events: List[CyberEvent] = []
         rejected_count = 0
@@ -93,6 +106,8 @@ class LLMClassifier:
         semaphore = asyncio.Semaphore(10)
         
         async def process_event_with_semaphore(event: CyberEvent) -> Optional[CyberEvent]:
+            if event.classification_status == "failed":
+                return event  # an earlier step (entity extraction) already failed it
             async with semaphore:
                 try:
                     return await self._enhance_single_event(event)
@@ -100,8 +115,9 @@ class LLMClassifier:
                     self.logger.error("Failed to enhance event %s: %s", event.event_id, exc)
                     # An LLM error is not an acceptance.  Hand the event back
                     # flagged so the caller neither stores it as a classified
-                    # incident nor marks its raw record processed.
-                    return event.model_copy(update={"classification_status": "failed"})
+                    # incident nor marks its raw record processed; the kind
+                    # decides whether the retry queue may ever give up on it.
+                    return failed_copy(event, exc)
         
         # Create tasks for all events
         tasks = [process_event_with_semaphore(event) for event in events]

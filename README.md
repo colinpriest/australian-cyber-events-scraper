@@ -223,7 +223,7 @@ python run_full_pipeline.py --skip-classification
                                [Dashboard Generation]
 ```
 
-1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, GDELT. Scrapes full content. Runs the fast-model classification; the Random Forest filter runs report-only (see [Random Forest filter](#random-forest-filter-versioned-bundles)).
+1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, GDELT. Scrapes full content. Judges each page with the calibrated Jev page gate, then the fast-model classification (see [Discovery filter and retry queue](#discovery-filter-and-retry-queue)).
 2. **Perplexity Enrichment** — Extracts formal entity names, threat actors, attack methods via multi-source verification.
 3. **Global Deduplication** — Merges only what is certain: an identical title on the same date, or the same organisation (by identity) on the same exact day. Everything else is decided by the calibrated Jev duplicate check that follows. See [Global Deduplication](#global-deduplication).
 4. **ASD Risk Classification** — Assigns C1–C6 severity categories using the Australian Signals Directorate risk matrix. Incremental (skips already-classified events).
@@ -257,7 +257,7 @@ australian-cyber-events-scraper/
 │   ├── datasources/               # Perplexity, OAIC, Google Search, Webber, GDELT
 │   ├── enrichment/                # High-quality 5-stage enrichment pipeline
 │   ├── filtering/
-│   │   ├── rf_event_filter.py     # Random Forest ML filter
+│   │   ├── page_gate.py           # Jev discovery page gate (rf_event_filter.py: retired)
 │   │   ├── progressive_filter.py
 │   │   └── confidence_filter.py
 │   ├── models/                    # CyberEvent, EventSeverity, CyberEventType
@@ -296,7 +296,7 @@ australian-cyber-events-scraper/
 │
 ├── docs/                          # Detailed pipeline stage documentation
 ├── analysis/                      # Generated statistical analysis reports
-├── machine_learning_filter/       # Trained Random Forest model artifacts
+├── machine_learning_filter/       # Retired Random Forest model artifacts (kept for reproduction)
 ├── instance/                      # SQLite database (gitignored)
 ├── logs/                          # Log files (unified_pipeline.log, etc.)
 ├── dashboard/                     # Generated HTML dashboard (gitignored)
@@ -755,8 +755,8 @@ Classification and Perplexity enrichment read the **persisted** record
 `processing/record_evidence.py`, not the snippet-bearing objects built at
 discovery. A record with no usable scraped text (under 200 characters) is
 passed on explicitly labelled as snippet-only, and its confidence is capped.
-A record rejected by a filter (blocked domain, Random Forest pre- or
-post-scrape) is marked processed with `Rejected at <stage>` and goes no
+A record rejected by a filter (blocked domain, or the Jev page gate after
+scraping) is marked processed with `Rejected at <stage>` and goes no
 further, in this run or later ones.
 
 Perplexity answers pass `processing/enrichment_gate.py` before anything is
@@ -773,36 +773,25 @@ python scripts/perplexity_backfill_events.py --release-quarantine
 python scripts/perplexity_backfill_events.py --requeue-empty   # old empty "validated" rows
 ```
 
-### Random Forest filter: versioned bundles
+### Discovery filter and retry queue
 
-The discovery filter loads an immutable bundle from
-`machine_learning_filter/bundles/<id>/` (model, vectorizer, encoder, a
-manifest with provenance, file hashes, evaluation and acceptance, and
-reference predictions), named by `machine_learning_filter/ACTIVE_BUNDLE`.
-Loading checks the hashes and, after any library upgrade, that the reference
-predictions still reproduce; files are never re-pickled (the old loader
-rewrote them to silence scikit-learn's version warning).
-
-A bundle drops records only if it passed acceptance on organisation-separated
-labelled data (out-of-fold predictions grouped by victim organisation): drop
-precision at least 0.90 and real-incident loss at most 0.02. Otherwise it
-runs **report-only**: it logs what it would have dropped and keeps everything.
-
-| Bundle | Evaluated on | Drop precision | Real incidents lost | Accepted |
-|---|---|---|---|---|
-| `rf-legacy-2025-09` (the 2025-09 model, unchanged) | 458 labelled records from organisations it never saw | 0.53 | 5.9% | no |
-| retrained on all 580 labels, same features | 5-fold grouped cross-validation | 0.68 | 43% | no |
-
-It dropped real incidents about as often as junk, and more labels do not fix
-TF-IDF features on this little data. The active bundle is the 2025-09 model,
-report-only. This matters because filter rejections now stop records (see
-above); the calibrated Jev steps after deduplication do this job with measured
-precision.
+The Random Forest filter is **retired** (it dropped real incidents about as
+often as junk: precision 0.53 on organisation-separated labels). Discovery now
+drops nothing before scraping; after scraping, Jev judges each new page with
+the calibrated source-gate question and rejects pages below its cut-off
+(0.58) **only for Google**, where it was calibrated. Other sources are scored
+and kept: on the event labels the same cut-off would drop real incidents
+(Perplexity lower-bound precision 0.36, `evaluation/page_gate_source_evaluation.json`).
+Every run first drains a durable retry queue of stored-but-unfinished records
+(temporary failures retried with back-off forever, permanent ones quarantined
+after 3), and a month whose search lost results is searched again. No TypeSafe
+or OpenAI key: discovery stops, it does not fall back. Details:
+[docs/04-event-filtering.md](docs/04-event-filtering.md) section 3.0 and
+[docs/02-discovery-collection.md](docs/02-discovery-collection.md) section 7.
 
 ```bash
-python scripts/train_rf_filter.py                        # train + grouped evaluation -> new bundle
-python scripts/train_rf_filter.py --activate             # ... and make it active
-python scripts/train_rf_filter.py --evaluate <bundle_id> # held-out evaluation of a bundle
+python scripts/discovery_queue.py status    # incomplete source-months, quarantined records
+python scripts/discovery_queue.py release   # return quarantined records to the queue
 ```
 
 ### API request budgets
@@ -1356,7 +1345,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 | [01-data-sources.md](docs/01-data-sources.md) | Data source descriptions, API configurations, and justifications |
 | [02-discovery-collection.md](docs/02-discovery-collection.md) | Discovery pipeline, search queries, and LLM prompts |
 | [03-content-scraping.md](docs/03-content-scraping.md) | Playwright scraping, content extraction, and fallback strategies |
-| [04-event-filtering.md](docs/04-event-filtering.md) | Random Forest ML filter, confidence scoring, and LLM classification |
+| [04-event-filtering.md](docs/04-event-filtering.md) | Jev page gate (Random Forest retired), confidence scoring, and LLM classification |
 | [05-event-enrichment.md](docs/05-event-enrichment.md) | 5-stage enrichment pipeline with Perplexity and GPT-4o |
 | [06-deduplication.md](docs/06-deduplication.md) | Entity-based deduplication, similarity matching, and merge logic |
 | [07-ASD-risk-classification.md](docs/07-ASD-risk-classification.md) | ASD risk matrix framework and GPT-4o classification |

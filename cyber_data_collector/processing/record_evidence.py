@@ -47,6 +47,10 @@ REJECTION_PREFIX = "Rejected at "
 # the persisted-rejection set: it may have been made on a bare snippet, and
 # the record deserves another look once scraping succeeds.
 STAGE_DOMAIN_BLOCKLIST = "domain_blocklist"
+#: The calibrated Jev page gate (``filtering/page_gate.py``).
+STAGE_PAGE_GATE = "page_gate"
+#: Historical: the retired Random Forest filter.  Markers with these stages
+#: may exist in older databases and are still honoured.
 STAGE_RF_URL_PREFILTER = "rf_url_prefilter"
 STAGE_RF_CONTENT_FILTER = "rf_content_filter"
 STAGE_NO_RECORD = "no_persisted_record"
