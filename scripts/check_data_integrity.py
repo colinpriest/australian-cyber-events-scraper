@@ -61,10 +61,18 @@ DASHBOARD_REQUIRED_TABLES = (
 
 @dataclass
 class CheckResult:
+    """One check's outcome.
+
+    ``skipped`` marks a check that could not apply (e.g. an in-memory database
+    has no file to build a dashboard from). It is reported as SKIP, never as a
+    pass, and is only for genuinely inapplicable checks: a check that errors or
+    cannot read its input is a failure (``ok=False``).
+    """
     name: str
     ok: bool
     summary: str = ""
     details: List[str] = field(default_factory=list)
+    skipped: bool = False
 
 
 # Sanity ranges
@@ -88,6 +96,34 @@ def _oaic_files_newest_first() -> List[str]:
         return m.group(1) + m.group(2) if m else "0"
 
     return sorted(glob.glob("oaic_cyber_statistics_*.json"), key=_key, reverse=True)
+
+
+def _load_oaic_files() -> tuple:
+    """``([(path, records)], [error])`` for every OAIC stats file, newest first.
+
+    A file that cannot be read or parsed, or is not a list of records, is an
+    error - every OAIC check fails on it rather than skipping it, because a
+    skipped corrupt file makes the remaining files look clean.
+    """
+    loaded, errors = [], []
+    for f in _oaic_files_newest_first():
+        try:
+            with open(f, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as exc:
+            errors.append(f"{os.path.basename(f)}: unreadable ({exc})")
+            continue
+        if not isinstance(data, list) or not all(isinstance(r, dict) for r in data):
+            errors.append(f"{os.path.basename(f)}: not a list of period records")
+            continue
+        loaded.append((f, data))
+    return loaded, errors
+
+
+def _unreadable_result(name: str, errors: List[str]) -> CheckResult:
+    return CheckResult(name, False, f"{len(errors)} OAIC stats file(s) could not be read", errors)
+
+
 SEVERITY_VALUES = {"Critical", "High", "Medium", "Low", "Unknown", None}
 EVENT_TYPE_VALUES_KNOWN_PREFIXES = (
     "Ransomware", "Data Breach", "Phishing", "Malware", "Vulnerability Exploit",
@@ -168,11 +204,10 @@ def check_no_duplicate_h1_h2_oaic(_unused) -> CheckResult:
     classic 'silent semester-selection failure' signature.
     """
     bad = []
-    for f in _oaic_files_newest_first():
-        try:
-            data = json.load(open(f))
-        except Exception:
-            continue
+    files, errors = _load_oaic_files()
+    if errors:
+        return _unreadable_result("oaic-no-duplicate-h1-h2", errors)
+    for f, data in files:
         by_year_period = {(d.get("year"), d.get("period")): d for d in data
                           if d.get("year") and d.get("period")}
         for (year, p), rec in by_year_period.items():
@@ -206,13 +241,11 @@ def check_oaic_top_sectors_in_range(_unused) -> CheckResult:
     almost certainly an LLM hallucination of a period total.
     """
     bad = []
-    files = _oaic_files_newest_first()
+    files, errors = _load_oaic_files()
+    if errors:
+        return _unreadable_result("oaic-top-sectors-in-range", errors)
     seen_keys = set()
-    for f in files:
-        try:
-            data = json.load(open(f))
-        except Exception:
-            continue
+    for f, data in files:
         for r in data:
             key = (r.get("year"), r.get("period"))
             if key in seen_keys: continue
@@ -257,7 +290,8 @@ def check_asd_categories_valid(conn: sqlite3.Connection) -> CheckResult:
     bad = list(conn.execute("""
         SELECT severity_category, COUNT(*) c FROM ASDRiskClassifications
         WHERE severity_category IS NOT NULL
-          AND severity_category NOT IN ('C1','C2','C3','C4','C5','C6')
+          AND severity_category NOT IN ('C1','C2','C3','C4','C5','C6',
+                                        'Insufficient information')
         GROUP BY severity_category
     """))
     if bad:
@@ -266,7 +300,8 @@ def check_asd_categories_valid(conn: sqlite3.Connection) -> CheckResult:
             f"{sum(r[1] for r in bad)} ASD rows have invalid severity_category",
             [f"{r[0]!r}: {r[1]}" for r in bad],
         )
-    return CheckResult("asd-categories-valid", True, "All ASD severity_category values valid")
+    return CheckResult("asd-categories-valid", True,
+                       "All ASD severity_category values are C1-C6 or 'Insufficient information'")
 
 
 def check_entity_size_bands_valid(conn: sqlite3.Connection) -> CheckResult:
@@ -542,7 +577,8 @@ def check_dashboard_totals_reconcile(conn: sqlite3.Connection) -> CheckResult:
     db_path = row[2] if row else ""
     if not db_path:
         return CheckResult("dashboard-totals-reconcile", True,
-                           "In-memory database; dashboard reconciliation skipped")
+                           "In-memory database: no file to build a dashboard from",
+                           skipped=True)
     present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     missing = [t for t in DASHBOARD_REQUIRED_TABLES if t not in present]
     if missing:
@@ -550,7 +586,8 @@ def check_dashboard_totals_reconcile(conn: sqlite3.Connection) -> CheckResult:
         # created) cannot be dashboarded at all; that is a schema problem, not a
         # reconciliation failure. Checked first because importing the builder is slow.
         return CheckResult("dashboard-totals-reconcile", True,
-                           f"Skipped: database schema is incomplete (no {', '.join(missing)})")
+                           f"database schema is incomplete (no {', '.join(missing)}): "
+                           "a dashboard cannot be built from it", skipped=True)
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     try:
@@ -565,12 +602,11 @@ def check_dashboard_totals_reconcile(conn: sqlite3.Connection) -> CheckResult:
         return CheckResult("dashboard-totals-reconcile", False,
                            "dashboard totals do not reconcile to the population",
                            str(exc).split(" - ", 1)[-1].split("; "))
-    except sqlite3.OperationalError as exc:
-        # A database without the pipeline's tables (a partial fixture, or one not
-        # yet created) cannot be dashboarded at all; that is a schema problem the
-        # other checks report, not a reconciliation failure.
-        return CheckResult("dashboard-totals-reconcile", True,
-                           f"Skipped: database schema is incomplete ({exc})")
+    except sqlite3.Error as exc:
+        # The required tables exist (checked above), so a database error here is
+        # the check failing to run - a failure, never a pass or a skip.
+        return CheckResult("dashboard-totals-reconcile", False,
+                           f"dashboard assembly raised a database error: {exc}")
     return CheckResult("dashboard-totals-reconcile", True,
                        "All dashboard chart totals reconcile to the reporting population")
 
@@ -581,13 +617,11 @@ def check_oaic_period_publication_realistic(_unused) -> CheckResult:
     extracted, or the scraper captured an unfiltered all-period total).
     """
     bad = []
-    files = _oaic_files_newest_first()
+    files, errors = _load_oaic_files()
+    if errors:
+        return _unreadable_result("oaic-period-totals-realistic", errors)
     seen = set()
-    for f in files:
-        try:
-            data = json.load(open(f))
-        except Exception:
-            continue
+    for f, data in files:
         for r in data:
             key = (r.get("year"), r.get("period"))
             if key in seen: continue
@@ -605,6 +639,51 @@ def check_oaic_period_publication_realistic(_unused) -> CheckResult:
         "oaic-period-totals-realistic", True,
         "All OAIC period total_notifications in 50-2000",
     )
+
+
+# Published OAIC dataset (scripts/oaic/oaic_dataset.py), relative to the CWD.
+OAIC_DATASET_PATH = Path("instance/oaic/oaic_statistics.json")
+OAIC_STATE_PATH = Path("instance/oaic/oaic_refresh_state.json")
+
+
+def _load_oaic_consistency_module():
+    """The shared OAIC consistency rules (standard library only), loaded directly."""
+    import importlib.util
+
+    path = PROJECT_ROOT / "scripts" / "oaic" / "oaic_consistency.py"
+    spec = importlib.util.spec_from_file_location("_integrity_oaic_consistency", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_oaic_published_dataset_consistent(_unused) -> CheckResult:
+    """The published OAIC dataset must be readable and contradiction-free.
+
+    Absent (no refresh has run yet) is reported as a skip, not a pass. An
+    unreadable dataset or refresh state, or any published record that
+    contradicts itself, fails.
+    """
+    name = "oaic-published-dataset-consistent"
+    if not OAIC_DATASET_PATH.exists():
+        return CheckResult(name, True, f"No published OAIC dataset at {OAIC_DATASET_PATH} "
+                                       "(run scripts/oaic/refresh_oaic_statistics.py)", skipped=True)
+    try:
+        data = json.loads(OAIC_DATASET_PATH.read_text(encoding="utf-8"))
+        records = data["records"]
+        if not isinstance(records, list):
+            raise ValueError("'records' is not a list")
+        if OAIC_STATE_PATH.exists():
+            json.loads(OAIC_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return CheckResult(name, False, f"published OAIC dataset or refresh state unreadable: {exc}")
+    consistency = _load_oaic_consistency_module()
+    bad = [f"{consistency.period_label(r)}: {c.message}"
+           for r in records for c in consistency.find_contradictions(r)]
+    if bad:
+        return CheckResult(name, False, f"{len(bad)} contradiction(s) in published OAIC records", bad)
+    return CheckResult(name, True, f"{len(records)} published OAIC periods, no contradictions")
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +709,7 @@ JSON_CHECKS: List[Callable[[None], CheckResult]] = [
     check_no_duplicate_h1_h2_oaic,
     check_oaic_top_sectors_in_range,
     check_oaic_period_publication_realistic,
+    check_oaic_published_dataset_consistent,
 ]
 
 
@@ -641,7 +721,12 @@ def main() -> int:
                         help="only print failing checks")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    if not Path(args.db).exists():
+        # sqlite3.connect would create an empty database and every check would
+        # then fail for the wrong reason (or, worse, a vacuous check would pass).
+        print(f"[ERROR] Database not found: {args.db}")
+        return 1
+    conn = sqlite3.connect(f"file:{Path(args.db).resolve().as_posix()}?mode=ro", uri=True)
     results: List[CheckResult] = []
     for fn in DB_CHECKS:
         try:
@@ -656,11 +741,14 @@ def main() -> int:
     conn.close()
 
     failed = [r for r in results if not r.ok]
-    print(f"=== Data integrity check: {len(results) - len(failed)}/{len(results)} passed ===\n")
+    skipped = [r for r in results if r.ok and r.skipped]
+    passed = len(results) - len(failed) - len(skipped)
+    print(f"=== Data integrity check: {passed}/{len(results)} passed, "
+          f"{len(skipped)} skipped, {len(failed)} failed ===\n")
     for r in results:
-        if r.ok and args.quiet:
+        if r.ok and not r.skipped and args.quiet:
             continue
-        marker = "PASS" if r.ok else "FAIL"
+        marker = "FAIL" if not r.ok else ("SKIP" if r.skipped else "PASS")
         print(f"[{marker}] {r.name}")
         if r.summary:
             print(f"    {r.summary}")
