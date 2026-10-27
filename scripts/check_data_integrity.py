@@ -117,7 +117,8 @@ def check_severity_no_truncated_or_qualified(conn: sqlite3.Connection) -> CheckR
         return CheckResult(
             name="severity-no-qualified-or-truncated",
             ok=False,
-            summary=f"{sum(r[1] for r in bad)} rows have malformed severity values",
+            summary=f"{sum(r[1] for r in bad)} rows have malformed severity values; run "
+                    "`python scripts/dedup_admin.py normalise-enums`",
             details=[f"{r[0]!r}: {r[1]} rows" for r in bad],
         )
     return CheckResult(
@@ -134,12 +135,48 @@ def check_event_type_no_truncated_or_qualified(conn: sqlite3.Connection) -> Chec
     if bad:
         return CheckResult(
             "event_type-no-qualified", False,
-            f"{sum(r[1] for r in bad)} rows have qualified-name event_type values",
+            f"{sum(r[1] for r in bad)} rows have qualified-name event_type values; run "
+            "`python scripts/dedup_admin.py normalise-enums`",
             [f"{r[0]!r}: {r[1]} rows" for r in bad],
         )
     return CheckResult(
         "event_type-no-qualified", True,
         "All DeduplicatedEvents.event_type values are clean enum values",
+    )
+
+
+# Every column (and source_metadata key) a qualified enum name was ever stored in.
+# Re-enrichment copies RawEvents.source_metadata into EnrichedEvents and on to
+# DeduplicatedEvents, so a legacy spelling left anywhere upstream comes back.
+LEGACY_ENUM_LOCATIONS = (
+    ("EnrichedEvents", "severity", "severity LIKE 'EventSeverity.%'"),
+    ("EnrichedEvents", "event_type", "event_type LIKE 'CyberEventType.%'"),
+    ("EntitiesV2", "entity_type", "entity_type LIKE 'EntityType.%'"),
+    ("RawEvents", "source_metadata",
+     "source_metadata LIKE '%\"EventSeverity.%' OR source_metadata LIKE '%\"CyberEventType.%'"),
+)
+
+
+def check_no_legacy_enum_spellings_upstream(conn: sqlite3.Connection) -> CheckResult:
+    """No qualified enum names ('EventSeverity.MEDIUM') in the tables feeding
+    DeduplicatedEvents. Repair with ``dedup_admin.py normalise-enums``."""
+    bad = []
+    for table, column, where in LEGACY_ENUM_LOCATIONS:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            continue
+        n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
+        if n:
+            bad.append(f"{table}.{column}: {n} rows")
+    if bad:
+        return CheckResult(
+            "enum-spellings-canonical-upstream", False,
+            "Qualified enum names stored upstream of DeduplicatedEvents; run "
+            "`python scripts/dedup_admin.py normalise-enums`",
+            bad,
+        )
+    return CheckResult(
+        "enum-spellings-canonical-upstream", True,
+        "EnrichedEvents, EntitiesV2 and RawEvents.source_metadata store enum values, not names",
     )
 
 
@@ -612,6 +649,7 @@ def check_oaic_period_publication_realistic(_unused) -> CheckResult:
 DB_CHECKS: List[Callable[[sqlite3.Connection], CheckResult]] = [
     check_severity_no_truncated_or_qualified,
     check_event_type_no_truncated_or_qualified,
+    check_no_legacy_enum_spellings_upstream,
     check_severity_in_known_set,
     check_asd_no_orphans,
     check_asd_categories_valid,

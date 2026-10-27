@@ -546,7 +546,10 @@ carries stored research over); the snapshot used is recorded.
   March 2020 breach; LUSH's privacy policy became LUSH's breach. Applied: 469
   of 1,074 Google records removed (65 events left with no evidence, 404 junk
   records split out of events that keep other evidence). Pages with under 300
-  characters of stored text are not judged. Where a removed record pointed at
+  characters of stored text are not judged; `rescrape-short-pages` re-fetches
+  them (Playwright, no Perplexity substitutes; real text only, given up after 3
+  failed attempts, tracked in `PageRescrapes`) so the next `check-sources`
+  can. Where a removed record pointed at
   a real incident no other event covers, a targeted search queues proper
   reporting for normal ingestion (80 queued; 54 became events' evidence on the
   next pass).
@@ -976,7 +979,17 @@ with no scalar victim that the cluster pass skipped.
 
 ```bash
 python scripts/build_static_dashboard.py               # Generate dashboard/index.html
+python scripts/enrich_pii_and_source_category.py       # OAIC breach source + PII types (Jev)
 ```
+
+The OAIC comparisons (source of breach; personal information types) need
+`DeduplicatedEvents.breach_source_category` and `personal_info_types_json`.
+`enrich_pii_and_source_category.py` asks Jev per active event (a Choice over
+OAIC's three sources plus "cannot tell", stored as `Unknown`; a Noul per
+information type, read at 0.5 and uncalibrated) over the members' evidence,
+stores every answer in `ModelJudgements` and re-asks only events whose
+evidence changed. It requires `TYPESAFE_API_KEY` and exits non-zero if any
+event could not be judged.
 
 ### Database
 
@@ -996,7 +1009,13 @@ any check fails, so it doubles as a CI gate.
 python scripts/check_data_integrity.py                 # Full report
 python scripts/check_data_integrity.py --quiet         # Only show failures
 python scripts/check_data_integrity.py --db PATH       # Override DB path
+python scripts/dedup_admin.py normalise-enums [--dry-run]  # repair qualified enum names
 ```
+
+Qualified names (`EventSeverity.MEDIUM`) came from `str()` of a `(str, Enum)`
+member on Python 3.11+; the enums now stringify to their values, storage
+canonicalises on write, and `normalise-enums` rewrites stored rows (including
+`RawEvents.source_metadata`, which re-enrichment copies from) idempotently.
 
 ### Reporting population: one definition for every dashboard and export
 

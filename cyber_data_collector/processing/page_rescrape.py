@@ -1,0 +1,225 @@
+"""Re-fetch Google-sourced pages whose stored text is too short to judge.
+
+The source gate (:mod:`cyber_data_collector.dedup.source_gate`) judges a
+Google record from its page's own text and leaves alone any record with under
+``MIN_PAGE_CHARS`` of it: the scrape failed, or caught only a headline, a
+cookie wall or a PDF it could not read. On 2026-10-27, 158 active Google
+records were like that, so junk among them could never be removed.
+
+:func:`rescrape_short_pages` fetches each again with the Playwright scraper
+(and its PDF extractor and second-browser-context retry) and stores the text
+only when it is real (not a block page, error page or cookie wall), at least
+``MIN_PAGE_CHARS`` long and longer than what is stored. The next
+``check-sources`` then judges the record on it.
+
+The Perplexity fallback is never used here: it returns *another* page about
+the story, and storing that as the record's page would make the gate judge
+the wrong page. A failed fetch is recorded as a failure.
+
+Every attempt is recorded in ``PageRescrapes`` (attempt count, last error),
+and a page is given up after ``MAX_ATTEMPTS`` failures, so dead pages are not
+fetched on every run. Social, profile and marketplace URLs, which the scraper
+never fetches, are given up at once.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+
+from cyber_data_collector.dedup.source_gate import MIN_PAGE_CHARS, SOURCE_TYPE
+
+logger = logging.getLogger(__name__)
+
+MAX_ATTEMPTS = 3
+FETCH_TIMEOUT_SECONDS = 45
+
+STATUS_STORED = "stored"
+STATUS_RETRY = "retry"
+STATUS_GAVE_UP = "gave_up"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS PageRescrapes (
+    raw_event_id     TEXT PRIMARY KEY,
+    url              TEXT,
+    attempts         INTEGER NOT NULL DEFAULT 0,  -- failed attempts; reset by nothing
+    status           TEXT NOT NULL,               -- stored / retry / gave_up
+    last_error       TEXT,
+    last_chars       INTEGER,                     -- length of the text fetched last time
+    last_attempt_at  TEXT NOT NULL
+);
+"""
+
+#: ``fetch(url) -> (text, metadata)`` as ``PlaywrightScraper.get_page_text(..., return_metadata=True)``.
+Fetch = Callable[[str], Awaitable[Tuple[Optional[str], Dict[str, Any]]]]
+
+
+class ScraperUnavailable(RuntimeError):
+    """The browser could not start (Playwright or Chromium missing); nothing was fetched."""
+
+
+@dataclass
+class RescrapeReport:
+    candidates: int = 0
+    attempted: int = 0
+    stored: List[Dict[str, Any]] = field(default_factory=list)
+    failed: List[Dict[str, Any]] = field(default_factory=list)
+    gave_up: int = 0           # pages reaching MAX_ATTEMPTS (or never fetchable) this run
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+
+
+def short_pages(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Active Google records with too little stored text, not yet given up on."""
+    ensure_schema(conn)
+    sql = f"""
+        SELECT r.raw_event_id, r.source_url, LENGTH(TRIM(COALESCE(r.raw_content, ''))) AS chars,
+               COALESCE(p.attempts, 0) AS attempts
+        FROM RawEvents r
+        LEFT JOIN PageRescrapes p ON p.raw_event_id = r.raw_event_id
+        WHERE r.source_type = ?
+          AND EXISTS (SELECT 1 FROM EnrichedEvents e
+                      WHERE e.raw_event_id = r.raw_event_id AND e.status = 'Active')
+          AND LENGTH(TRIM(COALESCE(r.raw_content, ''))) < ?
+          AND COALESCE(r.source_url, '') != ''
+          AND COALESCE(p.status, '') != '{STATUS_GAVE_UP}'
+        ORDER BY COALESCE(p.attempts, 0), r.raw_event_id
+    """
+    params: List[Any] = [SOURCE_TYPE, MIN_PAGE_CHARS]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    return [{"raw_event_id": r[0], "url": r[1], "chars": r[2], "attempts": r[3]}
+            for r in conn.execute(sql, params)]
+
+
+def assess(text: Optional[str], meta: Dict[str, Any], stored_chars: int) -> Optional[str]:
+    """None if ``text`` should be stored, else why not."""
+    from cyber_data_collector.utils.entity_scraper import ORIGIN_PERPLEXITY_ALTERNATIVE, looks_like_block_page
+
+    if not text or not text.strip():
+        return str(meta.get("error") or "no text extracted")
+    if meta.get("content_origin") == ORIGIN_PERPLEXITY_ALTERNATIVE:
+        return "text came from another page (Perplexity alternative); not stored as this page"
+    chars = len(text.strip())
+    if looks_like_block_page(text):
+        return f"block page, error page or cookie wall ({chars} chars)"
+    if chars < MIN_PAGE_CHARS:
+        return f"too short ({chars} chars < {MIN_PAGE_CHARS})"
+    if chars <= stored_chars:
+        return f"not longer than the stored text ({chars} <= {stored_chars} chars)"
+    return None
+
+
+def _record_attempt(conn: sqlite3.Connection, page: Dict[str, Any], status: str,
+                    error: Optional[str], chars: Optional[int], failed: bool) -> None:
+    conn.execute(
+        """INSERT INTO PageRescrapes (raw_event_id, url, attempts, status, last_error, last_chars, last_attempt_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(raw_event_id) DO UPDATE SET
+               url = excluded.url, attempts = excluded.attempts, status = excluded.status,
+               last_error = excluded.last_error, last_chars = excluded.last_chars,
+               last_attempt_at = excluded.last_attempt_at""",
+        (page["raw_event_id"], page["url"], page["attempts"] + (1 if failed else 0), status, error, chars,
+         datetime.now().isoformat()))
+
+
+def _store_text(conn: sqlite3.Connection, raw_event_id: str, text: str, origin: str) -> None:
+    """Store the page text, and record in source_metadata that it is the page's own."""
+    row = conn.execute("SELECT source_metadata FROM RawEvents WHERE raw_event_id = ?", (raw_event_id,)).fetchone()
+    try:
+        meta = json.loads(row[0]) if row and row[0] else {}
+    except ValueError:
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    meta.update({"content_origin": origin, "content_source_url": None,
+                 "content_rescraped_at": datetime.now().isoformat()})
+    conn.execute("UPDATE RawEvents SET raw_content = ?, source_metadata = ? WHERE raw_event_id = ?",
+                 (text.strip(), json.dumps(meta), raw_event_id))
+
+
+def apply_result(conn: sqlite3.Connection, page: Dict[str, Any], text: Optional[str],
+                 meta: Dict[str, Any], report: RescrapeReport) -> str:
+    """Store or record one fetch; commits. Returns what happened, for the log."""
+    from cyber_data_collector.utils.entity_scraper import BLOCKED_DOMAIN_ERROR, ORIGIN_PAGE
+
+    report.attempted += 1
+    problem = assess(text, meta, page["chars"])
+    chars = len(text.strip()) if text else 0
+    if problem is None:
+        _store_text(conn, page["raw_event_id"], text, meta.get("content_origin") or ORIGIN_PAGE)
+        _record_attempt(conn, page, STATUS_STORED, None, chars, failed=False)
+        report.stored.append({**page, "new_chars": chars})
+        outcome = f"stored {chars} chars (was {page['chars']})"
+    else:
+        attempts = page["attempts"] + 1
+        give_up = attempts >= MAX_ATTEMPTS or problem == BLOCKED_DOMAIN_ERROR
+        _record_attempt(conn, page, STATUS_GAVE_UP if give_up else STATUS_RETRY, problem, chars, failed=True)
+        report.failed.append({**page, "error": problem, "attempts": attempts})
+        report.gave_up += int(give_up)
+        outcome = f"{problem} (attempt {attempts}{', giving up' if give_up else ''})"
+    conn.commit()
+    return outcome
+
+
+async def _scrape_all(conn: sqlite3.Connection, pages: List[Dict[str, Any]], fetch: Optional[Fetch],
+                      concurrency: int, report: RescrapeReport) -> None:
+    async def run(fetcher: Fetch) -> None:
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        async def one(page: Dict[str, Any]) -> None:
+            async with sem:
+                try:
+                    text, meta = await fetcher(page["url"])
+                except Exception as exc:  # noqa: BLE001 - one page's failure is recorded, not fatal
+                    text, meta = None, {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+            # Single-threaded event loop: the connection is used from one thread.
+            logger.info("Re-scrape %s: %s", page["url"], apply_result(conn, page, text, meta, report))
+
+        await asyncio.gather(*(one(p) for p in pages))
+
+    if fetch is not None:
+        await run(fetch)
+        return
+    from cyber_data_collector.utils.entity_scraper import PlaywrightScraper
+
+    # No fallback: a page that cannot be fetched is a failure, not another page's text.
+    scraper = PlaywrightScraper(allow_perplexity_fallback=False)
+    try:
+        await scraper.__aenter__()
+    except Exception as exc:
+        await scraper.close()
+        raise ScraperUnavailable(
+            f"the browser could not start ({type(exc).__name__}: {exc}); install it with "
+            "`pip install -r requirements.txt` and `playwright install chromium`") from exc
+    try:
+        async def fetch_page(url: str):
+            return await scraper.get_page_text(url, timeout=FETCH_TIMEOUT_SECONDS, return_metadata=True)
+
+        await run(fetch_page)
+    finally:
+        await scraper.close()
+
+
+def rescrape_short_pages(conn: sqlite3.Connection, limit: Optional[int] = None, dry_run: bool = False,
+                         concurrency: int = 3, fetch: Optional[Fetch] = None) -> RescrapeReport:
+    """Re-fetch every short Google page not yet given up on.
+
+    Raises:
+        ScraperUnavailable: the browser could not start - a failure of the
+            command, not of a page, so no page's attempt count changes.
+    """
+    pages = short_pages(conn, limit=limit)
+    report = RescrapeReport(candidates=len(pages))
+    if dry_run or not pages:
+        return report
+    asyncio.run(_scrape_all(conn, pages, fetch, concurrency, report))
+    return report
