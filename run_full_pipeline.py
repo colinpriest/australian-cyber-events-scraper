@@ -617,9 +617,14 @@ class UnifiedPipeline:
         attribution = ["check-victim-attribution"]
         if not getattr(args, 'report_event_rejections', False):
             attribution.append("--apply")
+        # find-supplier-victims after duplicates: it merges supplier-incident
+        # fragments and attaches co-victims (calibrated; report-only otherwise).
+        suppliers = ["find-supplier-victims", "--research"]
+        if not getattr(args, 'report_event_rejections', False):
+            suppliers.append("--apply")
         steps = [["rescrape-short-pages"], ["research-timelines"], ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
-                 coherence, duplicates, ["reconcile-timelines", "--queue-gaps"]]
+                 coherence, duplicates, suppliers, ["reconcile-timelines", "--queue-gaps"]]
         for step in steps:
             try:
                 if dedup_admin.main(base + step) != 0:

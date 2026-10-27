@@ -115,7 +115,12 @@ def test_registered_cohort_only_uses_post_registration_discoveries(tmp_path, mon
     assert result["one_sided_p_value"] is None
 
 
-def test_run_handles_no_precision_metadata(tmp_path):
+def test_run_handles_no_precision_metadata(tmp_path, monkeypatch):
+    class BeforeRegistration(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 1)
+    monkeypatch.setattr(timing, "date", BeforeRegistration)
     frame = events([("a", "1", "2025-01-01", None), ("a", "2", "2025-04-11", None),
                     ("b", "3", "2025-01-01", None)])
     result = timing.run(frame, tmp_path / "missing.db", date(2025, 6, 1), tmp_path / "output", 42,
