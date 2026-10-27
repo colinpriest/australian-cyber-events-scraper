@@ -47,6 +47,9 @@ playwright install chromium
 # Create and configure environment variables
 cp .env.example .env
 # Edit .env with your API keys
+
+# Create (or upgrade) the database schema
+python pipeline.py init
 ```
 
 ### Development
@@ -170,10 +173,10 @@ The pipeline executes five distinct phases:
 - Much higher quality than initial fast-pass
 
 ### Phase 3: Global Deduplication
-- Entity-based matching with 0.15 similarity threshold
-- Rule 1: Same entity + same date → merge
-- Rule 2: Same entity + similar titles → merge
-- Uses earliest event date for merged events
+- Deterministic merges only (`DeduplicationEngine.merge_decision`): identical title + same date, or same organisation (by identity, never a shared word) + same exact day (not the 1st of a month)
+- Everything uncertain is decided by the calibrated Jev `check-duplicates` step in the hygiene phase
+- Merged events are dated by member consensus; a run fails if a record is in no event or in two
+- Re-enriched records refresh their events with ids kept (`dedup/record_fingerprints.py`)
 
 ### Phase 4: ASD Risk Classification
 - Assigns C1-C6 severity categories using Australian Signals Directorate framework
