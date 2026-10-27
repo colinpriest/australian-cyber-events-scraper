@@ -82,12 +82,12 @@ class PerplexityDataSource(DataSource):
 
     async def collect_events(self, date_range: DateRange) -> List[CyberEvent]:
         if not self.openai_client:
-            self.logger.warning("Perplexity client not initialized")
+            self.note_failure("Perplexity client not initialized; no queries run")
             return []
 
         # Check circuit breaker
         if self._should_skip_due_to_circuit_breaker():
-            self.logger.warning("Skipping Perplexity collection due to circuit breaker (too many recent failures)")
+            self.note_failure("Perplexity collection skipped by the circuit breaker (too many recent failures)")
             return []
 
         queries = self._generate_search_queries(date_range)
@@ -112,6 +112,7 @@ class PerplexityDataSource(DataSource):
             except Exception as exc:
                 failed_queries += 1
                 self._record_failure()
+                self.note_failure(f"Perplexity query '{query[:60]}' failed", exc)
 
                 # Log different types of errors appropriately
                 if self._is_auth_error(exc):
@@ -315,11 +316,10 @@ class PerplexityDataSource(DataSource):
                 )
                 return completion_result
 
-        self.logger.warning(
-            "All JSON recovery attempts failed for Perplexity response. "
-            "Raw content (first 500 chars): %s",
-            content[:500],
-        )
+        # The answer existed but could not be read: its events are lost, so
+        # this is a failure of the search, not an empty result.
+        self.note_failure(f"Perplexity answer for '{query[:60]}' could not be parsed "
+                          f"(first 200 chars: {content[:200]!r})")
         return PerplexitySearchResults(events=[])
 
     def _strip_markdown_json(self, content: str) -> str:

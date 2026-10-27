@@ -1,0 +1,68 @@
+{
+  "question_version": "source-gate-v1",
+  "model": "jev-1.14.0",
+  "cutoff": 0.580001,
+  "precision_target": 0.95,
+  "min_drops": 10,
+  "labels": "evaluation\\event_reality_labels.csv",
+  "method": "event labels mapped to member records; drops from 'real' events counted wrong (lower bound); unsure excluded; bootstrap over victim organisations",
+  "generated": "2026-10-27T22:38:31",
+  "sources": {
+    "OAIC": {
+      "judged": 6,
+      "would_drop": 5,
+      "correct_drops": 1,
+      "precision_lower_bound": 0.2,
+      "organisations": 6,
+      "organisation_bootstrap": {
+        "replicates": 1000,
+        "p05": 0.0,
+        "median": 0.2,
+        "p95": 0.5
+      },
+      "accepted": false
+    },
+    "Perplexity": {
+      "judged": 104,
+      "would_drop": 56,
+      "correct_drops": 20,
+      "precision_lower_bound": 0.35714285714285715,
+      "organisations": 57,
+      "organisation_bootstrap": {
+        "replicates": 1000,
+        "p05": 0.22666666666666666,
+        "median": 0.36363636363636365,
+        "p95": 0.5348837209302325
+      },
+      "accepted": false
+    },
+    "PerplexityResearch": {
+      "judged": 1,
+      "would_drop": 1,
+      "correct_drops": 1,
+      "precision_lower_bound": 1.0,
+      "organisations": 1,
+      "organisation_bootstrap": {
+        "replicates": 1000,
+        "p05": 1.0,
+        "median": 1.0,
+        "p95": 1.0
+      },
+      "accepted": false
+    },
+    "WebberInsurance": {
+      "judged": 55,
+      "would_drop": 2,
+      "correct_drops": 1,
+      "precision_lower_bound": 0.5,
+      "organisations": 46,
+      "organisation_bootstrap": {
+        "replicates": 870,
+        "p05": 0.0,
+        "median": 0.5,
+        "p95": 1.0
+      },
+      "accepted": false
+    }
+  }
+}

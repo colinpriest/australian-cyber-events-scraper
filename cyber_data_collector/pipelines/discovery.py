@@ -36,25 +36,35 @@ from cyber_data_collector.models.config import DataSourceConfig
 from cyber_data_collector.utils import ConfigManager, setup_logging
 from cyber_data_collector.utils.validation import (
     safe_bool,
-    safe_date,
     safe_float,
     safe_int,
     safe_json_dumps,
     safe_str,
-    validate_enriched_event_row,
     validate_enrichment_data_for_storage,
 )
-from cyber_data_collector.filtering.rf_event_filter import RfEventFilter
+from cyber_data_collector.filtering.page_gate import DiscoveryPageGate, GateDecision, PageGateUnavailable
+from cyber_data_collector.models.events import ConfidenceScore, CyberEvent, CyberEventType, EventSeverity, EventSource
 from cyber_data_collector.processing.enrichment_gate import validate_count, validate_iso_date
 from cyber_data_collector.processing.record_evidence import (
     STAGE_DOMAIN_BLOCKLIST,
-    STAGE_RF_CONTENT_FILTER,
-    STAGE_RF_URL_PREFILTER,
+    STAGE_PAGE_GATE,
     AcceptanceLedger,
     RecordEvidence,
     persist_rejections,
     prepare_records_for_processing,
 )
+from cyber_data_collector.processing.retry_queue import KIND_PERMANENT, KIND_TEMPORARY, RetryQueue
+from cyber_data_collector.utils.api_budget import is_budget_refusal
+
+
+#: ``CyberDataCollector.data_sources`` keys -> ``RawEvents.source_type``.
+SOURCE_TYPES_BY_COLLECTOR = {
+    "perplexity": "Perplexity",
+    "google_search": "GoogleSearch",
+    "webber": "WebberInsurance",
+    "oaic": "OAIC",
+    "gdelt": "GDELT",
+}
 
 
 def _enum_value_or_str(value: Any) -> Optional[str]:
@@ -200,16 +210,25 @@ for noisy_logger in ("httpx", "httpcore", "urllib3", "openai", "instructor"):
 class EventDiscoveryEnrichmentPipeline:
     """Main pipeline for discovering and enriching cyber events"""
 
-    def __init__(self, db_path: str = "instance/cyber_events.db"):
+    def __init__(self, db_path: str = "instance/cyber_events.db", page_gate_mode: Optional[str] = None,
+                 page_gate: Optional[DiscoveryPageGate] = None):
+        """
+        Args:
+            db_path: Database to work on.
+            page_gate_mode: ``'enforce'`` (default) or ``'report-only'`` for the
+                Jev page gate; ``None`` reads ``DISCOVERY_PAGE_GATE_MODE``.
+            page_gate: A ready gate (tests inject one with a fake judge).
+        """
         self.db_path = str(db_path)
         self.db = CyberEventDataV2(db_path)
         self.config_manager = ConfigManager()
         self.env_config = self.config_manager.load()
 
-        # Initialize Random Forest filtering system
-        self.filter_system = RfEventFilter()
-        # Reset statistics for this run
-        self.filter_system.reset_statistics()
+        # The discovery filter: the calibrated Jev page gate (the Random Forest
+        # filter is retired - it dropped real incidents as often as junk).
+        self.page_gate = page_gate or DiscoveryPageGate(self.db._conn, mode=page_gate_mode)
+        # Stored-but-unprocessed records, retried on every run with back-off.
+        self.retry_queue = RetryQueue.for_db(self.db)
 
         # Statistics
         self.stats = {
@@ -217,7 +236,13 @@ class EventDiscoveryEnrichmentPipeline:
             'events_scraped': 0,
             'events_analyzed': 0,
             'events_enriched': 0,
-            'errors': 0
+            'errors': 0,
+            'retry_due': 0,
+            'retry_completed': 0,
+            'records_failed_temporary': 0,
+            'records_failed_permanent': 0,
+            'records_quarantined': 0,
+            'source_months_failed': 0,
         }
 
     # =========================================================================
@@ -236,6 +261,14 @@ class EventDiscoveryEnrichmentPipeline:
         # Default to all sources if none specified
         if not source_types:
             source_types = ['Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC']
+
+        # Fail before any paid discovery call if a required model is missing.
+        self.require_prerequisites()
+
+        # Records stored by earlier runs but never finished (a classification
+        # timeout, a crash) are not rediscovered - OAIC skips stored URLs - so
+        # they are drained first, from the database.
+        await self.drain_retry_queue()
 
         # Get current year and month for dynamic date range
         from datetime import datetime
@@ -297,6 +330,7 @@ class EventDiscoveryEnrichmentPipeline:
                 start_date.strftime('%b %Y'),
                 now.strftime('%b %Y'),
             )
+            self.report_incomplete_months()
             return
 
         logger.info(f"[DISCOVERY] Found {len(unprocessed_months)} unprocessed months to process")
@@ -320,6 +354,7 @@ class EventDiscoveryEnrichmentPipeline:
 
         self.stats['events_discovered'] = total_events_discovered
         logger.info(f"[DISCOVERY] Completed processing all months. Total events discovered: {total_events_discovered}")
+        self.report_incomplete_months()
 
         # Deduplication is deliberately NOT run here. It is owned by the caller
         # (run_full_pipeline.UnifiedPipeline.run_deduplication_phase), which runs
@@ -357,15 +392,14 @@ class EventDiscoveryEnrichmentPipeline:
             # Create collector and capture ALL stages of processing
             collector = CyberDataCollector(collection_config, ".env", db_path=self.db_path)
 
-            # Inject known URLs so OAIC source can skip already-stored articles
+            # Inject known URLs so OAIC source can skip already-stored articles.
+            # Safe because a stored record that was never finished is drained
+            # from the retry queue, not left waiting for a rediscovery.
             if 'oaic' in collector.data_sources:
                 known = self.db.get_known_source_urls('OAIC')
                 collector.data_sources['oaic'].known_urls = known
                 if known:
                     logger.info(f"[OAIC] {len(known)} already-known URLs will be skipped")
-
-            # We need to hack into the collector to get all stages
-            # Let's manually run the collection pipeline to capture each stage
 
             # Step 1: Raw collection (same as collector.collect_all_events but broken down)
             valid_sources = {}
@@ -373,217 +407,88 @@ class EventDiscoveryEnrichmentPipeline:
                 if source.validate_config():
                     valid_sources[name] = source
 
-            # Collect raw events from all sources
-            import asyncio
-            collection_tasks = [collector._collect_from_source(name, source) for name, source in valid_sources.items()]
+            # Collect raw events from all sources.  A provider failure that
+            # loses results (an exception, a failed query, an exhausted quota)
+            # is recorded per source-month; such a month is not marked
+            # processed, so it is searched again on the next run.
+            collected = await asyncio.gather(*[
+                self._collect_source(name, source, date_range) for name, source in valid_sources.items()])
             all_raw_events = []
-            for task in asyncio.as_completed(collection_tasks):
-                try:
-                    source_events = await task
-                    all_raw_events.extend(source_events)
-                except Exception as exc:
-                    logger.error(f"Error collecting from source: {exc}")
+            failed_sources: Dict[str, List[str]] = {}
+            for name, source_events, failures in collected:
+                all_raw_events.extend(source_events)
+                source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
+                status = self.retry_queue.record_discovery(source_type, year, month, len(source_events), failures)
+                if status != "complete":
+                    failed_sources[source_type] = failures
+            for name in set(collector.data_sources) - set(valid_sources):
+                # Enabled but not configured (no key, no client): nothing was searched.
+                source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
+                problem = [f"{source_type} is enabled but not configured"]
+                self.retry_queue.record_discovery(source_type, year, month, 0, problem)
+                failed_sources[source_type] = problem
 
             logger.info(f"[RAW] Collected {len(all_raw_events)} raw events for {year}-{month:02d}")
 
             # Step 2: Store raw events
             raw_events_stored = 0
             raw_event_ids = []
+            source_by_id: Dict[str, str] = {}
             for event in all_raw_events:
                 raw_event_id = await self._store_raw_event(event, start_date)
                 if raw_event_id:
                     raw_events_stored += 1
                     raw_event_ids.append(raw_event_id)
+                    source_by_id[raw_event_id] = self._determine_source_type(event.data_sources)
                     setattr(event, "raw_event_id", raw_event_id)
                     # Log successful raw event storage
                     await self._log_processing_success(raw_event_id, 'raw_event_storage', {
-                        'source_type': self._determine_source_type(event.data_sources),
+                        'source_type': source_by_id[raw_event_id],
                         'title': event.title[:100]
                     })
+            # Durable before any fallible step: what was found, from which
+            # source, for which month.
+            self.retry_queue.register(raw_event_ids, source_by_id, year, month)
 
-            # Step 3: Scrape URL content for raw events.  A filter that rejects a
-            # record writes that decision to the ledger; it is persisted so it
-            # holds for every later stage, run and entry point.
-            ledger = AcceptanceLedger()
-            logger.info(f"[PIPELINE] Scraping URLs for {year}-{month:02d}")
-            scraped_count = await self._scrape_raw_events_for_month(raw_event_ids, ledger)
-            logger.info(f"[SCRAPED] Successfully scraped {scraped_count} URLs for {year}-{month:02d}")
-
-            # Step 4: Process events (entity extraction, LLM classification) from
-            # what scraping persisted - not the pre-scrape in-memory objects.
-            logger.info(f"[PIPELINE] Processing events for {year}-{month:02d}")
-            processed_events = await self._process_persisted_records(collector, all_raw_events, ledger)
-            logger.info(f"[PROCESSED] Enhanced {len(processed_events)} events for {year}-{month:02d}")
-            if len(ledger):
-                logger.info(f"[ACCEPTANCE] {len(ledger)} record(s) rejected before classification for {year}-{month:02d}")
-
-            # An LLM error is not an acceptance: those records are neither stored
-            # nor marked processed, so a later run retries them.
-            classification_failed = [e for e in processed_events if e.classification_status == "failed"]
-            processed_events = [e for e in processed_events if e.classification_status != "failed"]
-
-            # Step 5: Store enriched events
-            logger.info(f"[PIPELINE] Starting to store {len(processed_events)} enriched events for {year}-{month:02d}")
-            enriched_events_stored = 0
-            enriched_event_ids = []
-            enriched_event_map = {}
-            processed_raw_event_ids = set()
-            successful_raw_event_ids = set()
-            failed_raw_event_ids = {
-                e.raw_event_id for e in classification_failed if getattr(e, "raw_event_id", None)
-            }
-            if classification_failed:
-                logger.warning(
-                    "[WARNING] %d event(s) could not be classified (LLM error); they stay unprocessed for retry",
-                    len(classification_failed),
-                )
-            failed_stores = 0
-            
-            for i, event in enumerate(processed_events):
-                if i % 10 == 0:  # Log every 10th event
-                    logger.info(f"[PIPELINE] Storing enriched event {i+1}/{len(processed_events)} for {year}-{month:02d}")
-                raw_event_id = getattr(event, "raw_event_id", None)
-                if raw_event_id:
-                    processed_raw_event_ids.add(raw_event_id)
-                enriched_event_id = await self._store_enriched_event(event, raw_event_id, year, month)
-                if enriched_event_id:
-                    enriched_events_stored += 1
-                    enriched_event_ids.append(enriched_event_id)
-                    enriched_event_map[enriched_event_id] = event
-                    if raw_event_id:
-                        successful_raw_event_ids.add(raw_event_id)
-                    # Log successful enrichment
-                    if raw_event_id:
-                        await self._log_processing_success(raw_event_id, 'enrichment', {
-                            'enriched_event_id': enriched_event_id,
-                            'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
-                            'evidence_basis': event.evidence_basis,
-                        })
-                else:
-                    failed_stores += 1
-                    if raw_event_id:
-                        failed_raw_event_ids.add(raw_event_id)
-                    
-            logger.info(f"[PIPELINE] Completed storing {enriched_events_stored} enriched events for {year}-{month:02d}")
-            
-            # Check if too many events failed to store
-            if failed_stores > 0:
-                failure_rate = failed_stores / len(processed_events)
-                logger.warning(f"[WARNING] {failed_stores}/{len(processed_events)} events failed to store ({failure_rate:.1%} failure rate)")
-                if failure_rate > 0.5:  # More than 50% failure rate
-                    logger.error(f"[CRITICAL] High failure rate ({failure_rate:.1%}) - stopping pipeline")
-                    raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%})")
-
-            # Records the ledger rejected were already marked processed with the
-            # stage and reason; re-marking them here would overwrite that with a
-            # generic message.  Classification failures stay unprocessed.
-            ledger_rejected_ids = {d.raw_event_id for d in ledger.rejected()}
-            filtered_raw_event_ids = (
-                set(raw_event_ids) - processed_raw_event_ids - ledger_rejected_ids - failed_raw_event_ids
-            )
-            raw_events_to_mark = successful_raw_event_ids | filtered_raw_event_ids
-
-            logger.info(f"[PIPELINE] Marking {len(raw_events_to_mark)} raw events as processed for {year}-{month:02d}")
-            for i, raw_event_id in enumerate(sorted(raw_events_to_mark)):
-                if i % 20 == 0:  # Log every 20th event
-                    logger.info(f"[PIPELINE] Marking raw event {i+1}/{len(raw_events_to_mark)} as processed for {year}-{month:02d}")
-                error_message = None
-                if raw_event_id in filtered_raw_event_ids:
-                    error_message = "Filtered out during processing"
-                self.db.mark_raw_event_processed(raw_event_id, error_message=error_message)
-            logger.info(f"[PIPELINE] Completed marking processed raw events for {year}-{month:02d}")
-
-            if failed_raw_event_ids:
-                logger.warning(
-                    "[WARNING] %d raw events failed to store enriched data and will remain unprocessed for retry",
-                    len(failed_raw_event_ids),
-                )
-
-            # Step 6: Deduplicate events (within this month only)
-            # Initialize defaults so these variables are always defined even when
-            # deduplication is disabled (avoids NameError on the confidence filter below).
-            deduplicated_events = processed_events  # Default: all processed events pass through
-            deduplicated_events_stored = 0
-
-            if collector.config.enable_deduplication:
-                logger.info(f"[PIPELINE] Loading enriched events from database for deduplication for {year}-{month:02d}")
-                # Load enriched events from database for this month to ensure we have the proper dates
-                enriched_events_from_db = []
-                for enriched_event_id in enriched_event_ids:
-                    try:
-                        with self.db._lock:
-                            cursor = self.db._conn.cursor()
-                            cursor.execute("""
-                                SELECT
-                                    enriched_event_id, title, description, summary, event_type, severity,
-                                    event_date, records_affected, is_australian_event, is_specific_event,
-                                    confidence_score, australian_relevance_score
-                                FROM EnrichedEvents
-                                WHERE enriched_event_id = ? AND status = 'Active'
-                            """, (enriched_event_id,))
-                            row = cursor.fetchone()
-                            if row:
-                                enriched_events_from_db.append(dict(row))
-                    except Exception as e:
-                        logger.warning(f"[WARNING] Failed to load enriched event {enriched_event_id}: {e}")
-
-                logger.info(f"[PIPELINE] Loaded {len(enriched_events_from_db)} enriched events for deduplication for {year}-{month:02d}")
-
-                # Validate all database rows before processing
-                enriched_events_from_db = [
-                    validate_enriched_event_row(row) for row in enriched_events_from_db
-                ]
-
-                # Convert database records back to CyberEvent objects for deduplication
-                enriched_cyber_events = []
-                for db_event in enriched_events_from_db:
-                    # Find corresponding processed event to get full object structure
-                    event_id = safe_str(db_event.get('enriched_event_id'))
-                    if not event_id:
-                        logger.warning("[DEDUP] Skipping db_event with missing enriched_event_id")
-                        continue
-
-                    matching_event = enriched_event_map.get(event_id)
-
-                    if matching_event:
-                        # Create a copy and update with database values
-                        event_copy = matching_event.model_copy(deep=True)
-                        parsed_date = safe_date(db_event.get('event_date'), field_name='event_date')
-                        if parsed_date:
-                            event_copy.event_date = parsed_date
-                        enriched_cyber_events.append(event_copy)
-
-                # Step 7: Store enriched events (no deduplication yet)
-                logger.info(f"[PIPELINE] Storing {len(enriched_cyber_events)} enriched events for {year}-{month:02d}")
-                # Store enriched events directly without deduplication
-                enriched_events_stored = len(enriched_cyber_events)
-                deduplicated_events = enriched_cyber_events
-                deduplicated_events_stored = 0  # No deduplication at month level
-
-            # Final filtering by confidence
-            high_confidence_events = [
-                event for event in deduplicated_events
-                if event.confidence.overall >= collector.config.confidence_threshold
-            ]
-            if len(high_confidence_events) < len(deduplicated_events):
-                logger.info(
-                    f"Confidence filter: {len(deduplicated_events)} -> {len(high_confidence_events)} events "
-                    f"(threshold: {collector.config.confidence_threshold})"
-                )
+            # Steps 3-5: scrape, page gate, classify, store - the same path the
+            # retry queue uses.
+            outcome = await self._process_stored_records(
+                collector, all_raw_events, raw_event_ids, f"{year}-{month:02d}")
+            enriched_events_stored = len(outcome["enriched_event_ids"])
+            # No confidence threshold is applied here.  The old "final filtering
+            # by confidence" ran after the records were stored and excluded
+            # nothing downstream; an uncalibrated cut-off may not drop records
+            # (see docs/04-event-filtering.md), so it is gone rather than
+            # moved before storage.
 
             events_for_month = len(all_raw_events)  # Count original raw events for the month tracking
 
-            logger.info(f"[STORAGE] Month {year}-{month:02d}: {raw_events_stored} raw, {enriched_events_stored} enriched, {deduplicated_events_stored} deduplicated events stored")
+            logger.info(f"[STORAGE] Month {year}-{month:02d}: {raw_events_stored} raw, {enriched_events_stored} enriched events stored")
 
-            # Mark month as processed
-            self.db.mark_month_as_processed(
-                year=year,
-                month=month,
-                total_raw_events=events_for_month,
-                processing_notes=f"Processed with sources: {', '.join(source_types)}"
-            )
-
-            logger.info(f"[SUCCESS] Month {year}-{month:02d} complete: {events_for_month} events stored")
+            # MonthProcessed records that the month's discovery searches ran.
+            # Whether every record found has been processed is tracked per
+            # source in SourceMonthCompletion; pending records are retried
+            # from the queue on the next run without searching again.
+            pending = sum(row["pending"] for row in self.retry_queue.completion(year, month))
+            notes = f"Processed with sources: {', '.join(source_types)}"
+            if pending:
+                notes += f"; {pending} record(s) pending retry"
+                logger.warning(f"[RETRY] Month {year}-{month:02d} is incomplete: {pending} record(s) pending retry")
+            if failed_sources:
+                # Never record an empty or partial search as the month's answer.
+                self.stats['source_months_failed'] += len(failed_sources)
+                for source_type, failures in sorted(failed_sources.items()):
+                    logger.error("[DISCOVERY] %s search of %d-%02d lost results (%d failure(s), first: %s); the "
+                                 "month stays unprocessed and is searched again next run",
+                                 source_type, year, month, len(failures), failures[0] if failures else "?")
+            else:
+                self.db.mark_month_as_processed(
+                    year=year,
+                    month=month,
+                    total_raw_events=events_for_month,
+                    processing_notes=notes,
+                )
+                logger.info(f"[SUCCESS] Month {year}-{month:02d} complete: {events_for_month} events stored")
 
             # Note: Cross-month deduplication removed - will be handled globally
 
@@ -595,6 +500,334 @@ class EventDiscoveryEnrichmentPipeline:
             raise
 
         return events_for_month
+
+    # =========================================================================
+    # PROCESSING STORED RECORDS (new discoveries and the retry queue)
+    # =========================================================================
+
+    async def _collect_source(self, name: str, source: Any, date_range: DateRange):
+        """Collect from one source: ``(name, events, failures)``; a raised error is a failure."""
+        try:
+            events = await source.collect_events(date_range)
+        except Exception as exc:  # recorded as a failed source-month, never as "no events"
+            logger.error("[DISCOVERY] Collecting from %s failed: %s", name, exc)
+            return name, [], [f"collection raised {type(exc).__name__}: {exc}"[:500]]
+        failures = list(getattr(source, "collection_failures", []) or [])
+        logger.info("[DISCOVERY] %s: %d event(s)%s", name, len(events or []),
+                    f", {len(failures)} failure(s)" if failures else "")
+        return name, list(events or []), failures
+
+    def require_prerequisites(self) -> None:
+        """Raise unless every model discovery depends on is configured.
+
+        No silent fallbacks: without OpenAI the classifier used to return
+        events unclassified (and they were stored); without Jev the page gate
+        cannot decide. Both now stop the run before any discovery spend.
+        """
+        self.page_gate.require_available()
+        if not (self.env_config.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")):
+            raise RuntimeError("OPENAI_API_KEY is not configured: discovered records cannot be classified. "
+                               "Discovery does not run without it.")
+
+    def _make_collector(self) -> Any:
+        """A collector with no data source enabled, for processing stored records."""
+        now = datetime.now()
+        config = self._build_collection_config([], 1000, DateRange(start_date=now - timedelta(days=30), end_date=now))
+        return CyberDataCollector(config, ".env", db_path=self.db_path)
+
+    async def drain_retry_queue(self, now: Optional[datetime] = None, limit: Optional[int] = None) -> Dict[str, int]:
+        """Process stored records that are neither processed nor rejected.
+
+        Every discovery run calls this first. A record whose back-off has not
+        expired waits; a temporary failure (timeout, rate limit, outage, API
+        budget) is retried indefinitely; a permanent one is quarantined after
+        ``retry_queue.MAX_PERMANENT_ATTEMPTS``.
+
+        Returns:
+            ``{'due': n, 'completed': n, 'waiting': n}``
+        """
+        due = self.retry_queue.due(now=now, limit=limit)
+        waiting = self.retry_queue.waiting(now=now)
+        self.stats['retry_due'] += len(due)
+        if not due:
+            logger.info("[RETRY] No stored records awaiting processing" +
+                        (f" ({waiting} waiting for back-off)" if waiting else ""))
+            return {"due": 0, "completed": 0, "waiting": waiting}
+
+        logger.info("[RETRY] Draining %d stored-but-unprocessed record(s) before discovery (%d waiting for back-off)",
+                    len(due), waiting)
+        events = [self._event_from_raw_row(row) for row in due]
+        ids = [row["raw_event_id"] for row in due]
+        outcome = await self._process_stored_records(self._make_collector(), events, ids, "retry queue")
+        completed = len(outcome["completed_ids"])
+        self.stats['retry_completed'] += completed
+        logger.info("[RETRY] Retry queue: %d of %d record(s) finished; %d still pending", completed, len(due),
+                    len(due) - completed)
+        return {"due": len(due), "completed": completed, "waiting": waiting}
+
+    @staticmethod
+    def _event_from_raw_row(row: Dict[str, Any]) -> CyberEvent:
+        """Rebuild the in-memory event discovery would have held for a stored record.
+
+        Only what discovery stored is available - title, snippet, URL, dates
+        and the metadata recorded at storage; classification reads the
+        persisted article through ``prepare_records_for_processing`` anyway.
+        """
+        try:
+            metadata = json.loads(row.get("source_metadata") or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        def _when(value: Any) -> Optional[datetime]:
+            parsed = _parse_event_date(value)
+            return datetime(parsed.year, parsed.month, parsed.day) if parsed else None
+
+        try:
+            confidence = float(metadata.get("confidence"))
+        except (TypeError, ValueError):
+            confidence = 0.5
+        confidence = min(1.0, max(0.0, confidence))
+        source_type = row.get("source_type") or "Unknown"
+        description = row.get("raw_description") or ""
+        return CyberEvent(
+            title=row.get("raw_title") or "Untitled Event",
+            description=description,
+            event_type=CyberEventType.OTHER,
+            severity=EventSeverity.UNKNOWN,
+            event_date=_when(row.get("event_date")),
+            australian_relevance=bool(metadata.get("australian_relevance") or False),
+            confidence=ConfidenceScore(overall=confidence, source_reliability=0.5, data_completeness=0.5,
+                                       temporal_accuracy=0.5, geographic_accuracy=0.5),
+            data_sources=[EventSource(
+                source_id=row["raw_event_id"], source_type=source_type, url=row.get("source_url"),
+                title=row.get("raw_title"), content_snippet=description or None,
+                publication_date=_when(metadata.get("publication_date")),
+                credibility_score=0.5, relevance_score=0.5,
+            )],
+            raw_event_id=row["raw_event_id"],
+        )
+
+    async def _process_stored_records(
+        self,
+        collector: Any,
+        events: List[Any],
+        raw_event_ids: List[str],
+        label: str,
+    ) -> Dict[str, Any]:
+        """Scrape, gate, classify and store records already in ``RawEvents``.
+
+        The one path for a month's new records and for the retry queue. Every
+        record ends this call finished (processed, or rejected with a stage
+        and reason) or still pending with its failure recorded in the retry
+        queue - never silently dropped.
+
+        Raises:
+            PageGateUnavailable: Jev is not configured or kept failing; the
+                record that failed is queued as a temporary failure and the
+                rest stay pending.
+        """
+        # Step 3: Scrape URL content.  A filter that rejects a record writes
+        # that decision to the ledger; it is persisted so it holds for every
+        # later stage, run and entry point.
+        ledger = AcceptanceLedger()
+        logger.info(f"[PIPELINE] Scraping URLs for {label}")
+        scraped_count = await self._scrape_raw_events_for_month(raw_event_ids, ledger)
+        logger.info(f"[SCRAPED] Successfully scraped {scraped_count} URLs for {label}")
+
+        # Step 3b: the page gate judges what scraping stored.
+        held_ids = self._apply_page_gate(raw_event_ids, ledger, label)
+
+        # Step 4: Process events (entity extraction, LLM classification) from
+        # what scraping persisted - not the pre-scrape in-memory objects.
+        logger.info(f"[PIPELINE] Processing events for {label}")
+        to_process = [e for e in events if getattr(e, "raw_event_id", None) not in held_ids]
+        processed_events = await self._process_persisted_records(collector, to_process, ledger)
+        logger.info(f"[PROCESSED] Enhanced {len(processed_events)} events for {label}")
+        if len(ledger):
+            logger.info(f"[ACCEPTANCE] {len(ledger)} record(s) rejected before classification for {label}")
+
+        # An LLM error is not an acceptance: those records are neither stored
+        # nor marked processed; the retry queue records why and when to retry.
+        for event in processed_events:
+            if event.classification_status not in ("classified", "failed"):
+                # Never stored as an incident: nothing judged it.
+                event.classification_error = (f"classifier returned the record with status "
+                                              f"'{event.classification_status}', not 'classified'")
+                event.classification_error_kind = KIND_PERMANENT
+                event.classification_status = "failed"
+        classification_failed = [e for e in processed_events if e.classification_status == "failed"]
+        processed_events = [e for e in processed_events if e.classification_status == "classified"]
+        failed_raw_event_ids = set()
+        for event in classification_failed:
+            raw_event_id = getattr(event, "raw_event_id", None)
+            if not raw_event_id:
+                continue
+            failed_raw_event_ids.add(raw_event_id)
+            self._queue_failure(raw_event_id, "classification",
+                                event.classification_error or "classification failed",
+                                event.classification_error_kind or KIND_PERMANENT)
+        if classification_failed:
+            logger.warning(
+                "[WARNING] %d event(s) could not be classified; they stay in the retry queue",
+                len(classification_failed),
+            )
+
+        # Step 5: Store enriched events
+        logger.info(f"[PIPELINE] Starting to store {len(processed_events)} enriched events for {label}")
+        enriched_event_ids = []
+        enriched_event_map = {}
+        processed_raw_event_ids = set()
+        successful_raw_event_ids = set()
+        failed_stores = 0
+
+        for i, event in enumerate(processed_events):
+            if i % 10 == 0:  # Log every 10th event
+                logger.info(f"[PIPELINE] Storing enriched event {i+1}/{len(processed_events)} for {label}")
+            raw_event_id = getattr(event, "raw_event_id", None)
+            if raw_event_id:
+                processed_raw_event_ids.add(raw_event_id)
+            enriched_event_id = await self._store_enriched_event(event, raw_event_id)
+            if enriched_event_id:
+                enriched_event_ids.append(enriched_event_id)
+                enriched_event_map[enriched_event_id] = event
+                if raw_event_id:
+                    successful_raw_event_ids.add(raw_event_id)
+                    await self._log_processing_success(raw_event_id, 'enrichment', {
+                        'enriched_event_id': enriched_event_id,
+                        'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
+                        'evidence_basis': event.evidence_basis,
+                    })
+            else:
+                failed_stores += 1
+                if raw_event_id:
+                    failed_raw_event_ids.add(raw_event_id)
+                    self._queue_failure(raw_event_id, "store_enriched", "enriched event could not be stored",
+                                        KIND_PERMANENT)
+
+        logger.info(f"[PIPELINE] Completed storing {len(enriched_event_ids)} enriched events for {label}")
+
+        # Check if too many events failed to store
+        if failed_stores > 0:
+            failure_rate = failed_stores / len(processed_events)
+            logger.warning(f"[WARNING] {failed_stores}/{len(processed_events)} events failed to store ({failure_rate:.1%} failure rate)")
+            if failure_rate > 0.5:  # More than 50% failure rate
+                logger.error(f"[CRITICAL] High failure rate ({failure_rate:.1%}) - stopping pipeline")
+                raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%})")
+
+        # Records the ledger rejected were already marked processed with the
+        # stage and reason; re-marking them here would overwrite that with a
+        # generic message.  Failed and held records stay unprocessed.
+        ledger_rejected_ids = {d.raw_event_id for d in ledger.rejected()}
+        filtered_raw_event_ids = (
+            set(raw_event_ids) - processed_raw_event_ids - ledger_rejected_ids - failed_raw_event_ids - held_ids
+        )
+        raw_events_to_mark = successful_raw_event_ids | filtered_raw_event_ids
+
+        logger.info(f"[PIPELINE] Marking {len(raw_events_to_mark)} raw events as processed for {label}")
+        for raw_event_id in sorted(raw_events_to_mark):
+            error_message = None
+            if raw_event_id in filtered_raw_event_ids:
+                error_message = "Filtered out during processing"
+            self.db.mark_raw_event_processed(raw_event_id, error_message=error_message)
+        completed_ids = raw_events_to_mark | (ledger_rejected_ids & set(raw_event_ids))
+        self.retry_queue.record_success(completed_ids)
+
+        pending = failed_raw_event_ids | held_ids
+        if pending:
+            logger.warning(
+                "[RETRY] %d record(s) for %s remain unprocessed and will be retried from the queue",
+                len(pending), label,
+            )
+        return {
+            "processed_events": processed_events,
+            "enriched_event_ids": enriched_event_ids,
+            "enriched_event_map": enriched_event_map,
+            "completed_ids": completed_ids,
+            "pending_ids": pending,
+        }
+
+    def _queue_failure(self, raw_event_id: str, stage: str, error: str, kind: str) -> str:
+        outcome = self.retry_queue.record_failure(raw_event_id, stage, error, kind)
+        key = 'records_failed_temporary' if kind == KIND_TEMPORARY else 'records_failed_permanent'
+        self.stats[key] += 1
+        if outcome == "quarantined":
+            self.stats['records_quarantined'] += 1
+        return outcome
+
+    def _apply_page_gate(self, raw_event_ids: List[str], ledger: AcceptanceLedger, label: str) -> set:
+        """Judge each new, unrejected record's stored page; reject where calibrated.
+
+        Returns the ids *held* this run (not judged because the TypeSafe budget
+        ran out): they stay pending, are not classified, and are retried.
+
+        Raises:
+            PageGateUnavailable: Jev is not configured or kept failing.
+        """
+        rows = []
+        with self.db._lock:
+            cursor = self.db._conn.cursor()
+            for raw_event_id in raw_event_ids:
+                if ledger.is_rejected(raw_event_id):
+                    continue
+                cursor.execute(
+                    "SELECT raw_event_id, source_type, raw_title, raw_description, raw_content, source_url "
+                    "FROM RawEvents WHERE raw_event_id = ? AND COALESCE(is_processed, 0) = 0",
+                    (raw_event_id,))
+                row = cursor.fetchone()
+                if row:
+                    rows.append(dict(row))
+        held: set = set()
+        decisions: List[GateDecision] = []
+        for index, row in enumerate(rows):
+            try:
+                decision = self.page_gate.decide(row)
+            except PageGateUnavailable as exc:
+                if is_budget_refusal(exc):
+                    # The documented budget behaviour: stop asking, leave the
+                    # rest for the next run (the run ends degraded).
+                    for remaining in rows[index:]:
+                        held.add(remaining["raw_event_id"])
+                        self._queue_failure(remaining["raw_event_id"], STAGE_PAGE_GATE, str(exc), KIND_TEMPORARY)
+                    logger.warning("[PAGE_GATE] TypeSafe budget exhausted: %d record(s) held for the next run",
+                                   len(rows) - index)
+                    break
+                self._queue_failure(row["raw_event_id"], STAGE_PAGE_GATE, str(exc), KIND_TEMPORARY)
+                persist_rejections(self.db, ledger)
+                logger.error("[PAGE_GATE] Jev unavailable - stopping discovery; %s", exc)
+                raise
+            decisions.append(decision)
+            if decision.dropped:
+                ledger.reject(decision.raw_event_id, STAGE_PAGE_GATE, decision.reason)
+            self.db.log_processing_attempt(
+                decision.raw_event_id, STAGE_PAGE_GATE,
+                "rejected" if decision.dropped else "would_drop" if decision.below_cutoff
+                else "kept" if decision.judged else "not_judged",
+                result_data={"probability": decision.probability, "cutoff": self.page_gate.cutoff,
+                             "enforced": self.page_gate.is_enforcing(decision.source_type),
+                             "reason": decision.reason},
+            )
+        if decisions:
+            dropped = sum(d.dropped for d in decisions)
+            would = sum(d.below_cutoff and not d.dropped for d in decisions)
+            logger.info("[PAGE_GATE] %s: judged %d, not judgeable %d, dropped %d, would drop (report-only) %d",
+                        label, sum(d.judged for d in decisions), sum(not d.judged for d in decisions), dropped, would)
+        return held
+
+    def report_incomplete_months(self) -> List[Dict[str, Any]]:
+        """Log every source-month that still has records pending; return them."""
+        incomplete = self.retry_queue.incomplete_months()
+        for row in incomplete:
+            logger.warning(
+                "[RETRY] %s %d-%02d incomplete: %d of %d record(s) pending (%d failing)",
+                row["source_type"], row["discovery_year"], row["discovery_month"], row["pending"], row["stored"],
+                row["failing"],
+            )
+        if self.stats['records_quarantined']:
+            logger.error("[RETRY] %d record(s) quarantined this run after repeated permanent failures; "
+                         "see python scripts/discovery_queue.py status", self.stats['records_quarantined'])
+        return incomplete
 
     async def _process_persisted_records(
         self,
@@ -736,6 +969,12 @@ class EventDiscoveryEnrichmentPipeline:
 
             if not raw_event_id:
                 logger.warning(f"[WARNING] No raw_event_id provided for event: {event.title[:50]}...")
+                return None
+            if getattr(event, "classification_status", None) != "classified":
+                # Storage marks every row a specific incident, so an event the
+                # classifier did not judge must never reach it.
+                logger.error("[ENRICHED] Refusing to store unclassified event '%s' (status %r)",
+                             event.title[:50], getattr(event, "classification_status", None))
                 return None
 
             logger.debug(f"[ENRICHED] Processing event data...")
@@ -1452,8 +1691,9 @@ class EventDiscoveryEnrichmentPipeline:
         """
         Scrape URLs for specific raw events from the current month.
 
-        Every record a filter rejects (blocked domain, RF pre-filter, RF content
-        filter) is recorded in *ledger* so later stages do not process it.
+        A record on a blocked domain is rejected in *ledger* so later stages do
+        not process it.  Nothing else is dropped before scraping: judging a
+        page needs its text, which the page gate does afterwards.
         Returns the number of events successfully scraped.
         """
         if ledger is None:
@@ -1489,14 +1729,13 @@ class EventDiscoveryEnrichmentPipeline:
             logger.debug("[SCRAPING] No events have URLs to scrape for this month")
             return 0
 
-        # PRE-SCRAPE FILTERING: drop URLs we know we cannot scrape and obvious
-        # non-cyber content based on title+URL alone. Saves Playwright + Perplexity
-        # roundtrips on events that would be filtered out post-scrape anyway.
+        # PRE-SCRAPE: only social/profile/marketplace domains are skipped.  No
+        # record is dropped on its title or URL alone (the retired Random
+        # Forest pre-filter did that and lost real incidents).
         scraped_count = 0
         failed_scrapes = []
         events_after_prefilter = []
         prefilter_blocked = 0
-        prefilter_rf_filtered = 0
 
         for event in events_with_urls:
             url = event.get('source_url') or ''
@@ -1516,28 +1755,10 @@ class EventDiscoveryEnrichmentPipeline:
                 })
                 continue
 
-            # Pre-scrape RF filter on title + URL alone. We only act on a
-            # *negative* prediction here, since title+URL is a weaker signal than
-            # full content; the post-scrape RF pass remains the authoritative one.
-            if self._apply_rf_url_prefilter(event):
-                events_after_prefilter.append(event)
-            else:
-                prefilter_rf_filtered += 1
-                ledger.reject(event['raw_event_id'], STAGE_RF_URL_PREFILTER,
-                              'title+URL classified as non-cyber before scraping')
-                failed_scrapes.append({
-                    'title': title[:50] if title else 'Unknown',
-                    'url': url or 'No URL',
-                    'reason': 'Pre-scrape RF filter rejected (title+URL non-cyber)',
-                    'perplexity_attempted': False,
-                    'perplexity_succeeded': False,
-                })
+            events_after_prefilter.append(event)
 
-        if prefilter_blocked or prefilter_rf_filtered:
-            logger.info(
-                f"[SCRAPING] Pre-filter dropped {prefilter_blocked + prefilter_rf_filtered} URLs "
-                f"({prefilter_blocked} blocked-domain, {prefilter_rf_filtered} RF pre-filter)"
-            )
+        if prefilter_blocked:
+            logger.info(f"[SCRAPING] Skipped {prefilter_blocked} blocked-domain URLs")
 
         if not events_after_prefilter:
             logger.info("[SCRAPING] All candidate URLs dropped by pre-filter; nothing to scrape")
@@ -1564,21 +1785,8 @@ class EventDiscoveryEnrichmentPipeline:
                 try:
                     scrape_result = await asyncio.wait_for(result, timeout=120.0)  # 2 minute timeout
                     if scrape_result['success']:
-                        # Apply Random Forest content filtering for all events
-                        if not self._apply_rf_content_filter(scrape_result['event']):
-                            # Content was filtered out.  Record the rejection so
-                            # the record stops here instead of being classified
-                            # and stored as if it had passed.
-                            ledger.reject(scrape_result['event']['raw_event_id'], STAGE_RF_CONTENT_FILTER,
-                                          'scraped content classified as non-cyber (Random Forest filter)')
-                            failed_scrapes.append({
-                                'title': scrape_result['event']['raw_title'][:50] if scrape_result['event'].get('raw_title') else 'Unknown',
-                                'url': scrape_result['event'].get('source_url', 'No URL'),
-                                'reason': 'Content filtered out as non-cyber (Random Forest filter)',
-                                'perplexity_attempted': scrape_result.get('perplexity_attempted', False),
-                                'perplexity_succeeded': scrape_result.get('perplexity_succeeded', False)
-                            })
-                            continue
+                        # The page gate judges the stored page after scraping
+                        # (``_apply_page_gate``), not here.
                         scraped_count += 1
                     else:
                         # Track failed scrapes for summary with Perplexity details
@@ -1628,127 +1836,6 @@ class EventDiscoveryEnrichmentPipeline:
         if len(failed_scrapes) > 10:
             logger.info(f"[SCRAPING] ... and {len(failed_scrapes) - 10} more failures")
 
-    def _apply_rf_url_prefilter(self, event: Dict[str, Any]) -> bool:
-        """Run RF filter on title + URL only, BEFORE scraping.
-
-        Returns True if the event should proceed to scraping. We are deliberately
-        conservative here: title+URL alone is a weaker signal than full content,
-        so we trust a *negative* RF prediction only when its confidence is
-        meaningfully low (< 0.4). The post-scrape RF pass remains authoritative
-        for borderline cases.
-
-        The win: events where title+URL alone clearly indicate non-cyber content
-        (vendor homepages, generic threat reports, profile pages that slip past
-        the blocked-domain list) are dropped without paying for Playwright +
-        Perplexity. In production, these are the events that consistently end up
-        as "Content filtered out as non-cyber (Random Forest filter)" post-scrape.
-        """
-        try:
-            url = event.get('source_url') or ''
-            title = event.get('raw_title') or ''
-            source_type = event.get('source_type') or ''
-
-            # If we don't already have source_type on the event dict, fetch it
-            if not source_type:
-                with self.db._lock:
-                    cursor = self.db._conn.cursor()
-                    cursor.execute(
-                        "SELECT source_type FROM RawEvents WHERE raw_event_id = ?",
-                        (event.get('raw_event_id'),),
-                    )
-                    row = cursor.fetchone()
-                    if row:
-                        source_type = row[0] or ''
-
-            filter_result = self.filter_system.should_keep_event(
-                source_type=source_type,
-                title=title,
-                description="",
-                content="",
-                url=url,
-            )
-            # Conservative: only drop when the model is confidently negative.
-            if not filter_result.is_cyber_relevant and filter_result.confidence_score < 0.4:
-                return False
-            return True
-
-        except Exception as exc:
-            logger.debug(f"[RF_FILTER] Pre-scrape filter error (keeping event): {exc}")
-            return True
-
-    def _apply_rf_content_filter(self, event: Dict[str, Any]) -> bool:
-        """Apply Random Forest content filtering to determine if event should be kept."""
-        try:
-            # Get the scraped content from the database
-            with self.db._lock:
-                cursor = self.db._conn.cursor()
-                cursor.execute("""
-                    SELECT raw_title, raw_description, raw_content, source_url, source_type FROM RawEvents WHERE raw_event_id = ?
-                """, (event.get('raw_event_id'),))
-                result = cursor.fetchone()
-                if not result:
-                    return False
-
-                title, description, content, url, source_type = result
-
-            # Use the Random Forest filtering system
-            filter_result = self.filter_system.should_keep_event(
-                source_type=source_type or "",
-                title=title or "",
-                description=description or "",
-                content=content or "",
-                url=url or ""
-            )
-
-            # Store the confidence score in the raw event metadata for later use
-            if filter_result.confidence_score is not None:
-                self._update_raw_event_confidence(event.get('raw_event_id'), filter_result)
-
-            return filter_result.is_cyber_relevant
-
-        except Exception as e:
-            logger.debug(f"[RF_FILTER] Error applying Random Forest filter: {e}")
-            # If filtering fails, err on the side of caution and keep the event
-            return True
-
-    def _update_raw_event_confidence(self, raw_event_id: str, filter_result):
-        """Update raw event with confidence score and filtering metadata."""
-        try:
-            # Update the raw event with confidence information
-            with self.db._lock:
-                cursor = self.db._conn.cursor()
-
-                # Get existing metadata
-                cursor.execute("""
-                    SELECT source_metadata FROM RawEvents WHERE raw_event_id = ?
-                """, (raw_event_id,))
-                result = cursor.fetchone()
-
-                existing_metadata = {}
-                if result and result[0]:
-                    try:
-                        existing_metadata = json.loads(result[0])
-                    except (json.JSONDecodeError, TypeError):
-                        existing_metadata = {}
-
-                # Add filtering information
-                existing_metadata.update({
-                    'content_filter_confidence': filter_result.confidence_score,
-                    'content_filter_reasoning': filter_result.reasoning,
-                    'content_filter_stage': filter_result.stage,
-                    'content_filter_risk_level': filter_result.risk_level
-                })
-
-                # Update the metadata
-                cursor.execute("""
-                    UPDATE RawEvents SET source_metadata = ? WHERE raw_event_id = ?
-                """, (safe_json_dumps(existing_metadata, "existing metadata payload"), raw_event_id))
-
-                self.db._conn.commit()
-
-        except Exception as e:
-            logger.warning(f"[WARNING] Failed to update raw event confidence: {e}")
-
     async def scrape_event_urls(self, max_events: Optional[int] = None, source_types: List[str] = None):
         """
         Scrape URLs from raw events to get full content using Playwright.
@@ -1770,15 +1857,14 @@ class EventDiscoveryEnrichmentPipeline:
         # Filter for events with URLs
         events_with_urls = [e for e in events_to_scrape if e.get('source_url')]
 
-        # Pre-scrape filter: drop blocked domains and obvious non-cyber URLs
-        # before paying Playwright + Perplexity round-trips.  Rejections are
-        # persisted: otherwise the later enrich_events() phase, which reads
-        # every unprocessed raw event, would classify them anyway.
+        # Pre-scrape: skip blocked domains only (nothing is dropped on title or
+        # URL alone).  Rejections are persisted: otherwise the later
+        # enrich_events() phase, which reads every unprocessed raw event, would
+        # classify them anyway.
         scraped_count = 0
         failed_scrapes = []
         events_after_prefilter = []
         prefilter_blocked = 0
-        prefilter_rf_filtered = 0
         ledger = AcceptanceLedger()
 
         for event in events_with_urls:
@@ -1796,25 +1882,12 @@ class EventDiscoveryEnrichmentPipeline:
                 })
                 continue
 
-            if self._apply_rf_url_prefilter(event):
-                events_after_prefilter.append(event)
-            else:
-                prefilter_rf_filtered += 1
-                ledger.reject(event['raw_event_id'], STAGE_RF_URL_PREFILTER,
-                              'title+URL classified as non-cyber before scraping')
-                failed_scrapes.append({
-                    'title': title[:50] if title else 'Unknown',
-                    'url': url or 'No URL',
-                    'reason': 'Pre-scrape RF filter rejected (title+URL non-cyber)',
-                })
+            events_after_prefilter.append(event)
 
         persist_rejections(self.db, ledger)
 
-        if prefilter_blocked or prefilter_rf_filtered:
-            logger.info(
-                f"[SCRAPING] Pre-filter dropped {prefilter_blocked + prefilter_rf_filtered} URLs "
-                f"({prefilter_blocked} blocked-domain, {prefilter_rf_filtered} RF pre-filter)"
-            )
+        if prefilter_blocked:
+            logger.info(f"[SCRAPING] Skipped {prefilter_blocked} blocked-domain URLs")
 
         events_with_urls = events_after_prefilter
         logger.info(f"[SCRAPING] Found {len(events_with_urls)} events with URLs to scrape")
@@ -1995,10 +2068,15 @@ class EventDiscoveryEnrichmentPipeline:
                 cursor.execute("""
                     UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = ?
                 """, (content, raw_event_id))
+                if cursor.rowcount != 1:
+                    raise RuntimeError(f"raw event {raw_event_id} not found; scraped content not stored")
                 self.db._conn.commit()
             except Exception as e:
+                # Raised, not swallowed: the caller reports the scrape as failed
+                # instead of logging success for content that was never stored.
                 logger.error(f"Failed to update raw event content: {e}")
                 self.db._conn.rollback()
+                raise
 
     # =========================================================================
     # ENRICHMENT PHASE
@@ -2035,6 +2113,8 @@ class EventDiscoveryEnrichmentPipeline:
                         pbar.set_postfix({"enriched": f"{enriched_count}/{len(events_to_process)}"})
                     else:
                         pbar.set_postfix({"skipped": "Not Australian/specific"})
+                except PageGateUnavailable:
+                    raise  # no silent fallback: the run stops, records stay unprocessed
                 except Exception as e:
                     logger.error(f"[ERROR] Enrichment error for {event.get('raw_title', 'Unknown')}: {e}")
                     self.stats['errors'] += 1
@@ -2058,6 +2138,15 @@ class EventDiscoveryEnrichmentPipeline:
         raw_event_id = raw_event['raw_event_id']
 
         try:
+            # The page gate first: a page that does not itself report an
+            # incident (where that is calibrated) is rejected before any LLM call.
+            decision = self.page_gate.decide(raw_event)
+            if decision.dropped:
+                ledger = AcceptanceLedger()
+                ledger.reject(raw_event_id, STAGE_PAGE_GATE, decision.reason)
+                persist_rejections(self.db, ledger)
+                return False
+
             # Prepare content for LLM analysis
             content = self._prepare_content_for_analysis(raw_event)
             if not content:
@@ -2089,70 +2178,13 @@ class EventDiscoveryEnrichmentPipeline:
                 processing_time_ms=processing_time_ms
             )
 
-            # Apply final stage filtering with Random Forest
-            content = self._prepare_content_for_analysis(raw_event)
-            final_filter_result = self.filter_system.should_keep_event(
-                source_type=raw_event.get('source_type', ''),
-                title=raw_event.get('raw_title', ''),
-                description=raw_event.get('raw_description', ''),
-                content=content or '',
-                url=raw_event.get('source_url', ''),
-                metadata={
-                    'llm_analysis': {
-                        'is_australian_event': enriched_data.is_australian_event,
-                        'is_specific_event': enriched_data.is_specific_event,
-                        'confidence_score': getattr(enriched_data, 'confidence_score', 0.7),
-                        'primary_entity': getattr(enriched_data, 'primary_entity', None)
-                    }
-                }
-            )
+            enriched_event_data = self._prepare_enriched_event_data(raw_event, enriched_data)
+            self.db.create_enriched_event(raw_event_id, enriched_event_data)
+            self.db.mark_raw_event_processed(raw_event_id)
+            return True
 
-            # Only create enriched event if it passes final filtering
-            if final_filter_result.is_cyber_relevant:
-                enriched_event_data = self._prepare_enriched_event_data(raw_event, enriched_data)
-                # Add final filtering confidence to the enriched event data
-                enriched_event_data['final_filter_confidence'] = final_filter_result.confidence_score
-                enriched_event_data['final_filter_reasoning'] = safe_json_dumps(
-                    final_filter_result.reasoning,
-                    "final filter reasoning",
-                )
-
-                enriched_event_id = self.db.create_enriched_event(raw_event_id, enriched_event_data)
-
-                # Log successful final filtering
-                self.db.log_processing_attempt(
-                    raw_event_id, 'final_filtering', 'success',
-                    result_data={
-                        'final_confidence': final_filter_result.confidence_score,
-                        'reasoning': final_filter_result.reasoning,
-                        'risk_level': final_filter_result.risk_level
-                    },
-                    processing_time_ms=processing_time_ms
-                )
-
-                # Mark raw event as processed
-                self.db.mark_raw_event_processed(raw_event_id)
-                return True
-            else:
-                # Event filtered out in final stage
-                reasons = final_filter_result.reasoning
-
-                self.db.log_processing_attempt(
-                    raw_event_id, 'final_filtering', 'filtered_out',
-                    result_data={
-                        'final_confidence': final_filter_result.confidence_score,
-                        'reasons': reasons,
-                        'risk_level': final_filter_result.risk_level,
-                        'llm_australian': enriched_data.is_australian_event,
-                        'llm_specific': enriched_data.is_specific_event
-                    },
-                    processing_time_ms=processing_time_ms
-                )
-
-                # Mark as processed but don't create enriched event
-                self.db.mark_raw_event_processed(raw_event_id)
-                return False
-
+        except PageGateUnavailable:
+            raise
         except Exception as e:
             processing_time_ms = int((time.time() - start_time) * 1000)
             self.db.log_processing_attempt(
@@ -2316,24 +2348,30 @@ class EventDiscoveryEnrichmentPipeline:
         print("="*60)
 
     def print_filtering_statistics(self):
-        """Print Random Forest filtering statistics for the current run"""
+        """Print the page gate's statistics and the retry queue for the current run."""
         print("\n" + "="*60)
-        print("[FILTERING] RANDOM FOREST FILTERING STATISTICS (CURRENT RUN)")
+        print("[FILTERING] PAGE GATE (Jev: does the page itself report an incident?)")
         print("="*60)
-
-        filter_stats = self.filter_system.get_filtering_statistics()
-
-        print(f"[RF_FILTER] Events processed: {filter_stats['events_processed']}")
-        print(f"[RF_FILTER] Events kept: {filter_stats['events_kept']} ({filter_stats['keep_rate']:.1%})")
-        print(f"[RF_FILTER] Events filtered: {filter_stats['events_filtered']} ({filter_stats['filter_rate']:.1%})")
-        print(f"[RF_FILTER] Prediction errors: {filter_stats['prediction_errors']} ({filter_stats['error_rate']:.1%})")
-
+        for line in self.page_gate.summary_lines():
+            print(f"[PAGE_GATE] {line}")
+        print(f"[RETRY] Records due from the retry queue: {self.stats['retry_due']}, "
+              f"finished: {self.stats['retry_completed']}")
+        print(f"[RETRY] Failures this run: {self.stats['records_failed_temporary']} temporary, "
+              f"{self.stats['records_failed_permanent']} permanent, "
+              f"{self.stats['records_quarantined']} quarantined")
+        try:
+            for row in self.retry_queue.incomplete_months():
+                print(f"[RETRY] Incomplete: {row['source_type']} {row['discovery_year']}-{row['discovery_month']:02d} "
+                      f"- {row['pending']} of {row['stored']} pending")
+        except Exception as exc:  # reporting must not hide the run's real outcome
+            print(f"[WARNING] Could not read source-month completion: {exc}")
         print("="*60)
 
     def close(self):
         """Clean up resources"""
-        # Log final filtering summary
-        self.filter_system.log_filtering_summary()
+        for line in self.page_gate.summary_lines():
+            logger.info(f"[PAGE_GATE] {line}")
+        self.page_gate.close()
         self.db.close()
 
 
