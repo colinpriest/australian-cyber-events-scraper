@@ -14,9 +14,9 @@
         0
       ],
       "exposure_days": [
-        0.0,
-        0.0,
-        0.0
+        2.0,
+        6.0,
+        5.0
       ]
     },
     {
@@ -28,9 +28,9 @@
         0
       ],
       "exposure_days": [
-        0.0,
-        0.0,
-        0.0
+        17.0,
+        14.0,
+        19.0
       ]
     },
     {
@@ -42,9 +42,9 @@
         0
       ],
       "exposure_days": [
-        0.0,
-        0.0,
-        0.0
+        7.0,
+        11.0,
+        12.0
       ]
     },
     {
@@ -56,9 +56,9 @@
         0
       ],
       "exposure_days": [
-        0.0,
-        0.0,
-        0.0
+        1.0,
+        6.0,
+        7.0
       ]
     },
     {
@@ -70,13 +70,19 @@
         0
       ],
       "exposure_days": [
-        0.0,
-        0.0,
-        0.0
+        2.0,
+        5.0,
+        5.0
       ]
     }
   ],
-  "supported_strata": [],
+  "supported_strata": [
+    "SMALL",
+    "MEDIUM",
+    "LARGE",
+    "HUGE",
+    "UNKNOWN"
+  ],
   "peak_events_supported": 0,
   "comparison_events_supported": 0,
   "minimum_events": 20,

@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+from contextlib import closing
 import argparse
 import json
 import math
@@ -349,7 +350,7 @@ def last_ingest_date(db_path: Path) -> date:
     Censoring at a hard-coded date goes stale after every refresh: events
     ingested since then would be dropped and their spells cut short.
     """
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute("SELECT MAX(discovered_at) FROM RawEvents").fetchone()
     if not row or not row[0]:
         raise RuntimeError("RawEvents has no discovered_at; pass --censor-date explicitly.")
@@ -395,7 +396,7 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
           AND TRIM(v.entity_name) != ''
         ORDER BY v.entity_name COLLATE NOCASE, d.event_date, d.title
     """
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         df = pd.read_sql_query(query, conn)
         if df.empty:
             raise RuntimeError("No victim events found for recurrent timing analysis.")

@@ -4,6 +4,7 @@ All scenarios operate on copies of the analysis cohort; the database is read onl
 """
 from __future__ import annotations
 
+from contextlib import closing
 import math
 import sqlite3
 from collections import defaultdict
@@ -100,7 +101,7 @@ def _has_columns(connection, table, required):
 
 def _evidence(db_path, ids):
     # as_uri handles spaces and Windows drive letters; mode=ro prevents creation or writes.
-    with sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
         db.execute('BEGIN')
         overrides_available = (_has_columns(db, 'DedupOverrides', ['left_enriched_event_id', 'right_enriched_event_id', 'verdict', 'active']) and

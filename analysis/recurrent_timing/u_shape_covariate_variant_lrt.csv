@@ -1,5 +1,5 @@
 variant,variant_label,excluded_covariates,phase_terms,likelihood_ratio,df,p_value,u_shape_intersection_p_value
-all_covariates,All covariates,,2,7.585731942263919,2,0.0225309362176891,0.019051693364445246
-drop_size,Drop organisation size,"org_size_score, org_size_unknown",2,8.512356420988908,2,0.01417637814452681,0.021100755949959502
-drop_industry,Drop industry/sector,sector_proxy,2,7.215291068959118,2,0.02711561454700614,0.018732046222205333
-drop_size_and_industry,Drop size and industry/sector,"org_size_score, org_size_unknown, sector_proxy",2,8.685161535938164,2,0.01300292732570626,0.023031919856502128
+all_covariates,All covariates,,2,5.817735541430579,2,0.0545374438164301,0.3689397239571679
+drop_size,Drop organisation size,"org_size_score, org_size_unknown",2,6.803087706902488,2,0.03332178627417768,0.3712818283458122
+drop_industry,Drop industry/sector,sector_proxy,2,6.744248261868222,2,0.03431666677793288,0.35603531001218147
+drop_size_and_industry,Drop size and industry/sector,"org_size_score, org_size_unknown, sector_proxy",2,8.354346154808013,2,0.015341816450039413,0.3608476833653195

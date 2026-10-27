@@ -1,32 +1,30 @@
 size,prior_attack_type,next_attack_type,transitions,organisations,share_of_prior_type_within_size
-HUGE,Data Breach,Data Breach,13,11,0.5416666666666666
-HUGE,Data Breach,Denial of Service,1,1,0.041666666666666664
-HUGE,Data Breach,Financial Fraud,1,1,0.041666666666666664
-HUGE,Data Breach,Other,1,1,0.041666666666666664
-HUGE,Data Breach,Phishing,2,2,0.08333333333333333
-HUGE,Data Breach,Ransomware,3,3,0.125
-HUGE,Data Breach,State-Sponsored Attack,1,1,0.041666666666666664
-HUGE,Data Breach,Supply Chain Attack,1,1,0.041666666666666664
-HUGE,Data Breach,Vulnerability Exploit,1,1,0.041666666666666664
+HUGE,Data Breach,Data Breach,17,13,0.6538461538461539
+HUGE,Data Breach,Denial of Service,1,1,0.038461538461538464
+HUGE,Data Breach,Other,3,3,0.11538461538461539
+HUGE,Data Breach,Ransomware,1,1,0.038461538461538464
+HUGE,Data Breach,State-Sponsored Attack,1,1,0.038461538461538464
+HUGE,Data Breach,Supply Chain Attack,1,1,0.038461538461538464
+HUGE,Data Breach,Unknown,2,2,0.07692307692307693
 HUGE,Denial of Service,Data Breach,1,1,1.0
-HUGE,Financial Fraud,Data Breach,1,1,1.0
-HUGE,Other,Data Breach,1,1,1.0
-HUGE,Ransomware,Data Breach,3,3,0.75
-HUGE,Ransomware,Ransomware,1,1,0.25
-HUGE,State-Sponsored Attack,Other,1,1,1.0
-HUGE,Vulnerability Exploit,Data Breach,1,1,1.0
-LARGE,Data Breach,Data Breach,9,7,0.6923076923076923
-LARGE,Data Breach,Denial of Service,1,1,0.07692307692307693
-LARGE,Data Breach,Other,2,2,0.15384615384615385
-LARGE,Data Breach,Ransomware,1,1,0.07692307692307693
-LARGE,Denial of Service,State-Sponsored Attack,1,1,1.0
-LARGE,Other,Data Breach,1,1,1.0
-LARGE,State-Sponsored Attack,Data Breach,2,2,1.0
+HUGE,Multiple or ambiguous,Data Breach,1,1,1.0
+HUGE,Other,Other,1,1,1.0
+HUGE,Ransomware,Data Breach,1,1,0.5
+HUGE,Ransomware,Ransomware,1,1,0.5
+LARGE,Data Breach,Data Breach,6,5,0.5
+LARGE,Data Breach,Denial of Service,1,1,0.08333333333333333
+LARGE,Data Breach,Other,3,3,0.25
+LARGE,Data Breach,Ransomware,1,1,0.08333333333333333
+LARGE,Data Breach,Unknown,1,1,0.08333333333333333
+LARGE,Denial of Service,Data Breach,1,1,1.0
+LARGE,Other,Data Breach,1,1,0.5
+LARGE,Other,Other,1,1,0.5
+LARGE,Ransomware,Other,1,1,1.0
+LARGE,State-Sponsored Attack,Data Breach,1,1,1.0
 MEDIUM,Data Breach,Data Breach,3,3,1.0
-MEDIUM,Other,Ransomware,1,1,1.0
 SMALL,Data Breach,Infrastructure Attack,1,1,1.0
-UNKNOWN,Data Breach,Data Breach,1,1,0.3333333333333333
-UNKNOWN,Data Breach,Denial of Service,1,1,0.3333333333333333
-UNKNOWN,Data Breach,State-Sponsored Attack,1,1,0.3333333333333333
-UNKNOWN,Denial of Service,State-Sponsored Attack,1,1,1.0
-UNKNOWN,State-Sponsored Attack,Data Breach,2,1,1.0
+UNKNOWN,Data Breach,State-Sponsored Attack,1,1,1.0
+UNKNOWN,State-Sponsored Attack,Data Breach,1,1,0.3333333333333333
+UNKNOWN,State-Sponsored Attack,Other,1,1,0.3333333333333333
+UNKNOWN,State-Sponsored Attack,State-Sponsored Attack,1,1,0.3333333333333333
+UNKNOWN,Unknown,Ransomware,1,1,1.0
