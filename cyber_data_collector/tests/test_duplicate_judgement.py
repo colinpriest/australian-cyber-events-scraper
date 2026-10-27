@@ -105,8 +105,8 @@ def _cal(tmp_path, cutoff):
 
 def _labels(tmp_path, label):
     path = tmp_path / "labels.csv"
-    path.write_text("pair_id,label,rationale,corroboration,labeller\n" + (f"e1|e2,{label},r,packet,t\n" if label else ""),
-                    encoding="utf-8")
+    rows = f"e1|e2,{label},r,packet,t\n" if label else "x|y,same,an unrelated labelled pair,packet,t\n"
+    path.write_text("pair_id,label,rationale,corroboration,labeller\n" + rows, encoding="utf-8")
     return path
 
 
@@ -154,3 +154,24 @@ def test_merge_cutoff_is_the_lowest_meeting_precision():
     # Merging down to 0.7 is all correct; reaching 0.6 lets a different pair in.
     assert chosen["cutoff"] == pytest.approx(0.7, abs=1e-5)
     assert chosen["merged_labelled"] == 5 and chosen["precision"] == 1.0
+
+
+def test_unreadable_labels_stop_merging(conn, merges, tmp_path, monkeypatch):
+    """Reviewer finding 6: without labels, 'different' pairs are unprotected - so nothing merges."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    with pytest.raises(RuntimeError, match="refusing to merge"):
+        dj.check_duplicates(conn, timeline_search=NO_SEARCH, escalation_client=NO_ESCALATION, apply=True,
+                            judge=JevJudge(conn, client=FakeTypeSafe(0.99)),
+                            calibration_path=_cal(tmp_path, 0.5), labels_path=tmp_path / "missing.csv")
+    assert merges == []
+
+
+def test_failed_escalation_leaves_the_pair_undecided(conn, merges, tmp_path, monkeypatch):
+    """Reviewer finding 7: a mid-band pair whose escalation fails is not merged on Jev's score."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    import cyber_data_collector.utils.escalation as esc
+    monkeypatch.setattr(esc, "escalate", lambda *a, **k: None)
+    result = dj.check_duplicates(conn, timeline_search=NO_SEARCH, apply=True,
+                                 judge=JevJudge(conn, client=FakeTypeSafe(0.6)),
+                                 calibration_path=_cal(tmp_path, 0.5), labels_path=_labels(tmp_path, None))
+    assert result["escalation_failed"] == ["e1|e2"] and merges == []

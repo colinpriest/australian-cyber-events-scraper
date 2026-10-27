@@ -105,12 +105,12 @@ class DeduplicationMigration:
                     # reports an incident (calibrated Jev gate; report-only
                     # without a calibration). See source_gate.
                     from cyber_data_collector.utils import jev
-                    if jev.available():
-                        from cyber_data_collector.dedup.source_gate import check_sources
-                        gate = check_sources(conn, apply=True, only_unmapped=True)
-                        self.migration_report['statistics']['source_gate_removed'] = len(gate['removed'])
-                        self.migration_report['statistics']['source_gate_replacements'] = len(
-                            gate['replacements_queued'])
+                    jev.require()   # the gate is part of ingestion: never skipped silently
+                    from cyber_data_collector.dedup.source_gate import check_sources
+                    gate = check_sources(conn, apply=True, only_unmapped=True)
+                    self.migration_report['statistics']['source_gate_removed'] = len(gate['removed'])
+                    self.migration_report['statistics']['source_gate_replacements'] = len(
+                        gate['replacements_queued'])
                     # Roundup / guidance / profile pages among the new records
                     # are classified first, so their verdicts feed the gate.
                     suspects = page_classifier.pending_suspects(conn, only_unmapped=True)
@@ -143,8 +143,11 @@ class DeduplicationMigration:
                             snap['asd'], snap['industry_overrides'],
                         )
                     except Exception as e:
-                        logger.warning(f"⚠️ SafetyVault snapshot failed: {e}")
-                        vault = None
+                        # A rebuild without the snapshot would cascade-delete every ASD
+                        # classification and industry correction for good: stop.
+                        logger.error(f"❌ SafetyVault snapshot failed; forced rebuild aborted: {e}")
+                        self.migration_report['errors'].append(f"SafetyVault snapshot failed: {e}")
+                        return False
 
                 if not self._apply_database_constraints():
                     self._restore_after_failed_rebuild()
@@ -444,9 +447,10 @@ class DeduplicationMigration:
             return new_event_ids, existing_count > 0
 
         except Exception as e:
+            # Never read a failed query as "no existing events": that used to
+            # start a destructive full rebuild without --force.
             logger.error(f"❌ Failed to detect new events: {e}")
-            # Fall back to full rebuild
-            return [], False
+            raise RuntimeError(f"could not read existing deduplication state: {e}") from e
 
     def _load_existing_deduplicated_events(self) -> Tuple[List[CyberEvent], Dict[str, str]]:
         """Load existing DeduplicatedEvents as CyberEvent objects for incremental matching.
@@ -495,8 +499,9 @@ class DeduplicationMigration:
             return events, dedup_to_master
 
         except Exception as e:
+            # An empty list here would let every new record become a duplicate incident.
             logger.error(f"❌ Failed to load existing dedup events: {e}")
-            return [], {}
+            raise RuntimeError(f"could not load existing incidents: {e}") from e
 
     def _run_incremental_deduplication(self, new_events: List[CyberEvent],
                                        existing_dedup_events: List[CyberEvent],
@@ -629,12 +634,13 @@ class DeduplicationMigration:
         merge decision is what stops grouping, a full rebuild or an incremental
         attachment from re-joining records a split separated.
         """
-        try:
-            rows = conn.execute(
-                "SELECT left_enriched_event_id, right_enriched_event_id FROM DedupOverrides "
-                "WHERE active = 1 AND verdict = 'different'").fetchall()
-        except sqlite3.OperationalError:  # no overrides table yet
-            rows = []
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'DedupOverrides'").fetchone()
+        # Only a database that has never had the table has no rulings; any other
+        # read failure propagates (it used to disable split protection).
+        rows = conn.execute(
+            "SELECT left_enriched_event_id, right_enriched_event_id FROM DedupOverrides "
+            "WHERE active = 1 AND verdict = 'different'").fetchall() if exists else []
         engine.different_pairs = {frozenset(row) for row in rows}
         return engine
 

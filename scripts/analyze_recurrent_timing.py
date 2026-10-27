@@ -455,7 +455,13 @@ def build_spells(events: pd.DataFrame, censor_date: date) -> tuple[pd.DataFrame,
             if start >= censor_date:
                 continue
 
-            has_next = i + 1 < len(group)
+            # A later incident is not observable if it falls after the chosen
+            # censor date.  In particular, retrospective runs must never use
+            # a future event as the end of an observed repeat spell.
+            has_next = (
+                i + 1 < len(group)
+                and parse_date(group.loc[i + 1, "event_date"]) <= censor_date
+            )
             if has_next:
                 end = parse_date(group.loc[i + 1, "event_date"])
                 next_event_ids = group.loc[i + 1, "event_ids"]
@@ -1888,6 +1894,10 @@ def main() -> int:
     )
     parser.add_argument("--bootstrap", type=int, default=500, help="Entity bootstrap replicates for piecewise hazard CI.")
     parser.add_argument("--seed", type=int, default=20260805, help="Bootstrap random seed.")
+    parser.add_argument("--extended", action="store_true",
+                        help="Also run the extended recurrence analyses in OUT_DIR/extended.")
+    parser.add_argument("--date-draws", type=int, default=100,
+                        help="Date-uncertainty draws for --extended (default: 100).")
     parser.add_argument(
         "--dashboard-out",
         default=DEFAULT_DASHBOARD_OUT,
@@ -1902,6 +1912,9 @@ def main() -> int:
     elapsed_bounds = args.elapsed_bounds
 
     events = load_victim_events(db_path)
+    events = events[events["event_date"] <= censor_date].copy()
+    if events.empty:
+        raise RuntimeError("No victim events are dated on or before the censor date.")
     spells, same_day = build_spells(events, censor_date)
     spells["elapsed_band"] = [
         band_labels(elapsed_bounds)[elapsed_band_index(v, elapsed_bounds)]
@@ -2051,6 +2064,12 @@ def main() -> int:
     print(f"Wrote recurrent timing analysis to {out_dir}")
     print(f"Adjusted elapsed-time LRT p-value: {adjusted_lrt['p_value']:.4g}")
     print(f"Best parametric AIC model: {model_table.iloc[0]['model']}")
+
+    if args.extended:
+        from scripts.analyze_recurrence_extensions import run_analysis
+        run_analysis(db_path, out_dir / "extended", censor_date,
+                     bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed)
+        print(f"Wrote extended recurrence analyses to {out_dir / 'extended'}")
 
     if args.dashboard_out:
         dashboard_path = Path(args.dashboard_out)
