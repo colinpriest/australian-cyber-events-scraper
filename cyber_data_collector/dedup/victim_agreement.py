@@ -227,15 +227,22 @@ def _entity_for(conn: sqlite3.Connection, dedup_id: str, name: str,
 
 
 def apply_victim(conn: sqlite3.Connection, dedup_id: str, old_victim: Optional[str],
-                 name: str, resolver: Optional[EntityResolver] = None) -> str:
+                 name: str, resolver: Optional[EntityResolver] = None,
+                 entity_id: Optional[int] = None) -> str:
     """Link ``name`` as the event's victim and demote the old one to bystander.
+
+    ``entity_id``, when given, is the entity to link; otherwise it is found
+    with :func:`_entity_for`, whose loose ``denotes`` test can return the old
+    victim itself for an acronym clash (UWA / UN Women Australia) - callers
+    replacing a victim judged wrong pass the entity explicitly.
 
     Returns the entity name finally stored as the victim.
     """
     from cyber_data_collector.dedup.entity_classification import industry_for
 
-    resolver = resolver or EntityResolver(conn)
-    entity_id = _entity_for(conn, dedup_id, name, resolver)
+    if entity_id is None:
+        resolver = resolver or EntityResolver(conn)
+        entity_id = _entity_for(conn, dedup_id, name, resolver)
     stored_name = conn.execute("SELECT entity_name FROM EntitiesV2 WHERE entity_id = ?",
                                (entity_id,)).fetchone()[0]
     members = [r[0] for r in conn.execute(
