@@ -264,7 +264,11 @@ def replace_evidence(conn: sqlite3.Connection, enriched_id: str, event_id: Optio
         when = datetime.strptime(when_text, "%Y-%m-%d").date()
     except ValueError:
         when = None
-    if _covered(conn, org, when, event_id):
+    # The record's own event is NOT excluded: when a junk record is split out of
+    # an event that keeps other evidence, that event still covers the incident
+    # (excluding it queued 397 replacements on the first run, mostly redundant).
+    # A rejected event is inactive and so never counts.
+    if _covered(conn, org, when, None):
         return None
     if search is None:
         if not os.getenv("PERPLEXITY_API_KEY"):
@@ -294,6 +298,37 @@ def replace_evidence(conn: sqlite3.Connection, enriched_id: str, event_id: Optio
                  (enriched_id, query, model, answer, json.dumps(citations), raw_id, datetime.now().isoformat()))
     conn.commit()
     return raw_id
+
+
+def prune_redundant_replacements(conn: sqlite3.Connection) -> List[str]:
+    """Drop queued, still-unprocessed replacement records whose incident is already covered.
+
+    Coverage can change after a replacement is queued (later merges, or a
+    corrected coverage check), so this re-checks every queued replacement that
+    has not been scraped yet and deletes those the data already covers. The
+    search itself stays recorded in ``SourceReplacements``.
+    """
+    conn.executescript(REPLACEMENT_SCHEMA)
+    pruned = []
+    for enriched_id, raw_id in conn.execute(
+            """SELECT s.enriched_event_id, s.raw_event_id FROM SourceReplacements s
+               JOIN RawEvents r ON r.raw_event_id = s.raw_event_id
+               WHERE s.raw_event_id IS NOT NULL AND COALESCE(r.is_processed, 0) = 0""").fetchall():
+        research = _research(conn, enriched_id)
+        org = str(research.get("formal_entity_name") or "").strip()
+        when_text = str(research.get("earliest_event_date") or "")[:10]
+        try:
+            when = datetime.strptime(when_text, "%Y-%m-%d").date()
+        except ValueError:
+            when = None
+        if org and _covered(conn, org, when, None):
+            conn.execute("DELETE FROM RawEvents WHERE raw_event_id = ?", (raw_id,))
+            conn.execute("UPDATE SourceReplacements SET raw_event_id = NULL WHERE enriched_event_id = ?",
+                         (enriched_id,))
+            pruned.append(raw_id)
+    conn.commit()
+    logger.info("Pruned %d queued replacement(s) already covered by active events", len(pruned))
+    return pruned
 
 
 # --- the gate ----------------------------------------------------------------
@@ -336,14 +371,19 @@ def check_sources(conn: sqlite3.Connection, apply: bool = False, only_unmapped: 
         and known.get(r["enriched_event_id"]) != "reports_incident"
         and (known.get(r["enriched_event_id"]) == "not_incident"
              or (judgeable(r) and probabilities[r["enriched_event_id"]] < cutoff))]
-    removed, replacements = [], []
+    removed, replacements, pruned = [], [], []
     if apply and cal:
+        # Remove every junk record first, then look for replacements, so the
+        # coverage check sees the data as it will be.
         for rec in below:
             rec["action"] = _remove(conn, rec)
             removed.append(rec)
+        for rec in below:
             raw_id = replace_evidence(conn, rec["enriched_event_id"], rec["deduplicated_event_id"], search=search)
             if raw_id:
                 replacements.append({"replaces": rec["enriched_event_id"], "raw_event_id": raw_id})
+        pruned = prune_redundant_replacements(conn)
     return {"records": len(records), "judged": len(probabilities),
             "unjudgeable": sum(1 for r in records if not judgeable(r)), "cutoff": cutoff, "calibrated": cal is not None,
-            "below_cutoff": below, "removed": removed, "replacements_queued": replacements}
+            "below_cutoff": below, "removed": removed, "replacements_queued": replacements,
+            "replacements_pruned": pruned}
