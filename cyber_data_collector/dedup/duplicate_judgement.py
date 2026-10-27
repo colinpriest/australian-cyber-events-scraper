@@ -129,14 +129,15 @@ def _event_with_dates(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]
 
 
 def build_pair_state(conn: sqlite3.Connection, pair: Dict[str, Any]) -> Dict[str, Any]:
-    from cyber_data_collector.dedup.org_timeline import stored
+    from cyber_data_collector.dedup.org_timeline import for_judgement
 
     state = {"organisation": pair["organisation"], "gap_days": pair["gap_days"],
              "event_a": _event_with_dates(conn, pair["a"]),
              "event_b": _event_with_dates(conn, pair["b"])}
-    timeline = stored(conn, pair["entity_id"]) if pair.get("entity_id") is not None else None
+    timeline = for_judgement(conn, pair["entity_id"]) if pair.get("entity_id") is not None else None
     if timeline:
-        state["organisation_timeline"] = {"incidents": timeline["timeline"], "citations": timeline["citations"]}
+        # incidents and citations as before; a warning only when the history may be incomplete.
+        state["organisation_timeline"] = {k: v for k, v in timeline.items() if k != "organisation"}
     return state
 
 

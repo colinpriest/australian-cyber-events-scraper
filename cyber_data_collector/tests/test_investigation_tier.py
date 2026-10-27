@@ -107,9 +107,10 @@ class FakeJev:
                                answers={q: SimpleNamespace(type="noul", noul=self.p) for q in questions})
 
 
-def test_victim_attribution_reports_and_changes_nothing(conn):
+def test_victim_attribution_reports_and_changes_nothing(conn, tmp_path):
     ot.research_all(conn, search=_search([]))
-    result = vj.check_victim_attribution(conn, judge=JevJudge(conn, client=FakeJev(0.1)))
+    result = vj.check_victim_attribution(conn, judge=JevJudge(conn, client=FakeJev(0.05)),
+                                         calibration_path=tmp_path / "no_calibration.json")
     assert result["judged"] == 2 and len(result["reported"]) == 2 and not result["calibrated"]
     assert {r[0] for r in conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents")} == \
            {"Western Sydney University"}

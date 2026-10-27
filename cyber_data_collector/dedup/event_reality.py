@@ -129,11 +129,11 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = Fa
             state["corroboration"] = {"answer": found["answer"], "citations": found["citations"]}
     if with_timeline:
         from cyber_data_collector.dedup.org_timeline import timeline_for_event
+        # organisation / incidents / citations, plus a warning only when the
+        # history may be incomplete (stale, failed or declined research).
         timeline = timeline_for_event(conn, dedup_id)
         if timeline:
-            state["organisation_timeline"] = {"organisation": timeline["organisation"],
-                                              "incidents": timeline["timeline"],
-                                              "citations": timeline["citations"]}
+            state["organisation_timeline"] = timeline
     return state
 
 
