@@ -9,6 +9,13 @@ from cyber_data_collector.dedup import page_classifier as pc
 from cyber_data_collector.dedup.non_incident import find_non_incident_events
 
 
+@pytest.fixture(autouse=True)
+def _no_jev(monkeypatch):
+    """These tests drive the OpenAI path; keep a TypeSafe key in the environment out of them."""
+    from cyber_data_collector.utils import jev
+    monkeypatch.setattr(jev, "available", lambda: False)
+
+
 @pytest.mark.parametrize("title, url, expected", [
     ("AUSCERT Week in Review for 20th February 2026", "https://auscert.org.au/week-in-review/x", True),
     ("Matt Lemon PhD's Post - LinkedIn", "https://www.linkedin.com/posts/mattlemon_x", True),

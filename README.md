@@ -451,13 +451,16 @@ python scripts/dedup_admin.py check-victims --dry-run # deterministic, no API ca
   enrichment summary it was shown before had been written by an earlier model
   as if every page reported an incident, so every service page passed. Verdicts
   carry a `question_version`; changing the question or the evidence re-asks.
-  **Rejection is report-only** (`--hygiene-apply-rejections` to apply): on
-  2026-10-27 it would have rejected 74 events, and many were real incidents
-  whose stored page is the victim's privacy policy or home page while the
-  incident came from Perplexity's research (LUSH, Nexia, Legal Aid ACT).
-  Perplexity's confidence does not separate the two (0.83 for the ACT business
-  page, 0.2 for LUSH). Deciding whether an *event* happened needs an
-  event-level judgement with corroboration, evaluated before it deletes.
+  Page verdicts describe pages; they no longer reject anything. On
+  2026-10-27 a page-based rule would have rejected 74 events, many of them
+  real incidents whose stored page is the victim's privacy policy or home page
+  while the incident came from Perplexity's research (LUSH, Nexia, Legal Aid
+  ACT).
+- **Events.** `check-events` asks Jev whether each event is a real, specific
+  cyber incident, showing it every record's page text *and* Perplexity
+  research, and rejects events below a **calibrated** cut-off. With no
+  calibration for the current Jev model and question version it only reports
+  (`instance/event_reality_findings.json`). See *Event-reality calibration*.
 - **Victims.** When no record names the event's victim and two thirds of the
   records name one other organisation (Perplexity's researched victim, found
   in the records' own text), that organisation becomes the victim. Guarded
@@ -467,6 +470,45 @@ python scripts/dedup_admin.py check-victims --dry-run # deterministic, no API ca
   reclassification, so a later pass cannot restore the wrong victim.
 - **Entities.** Names sharing a brand word across lines of business are no
   longer folded together, directly or by chaining through a bare name.
+
+### Event-reality calibration
+
+The cut-off for rejecting events is measured on this database, never assumed.
+
+```bash
+python scripts/dedup_admin.py check-events             # Jev P(real) for every active event, stored
+python scripts/calibrate_event_reality.py sample       # stratified sample -> evaluation/event_reality_sample.csv
+# label it -> evaluation/event_reality_labels.csv  (real / not_incident / unsure, with rationale)
+python scripts/calibrate_event_reality.py calibrate    # -> evaluation/event_reality_calibration.json
+```
+
+The sample is stratified on Jev's stored P(real): every event below 0.5 (a
+census, since any cut-off lies there), plus seeded samples of the 0.5-0.8 and
+0.8+ bands, weighted up to their bands. The cut-off is the largest at which
+the events it would reject are, weighted, at least 95% labelled
+`not_incident`, with at least 10 labelled rejections. The calibration file
+records the Jev model and question version; `check-events --apply` (and the
+refresh) rejects only while both match.
+
+**2026-10-27 result: no cut-off qualifies, so nothing is rejected.** 168
+events were labelled (87 `not_incident`, 76 `real`, 5 `unsure`) by Claude
+Opus 5.5 subagents blind to Jev's scores, from each event's records plus web
+searches for corroboration; every label carries its rationale and source in
+`evaluation/event_reality_labels.csv`, for review. Jev ranks the events well
+(weighted AUC 0.957), but its low end is not clean enough to delete from:
+below 0.25 it would reject 80 labelled events of which 18 are real (weighted
+precision 0.78); only the 3 events below 0.01 are all correct. The real
+incidents it scored lowest - Apunipima, ASIC/Accellion, Ventia, Western Sydney
+University, LUSH - were confirmed by the labellers' web searches, while the
+evidence stored for them is a different page or thin research. Jev can be no
+surer than its evidence; the next step is a corroboration search for
+low-scoring events, added to what Jev sees, then recalibration against the
+same labels.
+
+Labelling conventions worth reviewing: dark-web sale claims with no named
+victim were `unsure`; campaigns naming no targeted organisation, physical
+security incidents and non-cyber fraud were `not_incident`; real incidents
+outside Australia were `real` (Australian-ness is a separate filter).
 
 ### Stray records: event coherence
 
