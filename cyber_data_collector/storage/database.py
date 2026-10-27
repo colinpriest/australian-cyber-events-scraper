@@ -88,14 +88,10 @@ class DatabaseManager:
             return database_url.replace("sqlite://", "", 1)
 
         parsed = urlparse(database_url)
-        if parsed.scheme and parsed.scheme not in ("sqlite", ""):
-            self.logger.warning(
-                "Unsupported database scheme '%s'; falling back to default SQLite path",
-                parsed.scheme,
-            )
-            return "instance/cyber_events.db"
-
-        if parsed.scheme:
-            return "instance/cyber_events.db"
+        if parsed.scheme and len(parsed.scheme) > 1:
+            # Never fall back to the default database (it would silently
+            # become the target of operations meant for another one).
+            raise ValueError(f"Unsupported database URL {database_url!r}: only sqlite:/// URLs "
+                             "or file paths are supported")
 
         return database_url

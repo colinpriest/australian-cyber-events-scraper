@@ -97,3 +97,11 @@ def test_collector_uses_the_callers_database(monkeypatch):
     config = SimpleNamespace(max_threads=1)
     cyber_collector.CyberDataCollector(config, ".env", db_path="scratch/run.db")
     assert opened == ["sqlite:///scratch/run.db"]
+
+
+def test_unsupported_database_url_is_an_error_not_the_default(project, monkeypatch):
+    """Reviewer finding 39: it used to select instance/cyber_events.db silently."""
+    from cyber_data_collector.utils.config_manager import resolve_db_path
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user@host/events")
+    with pytest.raises(ValueError, match="Unsupported DATABASE_URL"):
+        resolve_db_path(None, env_path=project[0] / "no.env")

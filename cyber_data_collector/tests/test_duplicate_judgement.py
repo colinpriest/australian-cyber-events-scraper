@@ -18,17 +18,22 @@ from cyber_data_collector.utils.jev import JevJudge  # noqa: E402
 from scripts.calibrate_duplicates import merge_cutoff  # noqa: E402
 
 
-@pytest.mark.parametrize("incident, published, found, researched, basis", [
-    ("2023-06-08", "2023-06-08", "2026-05-03", None, "publication date (may lag the incident)"),
-    ("2026-05-03", None, "2026-05-03", None, "date the record was found (may lag the incident)"),
-    ("2023-06-01", "2023-06-08", None, "2023-06-01", "Perplexity research"),
-    ("2023-05-24", "2023-06-08", None, None, "stated in the record"),
-    (None, "2023-06-08", None, None, "no date"),
+@pytest.mark.parametrize("incident, published, found, researched, text, basis", [
+    ("2023-06-08", "2023-06-08", "2026-05-03", None, "", "publication date (may lag the incident)"),
+    ("2026-05-03", None, "2026-05-03", None, "", "date the record was found (may lag the incident)"),
+    ("2023-06-01", "2023-06-08", None, "2023-06-01", "", "Perplexity research"),
+    ("2023-05-24", "2023-06-08", None, None, "The attack began on 24 May 2023.", "stated in the record"),
+    # Reviewer finding 26: matching nothing is not "stated"; finding 24: a month is not a day.
+    ("2023-05-24", "2023-06-08", None, None, "", "unknown (not a source date and not found in the text)"),
+    ("2023-05-24", "2023-06-08", None, None, "The breach happened in May 2023.",
+     "unknown (not a source date and not found in the text)"),
+    ("2023-05-01", "2023-06-08", None, None, "The breach happened in May 2023.", "stated in the record"),
+    (None, "2023-06-08", None, None, "", "no date"),
 ])
-def test_date_basis(incident, published, found, researched, basis):
+def test_date_basis(incident, published, found, researched, text, basis):
     meta = json.dumps({"publication_date": published}) if published else None
     pplx = json.dumps({"earliest_event_date": researched}) if researched else None
-    assert dp.record_dates(incident, None, meta, found, pplx)["basis"] == basis
+    assert dp.record_dates(incident, None, meta, found, pplx, text=text)["basis"] == basis
 
 
 @pytest.mark.parametrize("date, precision", [
@@ -175,3 +180,13 @@ def test_failed_escalation_leaves_the_pair_undecided(conn, merges, tmp_path, mon
                                  judge=JevJudge(conn, client=FakeTypeSafe(0.6)),
                                  calibration_path=_cal(tmp_path, 0.5), labels_path=_labels(tmp_path, None))
     assert result["escalation_failed"] == ["e1|e2"] and merges == []
+
+
+def test_event_date_basis_and_precision_are_stored(conn):
+    """Priority 7: the event records how its date was determined and how precise it is."""
+    changed = dp.refresh_event_date_provenance(conn)
+    row = conn.execute("SELECT date_basis, date_precision FROM DeduplicatedEvents "
+                       "WHERE deduplicated_event_id = 'e2'").fetchone()
+    assert changed == 2
+    assert tuple(row) == ("publication date (may lag the incident)", "day")
+    assert dp.refresh_event_date_provenance(conn) == 0        # idempotent

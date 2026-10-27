@@ -865,10 +865,14 @@ class DeduplicationMigration:
     def _refresh_changed_events(self) -> None:
         from cyber_data_collector.dedup.record_fingerprints import refresh_changed_events
         try:
+            from cyber_data_collector.dedup.date_provenance import refresh_event_date_provenance
             with sqlite3.connect(self.db_path) as conn:
                 report = refresh_changed_events(conn)
+                # Store each event's date basis (incident / publication / found /
+                # research / repair) and precision (day / month / year).
+                dated = refresh_event_date_provenance(conn)
                 conn.commit()
-            logger.info(f"🔁 {report.summary()}")
+            logger.info(f"🔁 {report.summary()}; date provenance updated on {dated} event(s)")
             self.migration_report['statistics']['events_refreshed_from_changed_records'] =                 len(report.refreshed_events)
         except Exception as e:
             logger.error(f"❌ Refreshing events from changed records failed: {e}")
