@@ -320,6 +320,16 @@ def protected_events(path: Path = LABELS_PATH) -> set:
     return {r["deduplicated_event_id"] for r in rows if r.get("label") == "real"}
 
 
+LABELLED_NON_INCIDENT_MAX_P = 0.5
+
+
+def labelled_non_incidents(path: Path = LABELS_PATH) -> set:
+    """Events the labelled set says are not incidents (ground truth, like ``protected_events``)."""
+    import csv
+    with Path(path).open(encoding="utf-8") as fh:
+        return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "not_incident"}
+
+
 def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
     """Undo this filter's rejection of any protected event (latest snapshot)."""
     from cyber_data_collector.dedup.ledger import DedupLedger
@@ -402,11 +412,25 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
         {"deduplicated_event_id": did, "title": titles.get(did), "p_real": p}
         for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
         if p < cutoff and did not in protected]
+    # Labels are ground truth both ways: a labelled non-incident is rejected
+    # even above the cut-off - while the model still leans the same way. One
+    # that now scores as real may have absorbed a real incident's records
+    # since labelling (a merge into it), so it is reported for review instead.
+    labelled_out: List[Dict[str, Any]] = []
+    needs_review: List[Dict[str, Any]] = []
+    if cutoff is not None and apply:
+        already = {f["deduplicated_event_id"] for f in below}
+        for did in sorted(labelled_non_incidents(labels_path) & set(probabilities) - already - protected):
+            entry = {"deduplicated_event_id": did, "title": titles.get(did), "p_real": probabilities[did],
+                     "label": "not_incident"}
+            (labelled_out if probabilities[did] < LABELLED_NON_INCIDENT_MAX_P else needs_review).append(entry)
+        below = below + labelled_out
     applied = bool(apply and cal and below)
     if applied:
         reject_events(conn, below)
     restored = restore_protected(conn, protected) if apply else []
     return {"judged": len(probabilities), "corroborated": corroborated, "escalated": len(escalated),
             "escalation_failed": escalation_failed, "cutoff": cutoff,
+            "labelled_rejections": labelled_out, "labelled_needing_review": needs_review,
             "calibrated": cal is not None, "applied": applied, "rejections": below,
             "restored_protected": restored}

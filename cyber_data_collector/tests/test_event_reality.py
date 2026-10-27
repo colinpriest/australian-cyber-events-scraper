@@ -182,3 +182,31 @@ def test_report_only_without_apply(conn, tmp_path, monkeypatch):
                              search=NO_FINDINGS)
     assert len(result["rejections"]) == 1 and not result["applied"]
     assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2
+
+
+def test_a_labelled_non_incident_is_rejected_even_above_the_cutoff(conn, tmp_path, monkeypatch):
+    """Labels are ground truth both ways (13 labelled non-incidents were still Active)."""
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "act,not_incident,a service page,packet,test\n"
+                      "lush,not_incident,a privacy policy,packet,test\n", encoding="utf-8")
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True,
+                             judge=judge, calibration_path=_calibration(tmp_path, 0.01),
+                             search=NO_FINDINGS, labels_path=labels)
+    assert [f["deduplicated_event_id"] for f in result["labelled_rejections"]] == ["act"]
+    # LUSH now scores as real: possibly merged with a real incident since labelling - reviewed, not rejected.
+    assert [f["deduplicated_event_id"] for f in result["labelled_needing_review"]] == ["lush"]
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    assert status == {"act": "Rejected", "lush": "Active"}
+
+
+def test_missing_labels_refuse_to_reject(conn, tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.02, "LUSH data breach": 0.9}))
+    with pytest.raises(RuntimeError, match="refusing to reject"):
+        er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True,
+                        judge=judge, calibration_path=_calibration(tmp_path, 0.3),
+                        search=NO_FINDINGS, labels_path=tmp_path / "missing.csv")
+    assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2

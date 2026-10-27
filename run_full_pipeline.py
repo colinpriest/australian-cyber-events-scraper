@@ -202,7 +202,9 @@ class UnifiedPipeline:
         try:
             # Step 1: Run initial discovery with fast-model filtering
             logger.info("Step 1/3: Discovering events from sources (with initial fast-model filtering)...")
-            pipeline = EventDiscoveryEnrichmentPipeline(self.db_path)
+            page_gate_mode = "report-only" if getattr(args, 'page_gate_report_only', False) else None
+            pipeline = (EventDiscoveryEnrichmentPipeline(self.db_path, page_gate_mode=page_gate_mode)
+                        if page_gate_mode else EventDiscoveryEnrichmentPipeline(self.db_path))
 
             await pipeline.discover_events(
                 source_types=args.source,
@@ -216,6 +218,20 @@ class UnifiedPipeline:
             # Capture initial discovery count
             initial_events = pipeline.stats.get('events_discovered', 0)
             self.results['discovery']['events_found'] = initial_events
+
+            # Unfinished discovery is a degraded run, not a quiet log line:
+            # failed source-months are searched again next run, quarantined
+            # records need a look, incomplete months still hold pending records.
+            failed_months = pipeline.stats.get('source_months_failed', 0)
+            quarantined = pipeline.stats.get('records_quarantined', 0)
+            incomplete = len(pipeline.retry_queue.incomplete_months())
+            for count, what in ((failed_months, "source-month search(es) failed"),
+                                (quarantined, "record(s) quarantined after repeated failures"),
+                                (incomplete, "month(s) still have unprocessed records")):
+                if count:
+                    message = f"Discovery: {count} {what}"
+                    logger.error(message)
+                    self.results['discovery'].setdefault('errors', []).append(message)
 
             pipeline.close()
             logger.info(f"Initial discovery complete: {initial_events} events found")
@@ -414,6 +430,12 @@ class UnifiedPipeline:
         try:
             logger.info("Running global deduplication...")
 
+            # Canonical enum values before anything compares them (legacy
+            # "EventSeverity.HIGH" spellings re-enter via re-enrichment).
+            from scripts import dedup_admin
+            if dedup_admin.main(["--db", self.db_path, "normalise-enums"]) != 0:
+                raise RuntimeError("normalise-enums failed")
+
             force_rebuild = getattr(args, 'force_dedup', False)
             migration = DeduplicationMigration(self.db_path, dry_run=False, force=force_rebuild)
             if not migration.run_migration():
@@ -571,7 +593,10 @@ class UnifiedPipeline:
         # classify-entities --stale-only: roles (who is the victim, who the
         # vendor) go out of date when an event's members change - a merge, a
         # split, a re-enriched record - and nothing else refreshes them.
-        steps = [["classify-pages"], sources, check, ["classify-entities", "--stale-only"],
+        # rescrape-short-pages first: pages with under 300 characters of text
+        # cannot be judged by the source gate or the page classifier.
+        steps = [["rescrape-short-pages"], ["classify-pages"], sources, check,
+                 ["classify-entities", "--stale-only"],
                  ["check-victims"], duplicates, ["check-victim-attribution"]]
         for step in steps:
             try:
@@ -936,6 +961,21 @@ class UnifiedPipeline:
         elif args.discover_only:
             logger.info("Skipping classification phase (--discover-only specified)")
 
+        # Phase 2b: breach source and personal-information types (Jev, stored;
+        # only new or changed events are asked). Feeds the dashboard's OAIC
+        # breach-source comparison, which showed 0 while this never ran.
+        if (not args.dashboard_only and not args.discover_only and not args.classify_only
+                and not args.skip_classification):
+            from scripts import enrich_pii_and_source_category
+            try:
+                code = enrich_pii_and_source_category.main(["--db", self.db_path])
+            except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
+                code = f"error: {exc}"
+            if code != 0:
+                message = f"Breach-source classification did not complete ({code})"
+                logger.error(message)
+                self.results['classification'].setdefault('errors', []).append(message)
+
         # Phase 3: Dashboard
         if not args.discover_only and not args.classify_only:
             dashboard_success = self.run_dashboard_phase(args)
@@ -1059,6 +1099,8 @@ Examples:
                         help='Requests allowed this run per paid API, e.g. openai=3000 perplexity=1500 '
                              'typesafe=20000 (default: API_BUDGET_<PROVIDER> env, else unlimited). '
                              'Refused work is left for the next run.')
+    parser.add_argument('--page-gate-report-only', action='store_true',
+                        help='Discovery page gate logs what it would drop but drops nothing')
     parser.add_argument('--enrich-limit', type=int, default=500,
                         help='Most records the automatic Perplexity enrichment takes per run; '
                              'the rest of the backlog waits for the next run (0 = no limit, default 500)')
