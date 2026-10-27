@@ -69,3 +69,6 @@ pdf_analysis_output.txt
 
 
 
+
+# Versioned schema migrations are source, not database dumps
+!cyber_data_collector/storage/migrations/*.sql
