@@ -16,6 +16,13 @@ Usage:
 
     # Exclude events where records affected is unknown
     python export_cyber_events.py --format csv --output known_records.csv --detailed --exclude-unknown-records
+
+Population: the DeduplicatedEvents exports contain active incidents only
+(status = 'Active'), dated inside the dashboard reporting period unless
+--date-range or --all-dates is given - the same population the dashboards
+report (cyber_data_collector.reporting.population). Merged and rejected rows are
+deduplication history, not incidents; --include-history exports them too, for
+audit, and says so.
 """
 
 from __future__ import annotations
@@ -29,6 +36,22 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from cyber_data_collector.reporting.population import (  # noqa: E402
+    ReconciliationCheck,
+    ReconciliationError,
+    ReportingPeriod,
+    count_incidents,
+    dashboard_period,
+    incident_filter,
+    population_breakdown,
+    reconcile,
+)
+
+# Table whose rows are incidents (and so must be limited to the population).
+INCIDENT_TABLE = "DeduplicatedEvents"
 
 
 class CyberEventsExporter:
@@ -307,9 +330,40 @@ class CyberEventsExporter:
 
         return variations
 
+    def _incident_scope(
+        self,
+        date_range: Optional[Tuple[str, str]],
+        all_dates: bool,
+        include_history: bool,
+        alias: str = "",
+    ) -> Tuple[List[str], List[Any], Optional[ReportingPeriod]]:
+        """WHERE conditions, params and period for an export of incidents.
+
+        Active incidents only, inside ``date_range`` if given, else inside the
+        dashboard reporting period (so an export and the dashboard count the same
+        incidents) unless ``all_dates``. With ``include_history`` the status
+        filter is dropped - the export is then an audit dump, not a population.
+        """
+        prefix = f"{alias}." if alias else ""
+        period: Optional[ReportingPeriod] = None
+        if date_range:
+            period = ReportingPeriod.from_iso(date_range[0], date_range[1])
+        elif not all_dates and not include_history:
+            period = dashboard_period()
+
+        if include_history:
+            if period is None:
+                return [], [], None
+            sql, params = period.where(f"{prefix}event_date")
+            return [sql], list(params), period
+        where, params = incident_filter(period, alias)
+        return [where], list(params), period
+
     def export_table(self, table_name: str, output_file: str, format: str, 
                     date_range: Optional[Tuple[str, str]] = None,
-                    filters: Optional[Dict[str, Any]] = None) -> bool:
+                    filters: Optional[Dict[str, Any]] = None,
+                    all_dates: bool = False,
+                    include_history: bool = False) -> bool:
         """
         Export a specific table to CSV or Excel format.
         
@@ -317,8 +371,10 @@ class CyberEventsExporter:
             table_name: Name of the table to export
             output_file: Output file path
             format: Export format ('csv' or 'excel')
-            date_range: Tuple of (start_date, end_date) for filtering
+            date_range: Tuple of (start_date, end_date) for filtering (inclusive)
             filters: Additional filters to apply
+            all_dates: For DeduplicatedEvents, do not default to the dashboard period
+            include_history: For DeduplicatedEvents, include Merged / Rejected rows
             
         Returns:
             True if successful, False otherwise
@@ -334,11 +390,22 @@ class CyberEventsExporter:
             params = []
             conditions = []
             
-            # Add date range filter if specified
-            if date_range and 'event_date' in [col[0] for col in self.get_table_info(table_name)]:
-                start_date, end_date = date_range
-                conditions.append("event_date BETWEEN ? AND ?")
-                params.extend([start_date, end_date])
+            if table_name == INCIDENT_TABLE:
+                # Incidents: the shared population (active, in period). Not a raw
+                # SELECT * - that also exported every merged and rejected row.
+                scope_conditions, scope_params, _period = self._incident_scope(
+                    date_range, all_dates, include_history)
+                conditions.extend(scope_conditions)
+                params.extend(scope_params)
+                if include_history:
+                    print("[HISTORY] Including Merged and Rejected rows: this is "
+                          "deduplication history, not a count of incidents.")
+            elif date_range and 'event_date' in [col[0] for col in self.get_table_info(table_name)]:
+                # Other tables are not incidents; only the date range applies. Half-open
+                # so a value with a time of day on the last day is not lost.
+                sql, range_params = ReportingPeriod.from_iso(*date_range).where("event_date")
+                conditions.append(sql)
+                params.extend(range_params)
             
             # Add additional filters
             if filters:
@@ -387,18 +454,22 @@ class CyberEventsExporter:
                                               include_entities: bool = True,
                                               include_sources: bool = True,
                                               exclude_unknown_records: bool = False,
-                                              anonymize: bool = False) -> bool:
+                                              anonymize: bool = False,
+                                              all_dates: bool = False,
+                                              include_history: bool = False) -> bool:
         """
         Export deduplicated events with related entity and source information.
 
         Args:
             output_file: Output file path
             format: Export format ('csv' or 'excel')
-            date_range: Tuple of (start_date, end_date) for filtering
+            date_range: Tuple of (start_date, end_date) for filtering (inclusive)
             include_entities: Whether to include entity information
             include_sources: Whether to include source information
             exclude_unknown_records: Whether to exclude events where records_affected is unknown/null
             anonymize: Whether to anonymize descriptions (removes entity names, dates, titles)
+            all_dates: Do not default to the dashboard reporting period
+            include_history: Include Merged / Rejected rows (audit dump, not incidents)
 
         Returns:
             True if successful, False otherwise
@@ -437,11 +508,15 @@ class CyberEventsExporter:
             params = []
             conditions = []
 
-            # Add date range filter
-            if date_range:
-                start_date, end_date = date_range
-                conditions.append("de.event_date BETWEEN ? AND ?")
-                params.extend([start_date, end_date])
+            # Population: active incidents in the reporting period (see _incident_scope).
+            # This query used to have no status filter at all, so merged and rejected
+            # rows were exported beside the incidents, indistinguishable but for a
+            # status column.
+            conditions, params, period = self._incident_scope(
+                date_range, all_dates, include_history, "de")
+            if include_history:
+                print("[HISTORY] Including Merged and Rejected rows: this is "
+                      "deduplication history, not a count of incidents.")
 
             # Exclude events with unknown records_affected
             if exclude_unknown_records:
@@ -456,6 +531,14 @@ class CyberEventsExporter:
             cursor = self.conn.cursor()
             cursor.execute(base_query, params)
             events = cursor.fetchall()
+
+            # The export must contain exactly the population - nothing more, and
+            # (unless the caller filtered further) nothing less.
+            if not include_history and not exclude_unknown_records:
+                reconcile([ReconciliationCheck(
+                    "Detailed export rows", count_incidents(self.conn, period), len(events),
+                    f"period: {period}" if period else "all dates")],
+                    context="export_cyber_events")
 
             if not events:
                 print("No deduplicated events found with the specified filters")
@@ -572,6 +655,8 @@ class CyberEventsExporter:
             print(f"Successfully exported {len(df)} deduplicated events with details to {output_file}")
             return True
             
+        except ReconciliationError:
+            raise
         except Exception as e:
             print(f"Error exporting deduplicated events with details: {e}")
             return False
@@ -596,6 +681,11 @@ class CyberEventsExporter:
             except sqlite3.Error:
                 summary[table] = 0
         
+        try:
+            summary['population'] = population_breakdown(self.conn, dashboard_period())
+        except sqlite3.Error:
+            summary['population'] = {}
+
         # Get date ranges
         try:
             cursor.execute("SELECT MIN(event_date), MAX(event_date) FROM DeduplicatedEvents")
@@ -683,6 +773,14 @@ Examples:
     parser.add_argument('--exclude-unknown-records', action='store_true',
                        help='Exclude events where the number of customer records affected is unknown')
 
+    parser.add_argument('--all-dates', action='store_true',
+                       help='Do not limit DeduplicatedEvents exports to the dashboard reporting '
+                            'period (includes pre-2020 and undated incidents)')
+
+    parser.add_argument('--include-history', action='store_true',
+                       help='Include Merged and Rejected DeduplicatedEvents rows (audit only; '
+                            'not an incident count)')
+
     parser.add_argument('--anonymize', action='store_true',
                        help='Anonymize descriptions by removing entity names, dates, years, and titles')
 
@@ -709,7 +807,12 @@ Examples:
                 print("Export Summary:")
                 print(f"  Raw Events: {summary.get('RawEvents', 0):,}")
                 print(f"  Enriched Events: {summary.get('EnrichedEvents', 0):,}")
-                print(f"  Deduplicated Events: {summary.get('DeduplicatedEvents', 0):,}")
+                print(f"  Deduplicated Events (all rows, incl. merged/rejected history): "
+                      f"{summary.get('DeduplicatedEvents', 0):,}")
+                pop = summary.get('population') or {}
+                if pop:
+                    print(f"  Active incidents: {pop.get('active', 0):,} "
+                          f"({pop.get('active_in_period', 0):,} in the dashboard reporting period)")
                 print(f"  Entities: {summary.get('EntitiesV2', 0):,}")
                 print(f"  Event-Entity Relationships: {summary.get('DeduplicatedEventEntities', 0):,}")
                 print(f"  Event Sources: {summary.get('DeduplicatedEventSources', 0):,}")
@@ -751,7 +854,9 @@ Examples:
                         include_entities=not args.no_entities,
                         include_sources=not args.no_sources,
                         exclude_unknown_records=args.exclude_unknown_records,
-                        anonymize=args.anonymize
+                        anonymize=args.anonymize,
+                        all_dates=args.all_dates,
+                        include_history=args.include_history,
                     )
                 else:
                     # Use standard table export
@@ -759,7 +864,9 @@ Examples:
                         table_name=args.table,
                         output_file=output_file,
                         format=format_type,
-                        date_range=args.date_range
+                        date_range=args.date_range,
+                        all_dates=args.all_dates,
+                        include_history=args.include_history,
                     )
 
                 if success:
@@ -774,6 +881,14 @@ Examples:
                     print(f"   Output file: {abs_path}")
                 if args.date_range:
                     print(f"   Date range: {args.date_range[0]} to {args.date_range[1]}")
+                if args.table == INCIDENT_TABLE:
+                    if args.include_history:
+                        print("   Population: ALL rows including Merged and Rejected history")
+                    else:
+                        print("   Population: active incidents"
+                              + ("" if args.date_range else
+                                 (", all dates" if args.all_dates else
+                                  f", {dashboard_period()}")))
                 if args.detailed:
                     print(f"   Included detailed entity and source information")
                 if args.exclude_unknown_records:

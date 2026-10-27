@@ -14,10 +14,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from html import escape as html_escape
 import logging
 import os
 import re
 import sqlite3
+import sys
 import json
 import glob
 from datetime import date, timedelta
@@ -32,6 +34,26 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
 
+from cyber_data_collector.reporting.population import (  # noqa: E402
+    ASD_POPULATION_FROM,
+    OAIC_DETAIL_FIRST_YEAR,
+    VICTIM_ENTITY_JOINS,
+    ReconciliationCheck,
+    ReconciliationError,
+    ReportingPeriod,
+    calendar_year,
+    count_classifications,
+    count_incidents,
+    DASHBOARD_REPORTING_START,
+    dashboard_period,
+    half_year,
+    half_year_from_label,
+    incident_filter,
+    population_breakdown,
+    reconcile,
+    span_of,
+    sum_counts,
+)
 from scripts.oaic.oaic_validators import sanitize_top_sectors
 
 # Match the YYYYMMDD_HHMMSS scrape stamp embedded in OAIC output filenames.
@@ -54,6 +76,9 @@ def _oaic_files_newest_first() -> List[str]:
     return sorted(glob.glob('oaic_cyber_statistics_*.json'), key=_key, reverse=True)
 
 logger = logging.getLogger(__name__)
+
+# First day the dashboard reports on (see cyber_data_collector.reporting.population).
+DASHBOARD_START = DASHBOARD_REPORTING_START
 
 ASD_VALID_STAKEHOLDER_CATEGORIES = [
     "Member(s) of the public",
@@ -117,19 +142,30 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _incidents(start_date: str, end_date: str, alias: str = "") -> Tuple[str, List[str]]:
+    """WHERE fragment and params for the active incidents dated start..end inclusive.
+
+    Every incident query in this file goes through here (and so through
+    ``cyber_data_collector.reporting.population``), so the status filter and the
+    period boundaries are defined once. Do not write ``status = 'Active'`` or a
+    date literal in a query: that is how the ASD matrix came to count merged and
+    rejected events.
+    """
+    return incident_filter(ReportingPeriod.from_iso(start_date, end_date), alias)
+
+
 def get_monthly_event_counts(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             COUNT(DISTINCT deduplicated_event_id) as unique_events
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
+        WHERE {where}
         GROUP BY strftime('%Y-%m', event_date)
         ORDER BY month
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     months = [r['month'] for r in rows if r['month']]
     counts = [r['unique_events'] for r in rows if r['month']]
 
@@ -193,15 +229,14 @@ def get_monthly_event_counts(conn: sqlite3.Connection, start_date: str, end_date
 
 
 def get_monthly_severity_trends(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             severity,
             COUNT(DISTINCT deduplicated_event_id) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
+        WHERE {where}
         GROUP BY strftime('%Y-%m', event_date), severity
         ORDER BY month,
             CASE severity
@@ -212,7 +247,7 @@ def get_monthly_severity_trends(conn: sqlite3.Connection, start_date: str, end_d
                 ELSE 5
             END
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     months: List[str] = []
     severity_data: Dict[str, List[int]] = {}
     for r in rows:
@@ -228,7 +263,9 @@ def get_monthly_severity_trends(conn: sqlite3.Connection, start_date: str, end_d
             severity_data[severity] = []
         while len(severity_data[severity]) < len(months):
             severity_data[severity].append(0)
-        severity_data[severity][-1] = count
+        # += not =: 'High' and 'EventSeverity.HIGH' normalise to one label, and
+        # overwriting would drop one spelling's events from the month's total.
+        severity_data[severity][-1] += count
     for sev in list(severity_data.keys()):
         while len(severity_data[sev]) < len(months):
             severity_data[sev].append(0)
@@ -237,20 +274,19 @@ def get_monthly_severity_trends(conn: sqlite3.Connection, start_date: str, end_d
 
 def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
     # First, get all records_affected values grouped by month for median calculation
-    detail_query = """
+    where, params = _incidents(start_date, end_date)
+    detail_query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             CAST(records_affected AS FLOAT) as records_affected
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
             AND CAST(records_affected AS INTEGER) <= 1000000000
-            AND event_date >= ?
-            AND event_date <= ?
         ORDER BY month, records_affected
     """
-    detail_rows = conn.execute(detail_query, (start_date, end_date)).fetchall()
+    detail_rows = conn.execute(detail_query, params).fetchall()
 
     # Group by month and calculate median
     from collections import defaultdict
@@ -260,7 +296,7 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
             monthly_values[r['month']].append(r['records_affected'])
 
     # Get aggregate stats per month
-    query = """
+    query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             AVG(CAST(records_affected AS FLOAT)) as avg_records,
@@ -268,16 +304,14 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
             MIN(CAST(records_affected AS FLOAT)) as min_records,
             MAX(CAST(records_affected AS FLOAT)) as max_records
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
             AND CAST(records_affected AS INTEGER) <= 1000000000
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY strftime('%Y-%m', event_date)
         ORDER BY month
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     months, averages, medians, ci, sample_sizes = [], [], [], [], []
     for r in rows:
         if not r['month']:
@@ -312,19 +346,18 @@ def get_monthly_records_affected(conn: sqlite3.Connection, start_date: str, end_
 
 
 def get_monthly_event_type_mix(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             event_type,
             COUNT(DISTINCT deduplicated_event_id) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
+        WHERE {where}
         GROUP BY strftime('%Y-%m', event_date), event_type
         ORDER BY month, event_type
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     months: List[str] = []
     event_types: Dict[str, List[int]] = {}
     for r in rows:
@@ -340,7 +373,8 @@ def get_monthly_event_type_mix(conn: sqlite3.Connection, start_date: str, end_da
             event_types[event_type] = []
         while len(event_types[event_type]) < len(months):
             event_types[event_type].append(0)
-        event_types[event_type][-1] = count
+        # += for the same reason as severity: two raw spellings, one label.
+        event_types[event_type][-1] += count
     for et in list(event_types.keys()):
         while len(event_types[et]) < len(months):
             event_types[et].append(0)
@@ -349,18 +383,17 @@ def get_monthly_event_type_mix(conn: sqlite3.Connection, start_date: str, end_da
 
 def get_overall_event_type_mix(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
     """Get overall event type distribution across the full period."""
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             COALESCE(event_type, 'Unknown') as event_type,
             COUNT(DISTINCT deduplicated_event_id) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
+        WHERE {where}
         GROUP BY event_type
         ORDER BY event_count DESC
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     labels: List[str] = []
     counts: List[int] = []
     for r in rows:
@@ -399,18 +432,17 @@ def get_entity_type_distribution(conn: sqlite3.Connection, start_date: str, end_
         category_mapping[group_name] = keywords
 
     # Query for industry event counts
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             COALESCE(victim_organization_industry, 'Unknown') as industry,
             COUNT(DISTINCT deduplicated_event_id) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
+        WHERE {where}
         GROUP BY victim_organization_industry
         ORDER BY event_count DESC
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     # Count events by category
     category_counts = {}
@@ -448,22 +480,21 @@ def get_entity_type_distribution(conn: sqlite3.Connection, start_date: str, end_
 
 
 def get_records_affected_histogram(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             CAST(records_affected AS INTEGER) as records_affected,
             event_type,
             severity,
             COUNT(*) as frequency
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY CAST(records_affected AS INTEGER), event_type, severity
         ORDER BY CAST(records_affected AS INTEGER)
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
     bins = ['1-10', '11-100', '101-1K', '1K-10K', '10K-100K', '100K-1M', '1M-10M', '10M+']
     freqs = [0] * len(bins)
 
@@ -513,8 +544,12 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
     # Severity values to ignore for the max/avg charts (clean + legacy bug variants).
     excluded = ('Unknown', 'EventSeverity.UNKNOWN', 'EventSeverity.UNKNOW')
 
-    # Query for maximum severity
-    query_max = """
+    where_de, params_de = _incidents(start_date, end_date, "de")
+    where, params = _incidents(start_date, end_date)
+
+    # Query for maximum severity. Entities are joined from the incident
+    # (VICTIM_ENTITY_JOINS), so they can only describe events in the population.
+    query_max = f"""
         SELECT
             strftime('%Y-%m', de.event_date) as month,
             de.severity,
@@ -522,18 +557,10 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             e.entity_name,
             de.deduplicated_event_id
         FROM DeduplicatedEvents de
-        LEFT JOIN DeduplicatedEventEntities dee
-               ON de.deduplicated_event_id = dee.deduplicated_event_id
-              -- Only the breached organisation. Without this the join
-              -- can return any linked entity, including the customers
-              -- affected ("Australians") or a regulator.
-              AND dee.relationship_type = 'victim'
-        LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
-        WHERE de.status = 'Active'
+        {VICTIM_ENTITY_JOINS}
+        WHERE {where_de}
             AND de.severity IS NOT NULL
             AND de.severity NOT IN (?, ?, ?)
-            AND de.event_date >= ?
-            AND de.event_date <= ?
         ORDER BY strftime('%Y-%m', de.event_date),
             CASE de.severity
                 WHEN 'Critical' THEN 1
@@ -549,7 +576,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
     """
 
     # Query for average severity (Unknown excluded so it doesn't drag the mean to 0).
-    query_avg = """
+    query_avg = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             AVG(CASE severity
@@ -564,17 +591,15 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
                 ELSE NULL
             END) as avg_severity_numeric
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND severity IS NOT NULL
             AND severity NOT IN (?, ?, ?)
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY month
         ORDER BY month
     """
 
     # Get maximum severity per month
-    rows = conn.execute(query_max, (*excluded, start_date, end_date)).fetchall()
+    rows = conn.execute(query_max, (*params_de, *excluded)).fetchall()
 
     # Group by month and get the first (highest severity) event
     monthly_max = {}
@@ -592,7 +617,7 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
             }
 
     # Get average severity per month
-    avg_rows = conn.execute(query_avg, (*excluded, start_date, end_date)).fetchall()
+    avg_rows = conn.execute(query_avg, (*params, *excluded)).fetchall()
     monthly_avg = {}
     for row in avg_rows:
         month = row['month']
@@ -619,19 +644,18 @@ def get_maximum_severity_per_month(conn: sqlite3.Connection, start_date: str, en
 def get_median_severity_per_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
     """Get median severity per month, excluding Unknown / unrecognised values."""
     excluded = ('Unknown', 'EventSeverity.UNKNOWN', 'EventSeverity.UNKNOW')
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             strftime('%Y-%m', event_date) as month,
             severity
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND severity IS NOT NULL
             AND severity NOT IN (?, ?, ?)
-            AND event_date >= ?
-            AND event_date <= ?
         ORDER BY month, event_date
     """
-    rows = conn.execute(query, (*excluded, start_date, end_date)).fetchall()
+    rows = conn.execute(query, (*params, *excluded)).fetchall()
 
     # Group by month and calculate median
     monthly_severities = {}
@@ -674,7 +698,8 @@ def get_maximum_records_affected_per_month(conn: sqlite3.Connection, start_date:
 
     Filters out unrealistic values (> 1 billion) to exclude data quality issues.
     """
-    query = """
+    where, params = _incidents(start_date, end_date, "de")
+    query = f"""
         SELECT
             strftime('%Y-%m', de.event_date) as month,
             de.title,
@@ -686,23 +711,15 @@ def get_maximum_records_affected_per_month(conn: sqlite3.Connection, start_date:
             CAST(de.records_affected AS INTEGER) as records_affected,
             de.deduplicated_event_id
         FROM DeduplicatedEvents de
-        LEFT JOIN DeduplicatedEventEntities dee
-               ON de.deduplicated_event_id = dee.deduplicated_event_id
-              -- Only the breached organisation. Without this the join
-              -- can return any linked entity, including the customers
-              -- affected ("Australians") or a regulator.
-              AND dee.relationship_type = 'victim'
-        LEFT JOIN EntitiesV2 e ON dee.entity_id = e.entity_id
+        {VICTIM_ENTITY_JOINS}
         LEFT JOIN EnrichedEvents me ON de.master_enriched_event_id = me.enriched_event_id
-        WHERE de.status = 'Active'
+        WHERE {where}
             AND de.records_affected IS NOT NULL
             AND CAST(de.records_affected AS INTEGER) > 0
             AND CAST(de.records_affected AS INTEGER) <= 1000000000
-            AND de.event_date >= ?
-            AND de.event_date <= ?
         ORDER BY de.event_date, CAST(de.records_affected AS INTEGER) DESC
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     # Get maximum record for each month
     monthly_max = {}
@@ -762,20 +779,19 @@ def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date
         category_mapping[group_name] = keywords
 
     # Query for severity data by raw industry
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             COALESCE(victim_organization_industry, 'Unknown') as industry,
             severity,
             COUNT(*) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND severity IS NOT NULL
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY victim_organization_industry, severity
         ORDER BY victim_organization_industry
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     # Map raw industries to categories and calculate weighted average severity
     category_data = {}
@@ -836,20 +852,19 @@ def get_severity_by_industry(conn: sqlite3.Connection, start_date: str, end_date
 
 def get_severity_by_attack_type(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
     """Get average severity by attack type."""
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             COALESCE(event_type, 'Unknown') as attack_type,
             severity,
             COUNT(*) as event_count
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND severity IS NOT NULL
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY event_type, severity
         ORDER BY event_type
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     # Calculate weighted average severity by attack type
     attack_type_data = {}
@@ -888,23 +903,22 @@ def get_records_affected_by_attack_type(conn: sqlite3.Connection, start_date: st
 
     Filters out unrealistic values (> 1 billion) to exclude data quality issues.
     """
-    query = """
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             COALESCE(event_type, 'Unknown') as attack_type,
             CAST(records_affected AS FLOAT) as records_affected,
             COUNT(*) as event_count,
             SUM(CAST(records_affected AS FLOAT)) as total_records
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
+        WHERE {where}
             AND records_affected IS NOT NULL
             AND CAST(records_affected AS INTEGER) > 0
             AND CAST(records_affected AS INTEGER) <= 1000000000
-            AND event_date >= ?
-            AND event_date <= ?
         GROUP BY event_type
         ORDER BY total_records DESC
     """
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     attack_types = []
     avg_records = []
@@ -1049,9 +1063,31 @@ def load_oaic_data() -> List[Dict[str, Any]]:
     return merged_data
 
 
+def _oaic_record_period(record: Dict[str, Any]) -> Optional[ReportingPeriod]:
+    """The half-year an OAIC semester record covers, or None if it is malformed."""
+    year, period = record.get('year'), record.get('period')
+    if isinstance(year, int) and period in ('H1', 'H2'):
+        return half_year(year, period)
+    return None
+
+
+def _oaic_span(records: List[Dict[str, Any]]) -> Optional[ReportingPeriod]:
+    """The period covered by exactly these OAIC records.
+
+    Every OAIC-vs-database comparison queries the database over the semesters
+    the OAIC side actually used, so the two columns of a chart always describe
+    the same dates. (They used to use independent literals: OAIC summed over all
+    periods while the database was cut at 2019-2024, under a "2020-2025" title.)
+    """
+    return span_of(p for p in map(_oaic_record_period, records) if p is not None)
+
+
 def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
     """Get half-yearly event counts from the database to compare with OAIC data."""
-    query = """
+    # The 2020 floor used to be a second, hard-coded copy of the reporting start;
+    # the period passed in already carries it.
+    where, params = _incidents(start_date, end_date)
+    query = f"""
         SELECT
             CASE
                 WHEN CAST(strftime('%m', event_date) AS INTEGER) BETWEEN 1 AND 6 THEN 'H1'
@@ -1060,10 +1096,7 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
             strftime('%Y', event_date) as year,
             COUNT(DISTINCT deduplicated_event_id) as unique_events
         FROM DeduplicatedEvents
-        WHERE status = 'Active'
-            AND event_date >= ?
-            AND event_date <= ?
-            AND CAST(strftime('%Y', event_date) AS INTEGER) >= 2020
+        WHERE {where}
         GROUP BY strftime('%Y', event_date),
             CASE
                 WHEN CAST(strftime('%m', event_date) AS INTEGER) BETWEEN 1 AND 6 THEN 'H1'
@@ -1072,7 +1105,7 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
         ORDER BY year, half_year
     """
 
-    rows = conn.execute(query, (start_date, end_date)).fetchall()
+    rows = conn.execute(query, params).fetchall()
 
     periods = []
     database_counts = []
@@ -1481,28 +1514,32 @@ def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[d
     among its member records.
     """
     extraction = _parse_collection_date(get_data_collection_timestamp(conn))
-    if extraction is None:
+    if extraction is None or extraction < DASHBOARD_START:
         return None
+    # Same population and window as the monthly chart these estimates sit on:
+    # active incidents from the reporting start up to the extraction date.
+    where_de, params_de = incident_filter(ReportingPeriod(DASHBOARD_START, extraction), "de")
+    where, params = incident_filter(ReportingPeriod(DASHBOARD_START, extraction))
     try:
         start_row = conn.execute("SELECT MIN(discovered_at) FROM RawEvents").fetchone()
         collection_start = _parse_collection_date(start_row[0] if start_row else None)
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT de.event_date, MIN(re.discovered_at)
             FROM DeduplicatedEvents de
             JOIN EventDeduplicationMap m ON m.deduplicated_event_id = de.deduplicated_event_id
             JOIN EnrichedEvents ee ON ee.enriched_event_id = m.enriched_event_id
             JOIN RawEvents re ON re.raw_event_id = ee.raw_event_id
-            WHERE de.status = 'Active' AND de.event_date IS NOT NULL
+            WHERE {where_de}
             GROUP BY de.deduplicated_event_id
-        """).fetchall()
-        count_rows = conn.execute("""
+        """, params_de).fetchall()
+        count_rows = conn.execute(f"""
             SELECT CAST(strftime('%Y', event_date) AS INTEGER),
                    CAST(strftime('%m', event_date) AS INTEGER),
                    COUNT(DISTINCT deduplicated_event_id)
             FROM DeduplicatedEvents
-            WHERE status = 'Active' AND event_date IS NOT NULL AND event_date <= ?
+            WHERE {where}
             GROUP BY 1, 2
-        """, (extraction.isoformat(),)).fetchall()
+        """, params).fetchall()
     except sqlite3.Error as exc:
         logger.warning("Bornhuetter-Ferguson inputs unavailable: %s", exc)
         return None
@@ -1725,11 +1762,18 @@ def normalize_sector_name(sector: str) -> str:
 
 
 def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'instance/cyber_events.db') -> Dict[str, Any]:
-    """Prepare OAIC top sectors affected with database comparison (aggregated 2019-2024)."""
+    """Prepare OAIC top sectors affected with database comparison.
+
+    Both sides cover the same semesters: those from the dashboard reporting start
+    (2020) onward that contributed at least one sector count. The span is
+    returned as ``period_label`` so the chart title states it rather than
+    hard-coding a range.
+    """
     from collections import defaultdict
     import sqlite3
 
     sector_totals = defaultdict(int)
+    contributing_records: List[Dict[str, Any]] = []
 
     # Sanity range: real OAIC top-5 sector counts per semester are between
     # ~10 and ~250 per sector. Anything below 10 is almost certainly a rank
@@ -1743,7 +1787,11 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     dropped = 0
 
     for record in oaic_data:
+        record_period = _oaic_record_period(record)
+        if record_period is None or record_period.start < DASHBOARD_START:
+            continue
         top_sectors = record.get('top_sectors') or []
+        counted_any = False
         for sector_entry in top_sectors:
             sector = sector_entry.get('sector')
             notifications = sector_entry.get('notifications', 0)
@@ -1764,6 +1812,10 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
                 continue
             normalized_sector = normalize_sector_name(sector)
             sector_totals[normalized_sector] += n
+            counted_any = True
+        if counted_any:
+            contributing_records.append(record)
+    sector_period = _oaic_span(contributing_records)
     if dropped:
         logger.warning(
             "OAIC top-sectors aggregation: dropped %d entries outside "
@@ -1778,23 +1830,25 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
     top_sectors_list = sorted_sectors[:10]
     sector_count = len(top_sectors_list)
 
-    # Get database counts for 2019-2024
+    # Database counts over the same semesters the OAIC totals were summed over.
     db_counts = {}
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT victim_organization_industry, COUNT(*) as count
-            FROM DeduplicatedEvents
-            WHERE event_date >= '2019-01-01' AND event_date <= '2024-12-31'
-            AND victim_organization_industry IS NOT NULL
-            GROUP BY victim_organization_industry
-        """)
-        for row in cursor.fetchall():
-            db_counts[row[0]] = row[1]
-        conn.close()
-    except Exception as e:
-        logger.warning("Could not query database for sector counts: %s", e)
+    if sector_period is not None:
+        try:
+            conn = sqlite3.connect(db_path)
+            where, params = incident_filter(sector_period)
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT victim_organization_industry, COUNT(*) as count
+                FROM DeduplicatedEvents
+                WHERE {where}
+                AND victim_organization_industry IS NOT NULL
+                GROUP BY victim_organization_industry
+            """, params)
+            for row in cursor.fetchall():
+                db_counts[row[0]] = row[1]
+            conn.close()
+        except Exception as e:
+            logger.warning("Could not query database for sector counts: %s", e)
 
     # Map database industry names to OAIC sector names (using normalized names)
     industry_mapping = {
@@ -1836,7 +1890,10 @@ def prepare_oaic_sectors_data(oaic_data: List[Dict[str, Any]], db_path: str = 'i
         'oaic_counts': oaic_counts,
         'database_counts': database_counts,
         'ratios': ratios,
-        'sector_count': sector_count
+        'sector_count': sector_count,
+        'period_label': sector_period.label if sector_period else '',
+        'period_start': sector_period.start_iso if sector_period else None,
+        'period_end': sector_period.end_iso if sector_period else None,
     }
 
 
@@ -1962,28 +2019,33 @@ def prepare_oaic_individuals_affected_data(oaic_data: List[Dict[str, Any]], db_p
     medians = []
     db_averages = []
 
-    # Get database averages by half-year period
+    # Database averages by half-year, over the semesters OAIC reports (the old
+    # hard-coded 2019-2025 window would have silently dropped 2026 H1 as soon as
+    # OAIC published it).
     db_data = {}
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                strftime('%Y', event_date) as year,
-                CASE WHEN CAST(strftime('%m', event_date) AS INTEGER) <= 6 THEN 'H1' ELSE 'H2' END as half,
-                AVG(records_affected) as avg_records
-            FROM DeduplicatedEvents
-            WHERE event_date >= '2019-01-01' AND event_date <= '2025-12-31'
-            AND records_affected IS NOT NULL
-            GROUP BY year, half
-            ORDER BY year, half
-        """)
-        for row in cursor.fetchall():
-            period_key = f"{row[0]} {row[1]}"
-            db_data[period_key] = row[2]
-        conn.close()
-    except Exception as e:
-        logger.warning("Could not query database for records affected: %s", e)
+    oaic_period = _oaic_span(oaic_data)
+    if oaic_period is not None:
+        try:
+            conn = sqlite3.connect(db_path)
+            where, params = incident_filter(oaic_period)
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT
+                    strftime('%Y', event_date) as year,
+                    CASE WHEN CAST(strftime('%m', event_date) AS INTEGER) <= 6 THEN 'H1' ELSE 'H2' END as half,
+                    AVG(records_affected) as avg_records
+                FROM DeduplicatedEvents
+                WHERE {where}
+                AND records_affected IS NOT NULL
+                GROUP BY year, half
+                ORDER BY year, half
+            """, params)
+            for row in cursor.fetchall():
+                period_key = f"{row[0]} {row[1]}"
+                db_data[period_key] = row[2]
+            conn.close()
+        except Exception as e:
+            logger.warning("Could not query database for records affected: %s", e)
 
     for record in sorted(oaic_data, key=lambda x: (x.get('year', 0), x.get('start_month', 0))):
         year = record.get('year')
@@ -2023,11 +2085,12 @@ def prepare_oaic_monthly_comparison(
     oaic_data: List[Dict[str, Any]],
     db_path: str = 'instance/cyber_events.db',
 ) -> Dict[str, Any]:
-    """OAIC monthly notifications vs DB monthly event count for 2022-01 onwards.
+    """OAIC monthly notifications vs DB monthly event count.
 
     OAIC publishes per-month bar charts for each semester on page 2. We unfold
     each semester record into 6 (or fewer) {month, oaic_count} entries indexed
-    by absolute YYYY-MM, then join with DB-event-count-per-month.
+    by absolute YYYY-MM, then join with DB-event-count-per-month. The database
+    is counted over exactly the months OAIC reported.
     """
     import sqlite3
 
@@ -2054,15 +2117,24 @@ def prepare_oaic_monthly_comparison(
 
     months = sorted(oaic_by_ym.keys())
 
-    # DB counts per month over the same range
+    # DB counts per month over the same range: first reported month to the end of
+    # the last reported month.
+    first_year, first_month = int(months[0][:4]), int(months[0][5:7])
+    last_year, last_month = int(months[-1][:4]), int(months[-1][5:7])
+    month_period = ReportingPeriod(
+        date(first_year, first_month, 1),
+        _month_last_day(last_year, last_month),
+        f"{months[0]} to {months[-1]}",
+    )
     db_by_ym: Dict[str, int] = {}
     try:
         conn = sqlite3.connect(db_path)
+        where, params = incident_filter(month_period)
         for ym, c in conn.execute(
             "SELECT strftime('%Y-%m', event_date) ym, COUNT(*) c "
-            "FROM DeduplicatedEvents "
-            "WHERE status='Active' AND event_date IS NOT NULL "
-            "GROUP BY ym"
+            f"FROM DeduplicatedEvents WHERE {where} "
+            "GROUP BY ym",
+            params,
         ):
             db_by_ym[ym] = c
         conn.close()
@@ -2081,7 +2153,11 @@ def prepare_individuals_affected_distribution_comparison(
     db_path: str = 'instance/cyber_events.db',
 ) -> Dict[str, Any]:
     """Comparison of individuals-affected bucket distribution: OAIC vs DB,
-    aggregated across 2022 H1 - latest semester.
+    aggregated across 2022 H1 to the latest semester OAIC reports.
+
+    The database is bounded by the same semesters. It used to be open-ended
+    ("2022-01-01 onwards"), so incidents from after OAIC's latest published
+    semester were compared against a distribution that could not contain them.
     """
     import sqlite3
 
@@ -2097,43 +2173,59 @@ def prepare_individuals_affected_distribution_comparison(
         ('50,001-100,000',        50_001, 100_000),
         ('100,001-250,000',       100_001, 250_000),
         ('250,001-500,000',       250_001, 500_000),
+        # These two were missing, so the chart silently dropped every OAIC count and
+        # every database incident that fell in them (15 incidents in 2022-2025). The
+        # reconciliation against the population is what exposed it.
+        ('500,001-1,000,000',     500_001, 1_000_000),
         ('1,000,001-10,000,000',  1_000_001, 10_000_000),
+        ('10,000,001+',           10_000_001, float('inf')),
     ]
     label_to_idx = {lbl: i for i, (lbl, _, _) in enumerate(BUCKETS)}
 
     oaic_totals = [0] * len(BUCKETS)
+    used_records: List[Dict[str, Any]] = []
     for r in oaic_data:
-        if (r.get('year') or 0) < 2022:
+        if (r.get('year') or 0) < OAIC_DETAIL_FIRST_YEAR:
             continue
+        used = False
         for entry in (r.get('individuals_affected_distribution') or []):
             label = (entry.get('range') or '').strip()
             count = entry.get('count')
             if label in label_to_idx and isinstance(count, (int, float)):
                 oaic_totals[label_to_idx[label]] += int(count)
+                used = True
+        if used:
+            used_records.append(r)
+    dist_period = _oaic_span(used_records)
 
-    # DB: bucket records_affected
+    # DB: bucket records_affected over the semesters OAIC contributed
     db_totals = [0] * len(BUCKETS)
-    try:
-        conn = sqlite3.connect(db_path)
-        for ra, in conn.execute(
-            "SELECT records_affected FROM DeduplicatedEvents "
-            "WHERE status='Active' AND records_affected IS NOT NULL "
-            "AND event_date >= '2022-01-01'"
-        ):
-            if not isinstance(ra, (int, float)) or ra < 1:
-                continue
-            for i, (_lbl, lo, hi) in enumerate(BUCKETS):
-                if lo <= ra <= hi:
-                    db_totals[i] += 1
-                    break
-        conn.close()
-    except Exception as e:
-        logger.warning("Individuals-affected DB bucket query failed: %s", e)
+    if dist_period is not None:
+        try:
+            conn = sqlite3.connect(db_path)
+            where, params = incident_filter(dist_period)
+            for ra, in conn.execute(
+                "SELECT records_affected FROM DeduplicatedEvents "
+                f"WHERE {where} AND records_affected IS NOT NULL",
+                params,
+            ):
+                if not isinstance(ra, (int, float)) or ra < 1:
+                    continue
+                for i, (_lbl, lo, hi) in enumerate(BUCKETS):
+                    if lo <= ra <= hi:
+                        db_totals[i] += 1
+                        break
+            conn.close()
+        except Exception as e:
+            logger.warning("Individuals-affected DB bucket query failed: %s", e)
 
     return {
         'buckets':     [b[0] for b in BUCKETS],
         'oaic_counts': oaic_totals,
         'db_counts':   db_totals,
+        'period_label': dist_period.label if dist_period else '',
+        'period_start': dist_period.start_iso if dist_period else None,
+        'period_end':   dist_period.end_iso if dist_period else None,
     }
 
 
@@ -2152,7 +2244,7 @@ def prepare_source_split_comparison(
     oaic_human, oaic_malicious, oaic_system = [], [], []
     for r in sorted(oaic_data, key=lambda x: (x.get('year') or 0, x.get('period') or '')):
         year, period = r.get('year'), r.get('period')
-        if not (isinstance(year, int) and period in ('H1', 'H2') and year >= 2022):
+        if not (isinstance(year, int) and period in ('H1', 'H2') and year >= OAIC_DETAIL_FIRST_YEAR):
             continue
         bs = r.get('breach_sources') or {}
         he = (bs.get('human_error') or {}).get('current_period')
@@ -2175,20 +2267,14 @@ def prepare_source_split_comparison(
     try:
         conn = sqlite3.connect(db_path)
         for label in periods:
-            year_str, half = label.split()
-            year = int(year_str)
-            if half == 'H1':
-                start, end = f"{year}-01-01", f"{year}-06-30"
-            else:
-                start, end = f"{year}-07-01", f"{year}-12-31"
+            where, params = incident_filter(half_year_from_label(label))
             row = conn.execute(
                 "SELECT "
                 "  SUM(CASE WHEN breach_source_category IN ('Cyber Incident','Malicious or Criminal Attack') THEN 1 ELSE 0 END), "
                 "  SUM(CASE WHEN breach_source_category = 'Human Error' THEN 1 ELSE 0 END), "
                 "  SUM(CASE WHEN breach_source_category = 'System Fault' THEN 1 ELSE 0 END) "
-                "FROM DeduplicatedEvents "
-                "WHERE status='Active' AND event_date BETWEEN ? AND ?",
-                (start, end),
+                f"FROM DeduplicatedEvents WHERE {where}",
+                params,
             ).fetchone()
             db_malicious.append(int(row[0] or 0))
             db_human.append(int(row[1] or 0))
@@ -2225,7 +2311,7 @@ def prepare_oaic_time_distribution_series(
 
     relevant = [
         r for r in oaic_data
-        if (r.get('year') or 0) >= 2022 and r.get(field_name)
+        if (r.get('year') or 0) >= OAIC_DETAIL_FIRST_YEAR and r.get(field_name)
     ]
     relevant.sort(key=lambda r: (r['year'], r['period']))
 
@@ -2271,7 +2357,7 @@ def prepare_oaic_personal_info_series(
 
     periods, series = [], {}
     relevant = [r for r in oaic_data
-                if (r.get('year') or 0) >= 2022 and r.get('personal_info_types')]
+                if (r.get('year') or 0) >= OAIC_DETAIL_FIRST_YEAR and r.get('personal_info_types')]
     relevant.sort(key=lambda r: (r['year'], r['period']))
     cats = ['contact_information', 'identity_information', 'financial_details',
             'health_information', 'tax_file_numbers', 'other_sensitive_information']
@@ -2291,18 +2377,13 @@ def prepare_oaic_personal_info_series(
     try:
         conn = sqlite3.connect(db_path)
         for label in periods:
-            y_str, half = label.split()
-            y = int(y_str)
-            if half == 'H1':
-                start, end = f"{y}-01-01", f"{y}-06-30"
-            else:
-                start, end = f"{y}-07-01", f"{y}-12-31"
+            where, params = incident_filter(half_year_from_label(label))
             tally = {c: 0 for c in cats}
             for row in conn.execute(
                 "SELECT personal_info_types_json FROM DeduplicatedEvents "
-                "WHERE status='Active' AND event_date BETWEEN ? AND ? "
+                f"WHERE {where} "
                 "AND personal_info_types_json IS NOT NULL",
-                (start, end),
+                params,
             ):
                 try:
                     d = json.loads(row[0])
@@ -2430,15 +2511,38 @@ def compute_monthly_counts_stats(monthly_counts: Dict[str, Any]) -> Dict[str, An
     }
 
 
-def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) -> Dict[str, Any]:
+def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None,
+                        period: Optional[ReportingPeriod] = None) -> Dict[str, Any]:
     """Aggregate ASD risk classifications into a matrix by impact type and stakeholder groups.
 
+    Counts only classifications of *active incidents* dated inside the period
+    (``ASD_POPULATION_FROM`` is an INNER JOIN to ``DeduplicatedEvents`` filtered by
+    ``incident_filter``). It used to LEFT JOIN with no status filter, so the
+    classifications of merged and rejected events were counted too: 1,201
+    classifications against 643 real classified incidents.
+
+    Args:
+        conn: Open database connection.
+        year: Restrict to this calendar year (clipped to ``period``).
+        period: Reporting window; defaults to the dashboard's (2020 to date), so
+            this matrix agrees with every other chart on the page.
+
+    The result carries ``population_classifications`` (what the population says
+    there should be) and ``unmapped_classifications`` (rows whose impact type or
+    stakeholder is not in the ASD vocabulary and so cannot be placed in a cell),
+    which is what lets the build prove ``total_classifications + unmapped ==
+    population_classifications``.
+
     NOTE: ASDRiskClassifications.deduplicated_event_id references DeduplicatedEvents.deduplicated_event_id
-    (NOT EnrichedEvents). Always join to DeduplicatedEvents for date filtering.
+    (NOT EnrichedEvents).
     """
     stakeholder_groups = list(ASD_STAKEHOLDER_GROUPS.keys())
 
-    def empty_matrix() -> Dict[str, Any]:
+    window = period or dashboard_period()
+    if year is not None:
+        window = calendar_year(year).intersect(window)
+
+    def empty_matrix(population: int = 0, unmapped: int = 0) -> Dict[str, Any]:
         return {
             'impact_types': ASD_VALID_IMPACT_TYPES,
             'stakeholder_groups': stakeholder_groups,
@@ -2447,29 +2551,27 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
                 for impact in ASD_VALID_IMPACT_TYPES
             ],
             'total_classifications': 0,
+            'population_classifications': population,
+            'unmapped_classifications': unmapped,
             'max_value': 0,
             'year': year,
+            'period_label': window.label if window else '',
+            'period_start': window.start_iso if window else None,
+            'period_end': window.end_iso if window else None,
         }
 
+    if window is None:
+        # The requested year lies wholly outside the reporting window.
+        return empty_matrix()
+
     try:
-        cursor = conn.cursor()
-        params: List[Any] = []
-        # IMPORTANT: Join to DeduplicatedEvents (not EnrichedEvents) - that's where the FK points
-        base_sql = """
-            SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count
-            FROM ASDRiskClassifications arc
-            LEFT JOIN DeduplicatedEvents de ON arc.deduplicated_event_id = de.deduplicated_event_id
-        """
-        where_clauses = []
-
-        if year:
-            where_clauses.append("de.event_date IS NOT NULL")
-            where_clauses.append("CAST(strftime('%Y', de.event_date) AS INTEGER) = ?")
-            params.append(year)
-
-        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        query = f"{base_sql} {where_sql} GROUP BY arc.impact_type, arc.primary_stakeholder_category"
-        rows = cursor.execute(query, params).fetchall()
+        where, params = incident_filter(window, "de")
+        query = (
+            "SELECT arc.impact_type, arc.primary_stakeholder_category, COUNT(*) as count "
+            f"FROM {ASD_POPULATION_FROM} WHERE {where} "
+            "GROUP BY arc.impact_type, arc.primary_stakeholder_category"
+        )
+        rows = conn.cursor().execute(query, params).fetchall()
     except Exception as e:
         logger.error("Error in get_asd_risk_matrix: %s", e)
         return empty_matrix()
@@ -2479,11 +2581,15 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
 
     valid_stakeholders = {cat for cats in ASD_STAKEHOLDER_GROUPS.values() for cat in cats}
     count_map: Dict[tuple, int] = {}
+    unmapped = 0
+    population = 0
     for row in rows:
         impact = row['impact_type']
         stakeholder = row['primary_stakeholder_category']
         count = int(row['count'])
+        population += count
         if impact not in ASD_VALID_IMPACT_TYPES or stakeholder not in valid_stakeholders:
+            unmapped += count
             continue
         count_map[(impact, stakeholder)] = count
 
@@ -2505,8 +2611,13 @@ def get_asd_risk_matrix(conn: sqlite3.Connection, year: Optional[int] = None) ->
         'stakeholder_groups': stakeholder_groups,
         'matrix': matrix,
         'total_classifications': total_classifications,
+        'population_classifications': population,
+        'unmapped_classifications': unmapped,
         'max_value': max_value,
         'year': year,
+        'period_label': window.label,
+        'period_start': window.start_iso,
+        'period_end': window.end_iso,
     }
 
 
@@ -2627,13 +2738,14 @@ def compute_incomplete_month_cutoff(latest_month: Optional[str],
 
 def get_latest_incident_month(conn: sqlite3.Connection, start_date: str, end_date: str) -> Optional[str]:
     """Return the latest active incident month ('YYYY-MM') within the date range."""
+    where, params = _incidents(start_date, end_date)
     row = conn.execute(
-        """
+        f"""
         SELECT MAX(strftime('%Y-%m', event_date))
         FROM DeduplicatedEvents
-        WHERE status = 'Active' AND event_date >= ? AND event_date <= ?
+        WHERE {where}
         """,
-        (start_date, end_date),
+        params,
     ).fetchone()
     return row[0] if row and row[0] else None
 
@@ -2682,6 +2794,11 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     asd_all = script_json(data.get('asd_risk_all', {}))
     asd_current = script_json(data.get('asd_risk_current', {}))
     asd_previous = script_json(data.get('asd_risk_previous', {}))
+    population = data.get('population') or {}
+    population_note = html_escape(population.get('note') or '')
+    asd_all_start = ((data.get('asd_risk_all') or {}).get('period_start') or '')[:4]
+    asd_all_label = f"{asd_all_start} to date" if asd_all_start else "All Years"
+    sector_period = html_escape((data.get('oaic_sectors') or {}).get('period_label') or '')
 
     template = """<!DOCTYPE html>
 <html lang="en">
@@ -2710,6 +2827,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         <div class="col-md-8">
           <h1 class="mb-0">Australian Cyber Security Events Dashboard</h1>
           <p class="mb-0 last-updated">Incident Date Range: __START__ to __INCIDENT_END__ &nbsp;&middot;&nbsp; Extraction Date: __EXTRACTED__</p>
+          <p class="mb-0 last-updated">__POPULATION_NOTE__</p>
         </div>
       </div>
     </div>
@@ -2820,7 +2938,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title" id="oaicSectorsTitle">OAIC: Top Affected Sectors (2020-2025)</div>
+          <div class="chart-title" id="oaicSectorsTitle">OAIC: Top Affected Sectors (__SECTOR_PERIOD__)</div>
           <canvas id="oaicSectorsChart"></canvas>
         </div>
       </div>
@@ -2877,7 +2995,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       <div class="col-lg-12 col-md-12">
         <div class="chart-container risk-matrix" style="height: auto;">
           <div class="chart-title d-flex justify-content-between align-items-center">
-            <span>Database: ASD Risk Matrix (All Years)</span>
+            <span>Database: ASD Risk Matrix (__ASD_ALL_LABEL__)</span>
             <span class="badge bg-secondary">Classifications: <span id="asdAllTotal">0</span></span>
           </div>
           <div id="asdRiskMatrixAll"></div>
@@ -3754,7 +3872,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicSectors;
       if (!data.sectors || data.sectors.length === 0) {
         document.getElementById('oaicSectorsChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC: Top Affected Sectors (2020-2025)</div>' +
+          '<div class="chart-title">OAIC: Top Affected Sectors</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
@@ -3762,7 +3880,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       // Update title based on actual sector count
       const sectorCount = data.sector_count || data.sectors.length;
       document.getElementById('oaicSectorsTitle').textContent =
-        `OAIC Top ${sectorCount} Affected Sectors (2020-2025)`;
+        `OAIC Top ${sectorCount} Affected Sectors (${data.period_label || ''})`;
 
       new Chart(document.getElementById('oaicSectorsChart').getContext('2d'), {
         type: 'bar',
@@ -3799,7 +3917,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             x: {
               title: {
                 display: true,
-                text: 'Total Notifications (2020-2025)'
+                text: 'Total Notifications (' + (data.period_label || '') + ')'
               }
             }
           }
@@ -4550,6 +4668,9 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
 """
 
     return (template
+            .replace('__POPULATION_NOTE__', population_note)
+            .replace('__ASD_ALL_LABEL__', asd_all_label)
+            .replace('__SECTOR_PERIOD__', sector_period)
             .replace('__START__', start_date)
             .replace('__INCIDENT_END__', header['incident_end'])
             .replace('__EXTRACTED__', header['extraction_date'])
@@ -4588,8 +4709,178 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
            )
 
 
+def _sum_nested(series: Dict[str, List[Any]]) -> int:
+    """Total of a {label: [monthly counts]} chart payload."""
+    return sum(sum_counts(values) for values in series.values())
+
+
+def describe_population(conn: sqlite3.Connection, period: ReportingPeriod) -> Dict[str, Any]:
+    """The explicit population this dashboard reports on, with what it left out."""
+    breakdown = population_breakdown(conn, period)
+    classified = count_classifications(conn, period)
+    note = (
+        f"Population: {breakdown['active_in_period']:,} active incidents dated "
+        f"{period.start_iso} to {period.end_iso}; {classified:,} with an ASD classification. "
+        f"Excludes {breakdown['merged']:,} merged and {breakdown['rejected']:,} rejected "
+        f"records (history), {breakdown['active_dated_outside_period']:,} active incidents dated "
+        f"outside the period and {breakdown['active_undated']:,} undated."
+    )
+    return {**breakdown, 'classified_in_period': classified, 'note': note}
+
+
+def build_reconciliation_checks(
+    conn: sqlite3.Connection,
+    data: Dict[str, Any],
+    period: ReportingPeriod,
+    series_period: ReportingPeriod,
+    full_monthly_counts: Dict[str, Any],
+) -> List[ReconciliationCheck]:
+    """Every claim that a chart total equals the reporting population's total.
+
+    Args:
+        conn: Open database connection.
+        data: The assembled dashboard payload (as passed to ``build_html``).
+        period: The dashboard reporting period (charts that use the full range).
+        series_period: ``period`` cut at the last complete month (the six monthly
+            trend charts drop an incomplete latest month).
+        full_monthly_counts: Untrimmed monthly counts, for the full-range total.
+
+    Each check pairs a figure the population computes independently of the chart
+    code (``count_incidents`` / ``count_classifications``) with the total the
+    chart will show. A chart that double counts, drops a spelling variant, or
+    reads a table outside the population disagrees with it.
+    """
+    population = count_incidents(conn, period)
+    series_population = count_incidents(conn, series_period)
+    checks: List[ReconciliationCheck] = [
+        ReconciliationCheck(
+            "Monthly unique events (full range)", population,
+            sum_counts(full_monthly_counts.get('counts', []))),
+        ReconciliationCheck(
+            "Monthly unique events (trend series)", series_population,
+            sum_counts(data['monthly_counts'].get('counts', [])),
+            "last complete month: " + series_period.end_iso),
+        ReconciliationCheck(
+            "Half-yearly database counts", population,
+            sum_counts(data['oaic_comparison'].get('database_counts', []))),
+        ReconciliationCheck(
+            "Overall event type mix", population,
+            sum_counts(data['overall_event_type_mix'].get('counts', []))),
+        ReconciliationCheck(
+            "Industry distribution", population,
+            sum_counts([t.get('events') for t in data['entity_types'].get('types', [])])),
+        ReconciliationCheck(
+            "Monthly severity trends", series_population,
+            _sum_nested(data['severity_trends'].get('data', {}))),
+        ReconciliationCheck(
+            "Monthly event type mix", series_population,
+            _sum_nested(data['event_type_mix'].get('types', {}))),
+    ]
+
+    # Records-affected histogram: a defined subset of the population.
+    where, params = incident_filter(period)
+    with_records = int(conn.execute(
+        f"SELECT COUNT(*) FROM DeduplicatedEvents WHERE {where} "
+        "AND records_affected IS NOT NULL AND CAST(records_affected AS INTEGER) > 0",
+        params,
+    ).fetchone()[0])
+    checks.append(ReconciliationCheck(
+        "Records-affected histogram", with_records,
+        sum_counts(data['records_histogram'].get('frequencies', [])),
+        "incidents with records_affected > 0"))
+
+    # Yearly counts must partition the total: an off-by-one at a year boundary
+    # (the classic BETWEEN / <= end-of-day error) shows up here.
+    years = range(period.start.year, period.end.year + 1)
+    yearly_incidents = 0
+    yearly_classifications = 0
+    for year in years:
+        window = calendar_year(year).intersect(period)
+        if window is not None:
+            yearly_incidents += count_incidents(conn, window)
+            yearly_classifications += count_classifications(conn, window)
+    classifications = count_classifications(conn, period)
+    checks.append(ReconciliationCheck(
+        "Yearly incident counts sum to total", population, yearly_incidents))
+    checks.append(ReconciliationCheck(
+        "Yearly ASD classification counts sum to total", classifications, yearly_classifications))
+
+    # ASD matrices: placed cells plus any the vocabulary could not place must
+    # equal the classifications of active incidents in the same window.
+    for key, label, window in (
+        ('asd_risk_all', "ASD matrix (all years)", period),
+        ('asd_risk_current', "ASD matrix (current year)",
+         calendar_year(period.end.year).intersect(period)),
+        ('asd_risk_previous', "ASD matrix (previous year)",
+         calendar_year(period.end.year - 1).intersect(period)),
+    ):
+        matrix = data.get(key) or {}
+        expected = count_classifications(conn, window) if window is not None else 0
+        shown = int(matrix.get('total_classifications', 0)) + int(matrix.get('unmapped_classifications', 0))
+        checks.append(ReconciliationCheck(
+            label, expected, shown,
+            f"{matrix.get('total_classifications', 0)} placed + "
+            f"{matrix.get('unmapped_classifications', 0)} unmapped"))
+
+    # Every classified incident has exactly one classification (UNIQUE
+    # constraint); if that is relaxed, per-incident matrix counts would exceed it.
+    where_de, params_de = incident_filter(period, "de")
+    classified_incidents = int(conn.execute(
+        f"SELECT COUNT(DISTINCT de.deduplicated_event_id) FROM {ASD_POPULATION_FROM} "
+        f"WHERE {where_de}", params_de).fetchone()[0])
+    checks.append(ReconciliationCheck(
+        "ASD classifications per classified incident", classified_incidents, classifications))
+
+    # OAIC comparisons: the database column is computed over the same window the
+    # OAIC column was summed over, so its total must match the population there.
+    monthly = data.get('oaic_monthly_comparison') or {}
+    months = monthly.get('months') or []
+    if months:
+        window = ReportingPeriod(
+            date(int(months[0][:4]), int(months[0][5:7]), 1),
+            _month_last_day(int(months[-1][:4]), int(months[-1][5:7])))
+        checks.append(ReconciliationCheck(
+            "OAIC monthly comparison: database months",
+            count_incidents(conn, window), sum_counts(monthly.get('db_counts', [])),
+            f"{months[0]} to {months[-1]}"))
+
+    sectors = data.get('oaic_sectors') or {}
+    if sectors.get('period_start'):
+        window = ReportingPeriod.from_iso(sectors['period_start'], sectors['period_end'])
+        checks.append(ReconciliationCheck(
+            "OAIC sectors: database count within population",
+            count_incidents(conn, window), sum_counts(sectors.get('database_counts', [])),
+            "industry-mapped subset", relation='<='))
+
+    distribution = data.get('oaic_individuals_affected_distribution') or {}
+    if distribution.get('period_start'):
+        window = ReportingPeriod.from_iso(distribution['period_start'], distribution['period_end'])
+        where_w, params_w = incident_filter(window)
+        with_records_w = int(conn.execute(
+            f"SELECT COUNT(*) FROM DeduplicatedEvents WHERE {where_w} "
+            "AND records_affected IS NOT NULL AND CAST(records_affected AS INTEGER) >= 1",
+            params_w).fetchone()[0])
+        checks.append(ReconciliationCheck(
+            "OAIC individuals-affected distribution: database buckets",
+            with_records_w, sum_counts(distribution.get('db_counts', [])),
+            f"{distribution.get('period_label', '')}; incidents with records_affected >= 1"))
+
+    split = data.get('oaic_source_split') or {}
+    if split.get('periods'):
+        expected_split = sum(
+            count_incidents(conn, half_year_from_label(label)) for label in split['periods'])
+        shown_split = (sum_counts(split.get('db_human', []))
+                       + sum_counts(split.get('db_malicious', []))
+                       + sum_counts(split.get('db_system', [])))
+        checks.append(ReconciliationCheck(
+            "OAIC source split: database within population", expected_split, shown_split,
+            "classified subset", relation='<='))
+    return checks
+
+
 def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
-                         out_dir: str = 'dashboard') -> str:
+                         out_dir: str = 'dashboard',
+                         check_only: bool = False) -> str:
     """Assemble every dashboard data section and write the static HTML.
 
     This is the single source of truth for dashboard generation. Both the
@@ -4599,23 +4890,30 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
     personal-info, monthly-comparison and individuals-distribution charts empty
     when run via the pipeline).
 
+    Every chart total is reconciled to the reporting population before anything
+    is written; a mismatch raises ``ReconciliationError`` and leaves any existing
+    index.html untouched.
+
     Args:
         db_path: Path to the SQLite database.
         out_dir: Directory to write index.html into.
+        check_only: Assemble and reconcile, but write nothing (used by
+            scripts/check_data_integrity.py to run the same checks as a build).
 
     Returns:
-        The path to the written index.html.
+        The path to the written index.html ('' when ``check_only``).
+
+    Raises:
+        ReconciliationError: if any chart total disagrees with the population.
     """
-    start_date = '2020-01-01'
-    end_date = date.today().strftime('%Y-%m-%d')
-    current_year = date.today().year
+    # One explicit reporting window for every chart: 2020-01-01 to the build date,
+    # inclusive (cyber_data_collector.reporting.population).
+    reporting_period = dashboard_period()
+    start_date = reporting_period.start_iso
+    end_date = reporting_period.end_iso
 
     if not os.path.exists(db_path):
         raise FileNotFoundError(f'Database not found: {db_path}')
-
-    out_dir_path = Path(out_dir)
-    out_dir_path.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir_path / 'index.html'
 
     # Load OAIC data
     oaic_data = load_oaic_data()
@@ -4696,10 +4994,30 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             'oaic_time_to_identify': oaic_time_to_identify,
             'oaic_time_to_notify': oaic_time_to_notify,
             'oaic_personal_info_types': oaic_personal_info_types,
-            'asd_risk_all': get_asd_risk_matrix(conn),
-            'asd_risk_current': get_asd_risk_matrix(conn, current_year),
-            'asd_risk_previous': get_asd_risk_matrix(conn, current_year - 1),
+            'asd_risk_all': get_asd_risk_matrix(conn, period=reporting_period),
+            'asd_risk_current': get_asd_risk_matrix(
+                conn, reporting_period.end.year, period=reporting_period),
+            'asd_risk_previous': get_asd_risk_matrix(
+                conn, reporting_period.end.year - 1, period=reporting_period),
+            'population': describe_population(conn, reporting_period),
         }
+
+        # Prove the charts add up to the population before anything is written.
+        # Raises ReconciliationError (after logging each mismatch) so a wrong
+        # page is never published; the previous index.html is left untouched.
+        reconcile(
+            build_reconciliation_checks(
+                conn, data, reporting_period,
+                reporting_period.clipped_to(series_end_date), monthly_counts),
+            context="dashboard",
+        )
+
+    if check_only:
+        return ''
+
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir_path / 'index.html'
 
     # Per-section data-presence sanity checks. Each chart section in the
     # dashboard has a "no data available" fallback render path; if any of
@@ -4775,7 +5093,14 @@ def main():
     parser.add_argument('--out-dir', default='dashboard', help='Output directory for static HTML')
     args = parser.parse_args()
 
-    out_file = build_dashboard_file(db_path=args.db_path, out_dir=args.out_dir)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    try:
+        out_file = build_dashboard_file(db_path=args.db_path, out_dir=args.out_dir)
+    except ReconciliationError as exc:
+        # Already logged check by check; fail the build rather than publish totals
+        # that do not match the data.
+        print(f'Dashboard NOT generated: {exc}', file=sys.stderr)
+        sys.exit(1)
     print(f'Static dashboard generated: {out_file}')
 
 

@@ -900,6 +900,47 @@ python scripts/check_data_integrity.py --quiet         # Only show failures
 python scripts/check_data_integrity.py --db PATH       # Override DB path
 ```
 
+### Reporting population: one definition for every dashboard and export
+
+`DeduplicatedEvents` is the whole history of deduplication, not a list of
+incidents: merged and rejected rows stay behind with their ids. The ASD risk
+matrix once LEFT JOINed every classification to it with no status filter and
+reported 1,201 classifications when only 643 belonged to active incidents - it
+nearly doubled the picture, and each dashboard kept its own copy of the filter.
+
+The population is now defined once, in
+[`cyber_data_collector/reporting/population.py`](cyber_data_collector/reporting/population.py):
+
+| | Definition |
+|---|---|
+| **Incident** | a `DeduplicatedEvents` row with `status = 'Active'`. `is_australian_event` / `is_specific_event` are not filtered on: dedup writes both as constant `True`, and `check_data_integrity.py` verifies that rather than assuming it |
+| **ASD classifications** | INNER JOINed to an active incident, so merged / rejected / orphan classifications cannot be counted |
+| **Victim entities** | joined *from* the incident with `relationship_type = 'victim'` |
+| **Period** | `ReportingPeriod(start, end)`, both ends inclusive calendar days; SQL is half-open (`>= start AND < end + 1 day`) so a timestamp on the last day is not lost. Undated incidents belong to no period |
+| **Dashboard window** | `dashboard_period()` = 2020-01-01 to the build date. The ASD matrix's "All Years" is now "2020 to date" so it agrees with every other chart |
+| **OAIC comparisons** | `half_year()`, `calendar_year()`, `half_year_from_label()`, `span_of()`: the database is queried over exactly the semesters the OAIC series was summed over, never a hard-coded range |
+
+Nothing outside that module may write `status = 'Active'` or a date literal in a
+reporting query (a test enforces it).
+
+**Reconciliation.** Every dashboard build proves its chart totals against the
+population before writing anything - monthly / half-yearly / type / industry /
+severity totals equal the active incidents in the window, yearly counts sum to
+the total, the three ASD matrices equal the active classified incidents (cells
+plus any the ASD vocabulary could not place), and each OAIC-vs-database column
+reconciles over its own window. A mismatch is logged at ERROR for each check and
+the build raises `ReconciliationError` / exits 1; the previous `index.html` is left
+untouched. `scripts/check_data_integrity.py` runs the same checks
+(`dashboard-totals-reconcile`) plus `reporting-population-consistent`,
+`population-flags-consistent` and `no-future-dated-incidents`.
+
+**Exports** (`export_cyber_events.py`, `export_events_excel.py`) contain the same
+population by default: active incidents in the dashboard window. `--all-dates`
+adds pre-2020 and undated incidents; `export_cyber_events.py --include-history`
+adds merged / rejected rows for audit and says so. The deduplication review
+dashboard deliberately shows history, and labels it: it lists the active
+incidents, each with its full merge ancestry.
+
 ### Repeat-event timing analysis
 
 `scripts/analyze_recurrent_timing.py` tests whether repeat cyber-event timing

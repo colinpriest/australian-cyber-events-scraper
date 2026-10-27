@@ -21,6 +21,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_population_module():
+    """Load the shared population definition without importing the whole package.
+
+    ``import cyber_data_collector.reporting.population`` would run
+    ``cyber_data_collector/__init__.py``, which pulls in pandas, the data sources
+    and their API clients (~10 s cold). This script is a CI gate and a
+    pre-run sanity check that has always been dependency-free and fast, and the
+    population module itself needs only the standard library, so load that one
+    file directly. The dashboard check below does a normal package import because
+    it needs the whole dashboard builder anyway.
+    """
+    import importlib.util
+
+    path = PROJECT_ROOT / "cyber_data_collector" / "reporting" / "population.py"
+    spec = importlib.util.spec_from_file_location("_integrity_population", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module   # dataclasses resolve annotations through sys.modules
+    spec.loader.exec_module(module)
+    return module
+
+
+_population = _load_population_module()
+count_classifications = _population.count_classifications
+count_classified_incidents = _population.count_classified_incidents
+count_incidents = _population.count_incidents
+dashboard_period = _population.dashboard_period
+population_breakdown = _population.population_breakdown
+
+# What a dashboard build needs; without them it cannot run at all.
+DASHBOARD_REQUIRED_TABLES = (
+    "DeduplicatedEvents", "ASDRiskClassifications", "DeduplicatedEventEntities",
+    "EntitiesV2", "EnrichedEvents",
+)
+
 
 @dataclass
 class CheckResult:
@@ -393,6 +430,151 @@ def check_no_dedup_status_drift(conn: sqlite3.Connection) -> CheckResult:
     return CheckResult("dedup-status-canonical", True, "All dedup status values canonical")
 
 
+def check_population_flags_consistent(conn: sqlite3.Connection) -> CheckResult:
+    """Active incidents must not be flagged non-Australian or non-specific.
+
+    The reporting population is ``status = 'Active'`` and nothing else
+    (``cyber_data_collector.reporting.population``). That is only equivalent to
+    "Australian, specific incidents" because deduplication writes both flags as
+    True. If a row ever carries 0 the dashboards would still count it, so this
+    fails loudly rather than letting the definition drift silently.
+    """
+    bad = list(conn.execute("""
+        SELECT deduplicated_event_id, title, is_australian_event, is_specific_event
+        FROM DeduplicatedEvents
+        WHERE status = 'Active'
+          AND (is_australian_event = 0 OR is_specific_event = 0)
+        LIMIT 20
+    """))
+    if bad:
+        return CheckResult(
+            "population-flags-consistent", False,
+            f"{len(bad)}+ active incidents are flagged non-Australian or non-specific "
+            "but would still be counted by every dashboard",
+            [f"{r[0]}: {(r[1] or '')[:60]!r} aus={r[2]} specific={r[3]}" for r in bad],
+        )
+    return CheckResult(
+        "population-flags-consistent", True,
+        "Every active incident is flagged Australian and specific",
+    )
+
+
+def check_no_future_dated_incidents(conn: sqlite3.Connection) -> CheckResult:
+    """No active incident may be dated after today.
+
+    Every report covers a period that ends today, so a future-dated incident
+    (a mis-parsed year, a scheduled event) belongs to no period and silently
+    disappears from every chart and export.
+    """
+    period = dashboard_period()
+    bad = list(conn.execute("""
+        SELECT deduplicated_event_id, event_date, title FROM DeduplicatedEvents
+        WHERE status = 'Active' AND event_date >= ?
+        ORDER BY event_date LIMIT 20
+    """, (period.end_exclusive.isoformat(),)))
+    if bad:
+        return CheckResult(
+            "no-future-dated-incidents", False,
+            f"{len(bad)}+ active incidents are dated after {period.end_iso} and are "
+            "excluded from every report",
+            [f"{r[0]}: {r[1]} {(r[2] or '')[:50]!r}" for r in bad],
+        )
+    return CheckResult("no-future-dated-incidents", True,
+                       "No active incident is dated in the future")
+
+
+def check_reporting_population(conn: sqlite3.Connection) -> CheckResult:
+    """The reporting population is internally consistent, and says what it excludes.
+
+    Fails if ASD classifications and classified incidents disagree (a relaxed
+    UNIQUE constraint would double count in the risk matrix), or if the
+    population cannot be split exactly into in-period / outside-period / undated.
+    Always reports, as details, the history rows that every report leaves out:
+    the ASD matrix once counted all of them.
+    """
+    period = dashboard_period()
+    breakdown = population_breakdown(conn, period)
+    classifications = count_classifications(conn, period)
+    classified_incidents = count_classified_incidents(conn, period)
+    all_classifications = conn.execute(
+        "SELECT COUNT(*) FROM ASDRiskClassifications").fetchone()[0]
+    all_active_classifications = count_classifications(conn)
+
+    details = [
+        f"{breakdown['active']} active incidents: {breakdown['active_in_period']} in "
+        f"{period.start_iso}..{period.end_iso}, "
+        f"{breakdown['active_dated_outside_period']} dated outside it, "
+        f"{breakdown['active_undated']} undated",
+        f"excluded as history: {breakdown['merged']} merged, {breakdown['rejected']} rejected rows",
+        f"{all_classifications} ASD classification rows in total, of which "
+        f"{all_active_classifications} belong to active incidents "
+        f"({all_classifications - all_active_classifications} are classifications of "
+        "merged / rejected events and are not reported)",
+        f"{classifications} reported in the period",
+    ]
+    problems = []
+    if classifications != classified_incidents:
+        problems.append(
+            f"{classifications} classification rows for {classified_incidents} classified "
+            "incidents in the period: more than one classification per incident")
+    if count_incidents(conn, period) != breakdown["active_in_period"]:
+        problems.append("count_incidents disagrees with population_breakdown")
+    if problems:
+        return CheckResult("reporting-population-consistent", False,
+                           "; ".join(problems), details)
+    return CheckResult(
+        "reporting-population-consistent", True,
+        f"{breakdown['active_in_period']} incidents / {classifications} ASD classifications "
+        "in the reporting population",
+        details,
+    )
+
+
+def check_dashboard_totals_reconcile(conn: sqlite3.Connection) -> CheckResult:
+    """Every dashboard chart total must reconcile to the reporting population.
+
+    Runs the same assembly and reconciliation as a dashboard build, writing
+    nothing. Needs the OAIC statistics files in the working directory (run from
+    the project root) - without them the OAIC series are simply empty, which does
+    not affect the population totals.
+    """
+    row = next(iter(conn.execute("PRAGMA database_list")), None)
+    db_path = row[2] if row else ""
+    if not db_path:
+        return CheckResult("dashboard-totals-reconcile", True,
+                           "In-memory database; dashboard reconciliation skipped")
+    present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    missing = [t for t in DASHBOARD_REQUIRED_TABLES if t not in present]
+    if missing:
+        # A database without the pipeline's tables (a partial fixture, or one not yet
+        # created) cannot be dashboarded at all; that is a schema problem, not a
+        # reconciliation failure. Checked first because importing the builder is slow.
+        return CheckResult("dashboard-totals-reconcile", True,
+                           f"Skipped: database schema is incomplete (no {', '.join(missing)})")
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    try:
+        from cyber_data_collector.reporting.population import ReconciliationError
+        from scripts.build_static_dashboard import build_dashboard_file
+    except ImportError as exc:  # missing optional dependency, not a data problem
+        return CheckResult("dashboard-totals-reconcile", False,
+                           f"cannot import the dashboard builder: {exc}")
+    try:
+        build_dashboard_file(db_path=db_path, check_only=True)
+    except ReconciliationError as exc:
+        return CheckResult("dashboard-totals-reconcile", False,
+                           "dashboard totals do not reconcile to the population",
+                           str(exc).split(" - ", 1)[-1].split("; "))
+    except sqlite3.OperationalError as exc:
+        # A database without the pipeline's tables (a partial fixture, or one not
+        # yet created) cannot be dashboarded at all; that is a schema problem the
+        # other checks report, not a reconciliation failure.
+        return CheckResult("dashboard-totals-reconcile", True,
+                           f"Skipped: database schema is incomplete ({exc})")
+    return CheckResult("dashboard-totals-reconcile", True,
+                       "All dashboard chart totals reconcile to the reporting population")
+
+
 def check_oaic_period_publication_realistic(_unused) -> CheckResult:
     """Each scraped semester should have total_notifications in 50-2000.
     Outside that range strongly suggests a bad scrape (e.g. only ranks were
@@ -438,6 +620,10 @@ DB_CHECKS: List[Callable[[sqlite3.Connection], CheckResult]] = [
     check_industry_known_vendors_correct,
     check_no_records_affected_outliers,
     check_no_dedup_status_drift,
+    check_population_flags_consistent,
+    check_no_future_dated_incidents,
+    check_reporting_population,
+    check_dashboard_totals_reconcile,
 ]
 
 JSON_CHECKS: List[Callable[[None], CheckResult]] = [

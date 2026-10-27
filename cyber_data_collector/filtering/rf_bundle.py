@@ -265,17 +265,18 @@ def write_bundle(bundle_id: str, objects: Tuple[Any, Any, Any], manifest: Dict[s
     model, vectorizer, encoder = objects
     reference = reference_frame[["source_type", "raw_title", "raw_description", "raw_content", "source_url"]]
     probabilities = predict_keep_probability(model, vectorizer, encoder, reference_frame)
-    (directory / "reference.json").write_text(json.dumps({
+    # Bytes, not text mode: the hashes must not depend on the platform's newline.
+    (directory / "reference.json").write_bytes(json.dumps({
         "inputs": reference.to_dict(orient="records"),
         "keep_probability": [float(p) for p in probabilities],
-    }, indent=1, default=str), encoding="utf-8")
+    }, indent=1, default=str).encode("utf-8"))
     manifest = dict(manifest, bundle_id=bundle_id, feature_version=FEATURE_VERSION,
                     created_at=manifest.get("created_at") or datetime.now().isoformat(timespec="seconds"),
                     versions=manifest.get("versions") or _versions(),
                     files={key: {"name": filename, "sha256": _sha256(directory / filename)}
                            for key, filename in FILES.items()},
                     reference_sha256=_sha256(directory / "reference.json"))
-    (directory / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
+    (directory / "manifest.json").write_bytes(json.dumps(manifest, indent=2, default=str).encode("utf-8"))
     return directory
 
 

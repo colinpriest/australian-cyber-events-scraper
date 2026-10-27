@@ -44,6 +44,12 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
+from cyber_data_collector.reporting.population import (  # noqa: E402
+    ReconciliationCheck,
+    count_incidents,
+    incident_filter,
+    reconcile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +82,12 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                     if has_size else
                     "NULL AS size, NULL AS size_basis, NULL AS size_confidence")
 
+    # The shared population (active incidents, every date: this is a review tool,
+    # so undated and pre-2020 incidents stay listed). Strictly 'Active': the old
+    # COALESCE(status, 'Active') let a NULL status through, which the population
+    # does not (the column defaults to 'Active', so none exist).
+    where, params = incident_filter(None, "d")
+
     rows = conn.execute(
         f"""
         SELECT v.entity_name                          AS entity,
@@ -101,11 +113,12 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         LEFT JOIN EnrichedEvents e
              ON e.enriched_event_id = d.master_enriched_event_id
         WHERE dee.relationship_type = 'victim'
-          AND COALESCE(d.status, 'Active') = 'Active'
+          AND {where}
           AND v.entity_name IS NOT NULL
           AND TRIM(v.entity_name) != ''
         ORDER BY v.entity_name COLLATE NOCASE, d.event_date, d.title
-        """
+        """,
+        params,
     ).fetchall()
 
     out: List[Dict[str, Any]] = []
@@ -324,9 +337,29 @@ render();
 """
 
 
-def build_html(rows: List[Dict[str, Any]], stats: Dict[str, Any]) -> str:
+def population_note(conn: sqlite3.Connection, stats: Dict[str, Any]) -> str:
+    """State which population the page lists, and prove it is a subset of it.
+
+    Events without a ``victim``-role entity cannot be listed under an organisation,
+    so the page shows at most the active incidents - never more. If it ever shows
+    more, something other than the population was read.
+
+    Raises:
+        ReconciliationError: if the page lists more events than there are active
+            incidents.
+    """
+    active = count_incidents(conn)
+    reconcile([ReconciliationCheck(
+        "Entity dashboard events within active incidents", active, stats["events"],
+        relation="<=")], context="entity_dashboard")
+    return (f"Active incidents only ({active} in the database; "
+            f"{active - stats['events']} have no victim-role organisation and are not listed). ")
+
+
+def build_html(rows: List[Dict[str, Any]], stats: Dict[str, Any], note: str = "") -> str:
     by_size = ", ".join(f"{n} {size}" for size, n in stats["by_size"].items())
-    sub = (f"{stats['events']} event(s) attributed to {stats['entities']} entit"
+    sub = (note +
+           f"{stats['events']} event(s) attributed to {stats['entities']} entit"
            f"{'y' if stats['entities'] == 1 else 'ies'}; "
            f"{stats['multi_entities']} entit"
            f"{'y has' if stats['multi_entities'] == 1 else 'ies have'} more than "
@@ -346,13 +379,14 @@ def main() -> int:
     conn = _connect(args.db)
     try:
         rows = load_rows(conn)
+        stats = summarise(rows)
+        note = population_note(conn, stats)
     finally:
         conn.close()
 
-    stats = summarise(rows)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build_html(rows, stats), encoding="utf-8")
+    out.write_text(build_html(rows, stats, note), encoding="utf-8")
 
     print(f"Entity dashboard generated: {out}")
     print(f"  {stats['events']} event(s), {stats['entities']} entities, "
