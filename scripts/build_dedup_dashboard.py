@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.utils.html_safe import script_json  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -355,7 +357,7 @@ function memberTable(ev){
       <td>${esc(m.title)||'<i>untitled</i>'}</td>
       <td>${esc(m.date)||'-'}</td>
       <td>${esc(m.entity)||'-'}</td>
-      <td>${m.url?`<a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.source_type||'link')}</a>`:'-'}</td>
+      <td>${/^https?:/i.test(m.url||'')?`<a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.source_type||'link')}</a>`:'-'}</td>
       <td>${ev.members.length>1 && m.contribution!=='master'
         ? `<button class="copy" onclick="cmdSplit('${esc(ev.id)}','${esc(m.enriched_event_id)}')">Split out</button>`
         : ''}</td>
@@ -464,7 +466,7 @@ render();
 
 def build_html(data: Dict[str, Any]) -> str:
     return (TEMPLATE
-            .replace("__DATA__", json.dumps(data, ensure_ascii=False, default=str))
+            .replace("__DATA__", script_json(data, ensure_ascii=False, default=str))
             .replace("__GENERATED__", html.escape(data["stats"]["generated_at"])))
 
 

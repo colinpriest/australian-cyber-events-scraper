@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
 
-from cyber_data_collector.utils import ConfigManager
+from cyber_data_collector.utils.config_manager import resolve_db_path
+from cyber_data_collector.utils.db_backup import backup_database
 from cyber_data_collector.utils.run_summary import (
     install_run_summary,
     print_run_summary,
@@ -35,8 +38,7 @@ DEFAULT_SOURCES = ["Perplexity", "OAIC", "GoogleSearch", "WebberInsurance"]
 
 
 def _resolve_db_path(db_path: Optional[str]) -> str:
-    env_config = ConfigManager(".env").load()
-    return db_path or env_config.get("DATABASE_PATH") or "instance/cyber_events.db"
+    return resolve_db_path(db_path)
 
 
 def _build_pipeline_args(
@@ -115,7 +117,15 @@ def _run_rebuild(parsed: argparse.Namespace) -> int:
         print("Rebuild requires --force to wipe existing data.")
         return 2
 
-    wiper = DatabaseRecordWiper(dry_run=parsed.dry_run, force=parsed.force)
+    # Resolved once, before anything is touched: the wipe, the backup and the
+    # rebuild all act on this one database.
+    db_path = _resolve_db_path(parsed.db_path)
+    if not parsed.dry_run and Path(db_path).exists():
+        backup = f"{db_path}.backup.{datetime.now():%Y%m%d_%H%M%S}_pre_rebuild"
+        backup_database(db_path, backup)
+        print(f"Verified backup before wipe: {backup}")
+
+    wiper = DatabaseRecordWiper(db_path=db_path, dry_run=parsed.dry_run, force=parsed.force)
     wipe_success = wiper.wipe_sqlite_records()
     if not wipe_success:
         print("Database wipe failed. Aborting rebuild.")
@@ -125,7 +135,6 @@ def _run_rebuild(parsed: argparse.Namespace) -> int:
         print("Dry run complete. Re-run with --force to rebuild.")
         return 0
 
-    db_path = _resolve_db_path(parsed.db_path)
     sources = _normalize_sources(parsed.source) or DEFAULT_SOURCES
     args = _build_pipeline_args(
         db_path=db_path,

@@ -40,8 +40,6 @@ except ImportError:
 class DatabaseRecordWiper:
     """Handles wiping records from the project's database tables."""
 
-    # Project-specific database configuration
-    SQLITE_DB_PATH = "instance/cyber_events.db"
 
     # Allowlist of permitted table names to prevent SQL injection
     ALLOWED_TABLES = {
@@ -84,7 +82,14 @@ class DatabaseRecordWiper:
     # Combined tables - will detect which schema is in use
     PROJECT_TABLES = V1_PROJECT_TABLES + V2_PROJECT_TABLES
 
-    def __init__(self, dry_run: bool = False, force: bool = False):
+    def __init__(self, db_path: Optional[str] = None, dry_run: bool = False, force: bool = False):
+        """``db_path`` is resolved once here (explicit, else DATABASE_URL, else
+        the default) and is the only SQLite database this wiper touches.
+        PostgreSQL is wiped only when no explicit path was given: a run aimed
+        at a scratch file must not reach a configured server."""
+        from cyber_data_collector.utils.config_manager import resolve_db_path
+        self.db_path = resolve_db_path(db_path)
+        self.wipe_postgres = db_path is None
         self.dry_run = dry_run
         self.force = force
         self.deleted_count = 0
@@ -179,20 +184,20 @@ class DatabaseRecordWiper:
 
     def wipe_sqlite_records(self, tables_to_wipe: Optional[List[str]] = None) -> bool:
         """Wipe records from SQLite database tables."""
-        if not os.path.exists(self.SQLITE_DB_PATH):
-            self.log(f"SQLite database not found at: {self.SQLITE_DB_PATH}")
+        if not os.path.exists(self.db_path):
+            self.log(f"SQLite database not found at: {self.db_path}")
             return True
 
         # Detect and report schema version
-        schema_version = self.detect_schema_version(self.SQLITE_DB_PATH)
-        self.log(f"Found project database: {self.SQLITE_DB_PATH} (Schema: {schema_version.upper()})")
+        schema_version = self.detect_schema_version(self.db_path)
+        self.log(f"Found project database: {self.db_path} (Schema: {schema_version.upper()})")
 
         if schema_version in ["none", "unknown", "error"]:
             self.log(f"Cannot proceed with {schema_version} schema", "ERROR")
             return False
 
         # Get current record counts
-        table_counts = self.get_table_info(self.SQLITE_DB_PATH)
+        table_counts = self.get_table_info(self.db_path)
         if not table_counts:
             self.log("No project tables found or database is empty")
             return True
@@ -243,7 +248,7 @@ class DatabaseRecordWiper:
 
         # Perform the deletion
         try:
-            with sqlite3.connect(self.SQLITE_DB_PATH) as conn:
+            with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
 
                 # Disable foreign key constraints temporarily
@@ -256,10 +261,14 @@ class DatabaseRecordWiper:
                     self.log(f"Deleted {deleted_rows:,} records from {table}")
                     self.deleted_count += deleted_rows
 
-                # Reset auto-increment counters
-                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ({})".format(
-                    ','.join('?' * len(tables_to_process))
-                ), tables_to_process)
+                # Reset auto-increment counters (sqlite_sequence exists only once
+                # an AUTOINCREMENT table has been created)
+                has_sequence = cursor.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").fetchone()
+                if has_sequence:
+                    cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ({})".format(
+                        ','.join('?' * len(tables_to_process))
+                    ), tables_to_process)
 
                 # Re-enable foreign key constraints
                 cursor.execute("PRAGMA foreign_keys = ON")
@@ -372,8 +381,8 @@ class DatabaseRecordWiper:
         self.log("Verifying wipe operation...")
 
         # Check SQLite
-        if os.path.exists(self.SQLITE_DB_PATH):
-            table_counts = self.get_table_info(self.SQLITE_DB_PATH)
+        if os.path.exists(self.db_path):
+            table_counts = self.get_table_info(self.db_path)
             total_remaining = sum(table_counts.values())
 
             if total_remaining > 0:
@@ -413,8 +422,9 @@ class DatabaseRecordWiper:
         # Wipe SQLite records
         success &= self.wipe_sqlite_records(tables_to_wipe)
 
-        # Wipe PostgreSQL records if configured
-        success &= self.wipe_postgresql_records(tables_to_wipe)
+        # Wipe PostgreSQL records if configured (never for an explicit SQLite path)
+        if self.wipe_postgres:
+            success &= self.wipe_postgresql_records(tables_to_wipe)
 
         # Verify the operation
         if success and not self.dry_run:
@@ -443,6 +453,11 @@ def main():
         help="Show what would be deleted without actually deleting"
     )
     parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database to wipe (default: DATABASE_URL, else instance/cyber_events.db)"
+    )
+    parser.add_argument(
         "--tables",
         type=str,
         help="Comma-separated list of specific tables to wipe (default: all project tables)"
@@ -466,7 +481,7 @@ def main():
         print("FORCE MODE - Skipping all confirmations!")
         time.sleep(2)  # Give user a moment to abort
 
-    wiper = DatabaseRecordWiper(dry_run=args.dry_run, force=args.force)
+    wiper = DatabaseRecordWiper(db_path=args.db_path, dry_run=args.dry_run, force=args.force)
 
     try:
         success = wiper.wipe_all_records(tables_to_wipe)

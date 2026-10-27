@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.utils.html_safe import safe_url  # noqa: E402
+
 from cyber_data_collector.dedup import org_timeline  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -209,7 +211,8 @@ def _card(org: Dict[str, Any]) -> str:
         f'<li><div class="date">{(e(i.get("number", "")) + ". ") if i.get("number") else ""}'
         f'{e(i["date"]) or "&mdash;"} {incident_flag(i)}</div><div class="what">{e(i["what"])}</div>'
         + (f'<div class="public">{e(i["public"])}</div>' if i["public"] else "")
-        + (f'<a href="{e(i["source"])}" target="_blank" rel="noopener">{e(i["source"])}</a>' if i["source"] else "")
+        + (f'<a href="{e(safe_url(i["source"]))}" target="_blank" rel="noopener">{e(i["source"])}</a>'
+           if safe_url(i["source"]) else (f'<div>{e(i["source"])}</div>' if i["source"] else ""))
         + "</li>" for i in org["incidents"]) or (
             # No list: show what research actually said ("NONE FOUND", or a refusal
             # to list a multinational's incidents) - that is itself informative.
@@ -220,8 +223,8 @@ def _card(org: Dict[str, Any]) -> str:
         for ev in org["events"]) or '<div class="none">No active events.</div>'
     sources = ""
     if tl and tl["citations"]:
-        links = "".join(f'<div><a href="{e(c)}" target="_blank" rel="noopener">{e(c)}</a></div>'
-                        for c in tl["citations"])
+        links = "".join(f'<div><a href="{e(safe_url(c))}" target="_blank" rel="noopener">{e(c)}</a></div>'
+                        if safe_url(c) else f"<div>{e(c)}</div>" for c in tl["citations"])
         sources = f"<details><summary>Research sources ({len(tl['citations'])})</summary>{links}</details>"
     return (f'<section class="card"><div class="head"><h2>{e(org["name"])}</h2>'
             f'<span class="badge">{e(org["size"])}</span>{status}'

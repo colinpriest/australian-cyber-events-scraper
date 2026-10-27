@@ -68,6 +68,9 @@ def render_report(run_dir: Path) -> str:
         return f"\n{key}\n"
 
     text = PLOT_LINE.sub(_swap, text)
+    # Python-Markdown passes raw HTML through, and reports quote organisation
+    # names and event titles: escape markup before converting.
+    text = text.replace("&", "&amp;").replace("<", "&lt;")
     body = markdown.markdown(text, extensions=["tables"])
     for key, tag in figures.items():
         body = body.replace(f"<p>{key}</p>", tag)
