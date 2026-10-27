@@ -79,6 +79,7 @@ import argparse
 import asyncio
 import logging
 import os
+import sqlite3
 import shutil
 import sys
 import tempfile
@@ -850,6 +851,20 @@ class UnifiedPipeline:
                 if problems:
                     raise RuntimeError("Dashboard failed validation, last published version kept: "
                                        + "; ".join(problems))
+                # Data-quality gate (cyber_data_collector.quality): blocking
+                # checks - integrity, label contradictions, synthetic cases,
+                # invalid dates, stale classifications - stop publication. The
+                # report is written to instance/quality_report.{json,md,html}.
+                if getattr(args, 'skip_quality_gate', False):
+                    logger.warning("Quality gate SKIPPED (--skip-quality-gate): publishing unchecked")
+                else:
+                    from cyber_data_collector.quality import publication_allowed
+                    with sqlite3.connect(self.db_path) as qconn:
+                        allowed, reasons = publication_allowed(
+                            qconn, report_dir=str(Path(self.db_path).parent))
+                    if not allowed:
+                        raise RuntimeError("Quality gate blocked publication, last published version kept: "
+                                           + "; ".join(str(r) for r in reasons)[:2000])
                 out_dir.mkdir(parents=True, exist_ok=True)
                 published = []
                 for staged in staging.iterdir():
@@ -1099,6 +1114,8 @@ Examples:
                         help='Requests allowed this run per paid API, e.g. openai=3000 perplexity=1500 '
                              'typesafe=20000 (default: API_BUDGET_<PROVIDER> env, else unlimited). '
                              'Refused work is left for the next run.')
+    parser.add_argument('--skip-quality-gate', action='store_true',
+                        help='Publish the dashboard even if blocking data-quality checks fail (logged)')
     parser.add_argument('--page-gate-report-only', action='store_true',
                         help='Discovery page gate logs what it would drop but drops nothing')
     parser.add_argument('--enrich-limit', type=int, default=500,

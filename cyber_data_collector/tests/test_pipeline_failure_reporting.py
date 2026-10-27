@@ -72,6 +72,25 @@ def test_invalid_dashboard_is_not_published(pipeline, monkeypatch, tmp_path):
     assert (out / "index.html").read_text(encoding="utf-8") == "<html>last good</html>"
 
 
+def test_quality_gate_blocks_publication(pipeline, monkeypatch, tmp_path):
+    out = tmp_path / "dashboard"
+    out.mkdir()
+    (out / "index.html").write_text("<html>last good</html>", encoding="utf-8")
+    (tmp_path / "db.sqlite").write_bytes(b"")
+
+    def full(db_path, out_dir):
+        path = Path(out_dir) / "index.html"
+        path.write_text("<html>" + "x" * 60_000 + "</html>", encoding="utf-8")
+        return str(path)
+
+    import cyber_data_collector.quality as quality
+    monkeypatch.setattr(rfp, "build_dashboard_file", full)
+    monkeypatch.setattr(rfp, "get_connection", _fake_connection)
+    monkeypatch.setattr(quality, "publication_allowed", lambda conn, **kw: (False, ["labels.contradictions_total"]))
+    assert pipeline.run_dashboard_phase(_args(out_dir=str(out))) is False
+    assert (out / "index.html").read_text(encoding="utf-8") == "<html>last good</html>"
+
+
 def test_valid_dashboard_is_published(pipeline, monkeypatch, tmp_path):
     out = tmp_path / "dashboard"
     (tmp_path / "db.sqlite").write_bytes(b"")
@@ -81,8 +100,10 @@ def test_valid_dashboard_is_published(pipeline, monkeypatch, tmp_path):
         path.write_text("<html>" + "x" * 60_000 + "</html>", encoding="utf-8")
         return str(path)
 
+    import cyber_data_collector.quality as quality
     monkeypatch.setattr(rfp, "build_dashboard_file", full)
     monkeypatch.setattr(rfp, "get_connection", _fake_connection)
+    monkeypatch.setattr(quality, "publication_allowed", lambda conn, **kw: (True, []))
     assert pipeline.run_dashboard_phase(_args(out_dir=str(out))) is True
     assert (out / "index.html").stat().st_size > 50_000
 
