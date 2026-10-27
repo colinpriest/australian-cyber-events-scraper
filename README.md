@@ -810,6 +810,23 @@ businesses" is a different question from "what happens to the ASX-100", and the
 page could not previously tell them apart. See
 [Entity size](#entity-size-small-medium-large-huge-unknown).
 
+### Organisation timeline dashboard
+
+```bash
+python scripts/build_timeline_dashboard.py             # -> dashboard/timelines.html (top 20)
+python scripts/build_timeline_dashboard.py --top 40
+```
+
+For the organisations with the most events, the researched incident timeline
+(Perplexity, `OrganisationTimelines`) beside the events the database holds,
+both in date order. An incident on the left with nothing on the right is a
+coverage gap; an event on the right matching nothing on the left is suspect
+(junk evidence, a wrong victim or a misdated duplicate). Each card shows when
+the timeline was researched and whether newer evidence has made it stale;
+timelines refresh automatically when it has. Where research returned no list
+("NONE FOUND", or a refusal to enumerate a multinational's incidents), the
+answer is shown as given.
+
 ### Entity canonicalisation, date repair and per-entity reconciliation
 
 Three defects compounded into most of the missed merges, because deduplication
