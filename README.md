@@ -490,20 +490,41 @@ the events it would reject are, weighted, at least 95% labelled
 records the Jev model and question version; `check-events --apply` (and the
 refresh) rejects only while both match.
 
-**2026-10-27 result: no cut-off qualifies, so nothing is rejected.** 168
-events were labelled (87 `not_incident`, 76 `real`, 5 `unsure`) by Claude
+Two question versions, run in sequence by `check-events`:
+
+1. **Screen** (`event-reality-v1`): stored evidence only. Every event below
+   0.5 gets a Perplexity search for public reporting of that incident
+   (`EventCorroborations`: query, answer, citations and model are stored and
+   reused, because a live search cannot be replayed).
+2. **Judgement** (`event-reality-v2-corroborated`): the same evidence plus that
+   search. This is the version calibrated and used to reject.
+
+The sample is stratified on the screen score, so it does not depend on the
+question being calibrated and the same labels serve every later version.
+
+168 events were labelled (87 `not_incident`, 76 `real`, 5 `unsure`) by Claude
 Opus 5.5 subagents blind to Jev's scores, from each event's records plus web
-searches for corroboration; every label carries its rationale and source in
-`evaluation/event_reality_labels.csv`, for review. Jev ranks the events well
-(weighted AUC 0.957), but its low end is not clean enough to delete from:
-below 0.25 it would reject 80 labelled events of which 18 are real (weighted
-precision 0.78); only the 3 events below 0.01 are all correct. The real
-incidents it scored lowest - Apunipima, ASIC/Accellion, Ventia, Western Sydney
-University, LUSH - were confirmed by the labellers' web searches, while the
-evidence stored for them is a different page or thin research. Jev can be no
-surer than its evidence; the next step is a corroboration search for
-low-scoring events, added to what Jev sees, then recalibration against the
-same labels.
+searches; every label carries its rationale and source in
+`evaluation/event_reality_labels.csv`, for review.
+
+| 2026-10-27 | Weighted AUC | Cut-off | Labelled rejections | Weighted precision |
+|---|---|---|---|---|
+| v1, stored evidence | 0.957 | none qualifies | 80 at 0.25, 18 of them real | 0.78 |
+| v2, + corroboration | 0.954 | **0.25** | 68, 3 of them real | **0.956** (95% CI 0.88-0.98) |
+
+Corroboration barely changes the overall ranking but fixes its low end, which
+is the part that deletes: 15 real incidents the screen scored below 0.25
+(Apunipima, ASIC/Accellion, Ventia, Western Sydney University, LUSH ...) move
+above it. The three real events v2 still rejects are garbled records: a title
+cut off mid-sentence, an event titled after the UK Electoral Commission breach
+with "Gucci" as victim, and an unconfirmed dark-web sale claim about NBN data.
+At 0.25, 70 of 790 active events would be rejected.
+
+The cut-off is chosen on the labels it is scored on, which flatters it. A
+stratified bootstrap of the whole choose-then-test procedure gives an
+**out-of-sample precision of about 0.95 (median 0.947, mean 0.90)** - at, or
+slightly under, the target. Expect roughly 3-5 of the 70 rejections to be real
+incidents; every rejection is snapshotted and reversible.
 
 Labelling conventions worth reviewing: dark-web sale claims with no named
 victim were `unsure`; campaigns naming no targeted organisation, physical
