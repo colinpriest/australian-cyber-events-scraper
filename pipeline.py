@@ -86,13 +86,14 @@ def _run_pipeline(args: SimpleNamespace) -> int:
     """
     pipeline = UnifiedPipeline(args.db_path)
     args._pipeline_results = pipeline.results  # picked up by main()
-    success = asyncio.run(pipeline.run_pipeline(args))
+    result = asyncio.run(pipeline.run_pipeline(args))
 
     # Print API token usage and cost report
     from cyber_data_collector.utils.token_tracker import tracker
     tracker.log_report()
 
-    return 0 if success else 1
+    # 0 ok, 1 a required phase failed, 2 completed with failed steps (as run_full_pipeline).
+    return {"ok": 0, "degraded": 2}.get(result, 1)
 
 
 def _run_refresh(parsed: argparse.Namespace) -> int:

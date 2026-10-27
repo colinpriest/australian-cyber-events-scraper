@@ -15,7 +15,6 @@ Usage (from the project root):
 from __future__ import annotations
 
 import argparse
-import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -24,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cyber_data_collector.dedup import corroboration, org_timeline  # noqa: E402
 from cyber_data_collector.utils import jev  # noqa: E402
+from cyber_data_collector.utils.db_backup import backup_database  # noqa: E402
 
 CARRIED = ("OrganisationTimelines", "EventCorroborations")
 
@@ -35,7 +35,9 @@ def main(argv=None) -> int:
     parser.add_argument("--live", default="instance/cyber_events.db")
     args = parser.parse_args(argv)
 
-    shutil.copyfile(args.backup, args.copy)
+    # The backup API, not a file copy: a backup taken by copying a WAL-mode
+    # database's main file may be missing committed changes (db_backup).
+    backup_database(args.backup, args.copy)
     conn = sqlite3.connect(args.copy)
     org_timeline.ensure_schema(conn)
     corroboration.ensure_schema(conn)

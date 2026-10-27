@@ -23,7 +23,6 @@ import argparse
 import json
 import logging
 import os
-import shutil
 import sqlite3
 import sys
 import uuid
@@ -148,13 +147,16 @@ class DeduplicationMigration:
                         vault = None
 
                 if not self._apply_database_constraints():
+                    self._restore_after_failed_rebuild()
                     return False
 
                 enriched_events = self._load_enriched_events()
                 if enriched_events is None:
+                    self._restore_after_failed_rebuild()
                     return False
 
                 if not self._run_global_deduplication(enriched_events):
+                    self._restore_after_failed_rebuild()
                     return False
 
                 # SAFETY VAULT: restore ASD + industry overrides after rebuild
@@ -196,6 +198,7 @@ class DeduplicationMigration:
             if not self.dry_run and self.migration_report['steps_completed'] \
                     and 'skipped_no_new_events' not in self.migration_report['steps_completed']:
                 if not self._validate_migration_results():
+                    self._restore_after_failed_rebuild()
                     return False
             elif self.dry_run:
                 logger.info("🔍 DRY RUN: Would validate migration results")
@@ -209,8 +212,24 @@ class DeduplicationMigration:
         except Exception as e:
             logger.error(f"❌ Deduplication failed: {e}")
             self.migration_report['errors'].append(str(e))
+            self._restore_after_failed_rebuild()
             return False
-    
+
+    def _restore_after_failed_rebuild(self) -> None:
+        """A forced rebuild wipes and rewrites DeduplicatedEvents; if it fails part-way the
+        database is left half-built. Put the verified pre-run backup back so the last valid
+        results stand. Incremental runs only add, so they keep their partial progress."""
+        if not (self.force and not self.dry_run and getattr(self, "backup_verified", False)):
+            return
+        try:
+            from cyber_data_collector.utils.db_backup import restore_database
+            restore_database(self.backup_path, self.db_path)
+            logger.error("Forced rebuild failed: database restored from the verified backup %s", self.backup_path)
+            self.migration_report['steps_completed'].append('restored_after_failure')
+        except Exception as exc:  # noqa: BLE001 - report both failures, never mask the first
+            logger.critical("Forced rebuild failed AND restore from %s failed: %s", self.backup_path, exc)
+            self.migration_report['errors'].append(f"Restore after failed rebuild failed: {exc}")
+
     def _backup_current_data(self) -> bool:
         """Backup the current DeduplicatedEvents table"""
         logger.info("📦 Backing up current deduplication data...")
@@ -220,9 +239,13 @@ class DeduplicationMigration:
             backup_dir = Path(self.backup_path).parent
             backup_dir.mkdir(parents=True, exist_ok=True)
             
-            # Copy database file
-            shutil.copy2(self.db_path, self.backup_path)
-            logger.info(f"✅ Database backed up to: {self.backup_path}")
+            # SQLite's backup API, verified - not a file copy: the database is
+            # in WAL mode and copying the main file drops committed changes
+            # still in the -wal file. See cyber_data_collector/utils/db_backup.py.
+            from cyber_data_collector.utils.db_backup import backup_database
+            backup_database(self.db_path, self.backup_path)
+            self.backup_verified = True
+            logger.info(f"✅ Database backed up (verified) to: {self.backup_path}")
             
             # Also create SQL backup
             sql_backup_path = f"{self.backup_path}.sql"
