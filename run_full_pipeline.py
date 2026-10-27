@@ -207,10 +207,16 @@ class UnifiedPipeline:
             pipeline = (EventDiscoveryEnrichmentPipeline(self.db_path, page_gate_mode=page_gate_mode)
                         if page_gate_mode else EventDiscoveryEnrichmentPipeline(self.db_path))
 
+            backfill_since = getattr(args, 'cyberdaily_backfill_since', '2020-01')
             await pipeline.discover_events(
                 source_types=args.source,
                 date_range_days=args.days,
-                max_events=args.max_events
+                max_events=args.max_events,
+                cyberdaily_backfill_since=(tuple(int(x) for x in backfill_since.split('-'))
+                                           if backfill_since and backfill_since != 'none' else None),
+                cyberdaily_refetch_days=(None if getattr(args, 'cyberdaily_refetch_all', False)
+                                         else getattr(args, 'cyberdaily_refetch_days', 90)),
+                cyberdaily_refetch=not getattr(args, 'skip_cyberdaily_refetch', False),
             )
 
             pipeline.print_statistics()
@@ -1151,6 +1157,16 @@ Examples:
     parser.add_argument('--source', choices=['GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance', 'OAIC',
                                              'CyberDaily'],
                         help='Data sources to use (can specify multiple)', action='append', nargs='+')
+    parser.add_argument('--cyberdaily-backfill-since', default='2020-01', metavar='YYYY-MM',
+                        help="With CyberDaily: search every processed month back to this one that Cyber Daily "
+                             "has not searched yet (resumable; 'none' to skip). Default: 2020-01")
+    parser.add_argument('--cyberdaily-refetch-days', type=int, default=90,
+                        help='With CyberDaily: re-fetch stored stories published or discovered in the last N '
+                             'days, plus any cut-off or short ones (default: 90)')
+    parser.add_argument('--cyberdaily-refetch-all', action='store_true',
+                        help='With CyberDaily: re-fetch every stored Cyber Daily story')
+    parser.add_argument('--skip-cyberdaily-refetch', action='store_true',
+                        help='With CyberDaily: do not re-fetch stored stories this run')
     parser.add_argument('--max-events', type=int, default=1000,
                         help='Maximum events to process per source per month (default: 1000)')
     parser.add_argument('--days', type=int, default=0,
