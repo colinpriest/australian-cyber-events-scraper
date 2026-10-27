@@ -98,13 +98,14 @@ def _perplexity(pe: Optional[str]) -> Dict[str, Any]:
     return out
 
 
-def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = False) -> Dict[str, Any]:
+def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = False,
+                max_records: int = MAX_RECORDS) -> Dict[str, Any]:
     """Everything Jev sees about one event. Deterministic, so the input hash is stable.
 
     With ``corroborated``, a stored web search for the event is added when one
     exists.
     """
-    state = _evidence_state(conn, dedup_id)
+    state = _evidence_state(conn, dedup_id, max_records)
     if corroborated:
         from cyber_data_collector.dedup.corroboration import stored
         found = stored(conn, dedup_id)
@@ -113,7 +114,7 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = Fa
     return state
 
 
-def _evidence_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
+def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = MAX_RECORDS) -> Dict[str, Any]:
     event = conn.execute(
         "SELECT title, event_date, victim_organization_name FROM DeduplicatedEvents "
         "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
@@ -129,7 +130,7 @@ def _evidence_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
     # always shows the same ten.
     rows = sorted(rows, key=lambda r: (not r[3], r[0]))
     records = [{"title": r[1], "url": r[2], "page_text": (r[3] or "")[:PAGE_CHARS] or "(none stored)",
-                "perplexity": _perplexity(r[4])} for r in rows[:MAX_RECORDS]]
+                "perplexity": _perplexity(r[4])} for r in rows[:max_records]]
     return {
         "event": {"title": event[0] if event else "", "date": event[1] if event else None,
                   "victim": event[2] if event else None, "record_count": len(rows)},

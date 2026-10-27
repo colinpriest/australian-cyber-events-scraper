@@ -541,6 +541,36 @@ victim were `unsure`; campaigns naming no targeted organisation, physical
 security incidents and non-cyber fraud were `not_incident`; real incidents
 outside Australia were `real` (Australian-ness is a separate filter).
 
+### Jev duplicate judgement (same-victim pairs)
+
+```bash
+python scripts/dedup_admin.py check-duplicates           # P(same incident) for every same-victim pair, stored
+python scripts/calibrate_duplicates.py --precision 0.95  # -> evaluation/duplicate_calibration.json
+python scripts/dedup_admin.py check-duplicates --apply   # merge (also run by the refresh)
+```
+
+Every pair of active events sharing a victim is a candidate (157 on
+2026-10-27). Jev sees both events' evidence - page text, Perplexity research,
+stored corroboration searches - the gap in days, and **how each date was
+determined**: whether a record's date was stated in it, came from Perplexity's
+research, or is just the publication or discovery date, and whether it is
+known to the day or only to the month or year (stored as the 1st). A gap built
+from publication dates or month-only placeholders is weak evidence of two
+incidents; that provenance is derived in `dedup/date_provenance.py`.
+
+Merges need a calibrated cut-off. All 157 pairs were labelled blind to Jev
+(17 `same`, 139 `different`, 1 `unsure`; reasons and sources in
+`evaluation/duplicate_labels.csv`). The lowest cut-off at which merges are at
+least 95% truly the same is **0.75**: it merges 9 labelled pairs, all
+correctly (recall 0.53; 95% CI 0.70-1.00, wide because there are only 9;
+bootstrap out-of-sample precision mean 0.90). Labelled pairs are ground truth:
+`different` is never merged and `same` always is, so today the labels decide
+every merge and the cut-off governs pairs new data creates. Applied
+2026-10-27: 15 merges (721 -> 706 active events), including the ACT Government
+pages into one Barracuda-breach event and Services Australia's notice into
+Spectrum Medical Imaging's breach. The GPT recurrence check had proposed
+those at 0.55 and 0.78, below its unmeasured 0.85 bar.
+
 ### Stray records: event coherence
 
 The opposite of a missed merge: an event holding records about a *different*
@@ -898,38 +928,40 @@ shows any run left stale. Rebuild the page alone with
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
 
-Current headline result (data to 2026-10-02, after `check-victims` and the
-calibrated event-reality filter; 623 victim entities, 54 with more than one
-event, 86 observed repeats):
+Current headline result (data to 2026-10-02, after victim corrections, the
+calibrated event-reality filter and calibrated Jev duplicate merges; 623
+victim entities, 50 with more than one event, 74 observed repeats):
 
 - The broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460` adjusted model does
-  not reject constant elapsed-time risk (`p = 0.098`).
+  not reject constant elapsed-time risk (`p = 0.106`).
 - The sensitivity model that splits the first six months into `0-90` and
-  `91-180` does (`p = 0.029`).
-- The delayed early peak is now clearer: `91-180` days runs at about 10
-  repeats per 100 entity-years, against about 4 in `0-90` and 3.3-4.3 after
-  six months. Adjusted, that is `2.53x` the first 90 days (`95% CI 1.04-6.16`)
-  and `2.13x` the pooled post-180 period (`95% CI 1.21-3.75`, two-sided
-  `p = 0.009`).
+  `91-180` does (`p = 0.007`).
+- The delayed early peak: `91-180` days runs at about 9.8 repeats per 100
+  entity-years, against 2.4 in `0-90` and 2.4-4.2 after six months. Adjusted,
+  that is `4.23x` the first 90 days (`95% CI 1.40-12.74`) and `2.36x` the
+  pooled post-180 period (`95% CI 1.30-4.28`, two-sided `p = 0.005`).
 - How the cleaning moved it:
 
-  | Data state | Repeats | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
-  |---|---|---|---|
-  | 2026-10-02 refresh, before cleaning | 102 | 0.147 | 1.74x (1.01-2.98) |
-  | + victim corrections (`check-victims`) | 97 | 0.041 | 1.75x (1.02-3.02) |
-  | + 69 non-incident events rejected | 86 | 0.029 | 2.13x (1.21-3.75) |
+  | Data state | Repeats | 0-90 repeats | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
+  |---|---|---|---|---|
+  | 2026-10-02 refresh, before cleaning | 102 | 11 | 0.147 | 1.74x (1.01-2.98) |
+  | + victim corrections (`check-victims`) | 97 | 7 | 0.041 | 1.75x (1.02-3.02) |
+  | + 69 non-incident events rejected | 86 | 7 | 0.029 | 2.13x (1.21-3.75) |
+  | + 15 duplicate merges (`check-duplicates`) | 74 | 4 | 0.007 | 2.36x (1.30-4.28) |
 
-  The short-gap band is where false repeats create signal rather than noise:
-  wrong victims (TPG's breach filed under Optus, Henning Harders under Toll,
-  Sharp Office Systems under Sharp Motor Group) had put 4 false repeats there.
-- Three of the 7 remaining `0-90` repeats are still artefacts, but now of a
-  different kind: an agency's own web page attached to its **real** incident
-  as a second event (ACT Government pages beside its June 2023 Barracuda
-  breach, Service NSW's *Report identity theft* page beside its March 2020
-  breach, a Services Australia notice beside Spectrum Medical Imaging's
-  breach). The corroboration search correctly finds that the incident
-  happened, so the reality filter keeps them; they are duplicates, and merging
-  them is deduplication's job (`check-recurrences`), not the filter's.
+- **Read the trend with care.** Each cleaning step lowered the `0-90` band
+  most, because that is where re-reporting artefacts concentrate: a wrong
+  victim, an agency web page or a follow-up story dated by its publication
+  creates a "repeat" weeks after the real incident. The steps themselves are
+  gap-blind - every event and every same-victim pair is judged, whatever its
+  gap, and merges were made at gaps of 0 to 4,603 days - but the result rests
+  on that cleaning, and on 4 repeats in the first 90 days. Report the table,
+  not only the last row.
+- The 4 remaining `0-90` repeats: Service NSW (its *Report identity theft*
+  page, labelled a separate item rather than the March 2020 breach), the
+  University of Western Australia (a mixed 2022 event beside DieNet's 2025
+  DDoS claim), the Commonwealth Bank (an AI-document loan fraud beside a
+  stolen-card sale) and "Australian Government" (a collective victim).
 - The explanatory story - attackers returning, incomplete remediation, later
   training and eventual complacency - is plausible data storytelling, not
   proven mechanism. The analysis tests timing patterns, not causality.

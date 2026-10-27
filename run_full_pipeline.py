@@ -511,6 +511,12 @@ class UnifiedPipeline:
            a privacy policy or home page (LUSH, Nexia, Legal Aid ACT).
            ``--report-event-rejections`` keeps it report-only regardless.
         3. ``check-victims`` - deterministic, no API calls.
+        4. ``check-duplicates --apply`` - Jev judges every pair of events
+           sharing a victim (with both events' evidence, corroboration and
+           date provenance) and merges pairs at or above the **calibrated**
+           cut-off (``evaluation/duplicate_calibration.json``); report-only
+           without a calibration for the current model and question. Runs
+           after the victim check because pairs are formed by victim.
 
         Never fails the phase.
         """
@@ -522,7 +528,10 @@ class UnifiedPipeline:
         check = ["check-events"]
         if not getattr(args, 'report_event_rejections', False):
             check.append("--apply")
-        steps = [check, ["check-victims"]]
+        duplicates = ["check-duplicates"]
+        if not getattr(args, 'report_event_rejections', False):
+            duplicates.append("--apply")
+        steps = [check, ["check-victims"], duplicates]
         if os.getenv('OPENAI_API_KEY') or os.getenv('TYPESAFE_API_KEY'):
             steps.insert(0, ["classify-pages"])
         else:
@@ -931,8 +940,8 @@ Examples:
                         help='Skip rejecting non-incident pages and correcting victims '
                              'that the event\'s own records contradict')
     parser.add_argument('--report-event-rejections', action='store_true',
-                        help='Report events Jev judges not to be incidents without rejecting '
-                             'them, even when a calibrated cut-off exists')
+                        help='Report Jev\'s rejections (non-incidents) and merges (duplicates) '
+                             'without applying them, even when calibrated cut-offs exist')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')
