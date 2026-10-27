@@ -255,14 +255,25 @@ year; the database holds 146 active events for that period.
 
 The site's free-reading meter does not get in the way. 351 of 360 stored pages
 hold the full article (most after a "N free articles left" banner), and the
-other 9 keep the lead. Page-gate and event-reality scores do not differ.
-Nothing logs in, and the text the site hides behind its paywall is not read.
-Months processed before the source existed are searched with an idempotent
-backfill:
+other 9 keep the lead. Page-gate and event-reality scores do not differ. The
+text the site hides behind its paywall is not read. Nothing logs in either:
+the login form requires a Cloudflare Turnstile check, which the pipeline does
+not try to get past.
+
+With CyberDaily among the sources, every run also does two more things:
+
+- **Backfill.** It searches processed months back to 2020-01 that Cyber Daily
+  has not searched yet. The first run therefore covers about 5,000 articles
+  and takes hours; it is resumable per month, and later runs have nothing left
+  to do.
+- **Re-fetch.** It fetches stored Cyber Daily stories again: the last 90 days,
+  plus any cut off or too short. Changed text is stored and re-enriched;
+  unchanged text writes nothing.
 
 ```bash
-python scripts/discovery_queue.py backfill --source CyberDaily --months 12
-python pipeline.py refresh    # enrich, deduplicate and publish what it stored
+python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
+python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--dry-run]
+python run_full_pipeline.py --cyberdaily-backfill-since none --skip-cyberdaily-refetch   # opt out for a run
 ```
 
 Details: [docs/01-data-sources.md section 5a](docs/01-data-sources.md#5a-cyber-daily).

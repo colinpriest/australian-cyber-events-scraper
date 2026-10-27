@@ -10,6 +10,9 @@ handles the cases a run does not:
     python scripts/discovery_queue.py release           # put quarantined records back in the queue
     python scripts/discovery_queue.py backfill --source CyberDaily --months 12
                                                         # run a source added later over processed months
+    python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
+    python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--dry-run]
+                                                        # fetch stored Cyber Daily stories again
 
 See ``cyber_data_collector/processing/retry_queue.py``.
 """
@@ -100,12 +103,23 @@ def backfill_months(months: int, today: date | None = None) -> list[tuple[int, i
     return sorted(out)
 
 
-def _backfill(db_path: str, source: str, months: int, max_events: int) -> int:
+def months_since(since: str, today: date | None = None) -> list[tuple[int, int]]:
+    """Every calendar month from ``since`` (``YYYY-MM``) to the current one, oldest first."""
+    today = today or date.today()
+    year, month = (int(part) for part in since.split("-"))
+    out = []
+    while (year, month) <= (today.year, today.month):
+        out.append((year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return out
+
+
+def _backfill(db_path: str, source: str, months: list[tuple[int, int]], max_events: int, force: bool) -> int:
     from cyber_data_collector.pipelines.discovery import EventDiscoveryEnrichmentPipeline
 
     pipeline = EventDiscoveryEnrichmentPipeline(db_path)
     try:
-        result = asyncio.run(pipeline.backfill_source(source, backfill_months(months), max_events))
+        result = asyncio.run(pipeline.backfill_source(source, months, max_events, force=force))
     finally:
         pipeline.close()
     for key in ("searched", "already_done", "not_processed", "failed"):
@@ -115,6 +129,24 @@ def _backfill(db_path: str, source: str, months: int, max_events: int) -> int:
         print("\nNew records are enriched, deduplicated and published by the next "
               "'python pipeline.py refresh'.")
     return 2 if result["failed"] else 0
+
+
+def _refetch(db_path: str, days: int | None, limit: int | None, dry_run: bool) -> int:
+    from cyber_data_collector.processing import cyberdaily_refetch
+
+    conn = sqlite3.connect(db_path)
+    try:
+        report = cyberdaily_refetch.refetch_stories(conn, days=days, limit=limit, dry_run=dry_run)
+    finally:
+        conn.close()
+    scope = "all stored stories" if days is None else f"stories from the last {days} days, plus cut-off/short ones"
+    print(f"Cyber Daily re-fetch ({scope}): {report.candidates} candidate(s)" + (" - dry run" if dry_run else ""))
+    if not dry_run:
+        print("  " + ", ".join(f"{k} {v}" for k, v in report.outcomes.items())
+              + f"; {report.requeued_enrichments} enrichment(s) queued again")
+        for row in report.failed[:20]:
+            print(f"  FAILED {row['url']}: {row['error']}")
+    return 2 if report.failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -130,8 +162,18 @@ def main(argv: list[str] | None = None) -> int:
                                                "(idempotent; needs OpenAI and TypeSafe keys)")
     backfill.add_argument("--source", required=True, choices=["CyberDaily", "WebberInsurance", "OAIC"],
                           help="Free sources only: a paid source over many months is a budget decision")
-    backfill.add_argument("--months", type=int, default=12, help="Calendar months before the current one")
+    span = backfill.add_mutually_exclusive_group()
+    span.add_argument("--months", type=int, default=12, help="Calendar months before the current one")
+    span.add_argument("--since", metavar="YYYY-MM", help="Every month from this one to the current one")
     backfill.add_argument("--max-events", type=int, default=1000)
+    backfill.add_argument("--force", action="store_true", help="Search months the source already completed again")
+    refetch = sub.add_parser("refetch-cyberdaily", help="Fetch stored Cyber Daily stories again; store changed text")
+    window = refetch.add_mutually_exclusive_group()
+    window.add_argument("--days", type=int, default=90,
+                        help="Stories published or discovered in the last N days, plus cut-off/short ones")
+    window.add_argument("--all", action="store_true", help="Every stored Cyber Daily story")
+    refetch.add_argument("--limit", type=int, default=None)
+    refetch.add_argument("--dry-run", action="store_true", help="Count the candidates; fetch nothing")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     db_path = resolve_db_path(args.db_path)
@@ -140,7 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "release":
         return _release(db_path)
     if args.command == "backfill":
-        return _backfill(db_path, args.source, args.months, args.max_events)
+        months = months_since(args.since) if args.since else backfill_months(args.months)
+        return _backfill(db_path, args.source, months, args.max_events, args.force)
+    if args.command == "refetch-cyberdaily":
+        return _refetch(db_path, None if args.all else args.days, args.limit, args.dry_run)
     return _drain(db_path, args.limit)
 
 

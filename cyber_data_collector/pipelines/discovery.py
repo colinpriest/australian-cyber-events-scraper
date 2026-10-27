@@ -57,6 +57,11 @@ from cyber_data_collector.processing.retry_queue import KIND_PERMANENT, KIND_TEM
 from cyber_data_collector.utils.api_budget import is_budget_refusal
 
 
+#: How far back Cyber Daily's first run searches (the dashboard window starts in 2020).
+CYBERDAILY_BACKFILL_SINCE: Tuple[int, int] = (2020, 1)
+#: Stored Cyber Daily stories re-fetched each run: published/discovered this many days back.
+CYBERDAILY_REFETCH_DAYS = 90
+
 #: ``CyberDataCollector.data_sources`` keys -> ``RawEvents.source_type``.
 SOURCE_TYPES_BY_COLLECTOR = {
     "perplexity": "Perplexity",
@@ -250,9 +255,19 @@ class EventDiscoveryEnrichmentPipeline:
     # DISCOVERY PHASE
     # =========================================================================
 
-    async def discover_events(self, source_types: List[str] = None, date_range_days: int = 7, max_events: int = 1000):
+    async def discover_events(self, source_types: List[str] = None, date_range_days: int = 7, max_events: int = 1000,
+                              cyberdaily_backfill_since: Optional[Tuple[int, int]] = CYBERDAILY_BACKFILL_SINCE,
+                              cyberdaily_refetch_days: Optional[int] = CYBERDAILY_REFETCH_DAYS,
+                              cyberdaily_refetch: bool = True):
         """
         Discover new events from configured data sources, processing month by month.
+
+        With CyberDaily among the sources, two more steps run after the months
+        (see :meth:`_cyberdaily_history`): every processed month back to
+        ``cyberdaily_backfill_since`` that Cyber Daily has not searched yet is
+        searched (the first run goes back to 2020; later runs find nothing left
+        to do), and stored Cyber Daily stories are re-fetched
+        (``cyberdaily_refetch_days``; None = all of them).
 
         Args:
             source_types: List of sources to use ('GDELT', 'Perplexity', 'GoogleSearch', 'WebberInsurance',
@@ -332,6 +347,8 @@ class EventDiscoveryEnrichmentPipeline:
                 start_date.strftime('%b %Y'),
                 now.strftime('%b %Y'),
             )
+            await self._cyberdaily_history(source_types, max_events, cyberdaily_backfill_since,
+                                           cyberdaily_refetch_days if cyberdaily_refetch else False)
             self.report_incomplete_months()
             return
 
@@ -356,6 +373,8 @@ class EventDiscoveryEnrichmentPipeline:
 
         self.stats['events_discovered'] = total_events_discovered
         logger.info(f"[DISCOVERY] Completed processing all months. Total events discovered: {total_events_discovered}")
+        await self._cyberdaily_history(source_types, max_events, cyberdaily_backfill_since,
+                                       cyberdaily_refetch_days if cyberdaily_refetch else False)
         self.report_incomplete_months()
 
         # Deduplication is deliberately NOT run here. It is owned by the caller
@@ -369,8 +388,42 @@ class EventDiscoveryEnrichmentPipeline:
         # every routine refresh (observed 2026-09-15: 762 curated events
         # rebuilt as 1,087, MediSecure fragmented back into 10).
 
+    async def _cyberdaily_history(self, source_types: List[str], max_events: int,
+                                  backfill_since: Optional[Tuple[int, int]], refetch_days: Any) -> None:
+        """Cyber Daily's deep backfill and re-fetch (no-op unless CyberDaily is a source).
+
+        ``refetch_days`` is a window in days, None for every stored story, or
+        False to skip the re-fetch. A failed re-fetch is counted and logged as
+        an error; it does not stop the run.
+        """
+        if "CyberDaily" not in (source_types or []):
+            return
+        if backfill_since:
+            now = datetime.now()
+            months, (year, month) = [], backfill_since
+            while (year, month) <= (now.year, now.month):
+                months.append((year, month))
+                year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+            result = await self.backfill_source("CyberDaily", months, max_events)
+            self.stats['cyberdaily_backfill_months'] = len(result["searched"])
+            logger.info("[CYBERDAILY] Backfill since %d-%02d: searched %d month(s), %d already done, %d not "
+                        "processed yet, %d failed", backfill_since[0], backfill_since[1], len(result["searched"]),
+                        len(result["already_done"]), len(result["not_processed"]), len(result["failed"]))
+        if refetch_days is False:
+            return
+        from cyber_data_collector.processing import cyberdaily_refetch
+
+        report = await cyberdaily_refetch.refetch_stories_async(self.db._conn, days=refetch_days)
+        outcomes = report.outcomes
+        self.stats['cyberdaily_refetch_failed'] = outcomes[cyberdaily_refetch.FAILED]
+        logger.info("[CYBERDAILY] Re-fetched %d stored stories: %d unchanged, %d updated (%d enrichment(s) queued), "
+                    "%d kept (fetched page cut off), %d failed", report.candidates, outcomes["unchanged"],
+                    outcomes["updated"], report.requeued_enrichments, outcomes["kept_stored"], outcomes["failed"])
+        for failure in report.failed[:10]:
+            logger.error("[CYBERDAILY] Re-fetch failed for %s: %s", failure["url"], failure["error"])
+
     async def backfill_source(self, source_type: str, months: List[Tuple[int, int]],
-                              max_events: int = 1000) -> Dict[str, List[Tuple[int, int]]]:
+                              max_events: int = 1000, force: bool = False) -> Dict[str, List[Tuple[int, int]]]:
         """Search already-processed months with one source added after they were processed.
 
         ``MonthProcessed`` is per month, not per source, so a source added later
@@ -380,7 +433,8 @@ class EventDiscoveryEnrichmentPipeline:
 
         Idempotent: a month the source has already searched completely
         (``SourceMonthDiscovery``) is skipped, so an interrupted backfill
-        resumes. A month nothing has processed yet is skipped too - normal
+        resumes (``force=True`` searches them again). A month nothing has
+        processed yet is skipped too - normal
         discovery covers it with every source, and recording it as processed
         after one source would stop the others from ever searching it.
 
@@ -396,7 +450,7 @@ class EventDiscoveryEnrichmentPipeline:
             if not self.db.is_month_processed(year, month):
                 result["not_processed"].append((year, month))
                 continue
-            if self.retry_queue.discovery_status(source_type, year, month) == "complete":
+            if not force and self.retry_queue.discovery_status(source_type, year, month) == "complete":
                 result["already_done"].append((year, month))
                 continue
             logger.info("[BACKFILL] %s %d-%02d", source_type, year, month)

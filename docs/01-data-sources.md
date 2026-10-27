@@ -697,28 +697,114 @@ The wall does not limit what this source needs:
 - On an exhausted meter the server still sends the rest of the article, inside
   a hidden `section.paywall` element. The scraper keeps only what is shown.
   Reading the hidden element would get round the site's access control, so it
-  is not done. A registered account would give full text on every page; that
-  is a decision for the project owner, not something the pipeline does.
+  is not done.
 
-### Backfill
+### Logging in: not automated
+
+A free account (which the project owner has created) would give full text on
+every page. The pipeline does not log in with it. The login form
+(`freeMembershipLoginForm`) posts to `com_ajax` with a
+`captcha_turnstile_response` field, so every login must pass a Cloudflare
+Turnstile check. Turnstile exists to tell people from programs, and code that
+logs in unattended would have to get past it. The free-article meter is
+per browser, and the scraper opens a fresh browser context for every page, so
+it sees each article as a first-time visitor does. That is why 351 of 360
+stored pages hold the full article without an account (and why the example
+below needed none).
+
+Ways to use the account, for the project owner to choose:
+
+1. **Keep anonymous access** (current). Full text on almost every page; the
+   cut-off ones keep their lead.
+2. **Use a session from the owner's own login.** The owner logs in in a
+   browser (passing the check as a person), and the pipeline reuses that
+   session cookie until it expires. Not built.
+3. **Ask Momentum Media for feed or API access** for research use.
+
+`CYBERDAILY_USERNAME` / `CYBERDAILY_PASSWORD` in `.env` are not read by any
+code.
+
+### First run: back to 2020
 
 `MonthProcessed` records a month as processed for all sources at once. A
-source added later therefore only reaches the rolling three-month window of
-each refresh. Earlier months are searched with:
+source added later would therefore only reach the rolling three-month window
+of each refresh. So every discovery run with CyberDaily among the sources
+(including `pipeline.py refresh`) then searches every processed month back to
+2020-01 (the start of the dashboard window) that Cyber Daily has not searched
+yet:
+
+- The first run walks the whole history, about 80 months and some 5,000
+  Security articles. Each article gets a scrape, a Jev page judgement and a
+  fast-model classification, so allow several hours. Perplexity enrichment of
+  the accepted ones is capped per refresh (`--enrich-limit`).
+- Progress is recorded per month in `SourceMonthDiscovery`. An interrupted
+  first run (outage, budget, crash) resumes at the first month not completed,
+  and later runs find nothing left to do.
+- A month nothing has processed yet is left to normal discovery.
+
+`--cyberdaily-backfill-since YYYY-MM` changes the start, and `none` turns the
+backfill off. To run it on its own, or again:
 
 ```bash
-python scripts/discovery_queue.py backfill --source CyberDaily --months 12
+python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01            # resume / catch up
+python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 --force    # search completed months again
 python pipeline.py refresh       # enriches, deduplicates and publishes what it stored
 ```
 
-The backfill:
+The backfill runs one source through the normal discovery path. It works on
+processed months only, leaves their `MonthProcessed` totals alone, exits 2 if
+any month failed, and accepts free sources only. Re-searching a month finds
+the stored articles and adds no duplicates.
 
-- runs the one source through the normal discovery path, for processed months
-  only, and leaves their `MonthProcessed` totals alone;
-- skips months the source has already searched completely, so it resumes after
-  an interruption;
-- exits 2 if any month failed;
-- accepts free sources only.
+### Re-fetching stored stories
+
+Every run with CyberDaily also fetches stored Cyber Daily stories again,
+whichever source stored them
+(`cyber_data_collector/processing/cyberdaily_refetch.py`):
+
+| Re-fetched page | Effect |
+|---|---|
+| Same text (ignoring the "N free articles left" banner, whose count changes) | Nothing written to `RawEvents`, nothing queued |
+| Different text | Stored text replaced. The record's active enrichments are queued for Perplexity again (stored facts kept). Record fingerprints, ASD input fingerprints and Jev input hashes carry the change downstream |
+| Cut off by the meter, while the stored copy is complete | Stored copy kept (`kept_stored`) |
+| Failed, a block page, too short, or another page's text | Recorded as a failure; nothing changed |
+
+Which stories: by default those published or discovered in the last 90 days,
+plus every story whose stored text is cut off or too short, whatever its age.
+On 2026-10-28 that is 45 of the 264 stories in active use. Stories stored or
+re-fetched in the last 24 hours are skipped, since the run has just scraped
+its new ones. Fetches are one at a time, 2 seconds apart. Every fetch is
+logged in `CyberDailyRefetches`.
+
+Re-fetching every stored story on every run would take about 10 minutes now,
+and more than 3 hours once the backfill has stored its ~5,000 stories. Hence
+the window. To change it:
+
+```bash
+python run_full_pipeline.py --cyberdaily-refetch-days 365      # or --cyberdaily-refetch-all, --skip-cyberdaily-refetch
+python scripts/discovery_queue.py refetch-cyberdaily --all     # on its own; --dry-run counts the candidates
+```
+
+### Positive example
+
+[Virtual Ideas hit by Lamashtu ransomware](https://www.cyberdaily.au/security/14337-exclusive-sydney-based-visualisation-firm-virtual-ideas-hit-by-lamashtu-ransomware-attack)
+(22 October 2026) went through the real path into a scratch database. The
+feed found it (October 2026: 77 articles, no failures). Without an account,
+the scrape stored the full article (3,100 characters, no wall). The page gate
+scored it 0.99, and classification made it Ransomware / High / Australian.
+The live database had no record of the URL, only Perplexity's record of the
+same incident (event "Virtual Ideas listed on Lamashtu ransomware leak site",
+2026-09-30). Deduplication decides whether the article joins that event.
+
+### Not every story is an incident
+
+About a quarter of Security articles report a specific incident. The rest
+(commentary, policy, surveys, vendor news, alerts) are stored and rejected by
+classification, like every source's non-incidents. The page gate scores them
+but drops nothing: its cut-off is calibrated for Google pages only, and
+enforcing it here would need labelled Cyber Daily pages first. The /news index
+is not read separately: 36 of its first 40 items are Security stories, and the
+other 4 are tech, culture and digital-transformation pieces.
 
 ### Confidence Scores
 
@@ -731,7 +817,7 @@ The backfill:
 ### Not yet done
 
 - `cyber_data_collector/quality/thresholds.json` does not list `CyberDaily` in
-  `monthly_sources`. Until earlier months are backfilled, every one of them
+  `monthly_sources`. Until the first-run backfill finishes, earlier months
   would be flagged for zero volume.
 - Only the Security section is read; `custom_config={"sections": [...]}` adds
   others. Of the Cyber Daily articles already in the database, 333 are in
