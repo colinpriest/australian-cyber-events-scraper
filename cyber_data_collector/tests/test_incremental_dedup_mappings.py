@@ -186,8 +186,9 @@ def test_whole_new_group_joins_the_matched_event(real_schema_db, monkeypatch):
     gc.collect()  # the run's connection sits in a reference cycle; free it so Windows can delete the file
 
 
-def test_split_ruling_keeps_a_record_out_of_its_old_event(real_schema_db):
-    conn, _ = real_schema_db
+def test_split_ruling_keeps_a_record_out_of_its_old_event(real_schema_db, monkeypatch):
+    """The incremental matcher uses the shared decision, vetoed by any member's ruling."""
+    conn, db_path = real_schema_db
     conn.executescript("""
         CREATE TABLE DedupOverrides (left_enriched_event_id TEXT, right_enriched_event_id TEXT,
                                      verdict TEXT, active INTEGER);
@@ -195,9 +196,26 @@ def test_split_ruling_keeps_a_record_out_of_its_old_event(real_schema_db):
             VALUES ('m0', 'raw-existing', 'enr-existing', 'dedup-uuid-1');
         INSERT INTO DedupOverrides VALUES ('enr-existing', 'enr-new', 'different', 1);
     """)
-    cur = conn.cursor()
-    assert _migration()._ruled_different(cur, {"enr-new"}, "dedup-uuid-1")
-    assert not _migration()._ruled_different(cur, {"enr-other"}, "dedup-uuid-1")
+    conn.commit()
+    from types import SimpleNamespace
+    from datetime import date
+    import cyber_data_collector.dedup.backfill as backfill
+    from cyber_data_collector.storage.deduplication_storage import DeduplicationStorage as Storage
+    monkeypatch.setattr(backfill, "run_backfill", lambda c: SimpleNamespace(summary=lambda: "stub"))
+    stored = []
+    monkeypatch.setattr(Storage, "store_deduplication_result",
+                        lambda self, result: stored.append(result) or SimpleNamespace(success=True))
+    day = date(2026, 2, 10)
+    new = [CyberEvent(event_id="enr-new", title="Optus breach", event_date=day, victim_organization_name="Optus")]
+    existing = [CyberEvent(event_id="dedup-uuid-1", title="Existing", event_date=day,
+                           victim_organization_name="Optus")]
+    assert _incremental_migration(db_path)._run_incremental_deduplication(new, existing, {})
+    mapped = {r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = 'dedup-uuid-1'")}
+    assert mapped == {"enr-existing"}          # not re-attached
+    assert stored and stored[0].unique_events[0].event_id == "enr-new"   # stored as its own event
+    import gc
+    gc.collect()
 
 
 def test_membership_check_finds_records_in_no_event_and_in_two(real_schema_db):

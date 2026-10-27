@@ -295,8 +295,8 @@ class TestDeduplicationEngine:
         engine = DeduplicationEngine(similarity_threshold=0.9)
         
         events = [
-            CyberEvent(event_id="1", title="Data Breach", event_date=date(2023, 1, 1)),
-            CyberEvent(event_id="2", title="Data Breach", event_date=date(2023, 1, 1)),
+            CyberEvent(event_id="1", title="Acme Health ransomware attack", event_date=date(2023, 1, 1)),
+            CyberEvent(event_id="2", title="Acme Health ransomware attack", event_date=date(2023, 1, 1)),
             CyberEvent(event_id="3", title="Different Event", event_date=date(2023, 1, 2))
         ]
         
@@ -361,6 +361,42 @@ class TestDeduplicationEngine:
         ]
 
         assert engine.merge_decision(*events) is None
+
+    def test_identical_generic_titles_of_different_victims_do_not_merge(self):
+        """The reviewer's reproduction: two universities, both titled "Data breach"."""
+        engine = DeduplicationEngine()
+        a = CyberEvent(event_id="1", title="Data breach", event_date=date(2024, 5, 14),
+                       victim_organization_name="University of Sydney")
+        b = CyberEvent(event_id="2", title="Data breach", event_date=date(2024, 5, 14),
+                       victim_organization_name="University of Melbourne")
+        assert engine.merge_decision(a, b) is None
+
+    def test_identical_generic_titles_without_victims_do_not_merge(self):
+        engine = DeduplicationEngine()
+        a = CyberEvent(event_id="1", title="Data breach", event_date=date(2024, 5, 14))
+        b = CyberEvent(event_id="2", title="Data Breach", event_date=date(2024, 5, 14))
+        assert engine.merge_decision(a, b) is None
+
+    def test_identical_title_with_one_victim_unknown_is_left_to_the_check(self):
+        engine = DeduplicationEngine()
+        a = CyberEvent(event_id="1", title="Acme Health ransomware attack", event_date=date(2024, 5, 14),
+                       victim_organization_name="Acme Health")
+        b = CyberEvent(event_id="2", title="Acme Health ransomware attack", event_date=date(2024, 5, 14))
+        assert engine.merge_decision(a, b) is None
+
+    def test_cached_split_ruling_vetoes_grouping_through_any_member(self):
+        """Record 3 was split from record 1; it must not rejoin via record 2."""
+        engine = DeduplicationEngine()
+        engine.different_pairs = {frozenset(("1", "3"))}
+        day = date(2024, 5, 14)
+        events = [CyberEvent(event_id=i, title="Acme Health ransomware attack", event_date=day,
+                             victim_organization_name="Acme Health") for i in ("1", "2", "3")]
+        result = engine.deduplicate(events)
+        groups = sorted(sorted([g.master_event.event_id] + [e.event_id for e in g.merged_events
+                                                             if e.event_id != g.master_event.event_id])
+                        for g in result.merge_groups)
+        assert len(result.unique_events) == 2
+        assert not any({"1", "3"} <= set(g) for g in groups)
 
     def test_event_without_a_victim_matches_nothing(self):
         """No victim is not guessed from title keywords."""

@@ -2288,6 +2288,36 @@ def cmd_name_entities(args) -> int:
     return 0
 
 
+def cmd_set_fact(args) -> int:
+    """Record an explicit correction to an event fact; it outranks recomputation."""
+    from cyber_data_collector.dedup.event_facts import set_fact
+    conn = _connect(args.db)
+    try:
+        set_fact(conn, args.dedup_id, args.field, None if args.value.lower() == "null" else args.value,
+                 args.reason)
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"{args.dedup_id}: {args.field} = {args.value} (recorded; recomputation will keep it)")
+    return 0
+
+
+def cmd_refresh_facts(args) -> int:
+    """Recompute facts for events whose membership changed since their facts were computed."""
+    from cyber_data_collector.dedup.event_facts import refresh_facts
+    conn = _connect(args.db)
+    try:
+        changed = refresh_facts(conn, dry_run=args.dry_run)
+        if not args.dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+    for dedup_id, delta in list(changed.items())[:25]:
+        print(f"  {dedup_id[:8]} " + "; ".join(f"{f}: {old} -> {new}" for f, (old, new) in delta.items()))
+    print(f"{'Would change' if args.dry_run else 'Changed'} facts on {len(changed)} event(s)")
+    return 0
+
+
 def cmd_roles_status(args) -> int:
     """Report which events have entity roles matching their current members."""
     conn = _connect(args.db)
@@ -2868,6 +2898,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Do not fall back to a Perplexity search.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_name_entities)
+
+    p = sub.add_parser("set-fact", help="Correct an event fact explicitly (kept over recomputation)")
+    p.add_argument("dedup_id")
+    p.add_argument("field", choices=["records_affected", "event_type", "severity", "attack_method",
+                                     "attacking_entity_name"])
+    p.add_argument("value", help="the corrected value, or 'null' for unknown")
+    p.add_argument("--reason", required=True)
+    p.set_defaults(func=cmd_set_fact)
+
+    p = sub.add_parser("refresh-facts", help="Recompute facts of events whose membership changed")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_refresh_facts)
 
     p = sub.add_parser("roles-status",
                        help="Report whether entity roles match current membership")
