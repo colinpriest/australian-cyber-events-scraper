@@ -2747,6 +2747,10 @@ def cmd_check_victim_attribution(args) -> int:
     verb = "Applied" if result["applied"] else "Would apply (dry run; pass --apply)"
     print(f"{verb}: {result['counts']} at cut-off {result['cutoff']} (replacement threshold "
           f"{result['replacement_threshold']}); judged {result['judged']} pair(s); findings in {out}")
+    review = result["flag_review"]
+    print(f"Earlier flags: {review['flagged_before']} reassessed ({review['inputs_changed']} with changed input) - "
+          f"{review['confirmed']} confirmed, {review['demoted']} demoted, {review['reattributed']} re-attributed, "
+          f"{review['still_flagged']} still flagged; {review['unresolved_now']} attribution(s) unresolved now")
     return 0
 
 

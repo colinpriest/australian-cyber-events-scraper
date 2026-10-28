@@ -49,6 +49,19 @@ Every change is snapshotted by the ledger (reversible) and written to
 ``VictimAttributionActions`` with the scores, cut-offs and calibration that
 justified it. Idempotent: once re-attributed, the old organisation is no
 longer a recorded victim, so it is not judged again; stored answers are reused.
+
+**Flags are reassessed, never left to go stale.** Every pair is judged on
+every run, and a stored answer is reused only while its input - the evidence,
+the organisation's timeline and the event's membership and other victims - is
+unchanged (``ModelJudgements`` keys on a hash of it). Each action row records
+that input hash and the event's member signature. A pair whose latest action
+is ``flagged`` therefore ends each run in one of three states: **confirmed**
+(re-judged at or above the cut-off, or labelled correct; a ``confirmed`` row
+clears the flag), **replaced** (demoted or re-attributed by the calibrated
+rules above), or **still flagged** (a new row with the current reason when the
+input or the reason changed; none when nothing did). A flagged pair is
+*unresolved* (:func:`unresolved_attributions`): the incident stays, and victim
+counting, the by-entity dashboard and the recurrence analysis mark it.
 """
 
 from __future__ import annotations
@@ -89,7 +102,7 @@ CREATE TABLE IF NOT EXISTS VictimAttributionActions (
     deduplicated_event_id  TEXT NOT NULL,
     entity_id              INTEGER NOT NULL,
     old_victim             TEXT NOT NULL,
-    action                 TEXT NOT NULL,     -- demoted / reattributed / flagged
+    action                 TEXT NOT NULL,     -- demoted / reattributed / flagged / confirmed
     new_victim             TEXT,
     p_recorded_victim      REAL NOT NULL,
     replacement_probability REAL,
@@ -98,9 +111,13 @@ CREATE TABLE IF NOT EXISTS VictimAttributionActions (
     calibration_json       TEXT,
     reason                 TEXT,
     roles_before_json      TEXT,              -- the event's entity roles before the change (for reversal)
-    created_at             TEXT NOT NULL
+    created_at             TEXT NOT NULL,
+    input_hash             TEXT,              -- hash of the judged input (evidence, timeline, membership)
+    member_signature       TEXT               -- the event's members when judged (role_maintenance)
 );
 """
+# Columns added after the table was first created: (name, declaration).
+_ADDED_COLUMNS = (("input_hash", "TEXT"), ("member_signature", "TEXT"))
 
 INSTRUCTIONS = (
     "`recorded_victim` is the organisation this stored event is filed against. Decide whether the "
@@ -190,10 +207,15 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, entity_id: int, victim:
 # ---------------------------------------------------------------- judging
 
 def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge=None,
-                escalation_client=None) -> Dict[str, float]:
-    """Final P(recorded victim is right) per pair: escalation in the band, else Jev. Raises on failure."""
+                escalation_client=None, inputs: Optional[Dict[str, Dict[str, str]]] = None) -> Dict[str, float]:
+    """Final P(recorded victim is right) per pair: escalation in the band, else Jev. Raises on failure.
+
+    With ``inputs``, also fills it with each pair's ``input_hash`` (the hash
+    Jev's stored answer is keyed on) and the event's ``member_signature``.
+    """
+    from cyber_data_collector.dedup.role_maintenance import member_signature
     from cyber_data_collector.utils.escalation import escalate
-    from cyber_data_collector.utils.jev import JevJudge
+    from cyber_data_collector.utils.jev import JevJudge, input_hash
 
     owned = judge is None
     judge = judge or JevJudge(conn)
@@ -202,6 +224,10 @@ def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
     try:
         for i, pair in enumerate(pairs, 1):
             state = build_state(conn, pair["deduplicated_event_id"], pair["entity_id"], pair["victim"])
+            if inputs is not None:
+                inputs[pair["pair_id"]] = {
+                    "input_hash": input_hash(state, q[QUESTION_ID], typesafe_model()),
+                    "member_signature": member_signature(conn, pair["deduplicated_event_id"])}
             p = float(judge.ask("event_victim", pair["pair_id"], QUESTION_VERSION, state, q)[QUESTION_ID].value)
             if ESCALATE_BAND and ESCALATE_BAND[0] <= p < ESCALATE_BAND[1]:
                 value = escalate(conn, "event_victim", pair["pair_id"], ESCALATION_QUESTION_ID,
@@ -348,6 +374,96 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     return cal
 
 
+# ---------------------------------------------------------------- flags
+
+def ensure_actions_schema(conn: sqlite3.Connection) -> None:
+    """Create ``VictimAttributionActions`` or add the columns later versions record. Idempotent."""
+    conn.executescript(ACTIONS_SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(VictimAttributionActions)")}
+    for name, declaration in _ADDED_COLUMNS:
+        if name not in have:
+            conn.execute(f"ALTER TABLE VictimAttributionActions ADD COLUMN {name} {declaration}")
+
+
+def latest_actions(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+    """The latest stored action for each pair id (``event|entity``); empty before the first action."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(VictimAttributionActions)")}
+    if not have:
+        return {}
+    extra = ", ".join(f"a.{c}" if c in have else f"NULL AS {c}" for c, _ in _ADDED_COLUMNS)
+    rows = conn.execute(
+        f"""SELECT a.deduplicated_event_id, a.entity_id, a.action, a.reason, a.p_recorded_victim,
+                   a.created_at, {extra}
+            FROM VictimAttributionActions a
+            JOIN (SELECT deduplicated_event_id, entity_id, MAX(action_id) AS latest
+                  FROM VictimAttributionActions GROUP BY deduplicated_event_id, entity_id) l
+              ON l.latest = a.action_id""").fetchall()
+    return {f"{r[0]}|{r[1]}": {"deduplicated_event_id": r[0], "entity_id": r[1], "action": r[2], "reason": r[3],
+                               "p_recorded_victim": r[4], "created_at": r[5], "input_hash": r[6],
+                               "member_signature": r[7]} for r in rows}
+
+
+def unresolved_attributions(conn: sqlite3.Connection) -> Dict[Tuple[str, int], Dict[str, Any]]:
+    """Active event-victim pairs whose latest attribution action is ``flagged``, keyed ``(event, entity)``.
+
+    The judgement scored the recorded victim below the calibrated cut-off, and
+    no co-victim or calibrated replacement could take its place. The incident
+    is kept; only who it happened to is unresolved. Each value holds the
+    flag's ``reason``, score and date.
+    """
+    flagged = {(a["deduplicated_event_id"], int(a["entity_id"])): a
+               for a in latest_actions(conn).values() if a["action"] == "flagged"}
+    if not flagged:
+        return {}
+    victims = {(r[0], int(r[1])) for r in conn.execute(
+        """SELECT dee.deduplicated_event_id, dee.entity_id FROM DeduplicatedEventEntities dee
+           JOIN DeduplicatedEvents d ON d.deduplicated_event_id = dee.deduplicated_event_id
+           WHERE dee.relationship_type = 'victim' AND d.status = 'Active'""")}
+    return {key: flag for key, flag in flagged.items() if key in victims}
+
+
+def _change_since(flag: Dict[str, Any], current: Optional[Dict[str, str]]) -> str:
+    """What changed in a pair's judged input since it was flagged, in words."""
+    if not current:
+        return "input not recorded"
+    if not flag.get("input_hash"):
+        return "flag predates input tracking"
+    if flag.get("member_signature") and flag["member_signature"] != current.get("member_signature"):
+        return "event membership changed"
+    if flag["input_hash"] != current.get("input_hash"):
+        return "evidence, timeline or co-victims changed"
+    return "input unchanged"
+
+
+def plan_confirmations(pairs: Sequence[Dict[str, Any]], flags: Dict[str, Dict[str, Any]],
+                       scores: Dict[str, float], cal: Dict[str, Any], labels: Dict[str, Dict[str, str]],
+                       inputs: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+    """Flagged pairs that are now right: labelled correct, or re-judged at or above the cut-off.
+
+    A pair labelled wrong is never confirmed. Flagged pairs still below the
+    cut-off are left to :func:`plan_actions` (demote, re-attribute or flag).
+    """
+    plans = []
+    for pair in pairs:
+        flag = flags.get(pair["pair_id"])
+        p = scores.get(pair["pair_id"])
+        if flag is None or p is None:
+            continue
+        label = labels.get(pair["pair_id"])
+        change = _change_since(flag, inputs.get(pair["pair_id"]))
+        if label and label.get("label") == "correct":
+            reason = f"labelled correct ({change})"
+        elif label and label.get("label") == "wrong":
+            continue
+        elif p >= cal["cutoff"]:
+            reason = f"re-judged {p:.2f} >= cut-off {cal['cutoff']:.2f} ({change})"
+        else:
+            continue
+        plans.append({**pair, "p_recorded_victim": p, "label": label, "action": "confirmed", "new_victim": None,
+                      "replacement_probability": None, "reason": reason})
+    return plans
+
+
 # ---------------------------------------------------------------- acting
 
 def _demote(conn: sqlite3.Connection, dedup_id: str, entity_id: int) -> None:
@@ -464,11 +580,16 @@ def plan_actions(conn: sqlite3.Connection, scores: Dict[str, float], cal: Dict[s
 
 
 def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal: Dict[str, Any]) -> str:
-    """Carry out planned demotions and re-attributions; snapshot first and audit every change."""
+    """Carry out planned demotions and re-attributions; snapshot first and audit every change.
+
+    ``confirmed`` and ``flagged`` plans change no roles; they are audit rows. A
+    flag identical to the latest one on record (reason, score and input) is
+    not written again.
+    """
     from cyber_data_collector.dedup.ledger import DedupLedger
     from cyber_data_collector.dedup.victim_agreement import apply_victim
 
-    conn.executescript(ACTIONS_SCHEMA)
+    ensure_actions_schema(conn)
     ledger = DedupLedger(conn)
     batch_id = f"victim-attribution-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     now = datetime.now().isoformat()
@@ -481,10 +602,11 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
             if plan["action"] == "flagged" and conn.execute(
                     "SELECT 1 FROM VictimAttributionActions WHERE deduplicated_event_id = ? AND entity_id = ? "
                     "AND action = 'flagged' AND reason IS ? AND ABS(p_recorded_victim - ?) < 1e-9 "
+                    "AND input_hash IS ? "
                     "AND action_id = (SELECT MAX(action_id) FROM VictimAttributionActions "
                     "WHERE deduplicated_event_id = ? AND entity_id = ?)",
-                    (did, plan["entity_id"], plan.get("reason"), plan["p_recorded_victim"], did,
-                     plan["entity_id"])).fetchone():
+                    (did, plan["entity_id"], plan.get("reason"), plan["p_recorded_victim"],
+                     plan.get("input_hash"), did, plan["entity_id"])).fetchone():
                 continue   # the same flag, already on record
             # The ledger snapshot holds the event row and members; the roles it
             # does not hold go in the audit row, so every change can be reversed.
@@ -504,11 +626,12 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
             conn.execute(
                 "INSERT INTO VictimAttributionActions (batch_id, deduplicated_event_id, entity_id, old_victim, "
                 "action, new_victim, p_recorded_victim, replacement_probability, cutoff, replacement_threshold, "
-                "calibration_json, reason, roles_before_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "calibration_json, reason, roles_before_json, created_at, input_hash, member_signature) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (batch_id, did, plan["entity_id"], plan["victim"], plan["action"], plan.get("new_victim"),
                  plan["p_recorded_victim"], plan.get("replacement_probability"), cal["cutoff"],
-                 cal.get("replacement_threshold"), cal_json, plan.get("reason"), roles_before, now))
+                 cal.get("replacement_threshold"), cal_json, plan.get("reason"), roles_before, now,
+                 plan.get("input_hash"), plan.get("member_signature")))
         conn.commit()
     except Exception:
         conn.rollback()
@@ -521,6 +644,10 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
                              labels_path: Path = LABELS_PATH) -> Dict[str, Any]:
     """Judge every event-victim pair; with a calibration, plan (and with ``apply``, make) re-attributions.
 
+    Pairs flagged earlier are settled too (:func:`plan_confirmations`): each
+    ends confirmed, demoted / re-attributed, or still flagged; ``flag_review``
+    counts them.
+
     Raises when ``apply`` is asked for and the labels are missing, unreadable
     or empty. Without a matching calibration nothing is changed (logged as
     report-only) and pairs below :data:`REPORT_BELOW` are reported.
@@ -530,21 +657,33 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
     labels = load_labels(labels_path, required=apply)
     owned = judge is None
     judge = judge or JevJudge(conn)
+    inputs: Dict[str, Dict[str, str]] = {}
     try:
         pairs = pairs_to_check(conn)
-        scores = judge_pairs(conn, pairs, judge=judge, escalation_client=escalation_client)
+        scores = judge_pairs(conn, pairs, judge=judge, escalation_client=escalation_client, inputs=inputs)
         cal = active_calibration(calibration_path)
         report = [{**p, "p_recorded_victim": scores[p["pair_id"]]} for p in pairs
                   if scores.get(p["pair_id"], 1.0) < (cal["cutoff"] if cal else REPORT_BELOW)]
         report.sort(key=lambda f: f["p_recorded_victim"])
-        plans = plan_actions(conn, scores, cal, labels, judge) if cal else []
+        flags = {pid: a for pid, a in latest_actions(conn).items() if a["action"] == "flagged" and pid in scores}
+        plans = (plan_actions(conn, scores, cal, labels, judge)
+                 + plan_confirmations(pairs, flags, scores, cal, labels, inputs)) if cal else []
+        for plan in plans:
+            plan.update(inputs.get(plan["pair_id"], {}))
     finally:
         if owned:
             judge.close()
     batch = apply_actions(conn, plans, cal) if (apply and cal and plans) else None
     counts = Counter(p["action"] for p in plans)
+    outcome = {p["pair_id"]: p["action"] for p in plans}
+    review = Counter(outcome.get(pid, "flagged") for pid in flags)
+    flag_review = {"flagged_before": len(flags), "confirmed": review["confirmed"], "demoted": review["demoted"],
+                   "reattributed": review["reattributed"], "still_flagged": review["flagged"],
+                   "inputs_changed": sum(_change_since(f, inputs.get(pid)) != "input unchanged"
+                                         for pid, f in flags.items()),
+                   "unresolved_now": len(unresolved_attributions(conn))}
     return {"judged": len(scores), "calibrated": cal is not None, "cutoff": cal["cutoff"] if cal else None,
             "replacement_threshold": cal.get("replacement_threshold") if cal else None,
             "applied": batch is not None, "batch_id": batch, "reported": report,
             "actions": [{k: v for k, v in p.items() if k != "label"} for p in plans],
-            "counts": dict(counts)}
+            "counts": dict(counts), "flag_review": flag_review}

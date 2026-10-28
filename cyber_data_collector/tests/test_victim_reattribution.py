@@ -339,3 +339,117 @@ def test_a_failed_escalation_fails_loudly(conn, tmp_path):
         vj.judge_pairs(conn, vj.pairs_to_check(conn),
                        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.4})),
                        escalation_client=broken)
+
+
+# ------------------------------------------------------------------ flags are reassessed
+
+def _add_record(conn, did, title, body, org, victim):
+    """A new member for an event: the membership, and so the judged input, changes."""
+    eid = f"{did}-new-{title[:8]}"
+    conn.execute("INSERT INTO RawEvents VALUES (?, 'https://news/y', ?, NULL, NULL, NULL, '2026-06-02T00:00:00')",
+                 (eid, body))
+    conn.execute("INSERT INTO EnrichedEvents VALUES (?, ?, ?, '2025-10-16', ?, NULL, ?, 'Active', NULL)",
+                 (eid, eid, title, body, json.dumps({"formal_entity_name": org})))
+    conn.execute("INSERT INTO EventDeduplicationMap VALUES (?, ?)", (eid, did))
+    conn.execute("INSERT INTO EnrichedEventEntities VALUES (?, ?, 'victim', NULL)", (eid, _entity(conn, victim)))
+
+
+def _flag_afp(conn, tmp_path):
+    _afp(conn)
+    judge =JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.03}, pick="Aussie Fluid Power", pick_p=0.5))
+    result = vj.check_victim_attribution(conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path),
+                                         labels_path=_labels(tmp_path))
+    assert result["counts"] == {"flagged": 1}
+    return ("afp1", _entity(conn, "Australian Federal Police"))
+
+
+def test_a_flag_records_its_input_and_is_unresolved(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    flag = vj.unresolved_attributions(conn)[key]
+    assert flag["reason"].startswith("replacement 'Aussie Fluid Power' below threshold")
+    assert flag["input_hash"] and flag["member_signature"]
+
+
+def test_an_unchanged_flag_stays_unresolved_and_is_not_rewritten(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    again = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.03}, pick="Aussie Fluid Power",
+                                            pick_p=0.5)))
+    assert again["flag_review"] == {"flagged_before": 1, "confirmed": 0, "demoted": 0, "reattributed": 0,
+                                    "still_flagged": 1, "inputs_changed": 0, "unresolved_now": 1}
+    assert conn.execute("SELECT COUNT(*) FROM VictimAttributionActions").fetchone()[0] == 1
+    assert key in vj.unresolved_attributions(conn)
+
+
+def test_a_flag_is_confirmed_when_new_membership_vindicates_the_victim(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    _add_record(conn, "afp1", "AFP confirms officers' data stolen", "The AFP said its systems were breached",
+                "Australian Federal Police", "Australian Federal Police")
+    result = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.92})))
+    assert result["counts"] == {"confirmed": 1}
+    assert result["flag_review"]["confirmed"] == 1 and result["flag_review"]["inputs_changed"] == 1
+    assert result["flag_review"]["unresolved_now"] == 0 and key not in vj.unresolved_attributions(conn)
+    action, reason = conn.execute("SELECT action, reason FROM VictimAttributionActions "
+                                  "ORDER BY action_id DESC LIMIT 1").fetchone()
+    assert action == "confirmed" and "event membership changed" in reason
+    assert _role(conn, "afp1", "Australian Federal Police") == "victim"
+    # Idempotent: a confirmed pair is not confirmed again.
+    again = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.92})))
+    assert again["counts"] == {} and again["flag_review"]["flagged_before"] == 0
+
+
+def test_a_flag_is_replaced_once_the_evidence_supports_a_replacement(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    _add_record(conn, "afp1", "Aussie Fluid Power confirms ransomware", "Aussie Fluid Power notified customers",
+                "Aussie Fluid Power", "Aussie Fluid Power")
+    result = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.03}, pick="Aussie Fluid Power")))
+    assert result["counts"] == {"reattributed": 1} and result["flag_review"]["reattributed"] == 1
+    assert key not in vj.unresolved_attributions(conn)
+    assert _role(conn, "afp1", "Aussie Fluid Power") == "victim"
+
+
+def test_a_flag_on_a_pair_labelled_correct_is_confirmed(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    pid = f"{key[0]}|{key[1]}"
+    result = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path),
+        labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "correct", "", "r", "t")]),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.03})))
+    assert result["counts"] == {"confirmed": 1} and not vj.unresolved_attributions(conn)
+    assert "labelled correct (input unchanged)" in result["actions"][0]["reason"]
+
+
+def test_a_flag_without_a_calibration_is_left_unresolved(conn, tmp_path):
+    key = _flag_afp(conn, tmp_path)
+    result = vj.check_victim_attribution(
+        conn, judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.92})),
+        calibration_path=tmp_path / "none.json", labels_path=_labels(tmp_path))
+    assert not result["calibrated"] and result["counts"] == {}
+    assert result["flag_review"]["still_flagged"] == 1 and key in vj.unresolved_attributions(conn)
+
+
+def test_flags_written_before_input_tracking_are_reassessed(conn, tmp_path):
+    """The table as first created had no input columns; it is upgraded and the old flag re-judged."""
+    conn.executescript(vj.ACTIONS_SCHEMA.replace(
+        ",\n    input_hash             TEXT,              -- hash of the judged input (evidence, timeline, membership)\n"
+        "    member_signature       TEXT               -- the event's members when judged (role_maintenance)", ""))
+    assert "input_hash" not in {r[1] for r in conn.execute("PRAGMA table_info(VictimAttributionActions)")}
+    _afp(conn)
+    entity = _entity(conn, "Australian Federal Police")
+    conn.execute("INSERT INTO VictimAttributionActions (batch_id, deduplicated_event_id, entity_id, old_victim, "
+                 "action, p_recorded_victim, reason, created_at) VALUES ('old', 'afp1', ?, 'AFP', 'flagged', "
+                 "0.03, 'no candidate chosen', '2026-10-28')", (entity,))
+    assert ("afp1", entity) in vj.unresolved_attributions(conn)
+    result = vj.check_victim_attribution(
+        conn, apply=True, calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path),
+        judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.92})))
+    assert result["counts"] == {"confirmed": 1}
+    assert "flag predates input tracking" in result["actions"][0]["reason"]
+    assert conn.execute("SELECT input_hash FROM VictimAttributionActions ORDER BY action_id DESC").fetchone()[0]

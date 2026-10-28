@@ -424,16 +424,26 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
     variant pair across two events splits a genuine repeat into two
     single-event "organisations".
     """
-    from cyber_data_collector.dedup.victim_counting import organisation_groups, within_event_duplicates
+    from cyber_data_collector.dedup.victim_counting import (
+        organisation_groups, unresolved_rows, within_event_duplicates,
+    )
 
     groups = organisation_groups(conn, df["entity_id"].tolist())
     df = df.copy()
     # Two victims of one event that are one organisation under two names
     # ("Australian Red Cross" / "Australian Red Cross Society") count once.
-    drop = within_event_duplicates(conn, zip(df["entity_id"], df["entity_name"], df["deduplicated_event_id"]))
+    victims = list(zip(df["entity_id"], df["entity_name"], df["deduplicated_event_id"]))
+    drop = within_event_duplicates(conn, victims)
+    # Victims the calibrated attribution check flagged as probably wrong with no
+    # trusted replacement: kept, and marked for the attribution sensitivity.
+    unresolved = unresolved_rows(conn, victims, drop)
     if drop:
         df = df[[(int(e), d) not in drop for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]]
+    df["attribution_unresolved"] = [(int(e), d) in unresolved
+                                    for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]
     df["entity_id"] = df["entity_id"].map(lambda e: groups.get(int(e), int(e)))
+    df["attribution_unresolved"] = df.groupby(["entity_id", "deduplicated_event_id"])[
+        "attribution_unresolved"].transform("max").astype(bool)
     reps = sorted(set(df["entity_id"]))
     attrs = pd.read_sql_query(
         f"SELECT entity_id, {', '.join(_ENTITY_COLUMNS)} FROM EntitiesV2 "
@@ -442,6 +452,78 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
         if column in df.columns:
             df[column] = df["entity_id"].map(attrs[column])
     return df.drop_duplicates(["entity_id", "deduplicated_event_id"]).reset_index(drop=True)
+
+
+UNRESOLVED_ATTRIBUTION_POLICIES = ("include", "exclude")
+
+
+def apply_attribution_policy(events: pd.DataFrame, policy: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Keep or drop victim rows whose attribution is unresolved; say how many there were.
+
+    Unresolved rows (``attribution_unresolved``, see
+    :func:`victim_counting.unresolved_rows`) are real incidents filed under an
+    organisation the attribution check judged probably wrong without a trusted
+    replacement. ``include`` keeps them (the default: the incident happened);
+    ``exclude`` drops those rows. Either way the counts are reported.
+    """
+    if policy not in UNRESOLVED_ATTRIBUTION_POLICIES:
+        raise ValueError(f"unresolved-attribution policy must be one of {UNRESOLVED_ATTRIBUTION_POLICIES}")
+    flags = _unresolved_flags(events)
+
+    def distinct(column: str) -> int:
+        return int(events.loc[flags, column].nunique()) if column in events else 0
+
+    info = {
+        "policy": policy,
+        "victim-event attributions unresolved": int(flags.sum()),
+        "events with an unresolved attribution": distinct("deduplicated_event_id"),
+        "organisations with an unresolved attribution": distinct("entity_id"),
+    }
+    if policy == "exclude":
+        events = events.loc[~flags].copy()
+    info["victim-event attributions analysed"] = int(len(events))
+    return events, info
+
+
+def _unresolved_flags(events: pd.DataFrame) -> pd.Series:
+    if "attribution_unresolved" not in events:
+        return pd.Series(False, index=events.index)
+    return events["attribution_unresolved"].fillna(False).astype(bool)
+
+
+def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
+                            bounds: tuple[float, ...]) -> dict[str, Any]:
+    """Observed repeats per elapsed-time band with unresolved attributions included and excluded.
+
+    ``events`` must still hold the unresolved rows. A repeat involves an
+    unresolved attribution when the event before or after it is one.
+    """
+    flags = _unresolved_flags(events)
+    labels = band_labels(bounds)
+    out: dict[str, Any] = {}
+    for name, cohort in (("included", events), ("excluded", events.loc[~flags])):
+        try:
+            spells, _ = build_spells(cohort, censor_date)
+        except RuntimeError:     # no spell at all
+            out[name] = {"observed repeats": 0, "entities with a repeat": 0,
+                         "repeats by elapsed band": {label: 0 for label in labels}}
+            continue
+        repeats = spells[spells["event"] == 1]
+        by_band = {label: 0 for label in labels}
+        for duration in repeats["duration_days"]:
+            by_band[labels[elapsed_band_index(duration, bounds)]] += 1
+        out[name] = {"observed repeats": int(len(repeats)),
+                     "entities with a repeat": int(repeats["entity_id"].nunique()),
+                     "repeats by elapsed band": by_band}
+    unresolved_ids = set(events.loc[flags, "deduplicated_event_id"].astype(str))
+    involved = 0
+    if unresolved_ids and out["included"]["observed repeats"]:
+        spells, _ = build_spells(events, censor_date)
+        repeats = spells[spells["event"] == 1]
+        involved = sum(bool(unresolved_ids & set(f"{p}|{n}".split("|")))
+                       for p, n in zip(repeats["prior_event_ids"], repeats["next_event_ids"]))
+    out["repeats involving an unresolved attribution"] = int(involved)
+    return out
 
 
 def collapse_entity_same_day_events(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1944,6 +2026,13 @@ def main() -> int:
     parser.add_argument("--date-draws", type=int, default=100,
                         help="Date-uncertainty draws for --extended (default: 100).")
     parser.add_argument(
+        "--unresolved-attributions",
+        choices=UNRESOLVED_ATTRIBUTION_POLICIES,
+        default="include",
+        help="Victim rows whose attribution the calibrated check left unresolved: keep them "
+             "(default) or drop them. Repeats with and without them are reported either way.",
+    )
+    parser.add_argument(
         "--dashboard-out",
         default=DEFAULT_DASHBOARD_OUT,
         help="HTML page combining every run under the output's parent folder ('' to skip).",
@@ -1960,6 +2049,10 @@ def main() -> int:
     events = events[events["event_date"] <= censor_date].copy()
     if events.empty:
         raise RuntimeError("No victim events are dated on or before the censor date.")
+    unresolved_sensitivity = attribution_sensitivity(events, censor_date, elapsed_bounds)
+    events, unresolved_info = apply_attribution_policy(events, args.unresolved_attributions)
+    if events.empty:
+        raise RuntimeError("No victim events remain after excluding unresolved attributions.")
     spells, same_day = build_spells(events, censor_date)
     spells["elapsed_band"] = [
         band_labels(elapsed_bounds)[elapsed_band_index(v, elapsed_bounds)]
@@ -2059,6 +2152,7 @@ def main() -> int:
         "first-of-month event dates": int(sum(d.day == 1 for d in events["event_date"])),
         "same-day entity-event groups collapsed": int(len(same_day)),
         "covariate coverage": covariate_coverage,
+        "unresolved victim attributions": {**unresolved_info, "repeats": unresolved_sensitivity},
     }
 
     summary = {
@@ -2113,7 +2207,8 @@ def main() -> int:
     if args.extended:
         from scripts.analyze_recurrence_extensions import run_analysis
         run_analysis(db_path, out_dir / "extended", censor_date,
-                     bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed)
+                     bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed,
+                     unresolved_attributions=args.unresolved_attributions)
         print(f"Wrote extended recurrence analyses to {out_dir / 'extended'}")
 
     if args.dashboard_out:
