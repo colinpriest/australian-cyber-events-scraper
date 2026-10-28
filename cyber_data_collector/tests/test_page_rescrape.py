@@ -129,6 +129,18 @@ def test_a_fetch_exception_is_recorded_per_page(conn):
     assert "RuntimeError: boom" in _attempt(conn, "short")[2]
 
 
+def test_a_fetch_that_never_returns_is_a_failed_attempt_not_a_hang(conn):
+    async def hang(url):
+        if url == "https://news.example/acme":
+            await asyncio.Event().wait()  # never set: Playwright stuck mid-navigation
+        return None, {}
+
+    report = pr.rescrape_short_pages(conn, fetch=hang, deadline=0.05)
+    attempts, status, error = _attempt(conn, "short")
+    assert (attempts, status) == (1, pr.STATUS_RETRY) and "no answer within" in error
+    assert report.attempted == 3
+
+
 def test_dry_run_fetches_nothing(conn):
     fetch = fetcher({})
     report = pr.rescrape_short_pages(conn, dry_run=True, fetch=fetch)
