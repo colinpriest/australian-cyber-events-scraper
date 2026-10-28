@@ -137,6 +137,11 @@ names the evidence that showed the problem. Done items move to the README or
 - **Rediscovered records are re-classified each run** (rolling three-month
   window). Deliberate, so a record first seen as a snippet is re-judged once
   scraped, but it costs LLM calls; cache by evidence fingerprint.
+- **Calibrate the contextual-alias bar (0.9).** Label a sample of acronym mentions (record text,
+  candidates, the right organisation) and choose the cut-off on them, as for the other Jev steps.
+- **39 events dated "publication date" with no matching report.** Their date basis says
+  publication, but no member now carries that publication date (most are 1st-of-month dates from
+  the old discovery fallback). Re-derive their dates from the records' stated dates or research.
 - **Recalibrate event reality, duplicates and coherence on the new evidence.** Their cut-offs were
   measured on evidence that included pages belonging to other articles (39% of stored pages on
   2026-10-28) and the first 1,200 characters only; the evidence readers now withhold mismatched

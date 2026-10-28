@@ -190,24 +190,33 @@ def stored_aliases(conn: sqlite3.Connection, sources: Sequence[str] = TRUSTED_AL
         return {}
 
 
-def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str]) -> Optional[str]:
+def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str],
+                          context: Optional[str] = None) -> Optional[str]:
     """The organisation's canonical name when ``name`` is a stored alias of it, else ``name``.
 
-    Looked up before an entity is found or created, so a record naming "NAB"
-    or "Medicare" files under the organisation already known instead of
-    recreating the variant. Exact (case-insensitive) first, then normalised
-    (punctuation, '&', accents).
+    Looked up before an entity is found or created, so a record naming
+    "Medicare" files under the organisation already known instead of
+    recreating the variant. Global aliases (``EntityAliases``): exact
+    (case-insensitive) first, then normalised (punctuation, '&', accents). An
+    acronym alias is contextual (``dedup/contextual_aliases.py``) and applies
+    only when ``context`` - the record's or event's text - names exactly one
+    organisation it may mean; without context the name is kept as written.
     """
     if not name or not name.strip():
         return name
     aliases = stored_aliases(conn, (*TRUSTED_ALIAS_SOURCES, "rule", "learned"))
-    if not aliases:
-        return name
     lowered = {raw.lower(): canonical for raw, canonical in aliases.items()}
     hit = lowered.get(name.strip().lower())
-    if hit is None:
+    if hit is None and aliases:
         wanted = normalize_name(name)
         hit = next((canonical for raw, canonical in aliases.items() if normalize_name(raw) == wanted), None)
+    if hit is None and context:
+        from cyber_data_collector.dedup.contextual_aliases import resolve_in_context
+
+        try:
+            hit = resolve_in_context(conn, name, context)
+        except sqlite3.Error:
+            hit = None
     return hit or name
 
 

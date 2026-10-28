@@ -509,7 +509,10 @@ def replacement_entity(conn: sqlite3.Connection, dedup_id: str, name: str, old_e
             return entity_id
     from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
 
-    name = canonical_entity_name(conn, name)
+    from cyber_data_collector.dedup.contextual_aliases import event_text
+
+    # An acronym alias applies only where the event's text names the organisation.
+    name = canonical_entity_name(conn, name, context=event_text(conn, dedup_id)[1])
     row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ? COLLATE NOCASE AND entity_id != ? "
                        "ORDER BY entity_id LIMIT 1", (name, old_entity_id)).fetchone()
     if row:

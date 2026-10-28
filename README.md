@@ -1193,6 +1193,46 @@ every refresh; a pair Perplexity could not decide stays unfolded and the step
 exits 1. Medicare is folded into Services Australia, which administers it:
 coverage of the 2026 OpenAI-agent incident filed it under both.
 
+**Acronym aliases hold only in context** (`dedup/contextual_aliases.py`). A
+confirmed alias used to apply everywhere: the variant's entity was folded and
+every link moved with it. That is right for "National Australia Bank" -> NAB,
+wrong for an acronym: "AP" is Advance Press in one record and Associated Press
+in another, "UC" the University of Canberra or of California, "ACS" the
+Australian Computer Society or the American Chemical Society. A
+model-confirmed alias whose variant is an acronym or initialism (every token
+upper case, at most 8 letters) is now **contextual** - kept in
+`ContextualEntityAliases`, which can list several organisations for one
+acronym - and is applied one record (or event) at a time:
+
+1. the record's own text names exactly one candidate in full (or by a
+   non-acronym alias) - placed, no model;
+2. otherwise Jev reads the text around the mention and chooses a candidate, "a
+   different organisation" or "the text does not say"; a candidate (or
+   "different") at **0.9** or above decides it;
+3. below that the strong OpenAI model re-judges with reasoning; a failed
+   escalation leaves the link where it is and the step exits 1;
+4. anything else stays unresolved, and an unsure answer moves nothing: a link
+   leaves an organisation only when its text resolves it elsewhere or a model
+   is confident the acronym means a different organisation.
+
+Reviewed aliases (`human`, and every pair in `EXPLICIT_ALIASES` such as ASIC
+and CBA) stay global, as do variants that contain the organisation's own name
+("JBS S.A.", "US CISA"). `canonicalise-entities` moves stored acronym aliases
+into the contextual table, and re-checks the links: a link on the acronym's
+entity moves to the organisation its text resolves to, and a link that an
+earlier entity-wide fold put on an organisation, in a record that mentions only
+the acronym, returns to the acronym's entity when a model is confident it means
+a different organisation - the OpenAI-agent reports credit photos to "AFP"
+(Agence France-Presse) and "AP" (Associated Press), and had been filed under the
+Australian Federal Police and Advance Press. Event victim names follow their links. Decisions are kept in
+`EntityMentionResolutions`; model answers in `ModelJudgements`. Ingest
+(`_link_entities_to_enriched_event`, victim replacement) resolves global
+aliases and applies a contextual one only when the record's text names the
+organisation. The 0.9 bar is not calibrated on labelled mentions; it is set
+high because an unresolved acronym (a separate entity) is the less harmful
+error than the wrong organisation. On 2026-10-29, 65 stored aliases became
+contextual and 90 links were re-checked.
+
 **Dates.** Merging took the *earliest* member date, so one bad extraction
 captured the event: MediSecure has 77 source records, 64 saying April 2024, and
 was stored as **March 2019** - which then convinced the cluster adjudicator that
@@ -1239,6 +1279,19 @@ again by a browser (Playwright); failures are retried up to 3 times
 their metadata or URL, 506 state no date, 268 failed (the browser pass was not
 run); 77 undated events dated by their first report; 674 events have a
 measurable lag.
+
+**A listing page's date is nobody's publication date.** A page cited by
+records of more than 3 events (the duplicate checks' hub rule) is a breach
+list, roundup or tracker; the date in its metadata or URL is the listing's,
+not when any one incident was reported. Webber's continuously updated
+data-breaches list carries `datePublished` 2018-07-09, and the first backfill
+gave that date to 110 records - which made Napoleon Perdis's 2025-26 Retail
+Express breach look like a merge of a 2018 incident with a 2025 one. Such dates
+are removed (a date the source gave for the item itself is kept) and the
+records are not fetched again (`PublicationDateFetches.status = 'listing
+page'`): 344 removed on 2026-10-29. A first report is also never earlier than
+the event's verified incident interval (61 such dates ignored), and an event
+dated by a report is re-dated when its first report changes.
 
 **Incident dates are intervals with verified precision**
 (`processing/incident_dates.py`). A raw record holds only an incident date its

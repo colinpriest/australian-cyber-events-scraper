@@ -724,12 +724,21 @@ class CyberEventDataV2:
 
     def _link_entities_to_enriched_event(self, enriched_event_id: str, entities: List[Dict[str, Any]]):
         """Link entities to an enriched event"""
+        from cyber_data_collector.dedup.contextual_aliases import record_text
+        from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+
         cursor = self._conn.cursor()
+        context = None
 
         for entity_data in entities:
             entity_name = entity_data.get('name')
             if not entity_name:
                 continue
+            # A stored alias files under its organisation; an acronym alias only
+            # when this record's text names the organisation (contextual_aliases).
+            if context is None:
+                context = record_text(self._conn, enriched_event_id)[1]
+            entity_name = canonical_entity_name(self._conn, entity_name.strip(), context=context)
 
             # Insert or get entity
             cursor.execute("""
