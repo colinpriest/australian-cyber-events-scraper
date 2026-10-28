@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,11 @@ STATUS_STORED = "stored"
 STATUS_RETRY = "retry"
 STATUS_NO_DATE = "no date on page"
 STATUS_GAVE_UP = "gave up"
+#: The URL is a listing (breach list, roundup, tracker) cited by records of
+#: more than ``HUB_MAX_EVENTS`` events: the page's own date is not when any one
+#: of them was reported. Webber's continuously updated data-breaches list
+#: carries ``datePublished`` 2018-07-09 and gave that date to 110 records.
+STATUS_LISTING = "listing page"
 
 EARLIEST = date(1990, 1, 1)
 FETCH_TIMEOUT_SECONDS = 20
@@ -284,6 +289,59 @@ def fill_from_metadata(conn: sqlite3.Connection) -> int:
     return filled
 
 
+def listing_urls(conn: sqlite3.Connection) -> Set[str]:
+    """Source URLs whose records belong to more than ``HUB_MAX_EVENTS`` active events.
+
+    The rule the duplicate candidates use for hub URLs (``dedup/candidates.py``):
+    a page cited for several incidents is a listing, so a date read from the
+    page or its URL is the listing's, not a report of any one incident.
+    """
+    from cyber_data_collector.dedup.candidates import HUB_MAX_EVENTS
+
+    rows = conn.execute("""
+        SELECT r.source_url FROM RawEvents r
+        JOIN EnrichedEvents e ON e.raw_event_id = r.raw_event_id
+        JOIN EventDeduplicationMap m ON m.enriched_event_id = e.enriched_event_id
+        JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+        WHERE d.status = 'Active' AND r.source_url LIKE 'http%'
+        GROUP BY r.source_url HAVING COUNT(DISTINCT d.deduplicated_event_id) > ?""",
+        (HUB_MAX_EVENTS,)).fetchall()
+    return {r[0] for r in rows}
+
+
+def clear_listing_dates(conn: sqlite3.Connection, dry_run: bool = False) -> int:
+    """Remove page-level publication dates from records whose URL is a listing.
+
+    Only dates read from the page (metadata) or its URL path are removed; a
+    date the source itself gave for the item (feed, search result) is kept.
+    Listing records are marked :data:`STATUS_LISTING` so they are not fetched
+    again. Idempotent; returns the number of records cleared.
+    """
+    ensure_schema(conn)
+    urls = sorted(listing_urls(conn))
+    if not urls:
+        return 0
+    marks = ",".join("?" * len(urls))
+    rows = [r[0] for r in conn.execute(
+        f"""SELECT raw_event_id FROM RawEvents WHERE source_url IN ({marks})
+              AND publication_date IS NOT NULL AND publication_date != ''
+              AND (publication_date_source LIKE ? OR publication_date_source = 'URL path')""",
+        (*urls, f"{SOURCE_PAGE_META}%")).fetchall()]
+    if dry_run:
+        return len(rows)
+    for raw_id in rows:
+        conn.execute("UPDATE RawEvents SET publication_date = NULL, publication_date_source = NULL "
+                     "WHERE raw_event_id = ?", (raw_id,))
+    undated = [r[0] for r in conn.execute(
+        f"""SELECT r.raw_event_id FROM RawEvents r
+              LEFT JOIN PublicationDateFetches f ON f.raw_event_id = r.raw_event_id
+              WHERE r.source_url IN ({marks}) AND (r.publication_date IS NULL OR r.publication_date = '')
+                AND COALESCE(f.status, '') != ?""", (*urls, STATUS_LISTING)).fetchall()]
+    for raw_id in undated:
+        _record_attempt(conn, raw_id, 0, STATUS_LISTING, None)
+    return len(rows)
+
+
 def records_without_dates(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Records of active events with a URL, no publication date, and not given up on."""
     sql = """
@@ -296,12 +354,14 @@ def records_without_dates(conn: sqlite3.Connection, limit: Optional[int] = None)
         WHERE d.status = 'Active'
           AND (r.publication_date IS NULL OR r.publication_date = '')
           AND r.source_url LIKE 'http%'
-          AND COALESCE(f.status, '') NOT IN (?, ?)
+          AND COALESCE(f.status, '') NOT IN (?, ?, ?)
         ORDER BY r.raw_event_id"""
     if limit:
         sql += f" LIMIT {int(limit)}"
-    rows = conn.execute(sql, (STATUS_GAVE_UP, STATUS_NO_DATE)).fetchall()
-    return [{"raw_event_id": r[0], "url": r[1], "discovered_at": r[2], "attempts": r[3]} for r in rows]
+    rows = conn.execute(sql, (STATUS_GAVE_UP, STATUS_NO_DATE, STATUS_LISTING)).fetchall()
+    listings = listing_urls(conn)
+    return [{"raw_event_id": r[0], "url": r[1], "discovered_at": r[2], "attempts": r[3]}
+            for r in rows if r[1] not in listings]
 
 
 Fetch = Callable[[str], Tuple[Optional[str], Optional[str]]]
@@ -334,10 +394,12 @@ class BackfillReport:
     no_date: int = 0
     failed: int = 0
     gave_up: int = 0
+    listing_cleared: int = 0
     how: Dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
-        return (f"publication dates: {self.from_source} from the source, {self.stored} from the page "
+        return (f"publication dates: {self.listing_cleared} listing-page date(s) removed; "
+                f"{self.from_source} from the source, {self.stored} from the page "
                 f"(metadata, else URL) of {self.candidates} page(s) fetched; {self.no_date} page(s) state none, "
                 f"{self.failed} fetch(es) failed ({self.gave_up} given up)")
 
@@ -411,6 +473,7 @@ def backfill(conn: sqlite3.Connection, limit: Optional[int] = None, fetch: Optio
     """
     ensure_schema(conn)
     report = BackfillReport()
+    report.listing_cleared = clear_listing_dates(conn, dry_run=dry_run)
     report.from_source = 0 if dry_run else fill_from_metadata(conn)
     conn.commit()
     pages = records_without_dates(conn, limit)
@@ -461,13 +524,19 @@ def backfill(conn: sqlite3.Connection, limit: Optional[int] = None, fetch: Optio
 class EventReport:
     first_reported: int = 0
     dated_by_first_report: List[str] = field(default_factory=list)
+    redated_by_first_report: List[str] = field(default_factory=list)
     lags: int = 0
+    #: Publication dates ignored because they precede the event's verified
+    #: incident interval - a report cannot come before what it reports.
+    before_incident: int = 0
     precision: Any = None   # incident_dates.PrecisionReport, after refresh_event_dates
 
     def summary(self) -> str:
         text = (f"{self.first_reported} event(s) with a first-report date; "
-                f"{len(self.dated_by_first_report)} undated event(s) dated by their first report; "
-                f"{self.lags} reporting lag(s) measurable")
+                f"{len(self.dated_by_first_report)} undated event(s) dated by their first report, "
+                f"{len(self.redated_by_first_report)} re-dated to a changed first report; "
+                f"{self.lags} reporting lag(s) measurable; {self.before_incident} publication date(s) "
+                "ignored as earlier than the verified incident")
         return f"{text}; {self.precision.summary()}" if self.precision is not None else text
 
 
@@ -481,17 +550,26 @@ def refresh_events(conn: sqlite3.Connection) -> EventReport:
 
     ensure_schema(conn)
     report = EventReport()
-    rows = conn.execute("""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    earliest_sql = "d.event_date_earliest" if "event_date_earliest" in columns else "NULL"
+    published: Dict[str, List[str]] = {}
+    for dedup_id, day in conn.execute("""
+            SELECT m.deduplicated_event_id, r.publication_date
+            FROM EventDeduplicationMap m
+            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+            JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+            WHERE r.publication_date IS NOT NULL AND r.publication_date != ''"""):
+        published.setdefault(dedup_id, []).append(day)
+    rows = conn.execute(f"""
         SELECT d.deduplicated_event_id, d.event_date, d.date_basis, d.first_reported_date,
-               d.reporting_lag_days,
-               (SELECT MIN(r.publication_date)
-                  FROM EventDeduplicationMap m
-                  JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
-                  JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
-                 WHERE m.deduplicated_event_id = d.deduplicated_event_id
-                   AND r.publication_date IS NOT NULL AND r.publication_date != '')
+               d.reporting_lag_days, {earliest_sql}
         FROM DeduplicatedEvents d WHERE d.status = 'Active'""").fetchall()
-    for dedup_id, event_date, basis, old_first, old_lag, first in rows:
+    for dedup_id, event_date, basis, old_first, old_lag, earliest in rows:
+        days = sorted(published.get(dedup_id, []))
+        if earliest:
+            report.before_incident += sum(1 for day in days if day < earliest)
+            days = [day for day in days if day >= earliest]
+        first = days[0] if days else None
         event_day = normalise(event_date)
         if first:
             report.first_reported += 1
@@ -501,6 +579,15 @@ def refresh_events(conn: sqlite3.Connection) -> EventReport:
             logger.info("Event %s had no date: dated %s by its first report", dedup_id[:8], first)
             report.dated_by_first_report.append(dedup_id)
             event_day, basis = first, BASIS_PUBLICATION
+        elif first and basis == BASIS_PUBLICATION and event_day != first:
+            # Dated by a report date that is no longer its first report (a
+            # listing page's date removed, or an earlier report found).
+            conn.execute("UPDATE DeduplicatedEvents SET event_date = ?, date_precision = ? "
+                         "WHERE deduplicated_event_id = ?", (first, precision(first), dedup_id))
+            logger.info("Event %s was dated %s by a report; re-dated %s by its first report",
+                        dedup_id[:8], event_day, first)
+            report.redated_by_first_report.append(dedup_id)
+            event_day = first
         lag = None
         if first and event_day and basis and not str(basis).startswith(NOT_INCIDENT_BASES):
             lag = (date.fromisoformat(first) - date.fromisoformat(event_day)).days
@@ -525,5 +612,6 @@ def refresh_event_dates(conn: sqlite3.Connection) -> EventReport:
     refresh_event_date_provenance(conn)
     report = refresh_events(conn)
     report.dated_by_first_report = first.dated_by_first_report
+    report.redated_by_first_report = first.redated_by_first_report + report.redated_by_first_report
     report.precision = refresh_event_precision(conn)
     return report

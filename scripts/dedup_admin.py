@@ -2032,30 +2032,57 @@ def cmd_canonicalise_entities(args) -> int:
     name-structure rules propose is put to Perplexity first and folds only on
     a ``same organisation`` verdict (:mod:`entity_alias_verification`); the
     structure rules alone would have folded Marks & Spencer into Mackay Sugar.
-    Exit 2 without Perplexity, 1 when a pair could not be decided (left unfolded).
+    A confirmed acronym ("AV" for Ambulance Victoria) is not folded: it becomes
+    a contextual alias and each link is placed by its own record's text
+    (:mod:`contextual_aliases`), which also puts back links an earlier
+    entity-wide fold moved without that context.
+    Exit 2 without Perplexity or Jev, 1 when a pair or a mention could not be
+    decided (left as it was).
     """
+    from cyber_data_collector.dedup.contextual_aliases import (
+        MentionResolver, add_contextual_alias, is_contextual_variant, migrate_contextual_aliases, resolve_links,
+    )
     from cyber_data_collector.dedup.entity_alias_verification import (
         AliasVerificationUnavailable, VerificationReport, verified_groups, verify_stored_aliases,
     )
+    from cyber_data_collector.utils.jev import JevUnavailable
+
+    from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
 
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
         resolver = EntityResolver()
+        # Acronym aliases leave the global table before anything folds on them.
+        scoped_now = [] if args.dry_run else migrate_contextual_aliases(conn)
+        conn.commit()
+        sources = dict(conn.execute("SELECT raw_name, source FROM EntityAliases").fetchall())
 
         def fold(groups, source: str) -> int:
             folded = 0
             for keep, drop in groups:
+                # Reviewed aliases hold everywhere; a model-confirmed acronym only in context.
+                reviewed = {n for n in drop if EXPLICIT_ALIASES.get(n) == keep}
+                scoped = [n for n in drop if n not in reviewed and is_contextual_variant(n, keep)]
+                drop = [n for n in drop if n not in scoped]
                 print(f"  {keep!r}")
                 for name in drop:
                     print(f"      <- {name!r}")
+                for name in scoped:
+                    print(f"      <- {name!r} (acronym: only where the record's text says so)")
                 if args.dry_run:
                     continue
-                folded += merge_entities(conn, keep, drop)
-                inherit_attributes(conn, keep)
+                if drop:
+                    folded += merge_entities(conn, keep, drop)
+                    inherit_attributes(conn, keep)
                 for name in drop:
                     # Remembered, so a future ingest resolves the variant instead of recreating it.
-                    resolver.learn_alias(conn, name, keep, source=source)
+                    # Only EXPLICIT_ALIASES pairs are "human": a stored model-confirmed alias
+                    # folded here keeps the source it had.
+                    learned = "human" if name in reviewed else sources.get(name, source)
+                    resolver.learn_alias(conn, name, keep, source=learned)
+                for name in scoped:
+                    add_contextual_alias(conn, name, keep, source)
             conn.commit()
             return folded
 
@@ -2092,13 +2119,29 @@ def cmd_canonicalise_entities(args) -> int:
             print("\nDry run - nothing written, nothing asked.")
             return 0
         print(f"\nFolded {merged} duplicate spelling(s) into their canonical entity.")
+        scoped = scoped_now
+        if scoped:
+            print(f"{len(scoped)} acronym alias(es) now apply only in context: "
+                  + ", ".join(f"{raw} -> {canonical}" for raw, canonical in scoped))
+        try:
+            links = resolve_links(conn, MentionResolver(conn))
+        except JevUnavailable as exc:
+            print(f"ERROR: acronym mentions cannot be placed: {exc}", file=sys.stderr)
+            return 2
+        print("Contextual aliases: " + links.summary())
+        for table, subject, old, new in links.moved_to_variant:
+            print(f"  {subject[:8]} ({table}): {old!r} -> {new!r}")
+        for table, subject, old, new in links.moved_to_organisation:
+            print(f"  {subject[:8]} ({table}): {old!r} -> {new!r}")
     finally:
         conn.close()
     if report.failed:
         print(f"ERROR: {len(report.failed)} proposed fold(s) could not be decided and were not applied; "
               "rerun to retry", file=sys.stderr)
-        return 1
-    return 0
+    if links.failed:
+        print(f"ERROR: {len(links.failed)} acronym mention(s) could not be decided (escalation failed) "
+              "and were left where they were; rerun to retry", file=sys.stderr)
+    return 1 if report.failed or links.failed else 0
 
 
 def cmd_redate(args) -> int:
@@ -2967,9 +3010,12 @@ def cmd_rescrape_short_pages(args) -> int:
 
 def cmd_publication_dates(args) -> int:
     """Store every record's publication date and each event's first report; see publication_dates."""
-    from cyber_data_collector.processing.publication_dates import backfill, refresh_event_dates
-
     from cyber_data_collector.processing.incident_dates import repair_webber_dates
+    from cyber_data_collector.processing.publication_dates import (
+        backfill,
+        clear_listing_dates,
+        refresh_event_dates,
+    )
 
     conn = _connect(args.db)
     try:
@@ -2978,6 +3024,10 @@ def cmd_publication_dates(args) -> int:
             print(f"Webber: {webber.raw} record(s) moved off the invented 15th to their heading month "
                   f"({webber.enriched} enriched record(s), {webber.events} event(s); {webber.publication_cleared} "
                   "heading month(s) cleared as publication dates)" + (" - dry run" if args.dry_run else ""))
+        listing = clear_listing_dates(conn, dry_run=args.dry_run)
+        if listing:
+            print(f"{listing} record(s) carried a listing page's own date (a page cited for several incidents) "
+                  "as their publication date; " + ("would be removed" if args.dry_run else "removed"))
         report = backfill(conn, limit=args.limit, concurrency=args.concurrency,
                           dry_run=args.dry_run or args.no_fetch, use_browser=not args.no_browser)
         if args.dry_run:

@@ -169,6 +169,53 @@ def test_events_get_first_report_lag_and_a_date_only_when_they_had_none(conn):
     assert pd.refresh_event_dates(conn).dated_by_first_report == []           # idempotent
 
 
+def _add_record(c, raw, dedup, url, published=None, how=None, incident=None):
+    c.execute("INSERT INTO RawEvents (raw_event_id, source_type, source_url, raw_content, publication_date, "
+              "publication_date_source, discovered_at) VALUES (?, 'Perplexity', ?, 'text', ?, ?, "
+              "'2026-10-28T06:00:00')", (raw, url, published, how))
+    c.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, status, is_australian_event, "
+              "is_specific_event) VALUES (?, ?, 't', 'Active', 1, 1)", (f"x{raw}", raw))
+    c.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id, "
+              "contribution_type, similarity_score) VALUES (?, ?, ?, ?, 'merged', 1.0)",
+              (f"m{raw}", raw, f"x{raw}", dedup))
+    if not c.execute("SELECT 1 FROM DeduplicatedEvents WHERE deduplicated_event_id = ?", (dedup,)).fetchone():
+        c.execute("INSERT INTO DeduplicatedEvents (deduplicated_event_id, master_enriched_event_id, title, "
+                  "event_date, status, is_australian_event, is_specific_event) VALUES (?, ?, 't', ?, 'Active', 1, 1)",
+                  (dedup, f"x{raw}", incident))
+
+
+def test_a_listing_pages_own_date_is_not_any_records_publication_date(conn):
+    # Webber's breach list: one page cited for many incidents, its datePublished 2018-07-09.
+    listing = "https://insurer.example/data-breaches-list"
+    for i in range(5):
+        _add_record(conn, f"L{i}", f"hub{i}", listing, "2018-07-09", "page metadata: JSON-LD datePublished")
+    _add_record(conn, "L5", "hub0", listing)                                   # never fetched yet
+    _add_record(conn, "S1", "hub1", listing, "2026-10-15", pd.SOURCE_FROM_SOURCE)  # the item's own date
+    conn.commit()
+    fetch = _fetcher(PAGES)
+    report = pd.backfill(conn, fetch=fetch, browser_fetch=lambda urls: {u: (None, "x") for u in urls})
+    dates = dict(conn.execute("SELECT raw_event_id, publication_date FROM RawEvents "
+                              "WHERE raw_event_id LIKE 'L%' OR raw_event_id = 'S1'").fetchall())
+    assert report.listing_cleared == 5
+    assert dates == {**{f"L{i}": None for i in range(6)}, "S1": "2026-10-15"}
+    assert listing not in fetch.calls                                          # not fetched again
+    status = dict(conn.execute("SELECT raw_event_id, status FROM PublicationDateFetches").fetchall())
+    assert status["L0"] == status["L5"] == pd.STATUS_LISTING
+    assert pd.clear_listing_dates(conn) == 0                                   # idempotent
+
+
+def test_a_report_dated_before_the_verified_incident_is_not_its_first_report(conn):
+    conn.execute("UPDATE DeduplicatedEvents SET event_date = '2025-11-01', event_date_earliest = '2025-11-01', "
+                 "event_date_latest = '2025-11-30' WHERE deduplicated_event_id = 'e2'")
+    _add_record(conn, "old", "e2", "https://elsewhere.example/a", "2018-07-09", "page metadata: x")
+    conn.execute("UPDATE RawEvents SET publication_date = '2026-06-09' WHERE raw_event_id = 'r4'")
+    conn.commit()
+    report = pd.refresh_events(conn)
+    assert conn.execute("SELECT first_reported_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
+                        ).fetchone()[0] == "2026-06-09"
+    assert report.before_incident == 1
+
+
 def test_storage_writes_the_sources_publication_date_to_its_own_column(tmp_path):
     path = tmp_path / "instance" / "s.db"
     initialize_database(str(path))

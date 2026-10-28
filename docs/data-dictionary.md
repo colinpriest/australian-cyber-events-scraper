@@ -319,6 +319,8 @@ a new row is written only when the evidence changes.
 
 `PublicationDateFetches` (`raw_event_id`, `attempts`, `status`: stored / retry / no date on page / gave up, `last_error`, `last_attempt_at`) records each page fetched for its publication date.
 
+`ContextualEntityAliases` (`raw_name`, `canonical_name`, `source`, `created_at`; key `raw_name` + `canonical_name`) holds acronym aliases that apply only where a record's text resolves them (`dedup/contextual_aliases.py`); one acronym may list several organisations. `EntityMentionResolutions` (`link_table`, `subject_id`, `raw_name`, `canonical_name` - NULL when unresolved, `method`: named in the text / jev / escalated / unresolved / escalation failed, `probability`, `moved_from`, `decided_at`) records where each link of an acronym was placed and why.
+
 `EntityAliasDecisions` (`name`, `other_name`, `verdict`: same / parent_subsidiary / related / different / unsure, `canonical_name`, `reason`, `citations_json`, `model`, `prompt_version`, `decided_at`) holds Perplexity's verdict on every entity fold the name-structure rules proposed; only `same` folds, and accepted folds are written to `EntityAliases` with source `llm`.
 
 **Indexes:**

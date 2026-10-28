@@ -217,7 +217,10 @@ def _entity_for(conn: sqlite3.Connection, dedup_id: str, name: str,
     for entity_id, entity_name in linked:
         if denotes(resolver, entity_name, name):
             return entity_id
-    name = canonical_entity_name(conn, name)
+    from cyber_data_collector.dedup.contextual_aliases import event_text
+
+    # An acronym alias applies only where the event's text names the organisation.
+    name = canonical_entity_name(conn, name, context=event_text(conn, dedup_id)[1])
     row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ? COLLATE NOCASE",
                        (name,)).fetchone()
     if row:
