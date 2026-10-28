@@ -137,10 +137,14 @@ names the evidence that showed the problem. Done items move to the README or
 - **Rediscovered records are re-classified each run** (rolling three-month
   window). Deliberate, so a record first seen as a snippet is re-judged once
   scraped, but it costs LLM calls; cache by evidence fingerprint.
-- **AI involvement is not calibrated.** `ai_involvement` is Jev's most probable
-  of three options (2026-10-28); label a sample (every event with
-  `no_ai_probability` < 0.9 plus a seeded sample above it) and choose cut-offs
-  before the dashboard's AI counts are relied on.
+- **AI involvement calibration needs re-measuring when the question changes.** The cut-off in
+  `evaluation/ai_involvement_calibration.json` applies only to `ai-involvement-v2` on the recorded Jev
+  model; a new question version falls back to the most probable option until it is re-labelled.
+- **Name-structure entity rules over-propose.** `canonical_groups` proposes folds such as IBM /
+  Insurance Business Magazine / Australian Cyber Security Magazine and The Frontier Trust / Frontier
+  Software; Perplexity rejects them, but each costs a call. Tighten `distinctive_core` matching.
+- **Publication-date browser pass not yet run on the live data** (268 pages refused plain HTTP on
+  2026-10-28); the next refresh runs it.
 - **Personal-information types are not calibrated.** The breach-source step
   stores Jev's per-type probabilities and reads them at 0.5; label a sample and
   calibrate before the dashboard's exposure rates are relied on.

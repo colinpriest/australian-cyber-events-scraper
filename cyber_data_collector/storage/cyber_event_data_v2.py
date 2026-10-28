@@ -115,6 +115,8 @@ class CyberEventDataV2:
         # Fact provenance and the cited-page cache the acceptance gate needs.
         from cyber_data_collector.storage.enrichment_support import ensure_schema as ensure_support_schema
         ensure_support_schema(self._conn)
+        from cyber_data_collector.processing.publication_dates import ensure_schema as ensure_publication_schema
+        ensure_publication_schema(self._conn)
         self._conn.commit()
         if added:
             self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
@@ -137,7 +139,11 @@ class CyberEventDataV2:
         if not self._conn:
             raise ConnectionError("Database not connected")
 
+        from cyber_data_collector.processing.publication_dates import SOURCE_FROM_SOURCE, normalise
+
         raw_event_id = str(uuid.uuid4())
+        # The source's own publication date, in its own column (never the incident date).
+        published = normalise((raw_data.get('metadata') or {}).get('publication_date'), datetime.now().date())
 
         with self._lock:
             cursor = self._conn.cursor()
@@ -146,8 +152,9 @@ class CyberEventDataV2:
                     INSERT INTO RawEvents (
                         raw_event_id, source_type, source_event_id, raw_title,
                         raw_description, raw_content, event_date, source_url,
-                        source_metadata, discovered_at, is_processed
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        source_metadata, discovered_at, is_processed,
+                        publication_date, publication_date_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     raw_event_id,
                     source_type,
@@ -159,7 +166,9 @@ class CyberEventDataV2:
                     raw_data.get('source_url'),
                     json.dumps(canonical_metadata(raw_data.get('metadata', {})), default=self._json_default),
                     datetime.now().isoformat(),
-                    False
+                    False,
+                    published,
+                    SOURCE_FROM_SOURCE if published else None,
                 ))
                 self._conn.commit()
                 return raw_event_id

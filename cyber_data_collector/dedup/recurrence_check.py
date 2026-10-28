@@ -98,14 +98,16 @@ def parse_event_date(value: Any) -> Optional[date]:
         return None
 
 
-def load_recurrence_events(conn) -> List[RecurrenceEvent]:
+def load_recurrence_events(conn, include_undated: bool = False) -> List[RecurrenceEvent]:
     """Every active event, keyed to the organisation it happened to.
 
     Attribution is by the ``victim`` role rather than
     ``victim_organization_name``, matching the entity dashboard and the
     recurrence analysis: an event with several co-equal victims appears under
     each of them, and an event whose scalar victim was never populated is still
-    covered.
+    covered. Undated events are left out (a run is built from gaps) unless
+    ``include_undated`` - the duplicate check needs them: a missing date is
+    no evidence of a separate incident.
     """
     rows = conn.execute(
         """
@@ -132,11 +134,11 @@ def load_recurrence_events(conn) -> List[RecurrenceEvent]:
              ON e.enriched_event_id = d.master_enriched_event_id
         WHERE dee.relationship_type = 'victim'
           AND COALESCE(d.status, 'Active') = 'Active'
-          AND d.event_date IS NOT NULL
+          AND (? OR (d.event_date IS NOT NULL AND d.event_date != ''))
           AND v.entity_name IS NOT NULL
           AND TRIM(v.entity_name) != ''
         ORDER BY v.entity_name COLLATE NOCASE, d.event_date
-        """
+        """, (int(include_undated),)
     ).fetchall()
 
     events: List[RecurrenceEvent] = []

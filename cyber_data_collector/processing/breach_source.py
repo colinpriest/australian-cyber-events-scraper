@@ -12,7 +12,8 @@ every failed call silently, so the database side of both charts read zero.
 Each event is asked of Jev (one request: a Choice over the breach source and a
 Noul per personal-information category) over its evidence: the event's title
 and, for up to ``MAX_RECORDS`` member records, each record's title, snippet,
-an excerpt of its stored page and the Perplexity research attached to it
+its stored page (whole, within ``PAGE_CHARS`` per record and ``EVENT_PAGE_CHARS``
+per event; any cut is stated) and the Perplexity research attached to it
 (attack method, threat actor, victim count, reasoning). Deduplicated events
 carry no description, summary or attack method of their own - on 2026-10-27
 all 709 active events had none - so a question over the event row alone saw
@@ -45,8 +46,16 @@ logger = logging.getLogger(__name__)
 QUESTION_VERSION = "breach-source-v2"
 SOURCE_QUESTION_ID = "breach_source"
 PII_QUESTION_PREFIX = "pii_"
-MAX_RECORDS = 5
-PAGE_CHARS = 1200
+#: Evidence per event. Until 2026-10-28 each page was cut to its first 1,200
+#: characters, often the site's menus and banners: 92% of active pages were
+#: longer (median 4,694), and of 1,057 pages mentioning AI, 841 first did so
+#: after character 1,200 - unseen by the AI-involvement question. Jev takes
+#: 32k tokens per question; whole pages up to PAGE_CHARS each (84% of pages
+#: fit) and EVENT_PAGE_CHARS (~15k tokens) per event leave room for the questions.
+MAX_RECORDS = 12
+PAGE_CHARS = 12000
+EVENT_PAGE_CHARS = 60000
+OTHER_TITLES = 40
 SNIPPET_CHARS = 600
 REASONING_CHARS = 600
 
@@ -199,12 +208,23 @@ def event_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
     # Records with page text first, then a stable order: a large event always
     # shows the same records, so its input hash is stable.
     rows = sorted(rows, key=lambda r: (not r[3].strip(), r[0]))
-    records = [{"title": r[1], "snippet": r[2][:SNIPPET_CHARS],
-                "page_text": r[3].strip()[:PAGE_CHARS] or "(none stored)", "research": _research(r[4])}
-               for r in rows[:MAX_RECORDS]]
-    return {"event": {"title": event[0] if event else "", "victim": event[1] if event else None,
-                      "record_count": len(rows)},
-            "records": records}
+    records, budget = [], EVENT_PAGE_CHARS
+    for r in rows[:MAX_RECORDS]:
+        text = r[3].strip()
+        page = text[:min(PAGE_CHARS, budget)]
+        budget -= len(page)
+        record = {"title": r[1], "snippet": r[2][:SNIPPET_CHARS],
+                  "page_text": page or ("(none stored)" if not text else "(left out: the event's text budget is spent)"),
+                  "research": _research(r[4])}
+        if page and len(page) < len(text):
+            record["page_text_cut"] = f"first {len(page)} of {len(text)} characters"
+        records.append(record)
+    state = {"event": {"title": event[0] if event else "", "victim": event[1] if event else None,
+                       "record_count": len(rows)},
+             "records": records}
+    if len(rows) > MAX_RECORDS:   # the rest are named, so no report is invisible
+        state["other_record_titles"] = [r[1] for r in rows[MAX_RECORDS:MAX_RECORDS + OTHER_TITLES]]
+    return state
 
 
 def active_events(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:

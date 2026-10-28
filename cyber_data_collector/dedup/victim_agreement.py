@@ -54,7 +54,7 @@ from cyber_data_collector.dedup.entity_merge import (
     lines_of_business_conflict,
     same_organisation_by_structure,
 )
-from cyber_data_collector.dedup.entity_resolution import EntityResolver
+from cyber_data_collector.dedup.entity_resolution import EntityResolver, canonical_entity_name
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +217,7 @@ def _entity_for(conn: sqlite3.Connection, dedup_id: str, name: str,
     for entity_id, entity_name in linked:
         if denotes(resolver, entity_name, name):
             return entity_id
+    name = canonical_entity_name(conn, name)
     row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ? COLLATE NOCASE",
                        (name,)).fetchone()
     if row:

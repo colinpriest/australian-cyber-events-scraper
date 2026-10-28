@@ -14,6 +14,7 @@ import requests
 from cyber_data_collector.datasources.base import DataSource
 from cyber_data_collector.models.config import DataSourceConfig, DateRange
 from cyber_data_collector.models.events import ConfidenceScore, CyberEvent, CyberEventType, EventSeverity, EventSource
+from cyber_data_collector.processing.publication_dates import from_google_item
 from cyber_data_collector.utils import RateLimiter
 
 
@@ -204,6 +205,8 @@ class GoogleSearchDataSource(DataSource):
                 title = item.get("title", "Google Search Result")
                 snippet = item.get("snippet", "")
                 link = item.get("link")
+                # The page's own publication date from Google's copy of its meta tags.
+                published = from_google_item(item, datetime.now().date())
 
                 data_source = EventSource(
                     source_id=f"google_{hashlib.md5((link or '').encode()).hexdigest()[:16]}",
@@ -211,6 +214,7 @@ class GoogleSearchDataSource(DataSource):
                     url=link,
                     title=title,
                     content_snippet=snippet,
+                    publication_date=datetime.fromisoformat(published) if published else None,
                     credibility_score=0.5,
                     relevance_score=0.6,
                 )

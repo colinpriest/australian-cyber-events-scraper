@@ -96,3 +96,67 @@ def escalate(conn: sqlite3.Connection, subject_type: str, subject_id: str, quest
          datetime.now().isoformat()))
     conn.commit()
     return float(judgement.probability)
+
+
+class EscalatedChoice(BaseModel):
+    """A reasoned choice among named options, with a probability for each."""
+
+    rationale: str = Field(description="Two to four sentences: the decisive evidence and why the other "
+                                       "options do not fit.")
+    probabilities: Dict[str, float] = Field(description="Probability of each option, by option name; "
+                                                        "they must sum to 1.")
+
+
+def escalate_choice(conn: sqlite3.Connection, subject_type: str, subject_id: str, question_id: str,
+                    question_version: str, state: Mapping[str, Any], question: str,
+                    options: Mapping[str, str], client=None) -> Optional[Dict[str, float]]:
+    """A distribution over ``options`` from the reasoning model; stored answers are reused.
+
+    ``options`` maps each option name to its definition. None on failure or an
+    answer that does not cover exactly those options - never a guess.
+    """
+    ensure_schema(conn)
+    model = openai_model()
+    full_question = (f"{question}\n\nOPTIONS (answer with a probability for each, by name):\n"
+                     + "\n".join(f"- {name}: {text}" for name, text in options.items()))
+    digest = _hash(state, full_question, model)
+    row = conn.execute("SELECT probabilities_json FROM ModelJudgements WHERE question_id = ? AND input_hash = ? "
+                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (question_id, digest)).fetchone()
+    if row is not None:
+        stored = json.loads(row[0])
+        return {name: float(stored[name]) for name in options}
+    client = client or _client()
+    try:
+        judgement, completion = client.chat.completions.create_with_completion(
+            **chat_params(model, reasoning_effort=REASONING_EFFORT),
+            response_model=EscalatedChoice,
+            messages=[
+                {"role": "system", "content": "You check records in an Australian cyber-incident research "
+                                              "database. Answer the question from the evidence given; think it "
+                                              "through before answering."},
+                {"role": "user", "content": f"QUESTION: {full_question}\n\nEVIDENCE (JSON):\n"
+                                            f"{json.dumps(state, ensure_ascii=False, default=str)}"},
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001 - recorded by the caller; the item stays undecided
+        logger.warning("Escalation failed for %s %s: %s", subject_type, subject_id, exc)
+        return None
+    probs = judgement.probabilities
+    total = sum(max(0.0, float(probs.get(name, 0.0))) for name in options)
+    if set(probs) != set(options) or total <= 0:
+        logger.warning("Escalation for %s %s answered options %s, not %s", subject_type, subject_id,
+                       sorted(probs), sorted(options))
+        return None
+    probs = {name: max(0.0, float(probs[name])) / total for name in options}
+    usage = getattr(completion, "usage", None)
+    conn.execute(
+        "INSERT INTO ModelJudgements VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), subject_type, subject_id, question_id, question_version, "escalation_choice",
+         max(probs, key=probs.get), max(probs.values()), None,
+         json.dumps({**probs, "rationale": judgement.rationale}),
+         json.dumps({"question": full_question, "reasoning_effort": REASONING_EFFORT}),
+         digest, model, getattr(completion, "model", None),
+         getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None),
+         datetime.now().isoformat()))
+    conn.commit()
+    return probs

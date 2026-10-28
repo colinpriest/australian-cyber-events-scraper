@@ -2027,34 +2027,77 @@ def cmd_canonicalise_entities(args) -> int:
     Commission" were never compared - which is how three ASIC events with
     byte-identical titles, dates and descriptions all survived deduplication.
     Fixing the entities is a precondition for fixing those merges.
+
+    The reviewed aliases in ``EXPLICIT_ALIASES`` fold directly. Every fold the
+    name-structure rules propose is put to Perplexity first and folds only on
+    a ``same organisation`` verdict (:mod:`entity_alias_verification`); the
+    structure rules alone would have folded Marks & Spencer into Mackay Sugar.
+    Exit 2 without Perplexity, 1 when a pair could not be decided (left unfolded).
     """
+    from cyber_data_collector.dedup.entity_alias_verification import (
+        AliasVerificationUnavailable, VerificationReport, verified_groups, verify_stored_aliases,
+    )
+
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
         resolver = EntityResolver()
-        groups = canonical_groups(conn)
-        print(f"{len(groups)} organisation(s) recorded under more than one name")
 
-        merged = 0
-        for keep, drop in groups[: args.limit] if args.limit else groups:
-            print(f"  {keep!r}")
-            for name in drop:
-                print(f"      <- {name!r}")
+        def fold(groups, source: str) -> int:
+            folded = 0
+            for keep, drop in groups:
+                print(f"  {keep!r}")
+                for name in drop:
+                    print(f"      <- {name!r}")
+                if args.dry_run:
+                    continue
+                folded += merge_entities(conn, keep, drop)
+                inherit_attributes(conn, keep)
+                for name in drop:
+                    # Remembered, so a future ingest resolves the variant instead of recreating it.
+                    resolver.learn_alias(conn, name, keep, source=source)
+            conn.commit()
+            return folded
+
+        explicit = canonical_groups(conn, explicit_only=True)
+        print(f"{len(explicit)} organisation(s) with reviewed aliases (EXPLICIT_ALIASES):")
+        merged = fold(explicit, "human")
+        report = VerificationReport()
+        if not args.explicit_only:
+            proposed = canonical_groups(conn, include_ambiguous_acronyms=True)   # every fold verified below
+            proposed = proposed[: args.limit] if args.limit else proposed
+            print(f"\n{len(proposed)} group(s) proposed by name structure, {sum(len(d) for _, d in proposed)} "
+                  "fold(s) - each confirmed by Perplexity before it is applied:")
             if args.dry_run:
-                continue
-            merged += merge_entities(conn, keep, drop)
-            inherit_attributes(conn, keep)
-            for name in drop:
-                # Remembered, so a future ingest resolves the variant instead
-                # of recreating it.
-                resolver.learn_alias(conn, name, keep, source="rule")
+                for keep, drop in proposed:
+                    print(f"  {keep!r} <- {', '.join(repr(d) for d in drop)}")
+            else:
+                try:
+                    stored = verify_stored_aliases(conn, report=report)
+                    print(f"Stored rule-made aliases: {stored.checked} checked, {stored.spelling_only} spelling "
+                          f"variants kept, {len(stored.confirmed)} confirmed, {len(stored.removed)} removed")
+                    for raw, canonical, verdict in stored.removed:
+                        print(f"  removed alias {raw!r} -> {canonical!r} ({verdict}); its earlier fold needs review")
+                    confirmed = verified_groups(conn, proposed, report=report)
+                except AliasVerificationUnavailable as exc:
+                    print(f"ERROR: proposed folds cannot be verified: {exc}; none applied", file=sys.stderr)
+                    return 2
+                merged += fold(confirmed, "llm")
+                for name, other, verdict in report.rejected:
+                    print(f"  not folded: {name!r} / {other!r} ({verdict})")
+                print(f"Perplexity: {report.asked} pair(s) asked, {report.reused} from stored verdicts; "
+                      f"{len(report.accepted)} confirmed, {len(report.rejected)} rejected, "
+                      f"{len(report.failed)} undecided")
         if args.dry_run:
-            print("\nDry run - nothing written.")
+            print("\nDry run - nothing written, nothing asked.")
             return 0
-        conn.commit()
         print(f"\nFolded {merged} duplicate spelling(s) into their canonical entity.")
     finally:
         conn.close()
+    if report.failed:
+        print(f"ERROR: {len(report.failed)} proposed fold(s) could not be decided and were not applied; "
+              "rerun to retry", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -2730,7 +2773,8 @@ def cmd_check_duplicates(args) -> int:
               "and question: nothing merged. Run scripts/calibrate_duplicates.py.")
         return 0
     for p in result["proposals"]:
-        print(f"  {p['p_same']:.3f}  {p['organisation'][:30]:30}  {p['gap_days']}d  {p['pair_id'][:8]}|...")
+        gap = f"{p['gap_days']}d" if isinstance(p['gap_days'], int) else "undated"
+        print(f"  {p['p_same']:.3f}  {p['organisation'][:30]:30}  {gap}  {p['pair_id'][:8]}|...")
     print(f"{len(result['merged'])} merge(s) applied of {len(result['proposals'])} proposed pair(s) at "
           f"cut-off {result['cutoff']}; findings in {out}")
     return _escalation_failures(result)
@@ -2888,6 +2932,29 @@ def cmd_rescrape_short_pages(args) -> int:
           f"{len(report.stored)} stored, {len(report.failed)} failed "
           f"({report.gave_up} given up after {MAX_ATTEMPTS} attempts or unfetchable). "
           "Run check-sources to judge the stored pages.")
+    return 0
+
+
+def cmd_publication_dates(args) -> int:
+    """Store every record's publication date and each event's first report; see publication_dates."""
+    from cyber_data_collector.processing.publication_dates import backfill, refresh_event_dates
+
+    conn = _connect(args.db)
+    try:
+        report = backfill(conn, limit=args.limit, concurrency=args.concurrency,
+                          dry_run=args.dry_run or args.no_fetch, use_browser=not args.no_browser)
+        if args.dry_run:
+            print(f"{report.candidates} record(s) of active events have no publication date and would be fetched.")
+            return 0
+        events = refresh_event_dates(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    if not args.no_fetch:
+        print(report.summary())
+        for how, count in sorted(report.how.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:5d}  {how}")
+    print(events.summary())
     return 0
 
 
@@ -3060,6 +3127,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("canonicalise-entities",
                        help="Collapse duplicate spellings of one organisation")
     p.add_argument("--limit", type=int)
+    p.add_argument("--explicit-only", action="store_true",
+                   help="Apply only the folds EXPLICIT_ALIASES names (no structural matching)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_canonicalise_entities)
 
@@ -3263,6 +3332,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--concurrency", type=int, default=3)
     p.add_argument("--dry-run", action="store_true", help="Count the pages; fetch nothing")
     p.set_defaults(func=cmd_rescrape_short_pages)
+
+    p = sub.add_parser("publication-dates",
+                       help="Store each record's publication date (the source's own, else the page's "
+                            "metadata - never its modified date), then each event's first-report date "
+                            "and reporting lag; an undated event is dated by its first report")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--concurrency", type=int, default=8)
+    p.add_argument("--no-fetch", action="store_true",
+                   help="Fetch no pages: only copy source dates and refresh the events")
+    p.add_argument("--no-browser", action="store_true",
+                   help="Do not fetch pages a plain HTTP client was refused again with a browser")
+    p.add_argument("--dry-run", action="store_true", help="Count the records; change nothing")
+    p.set_defaults(func=cmd_publication_dates)
 
     p = sub.add_parser("normalise-enums",
                        help="Rewrite stored qualified enum names (EventSeverity.MEDIUM, "

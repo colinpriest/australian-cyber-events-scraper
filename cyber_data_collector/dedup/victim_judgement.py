@@ -391,6 +391,9 @@ def replacement_entity(conn: sqlite3.Connection, dedup_id: str, name: str, old_e
     for entity_id, entity_name in linked:
         if entity_id != old_entity_id and (entity_name.lower() == name.lower() or is_same_name(entity_name, name)):
             return entity_id
+    from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+
+    name = canonical_entity_name(conn, name)
     row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ? COLLATE NOCASE AND entity_id != ? "
                        "ORDER BY entity_id LIMIT 1", (name, old_entity_id)).fetchone()
     if row:

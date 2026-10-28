@@ -146,3 +146,126 @@ def test_preferred_name_keeps_genuine_acronyms():
     """"ANZ" is not shouting; it is the organisation's name."""
     usage = {"ANZ": 12, "anz": 1}
     assert preferred_name(list(usage), usage) == "ANZ"
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-28: proposals are verified, lists and shared acronyms do not chain
+# ---------------------------------------------------------------------------
+
+def _entities(names):
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY, entity_name TEXT, entity_kind TEXT);
+        CREATE TABLE EnrichedEventEntities (enriched_event_id TEXT, entity_id INTEGER);
+        CREATE TABLE EnrichedEvents (enriched_event_id TEXT, title TEXT);
+    """)
+    conn.executemany("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES (?, 'organisation')",
+                     [(n,) for n in names])
+    return conn
+
+
+def test_a_shared_acronym_does_not_chain_different_organisations():
+    conn = _entities(["Mackay Sugar", "M&S", "Marks & Spencer", "Media Super"])
+    for keep, drop in canonical_groups(conn):
+        assert not {"Mackay Sugar", "Marks & Spencer"} <= {keep, *drop}
+        assert not {"Mackay Sugar", "Media Super"} <= {keep, *drop}
+
+
+def test_a_list_of_organisations_is_not_folded_into_one_of_them():
+    from cyber_data_collector.dedup.entity_merge import is_organisation_list
+
+    banks = ("Australia and New Zealand Banking Group Limited, National Australia Bank Limited, "
+             "Westpac Banking Corporation, Commonwealth Bank of Australia")
+    assert is_organisation_list(banks) and not is_organisation_list("Smith, Jones & Co")
+    conn = _entities(["Westpac", "Westpac Banking Corporation", banks])
+    assert all(banks not in {keep, *drop} for keep, drop in canonical_groups(conn))
+
+
+def test_explicit_only_applies_reviewed_aliases_and_nothing_structural():
+    conn = _entities(["Services Australia", "Medicare", "Genea", "Genea IVF Clinic"])
+    assert canonical_groups(conn, explicit_only=True) == [("Services Australia", ["Medicare"])]
+
+
+def test_proposed_folds_apply_only_when_perplexity_confirms_and_verdicts_are_reused():
+    import json
+
+    from cyber_data_collector.dedup import entity_alias_verification as eav
+
+    conn = _entities(["NAB", "National Australia Bank", "Mackay Sugar", "M&S"])
+    asked = []
+
+    def search(prompt):
+        asked.append(prompt)
+        same = 'A: "NAB"' in prompt and 'B: "National Australia Bank"' in prompt   # names sorted
+        verdict = {"verdict": "same" if same else "different", "canonical_name": None, "reason": "r"}
+        return {"text": "Answer: " + json.dumps(verdict), "citations": ["https://example.org"]}
+
+    proposed = [("National Australia Bank", ["NAB"]), ("Mackay Sugar", ["M&S"])]
+    report = eav.VerificationReport()
+    assert eav.verified_groups(conn, proposed, search=search, report=report) == [("National Australia Bank", ["NAB"])]
+    assert report.rejected == [("M&S", "Mackay Sugar", "different")] and len(asked) == 2
+    # Stored: asked once, ever.
+    again = eav.VerificationReport()
+    eav.verified_groups(conn, proposed, search=search, report=again)
+    assert len(asked) == 2 and again.reused == 2
+
+
+def test_an_unreadable_answer_leaves_the_pair_undecided_and_unfolded():
+    from cyber_data_collector.dedup import entity_alias_verification as eav
+
+    conn = _entities(["NAB", "National Australia Bank"])
+    report = eav.VerificationReport()
+    groups = eav.verified_groups(conn, [("National Australia Bank", ["NAB"])],
+                                 search=lambda prompt: {"text": "I think so", "citations": []}, report=report)
+    assert groups == [] and report.failed == [("NAB", "National Australia Bank")]
+    assert eav.parse_verdict('{"verdict": "maybe"}') is None
+
+
+def _alias_db(aliases):
+    conn = _entities(["National Australia Bank", "Services Australia"])
+    conn.execute("CREATE TABLE EntityAliases (raw_name TEXT UNIQUE, canonical_name TEXT, canonical_key TEXT, "
+                 "source TEXT, confidence REAL)")
+    conn.executemany("INSERT INTO EntityAliases VALUES (?, ?, '', ?, 1.0)", aliases)
+    return conn
+
+
+def test_stored_aliases_are_looked_up_before_an_entity_is_found_or_created():
+    from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+
+    conn = _alias_db([("NAB", "National Australia Bank", "llm"), ("Medicare", "Services Australia", "human")])
+    assert canonical_entity_name(conn, "NAB") == "National Australia Bank"
+    assert canonical_entity_name(conn, "medicare") == "Services Australia"          # case-insensitive
+    assert canonical_entity_name(conn, "Westpac") == "Westpac"                      # unknown: unchanged
+
+
+def test_trusted_stored_aliases_fold_without_asking():
+    conn = _alias_db([("NAB", "National Australia Bank", "llm")])
+    conn.execute("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES ('NAB', 'organisation')")
+    assert ("National Australia Bank", ["NAB"]) in canonical_groups(conn, explicit_only=True)
+
+
+def test_rule_made_aliases_are_verified_once_and_rejected_ones_removed():
+    import json
+
+    from cyber_data_collector.dedup import entity_alias_verification as eav
+
+    conn = _alias_db([("Centre for Digital Business", "Transport for NSW", "rule"),
+                      ("NAB", "National Australia Bank", "rule"),
+                      ("ORICA AUSTRALIA PTY. LTD.", "Orica Australia Pty. Ltd.", "rule")])
+    asked = []
+
+    def search(prompt):
+        asked.append(prompt)
+        verdict = "same" if 'A: "NAB"' in prompt else "different"
+        return {"text": json.dumps({"verdict": verdict, "canonical_name": None, "reason": "r"}), "citations": []}
+
+    out = eav.verify_stored_aliases(conn, search=search)
+    assert out.spelling_only == 1 and len(asked) == 2                               # the spelling variant not asked
+    assert out.confirmed == [("NAB", "National Australia Bank")]
+    assert out.removed == [("Centre for Digital Business", "Transport for NSW", "different")]
+    assert dict(conn.execute("SELECT raw_name, source FROM EntityAliases").fetchall()) == {
+        "NAB": "llm", "ORICA AUSTRALIA PTY. LTD.": "rule"}
+    eav.verify_stored_aliases(conn, search=search)
+    assert len(asked) == 2                                                          # verdicts stored

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -52,11 +53,31 @@ ORDER_SLACK = timedelta(days=14)
 #: A section has ~5,300 articles (2018 onward), 13 a page; a month never needs more.
 MAX_PAGES_PER_MONTH = 60
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+#: Waits (seconds) before each retry of a feed page the site answered with
+#: 429 Too Many Requests or 503. The 2026-10-28 backfill lost 2021-03 and
+#: 2021-05 to single 429s deep in the feed; a Retry-After header wins.
+THROTTLE_WAITS = (15, 60, 180, 300)
+THROTTLED = (429, 503)
 
 _ARTICLE_ID = re.compile(r"cyberdaily\.au/(?:[\w-]+/)+(\d+)-", re.IGNORECASE)
 _AUSTRALIAN = re.compile(
     r"australi|aussie|\b(?:nsw|qld|act|wa|sa|nt|tas|vic)\b|new south wales|victoria|queensland|tasmania|"
     r"canberra|sydney|melbourne|brisbane|perth|adelaide|hobart|darwin", re.IGNORECASE)
+
+
+def _retry_after(value: Optional[str]) -> float:
+    """Seconds from a Retry-After header (delta-seconds or HTTP date); 0 if absent or unreadable."""
+    if not value:
+        return 0.0
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, (when - datetime.now(when.tzinfo)).total_seconds())
 
 
 class CyberDailyFeedError(RuntimeError):
@@ -133,9 +154,19 @@ class CyberDailyDataSource(DataSource):
     # Feed access
     # ------------------------------------------------------------------
 
-    def _http_get(self, url: str, params: Dict[str, Any]) -> bytes:
-        response = requests.get(url, params=params, headers={"User-Agent": USER_AGENT},
-                                timeout=self.config.timeout)
+    def _http_get(self, url: str, params: Dict[str, Any], sleep: Callable[[float], None] = time.sleep) -> bytes:
+        """One feed page. A throttled answer (429/503) is waited out and asked
+        again (:data:`THROTTLE_WAITS`); still throttled after that, it raises,
+        and the month is recorded as incomplete and searched again next run."""
+        for wait in (*THROTTLE_WAITS, None):
+            response = requests.get(url, params=params, headers={"User-Agent": USER_AGENT},
+                                    timeout=self.config.timeout)
+            if response.status_code not in THROTTLED or wait is None:
+                break
+            wait = max(wait, _retry_after(response.headers.get("Retry-After")))
+            self.logger.warning("Cyber Daily answered %s for %s (offset %s); waiting %ss",
+                                response.status_code, url, params.get("limitstart"), wait)
+            sleep(wait)
         response.raise_for_status()
         return response.content
 

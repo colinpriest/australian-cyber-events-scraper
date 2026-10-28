@@ -251,3 +251,22 @@ def test_webber_detail_failure_is_a_failure_not_perplexity_prose(monkeypatch):
     assert source.failed_detail_pages == [{"url": "https://www.webberinsurance.com.au/x",
                                            "error": "ConnectionError: HTTP 503"}]
     assert not hasattr(source, "_perplexity_fallback")
+
+
+def test_runs_as_a_pipeline_step_inside_the_pipelines_event_loop(tmp_path):
+    """The 2026-10-28 refresh: run_full_pipeline runs under asyncio.run(), and the
+    step failed with 'asyncio.run() cannot be called from a running event loop'."""
+    import run_full_pipeline
+
+    def step(argv):  # a script main that, like rescrape-short-pages, runs its own loop
+        async def work():
+            return len(argv)
+        return asyncio.run(work())
+
+    async def pipeline():
+        with pytest.raises(RuntimeError, match="running event loop"):
+            step(["--db", "x"])                                                  # the old call
+        return run_full_pipeline.run_step(step, ["--db", "x"])
+
+    assert asyncio.run(pipeline()) == 2
+    assert run_full_pipeline.run_step(step, ["a"]) == 1                          # no loop: called directly

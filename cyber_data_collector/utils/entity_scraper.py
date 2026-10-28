@@ -3,6 +3,7 @@ import json
 import random
 import re
 import time
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 import logging
 import os
@@ -256,12 +257,15 @@ class PlaywrightScraper:
             If return_metadata is True, returns (content, metadata): the
             Perplexity fallback flags, ``content_origin`` (``page``, ``pdf``,
             ``perplexity_alternative`` or None), ``content_source_url`` (the
-            page the text came from, when not the requested one) and ``error``
-            (why nothing usable was fetched).
+            page the text came from, when not the requested one), ``error``
+            (why nothing usable was fetched) and ``publication_date`` /
+            ``publication_date_how`` (the page's own publication date from its
+            metadata, :func:`~cyber_data_collector.processing.publication_dates.from_html`).
         """
         perplexity_attempted = False
         perplexity_succeeded = False
         error: Optional[str] = None
+        published: Optional[tuple] = None
 
         def _format_return(text: Optional[str], origin: Optional[str] = ORIGIN_PAGE):
             if return_metadata:
@@ -273,6 +277,8 @@ class PlaywrightScraper:
                     "perplexity_attempted": perplexity_attempted,
                     "perplexity_succeeded": perplexity_succeeded,
                     "error": None if text else (error or "no text extracted"),
+                    "publication_date": published[0] if published else None,
+                    "publication_date_how": published[1] if published else None,
                     **origin_meta,
                 }
             return text
@@ -502,6 +508,11 @@ class PlaywrightScraper:
                 text = await page.locator('body').inner_text()
 
             cleaned_text = self._clean_text(text)
+            try:  # the page's own publication date, read while the page is open
+                from cyber_data_collector.processing.publication_dates import from_html
+                published = from_html(await page.content(), datetime.now().date())
+            except Exception as exc:  # noqa: BLE001 - a missing date never fails the scrape
+                self.logger.debug(f"Publication date not read from {url}: {exc}")
             return _format_return(cleaned_text)
 
         except PlaywrightTimeoutError:
