@@ -44,6 +44,7 @@ from cyber_data_collector.models.events import (
     EventSeverity,
     EventSource,
 )
+from cyber_data_collector.processing.fetch_errors import PARSE, classify_error
 from cyber_data_collector.utils import RateLimiter
 
 BASE_URL = "https://www.cyberdaily.au"
@@ -81,7 +82,16 @@ def _retry_after(value: Optional[str]) -> float:
 
 
 class CyberDailyFeedError(RuntimeError):
-    """A feed page could not be read or did not parse as the feed."""
+    """A feed page could not be read or did not parse as the feed.
+
+    ``error_type`` (:mod:`~cyber_data_collector.processing.fetch_errors`) says
+    which: ``parse`` for anything malformed, else the type of the fetch failure
+    (``throttled`` after every :data:`THROTTLE_WAITS`, ``missing``, ``network``).
+    """
+
+    def __init__(self, message: str, error_type: str = PARSE):
+        super().__init__(message)
+        self.error_type = error_type
 
 
 @dataclass(frozen=True)
@@ -146,6 +156,9 @@ class CyberDailyDataSource(DataSource):
         #: URLs already stored under any source; their articles are not stored again.
         self.known_urls: Set[str] = set()
         self.skipped_known = 0
+        #: Articles the feed listed for the last collected range (stored or not);
+        #: None until a collection has read every section completely.
+        self.items_seen: Optional[int] = None
 
     def validate_config(self) -> bool:
         return bool(self.sections)
@@ -178,7 +191,8 @@ class CyberDailyDataSource(DataSource):
             try:
                 content = await loop.run_in_executor(None, self._fetch, f"{BASE_URL}/{section}", params)
             except Exception as exc:
-                raise CyberDailyFeedError(f"{section} feed at offset {offset} could not be fetched: {exc}") from exc
+                raise CyberDailyFeedError(f"{section} feed at offset {offset} could not be fetched: {exc}",
+                                          classify_error(exc)) from exc
             cache[offset] = parse_feed(content, section)
         return cache[offset]
 
@@ -250,11 +264,14 @@ class CyberDailyDataSource(DataSource):
         events: List[CyberEvent] = []
         seen: Set[str] = set()
         self.skipped_known = 0
+        self.items_seen = None
+        complete = True
         for section in self.sections:
             try:
                 items = await self.items_between(section, start, end)
             except CyberDailyFeedError as exc:
                 self.note_failure(f"Cyber Daily {section} feed for {start}..{end} incomplete", exc)
+                complete = False
                 continue
             for item in items:
                 key = article_id(item.url) or item.url
@@ -265,6 +282,8 @@ class CyberDailyDataSource(DataSource):
                     self.skipped_known += 1
                     continue
                 events.append(self._to_event(item))
+        if complete:
+            self.items_seen = len(seen)
         self.logger.info("Cyber Daily %s..%s: %d new article(s), %d already stored by another source",
                          start, end, len(events), self.skipped_known)
         return events

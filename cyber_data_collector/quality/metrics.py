@@ -7,6 +7,7 @@ with the reason - never a zero, which would read as "nothing wrong".
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import statistics
@@ -67,17 +68,21 @@ def _month_keys(today: date, count: int, extra_before: int) -> List[str]:
 
 
 def flag_months(series: Dict[str, int], months: List[str], judged: List[str], trailing: int,
-                drop_ratio: float, min_median: float) -> List[str]:
+                drop_ratio: float, min_median: float, since: Optional[str] = None) -> List[str]:
     """Months in ``judged`` with zero volume, or below ``drop_ratio`` x the trailing median.
 
     The trailing window is the ``trailing`` months immediately before, zeros
     included; the ratio test only applies when that median is at least
     ``min_median`` (a fall from 2 to 0.5 is noise, not lost coverage).
+    Months before ``since`` (``YYYY-MM``) are neither judged nor in a window:
+    the source was not collecting monthly then.
     """
     flagged = []
     for month in judged:
+        if since and month < since:
+            continue
         i = months.index(month)
-        window = [series.get(m, 0) for m in months[max(0, i - trailing):i]]
+        window = [series.get(m, 0) for m in months[max(0, i - trailing):i] if not since or m >= since]
         value = series.get(month, 0)
         median = statistics.median(window) if window else 0
         if value == 0:
@@ -94,6 +99,7 @@ def measure_coverage(conn: sqlite3.Connection, thresholds: Thresholds, today: da
     drop_ratio = float(thresholds.setting("coverage", "drop_ratio"))
     min_median = float(thresholds.setting("coverage", "min_trailing_median"))
     monthly_sources = list(thresholds.setting("coverage", "monthly_sources"))
+    judge_from: Dict[str, str] = dict(thresholds.setting("coverage", "source_judge_from"))
 
     months = _month_keys(today, n_months, trailing)
     reported = months[-n_months:]
@@ -146,7 +152,8 @@ def measure_coverage(conn: sqlite3.Connection, thresholds: Thresholds, today: da
         flags = []
         for source in monthly_sources:
             flags += [f"{source} {f}" for f in
-                      flag_months(table[source], months, judged, trailing, drop_ratio, min_median)]
+                      flag_months(table[source], months, judged, trailing, drop_ratio, min_median,
+                                  since=judge_from.get(source))]
         what = ("raw records discovered" if kind == "records"
                 else "active events with a record from the source, by event month")
         out[f"coverage.{kind}_flagged_months"] = Measurement(
@@ -517,8 +524,220 @@ def measure_staleness(conn: sqlite3.Connection, thresholds: Thresholds, today: d
     return out
 
 
+# ---------------------------------------------------------------------------
+# Cyber Daily: articles per publication month and backfill completion
+# ---------------------------------------------------------------------------
+
+CYBERDAILY_SOURCE = "CyberDaily"
+CYBERDAILY_SUMMARY = (
+    "coverage.cyberdaily.backfill_months_complete", "coverage.cyberdaily.backfill_months_not_searched",
+    "coverage.cyberdaily.backfill_months_retrying", "coverage.cyberdaily.backfill_months_failed",
+    "coverage.cyberdaily.short_months", "coverage.cyberdaily.months_seen_not_stored",
+    "coverage.cyberdaily.stored_not_judged", "coverage.cyberdaily.stories_incomplete",
+    "coverage.cyberdaily.stories_unrecoverable",
+)
+
+
+def _months_between(first: str, last: str) -> List[str]:
+    year, month = (int(part) for part in first.split("-"))
+    out = []
+    while f"{year:04d}-{month:02d}" <= last:
+        out.append(f"{year:04d}-{month:02d}")
+        year, month = _month_add(year, month, 1)
+    return out
+
+
+def _neighbour_median(series: Dict[str, int], months: List[str], index: int, k: int) -> float:
+    window = [series[m] for m in months[max(0, index - k):index] + months[index + 1:index + 1 + k] if m in series]
+    return statistics.median(window) if window else 0
+
+
+def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Cyber Daily articles seen / stored / judged per publication month, and backfill completion.
+
+    *Seen*: articles the section feed listed for the month (``SourceMonthDiscovery.items_seen``,
+    from its last complete search). *Stored*: distinct Cyber Daily articles held in
+    ``RawEvents`` under any source, by publication date. *Judged*: of those, articles with
+    a record discovery has finished (classified or rejected). Months from
+    ``cyberdaily.backfill_since`` to last month are classed by their search state:
+    complete, retrying (the last search failed for a temporary reason and will be
+    searched again), failed (a 404/410, or given up after repeated failures) or not
+    searched.
+    """
+    from cyber_data_collector.processing.cyberdaily_refetch import enrichment_ids, is_eligible, is_incomplete
+    from cyber_data_collector.processing.fetch_errors import error_type_from_text, is_permanent
+
+    since = str(thresholds.setting("cyberdaily", "backfill_since"))
+    k = int(thresholds.setting("cyberdaily", "neighbour_months"))
+    drop_ratio = float(thresholds.setting("cyberdaily", "drop_ratio"))
+    min_median = float(thresholds.setting("cyberdaily", "min_neighbour_median"))
+    tolerance = float(thresholds.setting("cyberdaily", "seen_not_stored_tolerance"))
+
+    raw_cols = columns(conn, "RawEvents")
+    if not {"source_url", "is_processed", "raw_content"} <= raw_cols:
+        reason = "RawEvents.source_url / is_processed / raw_content missing"
+        return {name: Measurement.unavailable(reason) for name in CYBERDAILY_SUMMARY}
+
+    current = f"{today.year:04d}-{today.month:02d}"
+    previous = "%04d-%02d" % _month_add(today.year, today.month, -1)
+    judged_months = _months_between(since, previous)       # the current month is still being published
+    shown_months = _months_between(since, current)
+
+    # --- search state per month ---------------------------------------------
+    searches: Dict[str, Dict[str, object]] = {}
+    if has_table(conn, "SourceMonthDiscovery"):
+        smd_cols = columns(conn, "SourceMonthDiscovery")
+        extra = [c for c in ("error_type", "gave_up_at", "items_seen", "failed_attempts", "next_attempt_at")
+                 if c in smd_cols]
+        cur = conn.execute(
+            f"SELECT year, month, status, failures_json{''.join(', ' + c for c in extra)} "
+            "FROM SourceMonthDiscovery WHERE source_type = ?", (CYBERDAILY_SOURCE,))
+        names = [d[0] for d in cur.description]
+        for row in cur.fetchall():
+            record = dict(zip(names, row))
+            searches[f"{record['year']:04d}-{record['month']:02d}"] = record
+    processed_months = set()
+    if has_table(conn, "MonthProcessed"):
+        processed_months = {f"{y:04d}-{m:02d}" for y, m in conn.execute(
+            "SELECT year, month FROM MonthProcessed WHERE is_processed")}
+
+    complete, retrying, failed, not_searched = [], [], [], []
+    for month in judged_months:
+        record = searches.get(month)
+        if record is None:
+            not_searched.append(month)
+            continue
+        if record["status"] == "complete":
+            complete.append(month)
+            continue
+        error_type = record.get("error_type")
+        if not error_type:
+            try:
+                messages = json.loads(record.get("failures_json") or "[]")
+            except ValueError:
+                messages = [record.get("failures_json")]
+            error_type = error_type_from_text(" ".join(str(m) for m in messages))
+        label = f"{month}: {error_type}, {record.get('failed_attempts') or 1} failed search(es)"
+        if record.get("gave_up_at") or is_permanent(error_type):
+            failed.append(label + " - given up")
+        else:
+            retrying.append(label + (f", next after {record['next_attempt_at']}" if record.get("next_attempt_at")
+                                     else ", searched again next run"))
+
+    # --- stored and judged articles by publication month ---------------------
+    pub_expr = "r.publication_date" if "publication_date" in raw_cols else "NULL"
+    from cyber_data_collector.datasources.cyber_daily import article_id
+
+    stored_ids: Dict[str, set] = defaultdict(set)
+    judged_ids: Dict[str, set] = defaultdict(set)
+    undated = 0
+    for url, published, metadata, event_date, source_type, processed in conn.execute(
+            f"SELECT r.source_url, {pub_expr}, r.source_metadata, CAST(r.event_date AS TEXT), r.source_type, "
+            "r.is_processed FROM RawEvents r WHERE r.source_url LIKE '%cyberdaily.au/%'"):
+        aid = article_id(url)
+        if not aid:
+            continue
+        when = str(published or "")
+        if not _ISO_DAY.match(when):
+            try:
+                when = str((json.loads(metadata or "{}") or {}).get("publication_date") or "")
+            except (ValueError, AttributeError):
+                when = ""
+        if not _ISO_DAY.match(when) and source_type == CYBERDAILY_SOURCE:
+            when = str(event_date or "")       # Cyber Daily records are dated by publication at discovery
+        if not _ISO_DAY.match(when):
+            undated += 1
+            continue
+        stored_ids[when[:7]].add(aid)
+        if processed:
+            judged_ids[when[:7]].add(aid)
+    stored = {m: len(ids) for m, ids in stored_ids.items()}
+    judged = {m: len(ids) for m, ids in judged_ids.items()}
+
+    out: Measurements = {}
+    for month in shown_months:
+        seen = searches.get(month, {}).get("items_seen")
+        if isinstance(seen, int):
+            out[f"coverage.cyberdaily.seen.{month}"] = Measurement(value=seen)
+        out[f"coverage.cyberdaily.stored.{month}"] = Measurement(value=stored.get(month, 0))
+        out[f"coverage.cyberdaily.judged.{month}"] = Measurement(value=judged.get(month, 0))
+
+    span = f"{judged_months[0]}..{judged_months[-1]}" if judged_months else "none"
+    out["coverage.cyberdaily.backfill_months_complete"] = Measurement(
+        value=len(complete), detail=f"{len(complete)} of {len(judged_months)} months ({span}) searched completely")
+    unprocessed = [m for m in not_searched if m not in processed_months]
+    out["coverage.cyberdaily.backfill_months_not_searched"] = Measurement(
+        value=len(not_searched), examples=not_searched[:EXAMPLES],
+        detail=(f"months {span} Cyber Daily has never searched; {len(unprocessed)} of them are not processed by "
+                "discovery yet (the backfill only searches processed months). Run `python scripts/"
+                f"discovery_queue.py backfill --source CyberDaily --since {since}`"))
+    out["coverage.cyberdaily.backfill_months_retrying"] = Measurement(
+        value=len(retrying), examples=retrying[:EXAMPLES],
+        detail="last search lost results for a temporary reason (throttled, network, parse, other); searched "
+               "again automatically by the next run after its back-off")
+    out["coverage.cyberdaily.backfill_months_failed"] = Measurement(
+        value=len(failed), examples=failed[:EXAMPLES],
+        detail="feed gone (404/410) or given up after repeated failures: not searched again until "
+               "`python scripts/discovery_queue.py release` (or backfill --force)")
+
+    # Short months: a completely searched month well below its completely searched neighbours.
+    complete_stored = {m: stored.get(m, 0) for m in complete}
+    ordered = [m for m in judged_months if m in complete_stored]
+    short = []
+    for i, month in enumerate(ordered):
+        median = _neighbour_median(complete_stored, ordered, i, k)
+        value = complete_stored[month]
+        if median >= min_median and (value == 0 or value < drop_ratio * median):
+            short.append(f"{month}: {value} stored vs neighbour median {median:g}")
+    out["coverage.cyberdaily.short_months"] = Measurement(
+        value=len(short), examples=short[:EXAMPLES],
+        detail=(f"completely searched months whose stored articles fall below {drop_ratio:g} x the median of up "
+                f"to {k} searched months either side (when that median is at least {min_median:g})"
+                + (f"; {undated} stored Cyber Daily records have no publication date" if undated else "")))
+
+    gaps = []
+    for month in complete:
+        seen = searches[month].get("items_seen")
+        if isinstance(seen, int) and seen - stored.get(month, 0) > max(2, tolerance * seen):
+            gaps.append(f"{month}: feed listed {seen}, {stored.get(month, 0)} stored")
+    out["coverage.cyberdaily.months_seen_not_stored"] = Measurement(
+        value=len(gaps), examples=gaps[:EXAMPLES],
+        detail=f"months where the feed listed more articles than are stored (beyond max(2, {tolerance:.0%}))")
+
+    pending = {m: stored.get(m, 0) - judged.get(m, 0) for m in judged_months if stored.get(m, 0) > judged.get(m, 0)}
+    out["coverage.cyberdaily.stored_not_judged"] = Measurement(
+        value=sum(pending.values()), examples=[f"{m}: {n}" for m, n in sorted(pending.items())][:EXAMPLES],
+        detail="stored articles with no finished record yet (the retry queue drains them)")
+
+    # Incomplete page text, and stories no longer fetched.
+    given_up: Dict[str, Tuple[str, Optional[str]]] = {}
+    if has_table(conn, "CyberDailyRefetches") and "gave_up_at" in columns(conn, "CyberDailyRefetches"):
+        given_up = {rid: (url, etype) for rid, url, etype in conn.execute(
+            "SELECT raw_event_id, url, error_type FROM CyberDailyRefetches WHERE gave_up_at IS NOT NULL")}
+    incomplete = 0
+    active, anything = enrichment_ids(conn) if has_table(conn, "EnrichedEvents") else (set(), set())
+    error_col = "r.processing_error" if "processing_error" in raw_cols else "NULL"
+    for raw_id, url, content, processed, error in conn.execute(
+            f"SELECT r.raw_event_id, r.source_url, r.raw_content, r.is_processed, {error_col} FROM RawEvents r "
+            "WHERE r.source_url LIKE '%cyberdaily.au/%'"):
+        if (article_id(url) and raw_id not in given_up and is_incomplete(content)
+                and is_eligible(raw_id, processed, error, active, anything)):
+            incomplete += 1
+    out["coverage.cyberdaily.stories_incomplete"] = Measurement(
+        value=incomplete,
+        detail="stored Cyber Daily stories whose page text is cut off or too short, queued for the re-fetch "
+               "(`python scripts/discovery_queue.py refetch-cyberdaily`; a few hundred per run)")
+    by_type = Counter(etype or "?" for _, etype in given_up.values())
+    out["coverage.cyberdaily.stories_unrecoverable"] = Measurement(
+        value=len(given_up), examples=[f"{etype}: {url}" for url, etype in list(given_up.values())[:EXAMPLES]],
+        detail=("stories no longer fetched: " + (", ".join(f"{n} {t}" for t, n in sorted(by_type.items()))
+                                                 or "none") + " (missing = 404/410 on the site)"))
+    return out
+
+
 MEASURES = (
     ("coverage", measure_coverage),
+    ("coverage", measure_cyberdaily),
     ("evidence", measure_evidence),
     ("evidence", measure_evidence_status),
     ("backlog", measure_backlogs),

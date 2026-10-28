@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-27.1",
+  "version": "2026-10-28.1",
   "description": "Quality thresholds and the publication gate. Rules are matched in order (first match wins, fnmatch patterns). A blocking rule whose metric fails or cannot be measured blocks publication. A rule no check produced a metric for is reported as not measured. See docs/10-quality-gate.md.",
   "settings": {
     "coverage": {
@@ -7,7 +7,15 @@
       "trailing_months": 6,
       "drop_ratio": 0.5,
       "min_trailing_median": 5,
-      "monthly_sources": ["Perplexity", "GoogleSearch", "WebberInsurance"]
+      "monthly_sources": ["Perplexity", "GoogleSearch", "WebberInsurance", "CyberDaily"],
+      "source_judge_from": {"CyberDaily": "2026-11"}
+    },
+    "cyberdaily": {
+      "backfill_since": "2020-01",
+      "neighbour_months": 3,
+      "drop_ratio": 0.5,
+      "min_neighbour_median": 10,
+      "seen_not_stored_tolerance": 0.05
     },
     "evidence": {"min_page_chars": 300},
     "backlog": {"stale_after_days": 30},
@@ -74,6 +82,22 @@
     {"match": "coverage.records_flagged_months", "max": 0, "blocking": false,
      "why": "A month in which a monthly source delivered nothing, or under half its trailing median, is a collection gap."},
     {"match": "coverage.events_flagged_months", "max": 0, "blocking": false,
-     "why": "A sharp fall in a source's events by event month is either a collection gap or reporting lag in recent months."}
+     "why": "A sharp fall in a source's events by event month is either a collection gap or reporting lag in recent months. CyberDaily is judged from 2026-11 (source_judge_from): its 2026-10 records are the one-off backfill to 2020, which would make every later month look short."},
+    {"match": "coverage.cyberdaily.backfill_months_failed", "max": 0, "blocking": true,
+     "why": "A Cyber Daily month whose search was given up - the feed answered 404/410, or failed the same way 5 runs running (retry_queue.MAX_SOURCE_MONTH_ATTEMPTS) - is never searched again on its own, so its articles stay missing until someone looks. Persistent parse failures mean the feed changed. Fix, then `discovery_queue.py release`."},
+    {"match": "coverage.cyberdaily.backfill_months_retrying", "max": 0, "blocking": false,
+     "why": "The last search of these months lost results for a temporary reason (throttled, network, parse, other). The next run searches them again after a back-off, so this warns rather than blocks."},
+    {"match": "coverage.cyberdaily.backfill_months_not_searched", "max": 0, "blocking": false,
+     "why": "Months since 2020-01 Cyber Daily has never searched: its incidents for those months are missing. Run the backfill; months discovery has not processed are covered by normal discovery instead."},
+    {"match": "coverage.cyberdaily.backfill_months_complete", "blocking": false, "why": "Trend only."},
+    {"match": "coverage.cyberdaily.short_months", "max": 0, "blocking": false,
+     "why": "A completely searched month holding under half the articles of its neighbours means pages of the feed were skipped or articles were not stored. Check the month, then backfill --force it."},
+    {"match": "coverage.cyberdaily.months_seen_not_stored", "max": 0, "blocking": false,
+     "why": "The feed listed more articles for the month than the database holds: storage dropped some."},
+    {"match": "coverage.cyberdaily.stored_not_judged", "blocking": false, "why": "Trend only; the retry queue drains these and backlog.raw_unprocessed_stale catches stuck ones."},
+    {"match": "coverage.cyberdaily.stories_incomplete", "max": 0, "blocking": false,
+     "why": "Stories with cut-off or too-short page text were judged on a headline and standfirst. The re-fetch repairs a few hundred per run; the count should fall to zero."},
+    {"match": "coverage.cyberdaily.stories_unrecoverable", "blocking": false,
+     "why": "Stories removed from the site (404/410) or given up after 5 failed re-fetches keep their stored text. Reported for review; `discovery_queue.py release` retries the given-up ones."}
   ]
 }

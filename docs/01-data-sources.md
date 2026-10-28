@@ -753,8 +753,10 @@ python pipeline.py refresh       # enriches, deduplicates and publishes what it 
 
 The backfill runs one source through the normal discovery path. It works on
 processed months only, leaves their `MonthProcessed` totals alone, exits 2 if
-any month failed, and accepts free sources only. Re-searching a month finds
-the stored articles and adds no duplicates.
+any month failed or was given up, and accepts free sources only.
+Re-searching a month finds the stored articles and adds no duplicates. A
+month whose search failed is searched again by a later run (see
+[Failures, retries and monitoring](#failures-retries-and-monitoring)).
 
 ### Re-fetching stored stories
 
@@ -766,24 +768,105 @@ whichever source stored them
 |---|---|
 | Same text (ignoring the "N free articles left" banner, whose count changes) | Nothing written to `RawEvents`, nothing queued |
 | Different text | Stored text replaced. The record's active enrichments are queued for Perplexity again (stored facts kept). Record fingerprints, ASD input fingerprints and Jev input hashes carry the change downstream |
+| Full text for a record filtered out on its standfirst | Stored, and the record is *reopened* (`is_processed = 0`): the next run's retry-queue drain judges and classifies it on the full text |
 | Cut off by the meter, while the stored copy is complete | Stored copy kept (`kept_stored`) |
-| Failed, a block page, too short, or another page's text | Recorded as a failure; nothing changed |
+| Still cut off or too short after the fetch | Logged as an `incomplete` failure and retried later (below) |
+| HTTP 404 / 410 | `missing`: never fetched again; reported |
+| Throttled, timed out, a block page, or another page's text | A typed failure; nothing changed; retried later |
 
-Which stories: by default those published or discovered in the last 90 days,
-plus every story whose stored text is cut off or too short, whatever its age.
-On 2026-10-28 that is 45 of the 264 stories in active use. Stories stored or
-re-fetched in the last 24 hours are skipped, since the run has just scraped
-its new ones. Fetches are one at a time, 2 seconds apart. Every fetch is
-logged in `CyberDailyRefetches`.
+Which stories:
 
-Re-fetching every stored story on every run would take about 10 minutes now,
-and more than 3 hours once the backfill has stored its ~5,000 stories. Hence
-the window. To change it:
+- Stories published in the last 90 days that an active enrichment uses. The
+  window goes by publication date (else the record's date, else when it was
+  discovered), so stories the backfill stored today from 2021 are not
+  "recent". On 2026-10-28 that is 84 stories.
+- Every *incomplete* story, whatever its age: stored text cut off by the
+  meter, or under 300 characters. This includes records that discovery
+  could not scrape and then classified on the feed's standfirst alone and
+  filtered out (no enrichment, `Filtered out during processing`). Records
+  rejected by a filter (`Rejected at ...`) or a hygiene step (an enrichment
+  that is not active) are never re-fetched.
+
+At most 200 incomplete stories are fetched per run (`--repair-limit`). Stories
+an active enrichment uses go first, then the newest. Stories stored or
+re-fetched in the last 24 hours are skipped, since the run has just scraped its
+new ones. Fetches are one at a time, 2 seconds apart, and each is logged in
+`CyberDailyRefetches`.
+
+**The 2026-10-28 backlog.** The first run stored 4,682 Cyber Daily records.
+The discovery scrape got no text for 2,724 of them: every one is logged
+"Insufficient content retrieved", 2.5 to 3 minutes each, during the hours of
+the backfill. The scraper's own error was not kept then; it is now
+(`ProcessingLog.result_data`: `scrape_error`, `error_type`). 337 of those
+records are used by active events, judged on the standfirst. The other 2,387
+were filtered out on the standfirst. All of them are now queued for repair:
+200 per refresh takes about 14 runs. Clearing it in one go is a separate
+command (about 2,700 fetches, 9-10 hours). Reopened records then cost one Jev
+page judgement and one fast-model classification each on the next run.
 
 ```bash
 python run_full_pipeline.py --cyberdaily-refetch-days 365      # or --cyberdaily-refetch-all, --skip-cyberdaily-refetch
 python scripts/discovery_queue.py refetch-cyberdaily --all     # on its own; --dry-run counts the candidates
+python scripts/discovery_queue.py refetch-cyberdaily --repair-limit 0   # every incomplete story, no per-run limit
 ```
+
+### Failures, retries and monitoring
+
+Every failure keeps its type (`cyber_data_collector/processing/fetch_errors.py`),
+not only its message:
+
+| Type | Cause | Handling |
+|---|---|---|
+| `throttled` | HTTP 429 / 503 after every in-request wait (`THROTTLE_WAITS`, honouring `Retry-After`) | retried by a later run |
+| `missing` | HTTP 404 / 410 | never retried; reported |
+| `network` | timeout, connection error, other 5xx | retried by a later run |
+| `parse` | not the feed: malformed XML, a challenge page, an empty or endless feed | retried by a later run; persistent = the feed changed |
+| `incomplete` | page fetched but cut off or under 300 characters | re-queued for the re-fetch |
+| `other` | anything else (403, unknown) | retried by a later run |
+
+The type is stored where the failure is stored:
+
+| Where | Columns | Retry |
+|---|---|---|
+| `SourceMonthDiscovery` (one search of one month) | `error_type` (deciding), `error_types_json` (each failure), `failed_attempts`, `next_attempt_at`, `gave_up_at`, `items_seen` | back-off 30 min doubling to 1 day; given up after 5 consecutive failures or at once on `missing` |
+| `CyberDailyRefetches` (one stored story) | `error_type`, `failures`, `next_attempt_at`, `gave_up_at` | back-off 1 day doubling to 30 days; given up after 5, or at once on `missing` |
+| `DiscoveryRecordState` (one record in the retry queue) | `last_error_type` | unchanged: temporary failures retried forever, permanent ones quarantined after 3 |
+
+Failures recorded before the types existed are typed from their stored
+message when the schema is upgraded. The 2021-03 and 2021-05 searches lost on
+2026-10-28 become `throttled` with one failed attempt, and are searched again
+by the next run. The story that returned 404 becomes `missing`.
+
+A month or story that is given up is not tried again until released:
+
+```bash
+python scripts/discovery_queue.py status    # failed searches with type, attempts and next retry; stories no longer fetched
+python scripts/discovery_queue.py release   # also releases given-up source-months and stories (not 404/410 stories)
+python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 --force   # or search everything again
+```
+
+**Coverage metrics** (`quality/metrics.py:measure_cyberdaily`, thresholds in
+`quality/thresholds.json` under `cyberdaily`), on every quality report:
+
+| Metric | Warns / blocks when |
+|---|---|
+| `coverage.cyberdaily.{seen,stored,judged}.YYYY-MM` | table only. *Seen*: articles the feed listed (last complete search). *Stored*: distinct articles in `RawEvents` under any source, by publication date. *Judged*: of those, articles with a finished record |
+| `coverage.cyberdaily.backfill_months_not_searched` | warns: a month 2020-01 to last month never searched |
+| `coverage.cyberdaily.backfill_months_retrying` | warns: last search failed for a temporary reason; the next run searches it again |
+| `coverage.cyberdaily.backfill_months_failed` | **blocks**: given up (404/410, or 5 failures). Nothing searches it again by itself |
+| `coverage.cyberdaily.short_months` | warns: a completely searched month under half the median of up to 3 searched months either side (median at least 10) |
+| `coverage.cyberdaily.months_seen_not_stored` | warns: the feed listed more than is stored (beyond max(2, 5%)) |
+| `coverage.cyberdaily.stories_incomplete` | warns: stories still waiting for full text |
+| `coverage.cyberdaily.stories_unrecoverable`, `stored_not_judged`, `backfill_months_complete` | trend only |
+
+On the 2026-10-28 copy of the database these read: 79 of 81 months complete,
+2 retrying (2021-03, 2021-05, throttled), 0 failed, 0 not searched. One short
+month: 2021-01, with 5 stories against a neighbour median of 13 (the feed's
+own count was not recorded then). 2,720 incomplete stories, 1 missing.
+`CyberDaily` is also in `coverage.monthly_sources` (raw records by
+discovery month, events by event month). It is judged from 2026-11
+(`source_judge_from`): the one-off backfill put all 4,682 records in
+2026-10, and that would make every later month look short.
 
 ### Positive example
 
@@ -816,9 +899,6 @@ other 4 are tech, culture and digital-transformation pieces.
 
 ### Not yet done
 
-- `cyber_data_collector/quality/thresholds.json` does not list `CyberDaily` in
-  `monthly_sources`. Until the first-run backfill finishes, earlier months
-  would be flagged for zero volume.
 - Only the Security section is read; `custom_config={"sections": [...]}` adds
   others. Of the Cyber Daily articles already in the database, 333 are in
   Security, 12 in Government and 12 elsewhere.

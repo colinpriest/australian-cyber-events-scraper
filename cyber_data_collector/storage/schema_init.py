@@ -93,7 +93,9 @@ def _module_schema_steps(conn: sqlite3.Connection) -> None:
         record_fingerprints,
     )
     from cyber_data_collector.dedup.schema import migrate as migrate_dedup
-    from cyber_data_collector.processing import ai_involvement, evidence_recovery, publication_dates, retry_queue
+    from cyber_data_collector.processing import (
+        ai_involvement, cyberdaily_refetch, evidence_recovery, publication_dates, retry_queue,
+    )
     from cyber_data_collector.storage import asd_schema
     from cyber_data_collector.utils import jev
 
@@ -101,5 +103,5 @@ def _module_schema_steps(conn: sqlite3.Connection) -> None:
     asd_schema.ensure_schema(conn)
     for module in (jev, org_timeline, corroboration, entity_alias_verification, page_classifier,
                    record_fingerprints, event_facts, retry_queue, ai_involvement, publication_dates,
-                   evidence_recovery):
+                   evidence_recovery, cyberdaily_refetch):
         module.ensure_schema(conn)

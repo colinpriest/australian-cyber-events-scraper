@@ -32,10 +32,26 @@ class DataSource(ABC):
         """Failures noted since this source was created (one collection run)."""
         return self.__dict__.setdefault("_collection_failures", [])
 
-    def note_failure(self, what: str, exc: Optional[BaseException] = None) -> None:
-        """Record a failure that lost results, and log it as an error."""
+    @property
+    def collection_error_types(self) -> List[str]:
+        """The error type of each of :attr:`collection_failures`, in the same order
+        (:mod:`cyber_data_collector.processing.fetch_errors`)."""
+        return self.__dict__.setdefault("_collection_error_types", [])
+
+    def note_failure(self, what: str, exc: Optional[BaseException] = None,
+                     error_type: Optional[str] = None) -> None:
+        """Record a failure that lost results, with its error type, and log it as an error.
+
+        The type is ``error_type`` when given, else classified from ``exc``
+        (or from the message when there is no exception).
+        """
+        from cyber_data_collector.processing.fetch_errors import classify_error, error_type_from_text
+
         message = f"{what}: {exc}" if exc is not None else what
+        if error_type is None:
+            error_type = classify_error(exc) if exc is not None else error_type_from_text(what)
         self.collection_failures.append(message[:500])
+        self.collection_error_types.append(error_type)
         logging.getLogger(self.__class__.__name__).error("Collection incomplete - %s", message)
 
     @abstractmethod

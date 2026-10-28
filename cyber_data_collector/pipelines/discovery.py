@@ -53,7 +53,15 @@ from cyber_data_collector.processing.record_evidence import (
     persist_rejections,
     prepare_records_for_processing,
 )
-from cyber_data_collector.processing.retry_queue import KIND_PERMANENT, KIND_TEMPORARY, RetryQueue
+from cyber_data_collector.processing.fetch_errors import INCOMPLETE, OTHER, classify_error, error_type_from_text
+from cyber_data_collector.processing.retry_queue import (
+    KIND_PERMANENT,
+    KIND_TEMPORARY,
+    MONTH_COMPLETE,
+    MONTH_GAVE_UP,
+    MONTH_WAITING,
+    RetryQueue,
+)
 from cyber_data_collector.utils.api_budget import is_budget_refusal
 
 
@@ -407,8 +415,13 @@ class EventDiscoveryEnrichmentPipeline:
             result = await self.backfill_source("CyberDaily", months, max_events)
             self.stats['cyberdaily_backfill_months'] = len(result["searched"])
             logger.info("[CYBERDAILY] Backfill since %d-%02d: searched %d month(s), %d already done, %d not "
-                        "processed yet, %d failed", backfill_since[0], backfill_since[1], len(result["searched"]),
-                        len(result["already_done"]), len(result["not_processed"]), len(result["failed"]))
+                        "processed yet, %d failed, %d waiting for back-off, %d given up", backfill_since[0],
+                        backfill_since[1], len(result["searched"]), len(result["already_done"]),
+                        len(result["not_processed"]), len(result["failed"]), len(result["waiting"]),
+                        len(result["gave_up"]))
+            if result["gave_up"]:
+                logger.error("[CYBERDAILY] Backfill months given up (not searched again until released): %s",
+                             ", ".join(f"{y}-{m:02d}" for y, m in result["gave_up"]))
         if refetch_days is False:
             return
         from cyber_data_collector.processing import cyberdaily_refetch
@@ -416,11 +429,18 @@ class EventDiscoveryEnrichmentPipeline:
         report = await cyberdaily_refetch.refetch_stories_async(self.db._conn, days=refetch_days)
         outcomes = report.outcomes
         self.stats['cyberdaily_refetch_failed'] = outcomes[cyberdaily_refetch.FAILED]
-        logger.info("[CYBERDAILY] Re-fetched %d stored stories: %d unchanged, %d updated (%d enrichment(s) queued), "
-                    "%d kept (fetched page cut off), %d failed", report.candidates, outcomes["unchanged"],
-                    outcomes["updated"], report.requeued_enrichments, outcomes["kept_stored"], outcomes["failed"])
+        logger.info("[CYBERDAILY] Re-fetched %d stored stories (%d of them incomplete): %d unchanged, %d updated "
+                    "(%d enrichment(s) queued, %d record(s) reopened for classification), %d kept (fetched page "
+                    "cut off), %d failed (%d still incomplete, %d missing, %d given up)", report.candidates,
+                    report.repair_candidates, outcomes["unchanged"], outcomes["updated"],
+                    report.requeued_enrichments, report.reopened, outcomes["kept_stored"], outcomes["failed"],
+                    report.still_incomplete, len(report.missing), len(report.gave_up))
         for failure in report.failed[:10]:
-            logger.error("[CYBERDAILY] Re-fetch failed for %s: %s", failure["url"], failure["error"])
+            logger.error("[CYBERDAILY] Re-fetch failed for %s (%s): %s", failure["url"], failure["error_type"],
+                         failure["error"])
+        for story in report.missing[:10]:
+            logger.error("[CYBERDAILY] Stored story is gone from the site (%s), not fetched again: %s",
+                         story["error"], story["url"])
 
     async def backfill_source(self, source_type: str, months: List[Tuple[int, int]],
                               max_events: int = 1000, force: bool = False) -> Dict[str, List[Tuple[int, int]]]:
@@ -438,20 +458,28 @@ class EventDiscoveryEnrichmentPipeline:
         discovery covers it with every source, and recording it as processed
         after one source would stop the others from ever searching it.
 
+        A month whose last search failed is searched again once its back-off
+        has passed (``waiting`` until then), and not at all once it is given
+        up (a 404/410, or ``retry_queue.MAX_SOURCE_MONTH_ATTEMPTS`` failures:
+        ``gave_up``, reported, and searched again only after ``release`` or
+        with ``force=True``).
+
         Returns:
             ``{'searched': [...], 'already_done': [...], 'not_processed': [...],
-            'failed': [...]}`` of ``(year, month)``.
+            'failed': [...], 'waiting': [...], 'gave_up': [...]}`` of ``(year, month)``.
         """
         self.require_prerequisites()
         await self.drain_retry_queue()
         result: Dict[str, List[Tuple[int, int]]] = {
-            "searched": [], "already_done": [], "not_processed": [], "failed": []}
+            "searched": [], "already_done": [], "not_processed": [], "failed": [], "waiting": [], "gave_up": []}
+        skip = {MONTH_COMPLETE: "already_done", MONTH_WAITING: "waiting", MONTH_GAVE_UP: "gave_up"}
         for year, month in months:
             if not self.db.is_month_processed(year, month):
                 result["not_processed"].append((year, month))
                 continue
-            if not force and self.retry_queue.discovery_status(source_type, year, month) == "complete":
-                result["already_done"].append((year, month))
+            state = self.retry_queue.source_month_retry(source_type, year, month)
+            if not force and state in skip:
+                result[skip[state]].append((year, month))
                 continue
             logger.info("[BACKFILL] %s %d-%02d", source_type, year, month)
             await self._discover_events_for_month(year, month, [source_type], max_events, mark_processed=False)
@@ -517,17 +545,18 @@ class EventDiscoveryEnrichmentPipeline:
                 self._collect_source(name, source, date_range) for name, source in valid_sources.items()])
             all_raw_events = []
             failed_sources: Dict[str, List[str]] = {}
-            for name, source_events, failures in collected:
+            for name, source_events, failures, error_types, items_seen in collected:
                 all_raw_events.extend(source_events)
                 source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
-                status = self.retry_queue.record_discovery(source_type, year, month, len(source_events), failures)
+                status = self.retry_queue.record_discovery(source_type, year, month, len(source_events), failures,
+                                                           error_types=error_types, items_seen=items_seen)
                 if status != "complete":
                     failed_sources[source_type] = failures
             for name in set(collector.data_sources) - set(valid_sources):
                 # Enabled but not configured (no key, no client): nothing was searched.
                 source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
                 problem = [f"{source_type} is enabled but not configured"]
-                self.retry_queue.record_discovery(source_type, year, month, 0, problem)
+                self.retry_queue.record_discovery(source_type, year, month, 0, problem, error_types=[OTHER])
                 failed_sources[source_type] = problem
 
             logger.info(f"[RAW] Collected {len(all_raw_events)} raw events for {year}-{month:02d}")
@@ -615,16 +644,24 @@ class EventDiscoveryEnrichmentPipeline:
     # =========================================================================
 
     async def _collect_source(self, name: str, source: Any, date_range: DateRange):
-        """Collect from one source: ``(name, events, failures)``; a raised error is a failure."""
+        """Collect from one source: ``(name, events, failures, error_types, items_seen)``.
+
+        A raised error is a failure. ``error_types`` holds the type of each
+        failure (:mod:`~cyber_data_collector.processing.fetch_errors`);
+        ``items_seen`` is what the source listed for the range, where it says
+        (Cyber Daily), else None.
+        """
         try:
             events = await source.collect_events(date_range)
         except Exception as exc:  # recorded as a failed source-month, never as "no events"
             logger.error("[DISCOVERY] Collecting from %s failed: %s", name, exc)
-            return name, [], [f"collection raised {type(exc).__name__}: {exc}"[:500]]
+            return name, [], [f"collection raised {type(exc).__name__}: {exc}"[:500]], [classify_error(exc)], None
         failures = list(getattr(source, "collection_failures", []) or [])
+        error_types = list(getattr(source, "collection_error_types", []) or [])
+        items_seen = getattr(source, "items_seen", None)
         logger.info("[DISCOVERY] %s: %d event(s)%s", name, len(events or []),
                     f", {len(failures)} failure(s)" if failures else "")
-        return name, list(events or []), failures
+        return name, list(events or []), failures, error_types, items_seen if isinstance(items_seen, int) else None
 
     def require_prerequisites(self) -> None:
         """Raise unless every model discovery depends on is configured.
@@ -2169,8 +2206,16 @@ class EventDiscoveryEnrichmentPipeline:
                     perplexity_attempted = True
                 perplexity_succeeded = False
                 
+                # Why the page could not be read, with its type: a 429 or a
+                # timeout is not a short page (the Cyber Daily re-fetch
+                # repairs either on a later run).
+                scrape_error = scrape_meta.get('error') or (
+                    f"page text too short ({len(content.strip()) if content else 0} chars)")
                 self.db.log_processing_attempt(
                     event['raw_event_id'], 'url_scraping', 'failed',
+                    result_data={'url': url, 'scrape_error': scrape_error,
+                                 'error_type': (INCOMPLETE if content and content.strip()
+                                                else error_type_from_text(scrape_error))},
                     error_message="Insufficient content retrieved",
                     processing_time_ms=processing_time_ms
                 )
