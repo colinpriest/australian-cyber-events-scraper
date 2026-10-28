@@ -23,12 +23,22 @@ import html
 import json
 import logging
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import markdown
 
 from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.recurrence_conclusions import (
+    DELAYED_PEAK_PERIODS,
+    contrast_from_record,
+    describe_contrast,
+    describe_joint_test,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +91,31 @@ def _p(value: Optional[float]) -> str:
     return "n/a" if value is None else f"{value:.4f}"
 
 
-def _contrast(summary: Dict[str, Any], comparison: str) -> str:
-    for row in summary.get("delayed_peak_sensitivity_adjusted_contrasts") or []:
-        if row.get("comparison") == comparison:
-            return f"{row['rate_ratio']:.2f}x ({row['ci_low']:.2f}-{row['ci_high']:.2f})"
-    return "n/a"
+def delayed_peak_conclusions(summary: Dict[str, Any]) -> List[str]:
+    """The delayed-peak verdict and contrast sentences for a run's summary.
+
+    Generated from the stored numbers by the same helper as the report, so
+    the page cannot say more than the estimates do.
+    """
+    rows = summary.get("delayed_peak_sensitivity_adjusted_contrasts") or []
+    if not rows:
+        return ["The delayed-peak contrasts were not computed for this run."]
+    phase_rates = summary.get("delayed_peak_sensitivity_phase_rates")
+    events = (
+        {r["delayed_peak_phase"]: r["events"] for r in phase_rates}
+        if phase_rates else None
+    )
+    contrasts = [contrast_from_record(row, DELAYED_PEAK_PERIODS, events) for row in rows]
+    joint_p = (summary.get("delayed_peak_sensitivity_lrt") or {}).get("delayed_peak_intersection_p_value")
+    return [
+        describe_joint_test(
+            "delayed peak",
+            "a delayed 91-180 day peak",
+            float("nan") if joint_p is None else joint_p,
+            [c for c in contrasts if c.test != "two-sided"],
+        ),
+        *(describe_contrast(c) for c in contrasts),
+    ]
 
 
 def overview_rows(analysis_dir: Path) -> List[Dict[str, str]]:
@@ -129,6 +159,7 @@ def build_html(analysis_dir: Path) -> str:
         f'<section class="panel{" active" if i == 0 else ""}" id="run{i}">{render_report(analysis_dir / folder)}</section>'
         for i, (folder, _) in enumerate(runs)
     )
+    peak = "".join(f"<li>{html.escape(line)}</li>" for line in delayed_peak_conclusions(main_summary))
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     return f"""<!doctype html>
@@ -177,9 +208,8 @@ number, organisation size, sector, entity kind and records affected.</p>
 <thead><tr><th>Run</th><th>Censor date</th><th>Repeats</th><th>Unadjusted p</th><th>Adjusted p</th><th>Weibull vs exponential p</th><th>Best AIC</th></tr></thead>
 <tbody>{overview}</tbody>
 </table></div>
-<p class="muted">Delayed-peak contrasts (adjusted rate ratio, 95% CI): 91-180 vs 0-90 days
-{html.escape(_contrast(main_summary, "91-180 vs 0-90"))}; 91-180 vs post-180 days
-{html.escape(_contrast(main_summary, "91-180 vs post-180"))}.</p>
+<p class="muted">Delayed 91-180 day peak, adjusted model with 0-90 / 91-180 / post-180 day phases (main run):</p>
+<ul class="muted">{peak}</ul>
 
 <div class="tabs">{tabs}</div>
 {panels}

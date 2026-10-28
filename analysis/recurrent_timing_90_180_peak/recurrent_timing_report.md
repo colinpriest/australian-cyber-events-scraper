@@ -21,10 +21,11 @@ The primary model includes recorded organisation size. Size is a proxy for diffe
 - first-of-month event dates: 193
 - same-day entity-event groups collapsed: 5
 - covariate coverage: {'size_estimate levels': {'HUGE': 166, 'LARGE': 195, 'MEDIUM': 171, 'SMALL': 51, 'UNKNOWN': 94}, 'size_confidence populated': 633, 'employee_count populated': 566, 'turnover populated': 0, 'industry populated': 621, 'entity_kind populated': 677, 'sector_proxy levels': {'education': 44, 'finance': 53, 'government': 111, 'health': 58, 'industrial': 13, 'media': 4, 'other': 236, 'retail': 24, 'technology': 116, 'telecom_transport': 18}, 'prior records populated': 328}
+- unresolved victim attributions: {'policy': 'include', 'victim-event attributions unresolved': 18, 'events with an unresolved attribution': 18, 'organisations with an unresolved attribution': 18, 'victim-event attributions analysed': 677, 'repeats': {'included': {'observed repeats': 57, 'entities with a repeat': 42, 'repeats by elapsed band': {'0-90': 3, '91-180': 6, '181-365': 8, '366-730': 8, '731-1460': 17, '>1460': 15}}, 'excluded': {'observed repeats': 52, 'entities with a repeat': 38, 'repeats by elapsed band': {'0-90': 1, '91-180': 6, '181-365': 8, '366-730': 8, '731-1460': 16, '>1460': 13}}, 'repeats involving an unresolved attribution': 5}}
 
 ## Primary Piecewise Exponential Test
 
-The adjusted piecewise model does not reject a constant elapsed-time hazard at the 5% level.
+The adjusted piecewise model does not reject a constant elapsed-time hazard at the 5% level (LRT p = 0.122). It rests on 57 observed repeats.
 
 - unadjusted LRT p-value: 0.3213
 - adjusted LRT p-value: 0.1216
@@ -88,16 +89,20 @@ Full adjusted covariate table:
 | Sector: telecom_transport          |        1.432 |    0.404 |     5.076 |
 | Unknown size                       |        0.777 |    0.269 |     2.250 |
 
-Targeted contrast for the proposed low-then-rising pattern:
+Targeted contrast for the proposed low-then-rising pattern (hypothesis: the later bands are higher):
 
-- 91-180, 181-365 days vs 0-90 days rate ratio: 1.799
-- approximate 95% CI: 0.517 to 6.260
+- 91-180, 181-365 days vs 0-90 days (unadjusted): rate ratio 1.80 (95% CI 0.52-6.26), about 80% higher; two-sided p = 0.356. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.52 to 6.26, which includes 1. Repeat events: 14 in 91-180, 181-365 days and 3 in 0-90 days. Small count (3 in 0-90 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
 
 ## U-Shape Test
 
 Definition used here: immediate risk is the first elapsed-time band; the response period combines the next two bands; the long-term period combines the remaining later bands.
 The adjusted phase model controls for the same size, sector, calendar-period, prior-event-number, entity-kind, and records-affected terms as the main elapsed-time model.
-The point estimates do not form the requested U-shape.
+
+Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.823. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates do not have the hypothesised shape: response vs immediate goes the other way.
+
+- response vs immediate: rate ratio 1.81 (95% CI 0.52-6.37), about 81% higher; one-sided p = 0.823 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.52 to 6.37, which includes 1. The estimate is in the opposite direction to the hypothesis (higher, not lower). Repeat events: 13 in the response period and 3 in the immediate period. Small count (3 in the immediate period; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
+- long-term vs response: rate ratio 1.16 (95% CI 0.60-2.25), about 16% higher; one-sided p = 0.333 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.60 to 2.25, which includes 1. Repeat events: 40 in the long-term period and 13 in the response period.
+- long-term vs immediate: rate ratio 2.10 (95% CI 0.63-6.99), about 110% higher; two-sided p = 0.228. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.63 to 6.99, which includes 1. Repeat events: 40 in the long-term period and 3 in the immediate period. Small count (3 in the immediate period; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
 
 - phase-model LRT p-value versus constant elapsed-time risk: 0.4099
 - directional U-shape p-value: 0.823
@@ -146,13 +151,18 @@ Phase-model test by covariate set:
 | Drop industry/sector          |    0.3853 |                         0.8130 |
 | Drop size and industry/sector |    0.2947 |                         0.8155 |
 
-If dropping a covariate group materially narrowed the interval, the CI width would shrink in this table. In this run, the interval around the initial fall remains broad under all variants, which points more to sparse repeat-event information than to a single covariate group consuming all precision.
+If dropping a covariate group materially narrowed an interval, its CI width would shrink in this table. For response vs immediate, no variant narrows the 95% CI by 5% or more on the log scale ('All covariates' model: 0.52-6.37). For long-term vs response, no variant narrows the 95% CI by 5% or more on the log scale ('All covariates' model: 0.60-2.25).
 
 ## Delayed 91-180 Day Peak Test
 
 Definition used here: the hypothesised peak is 91-180 days after the prior event. A formal peak requires 91-180 days to be higher than both 0-90 days and the pooled post-180 period.
 The adjusted peak model controls for the same size, sector, calendar-period, prior-event-number, entity-kind, and records-affected terms as the main model.
-The point estimates have a delayed 91-180 day peak, but the full directional test is not statistically strong.
+
+Directional delayed peak test (all of: 91-180 vs 0-90 higher; 91-180 vs post-180 higher), intersection p = 0.394. Not statistically significant at the 5% level: the data do not reject the null of no delayed peak. The point estimates have the hypothesised shape. The weakest part is 91-180 vs post-180 (p = 0.394).
+
+- 91-180 vs 0-90: rate ratio 2.21 (95% CI 0.55-8.83), about 121% higher; one-sided p = 0.132 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.55 to 8.83, which includes 1. Repeat events: 6 in 91-180 days and 3 in 0-90 days. Small count (6 in 91-180 days, 3 in 0-90 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
+- 91-180 vs post-180: rate ratio 1.13 (95% CI 0.47-2.70), about 13% higher; one-sided p = 0.394 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.47 to 2.70, which includes 1. Repeat events: 6 in 91-180 days and 47 in post-180 days. Small count (6 in 91-180 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
+- post-180 vs 0-90: rate ratio 1.96 (95% CI 0.60-6.42), about 96% higher; two-sided p = 0.268. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.60 to 6.42, which includes 1. Repeat events: 47 in post-180 days and 3 in 0-90 days. Small count (3 in 0-90 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.
 
 - phase-model LRT p-value versus constant elapsed-time risk: 0.4353
 - directional delayed-peak p-value: 0.3937
