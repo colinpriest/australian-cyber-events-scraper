@@ -267,13 +267,32 @@ With CyberDaily among the sources, every run also does two more things:
   has not searched yet. The first run therefore covers about 5,000 articles
   and takes hours; it is resumable per month, and later runs have nothing left
   to do.
-- **Re-fetch.** It fetches stored Cyber Daily stories again: the last 90 days,
-  plus any cut off or too short. Changed text is stored and re-enriched;
-  unchanged text writes nothing.
+- **Re-fetch.** It fetches stored Cyber Daily stories again: those published
+  in the last 90 days, plus any cut off or too short. Changed text is stored
+  and re-enriched; unchanged text writes nothing.
+
+- **Self-healing.** Every failure keeps its type: `throttled` (429/503),
+  `missing` (404/410), `network`, `parse` or `incomplete`
+  (`processing/fetch_errors.py`; stored in `SourceMonthDiscovery`,
+  `CyberDailyRefetches` and `DiscoveryRecordState`). Temporary failures are
+  retried by later runs with back-off, and given up after 5. A 404/410 is
+  never retried. Given-up months and stories are reported until `release`.
+- **Incomplete stories are re-queued.** A story whose stored text is cut off
+  or under 300 characters is fetched again, at most 200 per run. That
+  includes records filtered out on the feed's standfirst alone; when the full
+  text arrives they are reopened and classified again. The first run left
+  2,724 such records (the discovery scrape got no text).
+- **Monitored.** The quality report shows Cyber Daily articles seen in the
+  feed, stored and judged per publication month. It warns on months short
+  against their neighbours, on months not searched or retrying after a
+  temporary failure, and on incomplete stories. It blocks publication only on
+  a month that was given up (404/410, or 5 failures in a row).
 
 ```bash
 python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
-python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--dry-run]
+python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
+python scripts/discovery_queue.py status    # failed searches with type and next retry; stories no longer fetched
+python scripts/discovery_queue.py release   # given-up months and stories back in the queue
 python run_full_pipeline.py --cyberdaily-backfill-since none --skip-cyberdaily-refetch   # opt out for a run
 ```
 

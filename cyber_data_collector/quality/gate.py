@@ -128,7 +128,10 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
                 found = measure(conn, thresholds, today)
         except Exception as exc:  # noqa: BLE001 - reported, never passed
             logger.exception("Quality measure %s failed", group)
-            found = {f"{group}.error": Measurement.unavailable(f"{type(exc).__name__}: {exc}")}
+            name = f"{group}.error"
+            if any(m.name == name for m in metrics):      # a second measure in the same group
+                name = f"{group}.{measure.__name__}.error"
+            found = {name: Measurement.unavailable(f"{type(exc).__name__}: {exc}")}
         for name, measurement in found.items():
             metrics.append(evaluate(name, group, measurement, thresholds))
     metrics.extend(unproduced_rules(metrics, thresholds))
@@ -244,8 +247,12 @@ GROUP_ORDER = ("integrity", "labels", "synthetic", "dates", "staleness", "duplic
 STATUS_ORDER = {FAIL: 0, NOT_MEASURED: 1, WARN: 2, PASS: 3, INFO: 4}
 
 
+CYBERDAILY_SERIES = ("seen", "stored", "judged")
+
+
 def _is_series(metric: Metric) -> bool:
-    return metric.name.startswith(("coverage.records.", "coverage.events."))
+    return metric.name.startswith(("coverage.records.", "coverage.events.")
+                                  + tuple(f"coverage.cyberdaily.{kind}." for kind in CYBERDAILY_SERIES))
 
 
 def _fmt(value: Optional[float]) -> str:
@@ -274,6 +281,17 @@ def _coverage_tables(report: QualityReport) -> List[Tuple[str, List[str], List[L
         months = sorted({mo for s in series.values() for mo in s})
         rows = [[source] + [_fmt(series[source].get(mo)) for mo in months] for source in sorted(series)]
         tables.append((title, ["source"] + months, rows))
+    per_month: Dict[str, Dict[str, float]] = {}
+    for m in report.metrics:
+        for kind in CYBERDAILY_SERIES:
+            prefix = f"coverage.cyberdaily.{kind}."
+            if m.name.startswith(prefix):
+                per_month.setdefault(m.name[len(prefix):], {})[kind] = m.value
+    if per_month:
+        rows = [[month] + [_fmt(per_month[month].get(kind)) for kind in CYBERDAILY_SERIES]
+                for month in sorted(per_month, reverse=True)]
+        tables.append(("Cyber Daily articles per publication month (seen in the feed / stored / judged)",
+                       ["month", *CYBERDAILY_SERIES], rows))
     return tables
 
 

@@ -7,11 +7,12 @@ handles the cases a run does not:
     python scripts/discovery_queue.py status            # per source and month: stored/processed/pending/...
     python scripts/discovery_queue.py status --all      # include complete months
     python scripts/discovery_queue.py drain             # process due records now, without discovery
-    python scripts/discovery_queue.py release           # put quarantined records back in the queue
+    python scripts/discovery_queue.py release           # put quarantined records, given-up source-months
+                                                        # and given-up Cyber Daily stories back in the queue
     python scripts/discovery_queue.py backfill --source CyberDaily --months 12
                                                         # run a source added later over processed months
     python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
-    python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--dry-run]
+    python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
                                                         # fetch stored Cyber Daily stories again
 
 See ``cyber_data_collector/processing/retry_queue.py``.
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 
 def _status(db_path: str, show_all: bool) -> int:
+    from cyber_data_collector.processing import cyberdaily_refetch
+
     conn = sqlite3.connect(db_path)
     try:
         queue = RetryQueue(conn)
@@ -44,6 +47,8 @@ def _status(db_path: str, show_all: bool) -> int:
         due = len(queue.due())
         waiting = queue.waiting()
         quarantined = queue.quarantined()
+        searches = queue.failed_discoveries()
+        stories = cyberdaily_refetch.unrecoverable(conn)
     finally:
         conn.close()
     print(f"Due now: {due}   waiting for back-off: {waiting}   quarantined: {len(quarantined)}")
@@ -59,16 +64,35 @@ def _status(db_path: str, show_all: bool) -> int:
     for q in quarantined:
         print(f"\nQUARANTINED {q['raw_event_id']} [{q['source_type']}] {q['raw_title'] or ''}\n"
               f"  {q['processing_error']}")
+    if searches:
+        print(f"\nSource-month searches that lost results ({len(searches)}):")
+        for r in searches:
+            state = ("GIVEN UP" if r["gave_up_at"] else
+                     f"retry after {r['next_attempt_at']}" if r["next_attempt_at"] else "retry next run")
+            print(f"  {r['source_type']:<16}{r['year']}-{r['month']:02d}  {r['error_type'] or '?':<11}"
+                  f"attempts {r['failed_attempts']}  {state}")
+    if stories:
+        print(f"\nCyber Daily stories no longer fetched ({len(stories)}):")
+        for r in stories:
+            print(f"  {r['error_type'] or '?':<11}{r['url']}  ({r['last_error']})")
     return 0
 
 
 def _release(db_path: str) -> int:
+    from cyber_data_collector.processing import cyberdaily_refetch
+
     conn = sqlite3.connect(db_path)
     try:
-        released = RetryQueue(conn).release_quarantine()
+        queue = RetryQueue(conn)
+        released = queue.release_quarantine()
+        months = queue.release_source_months()
+        stories = cyberdaily_refetch.release(conn)
     finally:
         conn.close()
     print(f"Released {released} quarantined record(s); the next discovery run (or 'drain') retries them.")
+    print(f"Released {months} given-up source-month search(es); the next backfill searches them again.")
+    print(f"Released {stories} given-up Cyber Daily stor(ies); the next re-fetch tries them again "
+          "(stories gone from the site, 404/410, stay out).")
     return 0
 
 
@@ -122,31 +146,44 @@ def _backfill(db_path: str, source: str, months: list[tuple[int, int]], max_even
         result = asyncio.run(pipeline.backfill_source(source, months, max_events, force=force))
     finally:
         pipeline.close()
-    for key in ("searched", "already_done", "not_processed", "failed"):
+    for key in ("searched", "already_done", "not_processed", "failed", "waiting", "gave_up"):
         listed = ", ".join(f"{y}-{m:02d}" for y, m in result[key]) or "-"
         print(f"{key:<14}{len(result[key]):>3}  {listed}")
     if result["searched"]:
         print("\nNew records are enriched, deduplicated and published by the next "
               "'python pipeline.py refresh'.")
-    return 2 if result["failed"] else 0
+    if result["gave_up"]:
+        print("\nGiven-up months are not searched again until "
+              "'python scripts/discovery_queue.py release' (or --force).")
+    return 2 if result["failed"] or result["gave_up"] else 0
 
 
-def _refetch(db_path: str, days: int | None, limit: int | None, dry_run: bool) -> int:
+def _refetch(db_path: str, days: int | None, limit: int | None, repair_limit: int | None, dry_run: bool) -> int:
     from cyber_data_collector.processing import cyberdaily_refetch
 
     conn = sqlite3.connect(db_path)
     try:
-        report = cyberdaily_refetch.refetch_stories(conn, days=days, limit=limit, dry_run=dry_run)
+        report = cyberdaily_refetch.refetch_stories(conn, days=days, limit=limit, repair_limit=repair_limit,
+                                                    dry_run=dry_run)
     finally:
         conn.close()
     scope = "all stored stories" if days is None else f"stories from the last {days} days, plus cut-off/short ones"
-    print(f"Cyber Daily re-fetch ({scope}): {report.candidates} candidate(s)" + (" - dry run" if dry_run else ""))
+    print(f"Cyber Daily re-fetch ({scope}): {report.candidates} candidate(s), {report.repair_candidates} of them "
+          f"incomplete; {report.repair_deferred} incomplete left for later runs"
+          + (" - dry run" if dry_run else ""))
     if not dry_run:
         print("  " + ", ".join(f"{k} {v}" for k, v in report.outcomes.items())
-              + f"; {report.requeued_enrichments} enrichment(s) queued again")
+              + f"; {report.requeued_enrichments} enrichment(s) queued again; {report.reopened} record(s) "
+              f"reopened for classification; {report.still_incomplete} still incomplete")
         for row in report.failed[:20]:
-            print(f"  FAILED {row['url']}: {row['error']}")
-    return 2 if report.failed else 0
+            print(f"  FAILED [{row['error_type']}] {row['url']}: {row['error']}")
+        for row in report.missing:
+            print(f"  MISSING (not fetched again) {row['url']}: {row['error']}")
+        for row in report.gave_up:
+            print(f"  GAVE UP after {cyberdaily_refetch.MAX_REFETCH_FAILURES} failures [{row['error_type']}] "
+                  f"{row['url']}: {row['error']}")
+    # Temporary failures are retried by later runs; only a story that left the queue needs a person.
+    return 2 if report.missing or report.gave_up else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -173,6 +210,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Stories published or discovered in the last N days, plus cut-off/short ones")
     window.add_argument("--all", action="store_true", help="Every stored Cyber Daily story")
     refetch.add_argument("--limit", type=int, default=None)
+    refetch.add_argument("--repair-limit", type=int, default=None,
+                         help="Incomplete (cut-off or short) stories to fetch this run; 0 = no limit "
+                              "(default: cyberdaily_refetch.DEFAULT_REPAIR_LIMIT)")
     refetch.add_argument("--dry-run", action="store_true", help="Count the candidates; fetch nothing")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -185,7 +225,10 @@ def main(argv: list[str] | None = None) -> int:
         months = months_since(args.since) if args.since else backfill_months(args.months)
         return _backfill(db_path, args.source, months, args.max_events, args.force)
     if args.command == "refetch-cyberdaily":
-        return _refetch(db_path, None if args.all else args.days, args.limit, args.dry_run)
+        from cyber_data_collector.processing.cyberdaily_refetch import DEFAULT_REPAIR_LIMIT
+
+        repair_limit = DEFAULT_REPAIR_LIMIT if args.repair_limit is None else (args.repair_limit or None)
+        return _refetch(db_path, None if args.all else args.days, args.limit, repair_limit, args.dry_run)
     return _drain(db_path, args.limit)
 
 
