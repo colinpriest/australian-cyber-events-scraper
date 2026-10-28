@@ -1596,14 +1596,10 @@ shows any run left stale. Rebuild the page alone with
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
 
-Current headline result (data to 2026-10-28, after the 2026-10-28 live run:
-victim attribution, supplier co-victims counted once per organisation,
-calibrated duplicate and supplier merges, and labelled non-incidents rejected;
-615 victim entities, 45 with more than one event, 57 observed repeats).
-The committed outputs were computed on the backup taken that day
-(`instance/cyber_events.db.backup.20261028_label_evidence`, censor date
-2026-10-28); data loaded since (the Cyber Daily backfill, publication-date
-dating of undated events) is not in them.
+Current headline result (live database, censor date 2026-10-29: the Cyber
+Daily backfill, events dated by their first report, listing-page dates removed,
+acronym aliases applied in context, and duplicates paired by organisation; 893
+victim organisations, 69 with more than one event, 123 observed repeats).
 
 Every conclusion sentence in the reports and on `dashboard/recurrence.html` is
 generated from the estimates by `scripts/recurrence_conclusions.py`: rate
@@ -1611,23 +1607,14 @@ ratio, 95% CI, which test (two-sided or one-sided) and its p-value, whether the
 estimate points the hypothesised way, and the repeat counts behind it (fewer
 than 10 in a compared period is flagged).
 
-- **The delayed early peak reported on 2026-10-27 is no longer statistically
-  significant.** None of the three bandings rejects constant elapsed-time risk
-  at the 5% level: the broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460`
-  model gives `p = 0.120`, the `0-90 / 91-180` split `p = 0.122`, and the
-  `0-90 / 91-365 / ...` bands `p = 0.080` (borderline). The directional
-  delayed-peak test (91-180 above both neighbours) gives `p = 0.39`.
-- `91-180` days runs at 3.95 repeats per 100 entity-years (6 repeats), against
-  1.84 in `0-90` (3 repeats) and 1.80-4.42 after six months. Adjusted, `91-180`
-  is `2.21x` the first 90 days (`95% CI 0.55-8.83`, one-sided `p = 0.13`) and
-  `1.13x` the pooled post-180 period (`0.47-2.70`, one-sided `p = 0.39`,
-  two-sided `p = 0.79`). Neither contrast is significant, both intervals
-  include 1, and with 6 and 3 repeats in the two short bands a few events
-  either way could change them materially.
-- With `0-90 / 91-365 / ...` bands (`analysis/recurrent_timing_90d`) the
-  directional U-shape test gives `p = 0.76`; its first step goes the other
-  way (the response period is `1.55x` the immediate period, `0.46-5.24`, not
-  lower).
+- **No elapsed-time pattern.** None of the three bandings rejects constant
+  elapsed-time risk: adjusted `p = 0.59` (broad `0-180 / 181-365 / ...`),
+  `0.72` (`0-90 / 91-180 / ...`) and `0.58` (`0-90 / 91-365 / ...`). The
+  directional delayed-peak test gives `p = 0.94`.
+- Rates per 100 entity-years: `0-90` 5.42 (13 repeats), `91-180` 5.99 (13),
+  `181-365` 6.26 (24), `366-730` 4.04 (24), `731-1460` 4.77 (29), `>1460` 6.07
+  (20). Adjusted, `91-180` is `1.12x` the first 90 days (`95% CI 0.52-2.41`)
+  and `1.01x` the pooled post-180 period (`0.56-1.82`).
 - How the data and the counting moved it:
 
   | Data state | Repeats | 0-90 | 91-180 | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
@@ -1636,23 +1623,27 @@ than 10 in a compared period is flagged).
   | + victim corrections, 69 rejections, 15 merges (2026-10-27) | 74 | 4 | - | 0.007 | 2.36x (1.30-4.28) |
   | same data, each organisation counted once (`victim_counting.py`) | 61 | 4 | 10 | 0.026 | 1.79x (0.88-3.63) |
   | + 2026-10-28 live run | 57 | 3 | 6 | 0.122 | 1.13x (0.47-2.70) |
+  | + Cyber Daily backfill and dating undated events (2026-10-29) | 128 | 17 | 13 | 0.662 | 1.02x |
+  | + duplicates paired by organisation, 8 merges (2026-10-29) | 123 | 13 | 13 | 0.718 | 1.01x (0.56-1.82) |
 
-- **What the peak was made of.** Five of the ten `91-180` repeats on the
-  pre-run data left: Westpac, CBA and ANZ pairs built from a callback-scam
-  campaign (labelled not an incident, now rejected) and a dark-web listing of
-  "stolen banking info of 65,000 Australians" (now merged), a University of
-  Tasmania pair from two supplier breaches, and a University of Sydney pair;
-  one (UWA, after re-dating) moved in. The earlier peak rested largely on
-  non-incident and attribution artefacts, as the 2026-10-27 table warned.
-- **Still in the short bands and still suspect**: Oz Hair & Beauty (3 days;
-  recorded as victim of a superannuation credential-stuffing campaign,
-  which victim attribution scored 0.02 and flagged but could not replace) and
-  youX (14 days; one event is the March 2025 S3 exposure misdated to February
-  2026). Excluding victim attributions the model scores below 0.5 (extended
-  analysis) leaves 1 and 3 repeats in `0-90` and `91-180`.
+- **Short-gap repeats were partly one incident counted twice.** The duplicate
+  check paired events by victim entity row, the analysis by organisation, so a
+  leak-site claim and the victim's disclosure days later under another spelling
+  ("ALS Global" / "ALS", "St Vincent's Health Australia" / "St Vincent's
+  Health", NSW RFS, Myelec) were never compared and counted as repeats. Pairing
+  by organisation merged 8 (four of the 17 `0-90` repeats).
+- **Still in the short bands and suspect**: Consonic (18 days, the same Akira
+  claim reported twice; duplicate score 0.80, just under the 0.81 cut-off),
+  Revolut (8 days; the second event is commentary), Australian Centre for
+  Heart Health (65 days, one claim under two names) and two misdated 2016 CBA
+  events. Without them `0-90` would hold 9 repeats; the conclusion does not
+  change.
+- The earlier delayed peak (2026-10-27) rested on non-incident and attribution
+  artefacts; see the history above and `analysis/recurrent_timing/` for the
+  generated conclusions.
 - The prospective test registered on 2026-10-27 (574 frozen organisations,
   `timing_peak_registration.json`) is unaffected and pending until
-  2028-10-27; it is now the only way the peak could be confirmed.
+  2028-10-27.
 - The analysis tests timing patterns, not causality.
 
 ### Safety Vault (snapshot/restore around destructive operations)
