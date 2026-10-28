@@ -98,8 +98,16 @@ def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     Undated events are paired too: until 2026-10-28 they were left out, so 35
     undated reports of the OpenAI agent's Medicare incident were never
     compared with each other or with the dated event.
+
+    "Sharing a victim" uses the organisation identity the recurrence analysis
+    and the entity dashboard count by (:func:`victim_counting.organisation_groups`),
+    not the entity row: until 2026-10-29 "ALS Global" / "ALS" and "St Vincent's
+    Health Australia" / "St Vincent's Health" were one organisation in the
+    analysis but never a candidate pair here, so a leak-site claim and the
+    victim's disclosure days later counted as a repeat attack.
     """
     from cyber_data_collector.dedup.recurrence_check import load_recurrence_events
+    from cyber_data_collector.dedup.victim_counting import organisation_groups
 
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row
@@ -107,9 +115,10 @@ def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         events = load_recurrence_events(conn, include_undated=True)
     finally:
         conn.row_factory = previous
+    groups = organisation_groups(conn, [e.entity_id for e in events])
     by_entity = defaultdict(list)
     for e in events:
-        by_entity[e.entity_id].append(e)
+        by_entity[groups.get(e.entity_id, e.entity_id)].append(e)
     pairs: Dict[str, Dict[str, Any]] = {}
     for es in by_entity.values():
         es = sorted(es, key=lambda e: (e.event_date is None, e.event_date or date.max, e.dedup_id))
