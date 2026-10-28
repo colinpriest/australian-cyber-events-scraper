@@ -45,6 +45,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.build_recurrence_dashboard import DEFAULT_OUT as DEFAULT_DASHBOARD_OUT
 from scripts.build_recurrence_dashboard import build_html as build_recurrence_dashboard
+from scripts.recurrence_conclusions import (
+    DELAYED_PEAK_PERIODS,
+    U_SHAPE_PERIODS,
+    Contrast,
+    contrast_from_record,
+    describe_ci_width_sensitivity,
+    describe_contrast,
+    describe_joint_test,
+    describe_lrt,
+)
 
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -344,13 +354,18 @@ def delayed_peak_phase_for_bounds(lo: float, hi: float) -> str:
     return "not_applicable"
 
 
+def connect_read_only(db_path: Path) -> sqlite3.Connection:
+    """Open the database read-only; a missing file is an error, never created."""
+    return sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
+
+
 def last_ingest_date(db_path: Path) -> date:
     """Date of the most recent ingest, the point up to which the data is complete.
 
     Censoring at a hard-coded date goes stale after every refresh: events
     ingested since then would be dropped and their spells cut short.
     """
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(connect_read_only(db_path)) as conn:
         row = conn.execute("SELECT MAX(discovered_at) FROM RawEvents").fetchone()
     if not row or not row[0]:
         raise RuntimeError("RawEvents has no discovered_at; pass --censor-date explicitly.")
@@ -396,7 +411,7 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
           AND TRIM(v.entity_name) != ''
         ORDER BY v.entity_name COLLATE NOCASE, d.event_date, d.title
     """
-    with closing(sqlite3.connect(db_path)) as conn:
+    with closing(connect_read_only(db_path)) as conn:
         df = pd.read_sql_query(query, conn)
         if df.empty:
             raise RuntimeError("No victim events found for recurrent timing analysis.")
@@ -1515,6 +1530,9 @@ def target_rate_ratio(summary: pd.DataFrame) -> dict[str, float]:
     x2 = float(later["exposure_days"].sum())
     rr = (e2 / x2) / (e1 / x1) if e1 > 0 and e2 > 0 else math.nan
     se = math.sqrt(1 / e1 + 1 / e2) if e1 > 0 and e2 > 0 else math.nan
+    p_two_sided = (
+        float(2 * stats.norm.sf(abs(math.log(rr) / se))) if math.isfinite(rr) and se > 0 else math.nan
+    )
     return {
         "early_events": e1,
         "early_bands": ", ".join(early["elapsed_band"].astype(str)),
@@ -1525,7 +1543,35 @@ def target_rate_ratio(summary: pd.DataFrame) -> dict[str, float]:
         "later_vs_early_rate_ratio": rr,
         "ci_low": math.exp(math.log(rr) - 1.96 * se) if math.isfinite(rr) else math.nan,
         "ci_high": math.exp(math.log(rr) + 1.96 * se) if math.isfinite(rr) else math.nan,
+        "p_two_sided": p_two_sided,
     }
+
+
+def phase_conclusions(
+    contrasts: pd.DataFrame,
+    phase_rates: pd.DataFrame,
+    phase_column: str,
+    periods: dict[str, tuple[str, str]],
+    joint_name: str,
+    joint_hypothesis: str,
+    joint_p_value: float,
+) -> list[str]:
+    """Report lines for a phase model: the intersection-test verdict, then each contrast.
+
+    The intersection test's components are the contrasts with a directional
+    alternative; the others are reported two-sided.
+    """
+    events = dict(zip(phase_rates[phase_column], phase_rates["events"].astype(int)))
+    built = [
+        contrast_from_record(row, periods, events)
+        for row in contrasts.to_dict(orient="records")
+    ]
+    components = [c for c in built if c.test != "two-sided"]
+    return [
+        describe_joint_test(joint_name, joint_hypothesis, joint_p_value, components),
+        "",
+        *(f"- {describe_contrast(c)}" for c in built),
+    ]
 
 
 def write_report(
@@ -1551,13 +1597,17 @@ def write_report(
     model_table: pd.DataFrame,
     weibull_lrt: dict[str, float],
     plot_paths: dict[str, Path],
-) -> None:
+) -> dict[str, Any]:
+    """Write the Markdown report; return its generated conclusion sentences by topic."""
     best = model_table.sort_values("aic").iloc[0]
-    p_adjusted = adjusted_lrt["p_value"]
-    if math.isfinite(p_adjusted) and p_adjusted < 0.05:
-        conclusion = "The adjusted piecewise model rejects a constant elapsed-time hazard at the 5% level."
-    else:
-        conclusion = "The adjusted piecewise model does not reject a constant elapsed-time hazard at the 5% level."
+    conclusions: dict[str, Any] = {}
+    conclusion = describe_lrt(
+        "The adjusted piecewise model",
+        adjusted_lrt["p_value"],
+        "a constant elapsed-time hazard",
+        events=int(data_quality["observed repeat spells"]),
+    )
+    conclusions["constant_hazard"] = conclusion
 
     covariate_terms = adjusted_coef[
         adjusted_coef["term"].str.startswith(
@@ -1718,13 +1768,27 @@ def write_report(
         )
 
     if target_rr:
+        target_sentence = describe_contrast(
+            Contrast(
+                comparison=f"{target_rr['later_bands']} days vs {target_rr['early_bands']} days (unadjusted)",
+                rate_ratio=target_rr["later_vs_early_rate_ratio"],
+                ci_low=target_rr["ci_low"],
+                ci_high=target_rr["ci_high"],
+                p_value=target_rr["p_two_sided"],
+                test="two-sided",
+                hypothesis="greater",
+                events={
+                    f"{target_rr['later_bands']} days": int(target_rr["later_events"]),
+                    f"{target_rr['early_bands']} days": int(target_rr["early_events"]),
+                },
+            )
+        )
+        conclusions["low_then_rising"] = target_sentence
         lines.extend(
             [
-                "Targeted contrast for the proposed low-then-rising pattern:",
+                "Targeted contrast for the proposed low-then-rising pattern (hypothesis: the later bands are higher):",
                 "",
-                f"- {target_rr['later_bands']} days vs {target_rr['early_bands']} days rate ratio: "
-                f"{target_rr['later_vs_early_rate_ratio']:.3f}",
-                f"- approximate 95% CI: {target_rr['ci_low']:.3f} to {target_rr['ci_high']:.3f}",
+                f"- {target_sentence}",
                 "",
             ]
         )
@@ -1757,31 +1821,24 @@ def write_report(
                 "p_directional",
             ]
         ]
-        response_rr = float(u_shape_contrasts.loc[
-            u_shape_contrasts["comparison"] == "response vs immediate",
-            "rate_ratio",
-        ].iloc[0])
-        long_response_rr = float(u_shape_contrasts.loc[
-            u_shape_contrasts["comparison"] == "long-term vs response",
-            "rate_ratio",
-        ].iloc[0])
-        has_u_shape_point_estimate = response_rr < 1 and long_response_rr > 1
-        if has_u_shape_point_estimate and u_shape_lrt["u_shape_intersection_p_value"] < 0.05:
-            u_shape_text = "The adjusted model supports the requested U-shaped pattern at the 5% directional level."
-        elif has_u_shape_point_estimate:
-            u_shape_text = (
-                "The point estimates have the requested U-shape, but the full directional test is not statistically strong. "
-                "The later rise is clearer than the initial fall."
-            )
-        else:
-            u_shape_text = "The point estimates do not form the requested U-shape."
+        u_shape_lines = phase_conclusions(
+            u_shape_contrasts,
+            u_shape_summary,
+            "u_shape_phase",
+            U_SHAPE_PERIODS,
+            "U-shape",
+            "a U-shape (a fall after the immediate period, then a rise)",
+            u_shape_lrt["u_shape_intersection_p_value"],
+        )
+        conclusions["u_shape"] = [line for line in u_shape_lines if line]
         lines.extend(
             [
                 "## U-Shape Test",
                 "",
                 "Definition used here: immediate risk is the first elapsed-time band; the response period combines the next two bands; the long-term period combines the remaining later bands.",
                 "The adjusted phase model controls for the same size, sector, calendar-period, prior-event-number, entity-kind, and records-affected terms as the main elapsed-time model.",
-                u_shape_text,
+                "",
+                *u_shape_lines,
                 "",
                 f"- phase-model LRT p-value versus constant elapsed-time risk: {u_shape_lrt['p_value']:.4g}",
                 f"- directional U-shape p-value: {u_shape_lrt['u_shape_intersection_p_value']:.4g}",
@@ -1847,7 +1904,15 @@ def write_report(
                 "",
                 lrt_display.to_markdown(index=False, floatfmt=".4f"),
                 "",
-                "If dropping a covariate group materially narrowed the interval, the CI width would shrink in this table. In this run, the interval around the initial fall remains broad under all variants, which points more to sparse repeat-event information than to a single covariate group consuming all precision.",
+                "If dropping a covariate group materially narrowed an interval, its CI width would shrink in this table. "
+                + describe_ci_width_sensitivity(
+                    u_shape_variant_contrasts[
+                        u_shape_variant_contrasts["comparison"].isin(
+                            ["response vs immediate", "long-term vs response"]
+                        )
+                    ].to_dict(orient="records"),
+                    "All covariates",
+                ),
                 "",
             ]
         )
@@ -1876,30 +1941,24 @@ def write_report(
                 "p_directional",
             ]
         ]
-        peak_vs_immediate_rr = float(delayed_peak_contrasts.loc[
-            delayed_peak_contrasts["comparison"] == "91-180 vs 0-90",
-            "rate_ratio",
-        ].iloc[0])
-        peak_vs_post_rr = float(delayed_peak_contrasts.loc[
-            delayed_peak_contrasts["comparison"] == "91-180 vs post-180",
-            "rate_ratio",
-        ].iloc[0])
-        has_peak_point_estimate = peak_vs_immediate_rr > 1 and peak_vs_post_rr > 1
-        if has_peak_point_estimate and delayed_peak_lrt["delayed_peak_intersection_p_value"] < 0.05:
-            delayed_peak_text = "The adjusted model supports a delayed 91-180 day peak at the 5% directional level."
-        elif has_peak_point_estimate:
-            delayed_peak_text = (
-                "The point estimates have a delayed 91-180 day peak, but the full directional test is not statistically strong."
-            )
-        else:
-            delayed_peak_text = "The point estimates do not support a delayed 91-180 day peak."
+        delayed_peak_lines = phase_conclusions(
+            delayed_peak_contrasts,
+            delayed_peak_summary_table,
+            "delayed_peak_phase",
+            DELAYED_PEAK_PERIODS,
+            "delayed peak",
+            "a delayed 91-180 day peak",
+            delayed_peak_lrt["delayed_peak_intersection_p_value"],
+        )
+        conclusions["delayed_peak"] = [line for line in delayed_peak_lines if line]
         lines.extend(
             [
                 "## Delayed 91-180 Day Peak Test",
                 "",
                 "Definition used here: the hypothesised peak is 91-180 days after the prior event. A formal peak requires 91-180 days to be higher than both 0-90 days and the pooled post-180 period.",
                 "The adjusted peak model controls for the same size, sector, calendar-period, prior-event-number, entity-kind, and records-affected terms as the main model.",
-                delayed_peak_text,
+                "",
+                *delayed_peak_lines,
                 "",
                 f"- phase-model LRT p-value versus constant elapsed-time risk: {delayed_peak_lrt['p_value']:.4g}",
                 f"- directional delayed-peak p-value: {delayed_peak_lrt['delayed_peak_intersection_p_value']:.4g}",
@@ -1922,6 +1981,16 @@ def write_report(
         and delayed_peak_sensitivity_lrt.get("available")
         and not delayed_peak_sensitivity_contrasts.empty
     ):
+        sensitivity_lines = phase_conclusions(
+            delayed_peak_sensitivity_contrasts,
+            delayed_peak_sensitivity_summary,
+            "delayed_peak_phase",
+            DELAYED_PEAK_PERIODS,
+            "delayed peak",
+            "a delayed 91-180 day peak",
+            delayed_peak_sensitivity_lrt["delayed_peak_intersection_p_value"],
+        )
+        conclusions["delayed_peak_sensitivity"] = [line for line in sensitivity_lines if line]
         delayed_display = delayed_peak_sensitivity_contrasts.copy()
         delayed_display["plain_language"] = delayed_display["rate_ratio"].map(
             lambda rr: (
@@ -1966,7 +2035,9 @@ def write_report(
                 "",
                 delayed_display.to_markdown(index=False, floatfmt=".3f"),
                 "",
-                "Interpretation: the 91-180 day period is much higher than the first 90 days, and that contrast is statistically strong. The stricter test that it is higher than both sides is suggestive rather than definitive because the 91-180 versus post-180 comparison is weaker.",
+                "Interpretation:",
+                "",
+                *sensitivity_lines,
                 "",
             ]
         )
@@ -2002,6 +2073,7 @@ def write_report(
     )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return conclusions
 
 
 def main() -> int:
@@ -2170,12 +2242,14 @@ def main() -> int:
         "delayed_peak_sensitivity_elapsed_lrt": delayed_peak_sensitivity_elapsed_lrt,
         "delayed_peak_sensitivity_lrt": delayed_peak_sensitivity_lrt,
         "delayed_peak_sensitivity_adjusted_contrasts": records_for_json(delayed_peak_sensitivity_contrasts),
+        "u_shape_phase_rates": records_for_json(u_shape_summary),
+        "delayed_peak_phase_rates": records_for_json(delayed_peak_summary_table),
+        "delayed_peak_sensitivity_phase_rates": records_for_json(delayed_peak_sensitivity_summary),
         "weibull_vs_exponential_lrt": weibull_lrt,
         "best_aic_model": str(model_table.iloc[0]["model"]),
         "outputs": {key: str(value) for key, value in plot_paths.items()},
     }
-    (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    write_report(
+    conclusions = write_report(
         out_dir / "recurrent_timing_report.md",
         data_quality,
         piecewise,
@@ -2199,6 +2273,8 @@ def main() -> int:
         weibull_lrt,
         plot_paths,
     )
+    summary["conclusions"] = conclusions
+    (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print(f"Wrote recurrent timing analysis to {out_dir}")
     print(f"Adjusted elapsed-time LRT p-value: {adjusted_lrt['p_value']:.4g}")

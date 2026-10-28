@@ -39,6 +39,38 @@
         "telecom_transport": 18
       },
       "prior records populated": 328
+    },
+    "unresolved victim attributions": {
+      "policy": "include",
+      "victim-event attributions unresolved": 18,
+      "events with an unresolved attribution": 18,
+      "organisations with an unresolved attribution": 18,
+      "victim-event attributions analysed": 677,
+      "repeats": {
+        "included": {
+          "observed repeats": 57,
+          "entities with a repeat": 42,
+          "repeats by elapsed band": {
+            "0-180": 9,
+            "181-365": 8,
+            "366-730": 8,
+            "731-1460": 17,
+            ">1460": 15
+          }
+        },
+        "excluded": {
+          "observed repeats": 52,
+          "entities with a repeat": 38,
+          "repeats by elapsed band": {
+            "0-180": 7,
+            "181-365": 8,
+            "366-730": 8,
+            "731-1460": 16,
+            ">1460": 13
+          }
+        },
+        "repeats involving an unresolved attribution": 5
+      }
     }
   },
   "elapsed_bounds": [
@@ -84,7 +116,8 @@
     "later_exposure_days": 261196.0,
     "later_vs_early_rate_ratio": 0.7831258263271005,
     "ci_low": 0.3460650330366529,
-    "ci_high": 1.7721699718663826
+    "ci_high": 1.7721699718663826,
+    "p_two_sided": 0.5573994607468757
   },
   "u_shape_phase_lrt": {
     "full_log_likelihood": -216.87987628956876,
@@ -457,6 +490,68 @@
       "p_directional": null
     }
   ],
+  "u_shape_phase_rates": [
+    {
+      "phase_order": 0,
+      "u_shape_phase": "immediate",
+      "phase": "Immediate period",
+      "events": 9,
+      "exposure_days": 115059,
+      "rate_per_100_entity_years": 2.8570124892
+    },
+    {
+      "phase_order": 1,
+      "u_shape_phase": "response",
+      "phase": "Response period",
+      "events": 15,
+      "exposure_days": 261196,
+      "rate_per_100_entity_years": 2.0975627498
+    },
+    {
+      "phase_order": 2,
+      "u_shape_phase": "long_term",
+      "phase": "Long-term period",
+      "events": 32,
+      "exposure_days": 314434,
+      "rate_per_100_entity_years": 3.7171552695
+    }
+  ],
+  "delayed_peak_phase_rates": [
+    {
+      "phase_order": 2,
+      "delayed_peak_phase": "post_180",
+      "phase": "Post-180 days",
+      "events": 47,
+      "exposure_days": 575630,
+      "rate_per_100_entity_years": 2.9822542258
+    }
+  ],
+  "delayed_peak_sensitivity_phase_rates": [
+    {
+      "phase_order": 0,
+      "delayed_peak_phase": "immediate_0_90",
+      "phase": "Immediate 0-90 days",
+      "events": 3,
+      "exposure_days": 59588,
+      "rate_per_100_entity_years": 1.8388769551
+    },
+    {
+      "phase_order": 1,
+      "delayed_peak_phase": "peak_91_180",
+      "phase": "Delayed peak 91-180 days",
+      "events": 6,
+      "exposure_days": 55471,
+      "rate_per_100_entity_years": 3.9507129852
+    },
+    {
+      "phase_order": 2,
+      "delayed_peak_phase": "post_180",
+      "phase": "Post-180 days",
+      "events": 47,
+      "exposure_days": 575630,
+      "rate_per_100_entity_years": 2.9822542258
+    }
+  ],
   "weibull_vs_exponential_lrt": {
     "likelihood_ratio": 1.0552658747835721,
     "df": 1,
@@ -467,5 +562,21 @@
     "piecewise hazard": "analysis\\recurrent_timing\\piecewise_hazard.png",
     "survival curve": "analysis\\recurrent_timing\\survival_curve.png",
     "parametric hazards": "analysis\\recurrent_timing\\parametric_hazards.png"
+  },
+  "conclusions": {
+    "constant_hazard": "The adjusted piecewise model does not reject a constant elapsed-time hazard at the 5% level (LRT p = 0.120). It rests on 57 observed repeats.",
+    "low_then_rising": "181-365, 366-730 days vs 0-180 days (unadjusted): rate ratio 0.78 (95% CI 0.35-1.77), about 22% lower; two-sided p = 0.557. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.35 to 1.77, which includes 1. The estimate is in the opposite direction to the hypothesis (lower, not higher). Repeat events: 16 in 181-365, 366-730 days and 9 in 0-180 days. Small count (9 in 0-180 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.",
+    "u_shape": [
+      "Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.369. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates have the hypothesised shape. The weakest part is response vs immediate (p = 0.369).",
+      "- response vs immediate: rate ratio 0.87 (95% CI 0.38-2.00), about 13% lower; one-sided p = 0.369 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.38 to 2.00, which includes 1. Repeat events: 15 in the response period and 9 in the immediate period. Small count (9 in the immediate period; fewer than 10): the estimate is imprecise and a few events either way could change it materially.",
+      "- long-term vs response: rate ratio 2.15 (95% CI 1.11-4.18), about 115% higher; one-sided p = 0.012 (alternative: higher). Statistically significant at the 5% level: the data reject the null of no increase (rate ratio at most 1). Repeat events: 32 in the long-term period and 15 in the response period.",
+      "- long-term vs immediate: rate ratio 1.86 (95% CI 0.82-4.26), about 86% higher; two-sided p = 0.139. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.82 to 4.26, which includes 1. Repeat events: 32 in the long-term period and 9 in the immediate period. Small count (9 in the immediate period; fewer than 10): the estimate is imprecise and a few events either way could change it materially."
+    ],
+    "delayed_peak_sensitivity": [
+      "Directional delayed peak test (all of: 91-180 vs 0-90 higher; 91-180 vs post-180 higher), intersection p = 0.394. Not statistically significant at the 5% level: the data do not reject the null of no delayed peak. The point estimates have the hypothesised shape. The weakest part is 91-180 vs post-180 (p = 0.394).",
+      "- 91-180 vs 0-90: rate ratio 2.21 (95% CI 0.55-8.83), about 121% higher; one-sided p = 0.132 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.55 to 8.83, which includes 1. Repeat events: 6 in 91-180 days and 3 in 0-90 days. Small count (6 in 91-180 days, 3 in 0-90 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.",
+      "- 91-180 vs post-180: rate ratio 1.13 (95% CI 0.47-2.70), about 13% higher; one-sided p = 0.394 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.47 to 2.70, which includes 1. Repeat events: 6 in 91-180 days and 47 in post-180 days. Small count (6 in 91-180 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially.",
+      "- post-180 vs 0-90: rate ratio 1.96 (95% CI 0.60-6.42), about 96% higher; two-sided p = 0.268. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.60 to 6.42, which includes 1. Repeat events: 47 in post-180 days and 3 in 0-90 days. Small count (3 in 0-90 days; fewer than 10): the estimate is imprecise and a few events either way could change it materially."
+    ]
   }
 }

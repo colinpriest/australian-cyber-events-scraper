@@ -314,6 +314,7 @@ australian-cyber-events-scraper/
 │   ├── build_static_dashboard.py  # HTML dashboard generation
 │   ├── analyze_recurrent_timing.py # Repeat-event survival/recurrent timing analysis
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
+│   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
@@ -1467,18 +1468,35 @@ so a rerun after a refresh uses the new data without editing the script.
 Current headline result (data to 2026-10-28, after the 2026-10-28 live run:
 victim attribution, supplier co-victims counted once per organisation,
 calibrated duplicate and supplier merges, and labelled non-incidents rejected;
-615 victim entities, 45 with more than one event, 57 observed repeats):
+615 victim entities, 45 with more than one event, 57 observed repeats).
+The committed outputs were computed on the backup taken that day
+(`instance/cyber_events.db.backup.20261028_label_evidence`, censor date
+2026-10-28); data loaded since (the Cyber Daily backfill, publication-date
+dating of undated events) is not in them.
 
-- **The delayed early peak reported on 2026-10-27 does not survive the
-  cleaning.** Neither banding rejects constant elapsed-time risk: the broad
-  `0-180 / 181-365 / 366-730 / 731-1460 / >1460` model gives `p = 0.120`, the
-  `0-90 / 91-180` split `p = 0.122`.
+Every conclusion sentence in the reports and on `dashboard/recurrence.html` is
+generated from the estimates by `scripts/recurrence_conclusions.py`: rate
+ratio, 95% CI, which test (two-sided or one-sided) and its p-value, whether the
+estimate points the hypothesised way, and the repeat counts behind it (fewer
+than 10 in a compared period is flagged).
+
+- **The delayed early peak reported on 2026-10-27 is no longer statistically
+  significant.** None of the three bandings rejects constant elapsed-time risk
+  at the 5% level: the broad `0-180 / 181-365 / 366-730 / 731-1460 / >1460`
+  model gives `p = 0.120`, the `0-90 / 91-180` split `p = 0.122`, and the
+  `0-90 / 91-365 / ...` bands `p = 0.080` (borderline). The directional
+  delayed-peak test (91-180 above both neighbours) gives `p = 0.39`.
 - `91-180` days runs at 3.95 repeats per 100 entity-years (6 repeats), against
   1.84 in `0-90` (3 repeats) and 1.80-4.42 after six months. Adjusted, `91-180`
-  is `1.13x` the pooled post-180 period (`95% CI 0.47-2.70`, two-sided
-  `p = 0.79`) and `2.21x` the first 90 days (`0.55-8.83`).
+  is `2.21x` the first 90 days (`95% CI 0.55-8.83`, one-sided `p = 0.13`) and
+  `1.13x` the pooled post-180 period (`0.47-2.70`, one-sided `p = 0.39`,
+  two-sided `p = 0.79`). Neither contrast is significant, both intervals
+  include 1, and with 6 and 3 repeats in the two short bands a few events
+  either way could change them materially.
 - With `0-90 / 91-365 / ...` bands (`analysis/recurrent_timing_90d`) the
-  adjusted test gives `p = 0.080`; the directional U-shape test `p = 0.76`.
+  directional U-shape test gives `p = 0.76`; its first step goes the other
+  way (the response period is `1.55x` the immediate period, `0.46-5.24`, not
+  lower).
 - How the data and the counting moved it:
 
   | Data state | Repeats | 0-90 | 91-180 | 0-90 / 91-180 split `p` | 91-180 vs post-180 |
