@@ -1064,14 +1064,11 @@ class EventDiscoveryEnrichmentPipeline:
             # Extract publication date from data sources
             publication_date = self._extract_publication_date(event.data_sources)
 
-            # Determine initial event date
+            # The incident date only as the source states it. A publication date
+            # is stored as one (RawEvents.publication_date), never as the incident
+            # date, and the search window's first day is neither (it used to be
+            # stored as the date of every Google record).
             event_date = event.event_date.date() if event.event_date else None
-
-            if not event_date:
-                if publication_date:
-                    event_date = publication_date.date()
-                else:
-                    event_date = self._fallback_event_date(event, month_start)
             
             # Convert date to ISO format string for SQLite (fixes Python 3.12 deprecation warning)
             event_date_str = event_date.isoformat() if event_date else None
@@ -1090,6 +1087,8 @@ class EventDiscoveryEnrichmentPipeline:
                 'description': event.description,
                 'content': None,  # Will be filled during scraping phase
                 'event_date': event_date_str,
+                'event_date_precision': getattr(event, 'event_date_precision', None) if event_date else None,
+                'event_date_basis': getattr(event, 'event_date_basis', None) if event_date else None,
                 'source_url': source_url,
                 'metadata': {
                     'event_type': _enum_value_or_str(getattr(event, 'event_type', None)),
@@ -1138,13 +1137,9 @@ class EventDiscoveryEnrichmentPipeline:
                 event_date = event.event_date.date() if hasattr(event.event_date, 'date') else event.event_date
                 logger.debug(f"[ENRICHED] Using event date: {event_date}")
 
-            # Try published date as fallback
-            elif hasattr(event, 'data_sources') and event.data_sources:
-                for source in event.data_sources:
-                    if hasattr(source, 'publication_date') and source.publication_date:
-                        event_date = source.publication_date.date() if hasattr(source.publication_date, 'date') else source.publication_date
-                        logger.debug(f"[ENRICHED] Using publication date from source: {event_date}")
-                        break
+            # No publication-date fallback: a record whose incident date is not
+            # stated stays undated; its event is dated by its first report,
+            # marked as such (processing/publication_dates.py).
 
             if not event_date:
                 logger.debug(f"[WARNING] No event date or publication date for '{event.title[:50]}...'")
@@ -1841,21 +1836,6 @@ class EventDiscoveryEnrichmentPipeline:
             store(self.db._conn, raw_event_id, scrape_meta['publication_date'],
                   f"{SOURCE_PAGE_META}: {scrape_meta.get('publication_date_how')}")
             self.db._conn.commit()
-
-    def _fallback_event_date(self, event, month_start: Optional[datetime] = None) -> Optional[datetime.date]:
-        """Return a fallback event date when no event date is available."""
-        if hasattr(event, 'data_sources') and event.data_sources:
-            for source in event.data_sources:
-                fallback_date = getattr(source, 'search_start_date', None)
-                if fallback_date:
-                    if isinstance(fallback_date, datetime):
-                        return fallback_date.date()
-                    try:
-                        return datetime.strptime(str(fallback_date), '%Y-%m-%d').date()
-                    except Exception:
-                        continue
-
-        return None
 
     # =========================================================================
     # SCRAPING PHASE

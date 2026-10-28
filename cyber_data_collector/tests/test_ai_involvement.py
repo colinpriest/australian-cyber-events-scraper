@@ -142,7 +142,7 @@ def test_rerun_reuses_answers_and_descriptions_and_reasks_changed_events(conn):
     refill = _run(conn, client, describer)
     assert len(client.requests) == 3 and refill.updated == 3
     # Changed evidence is asked again, and its description rewritten.
-    conn.execute("UPDATE RawEvents SET raw_content = 'new text' WHERE raw_event_id = 'r0'")
+    conn.execute("UPDATE RawEvents SET raw_content = 'Services Australia: new text' WHERE raw_event_id = 'r0'")
     changed = _run(conn, client, describer)
     assert len(client.requests) == 4 and changed.asked == 1 and changed.described == 1
 

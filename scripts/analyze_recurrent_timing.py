@@ -372,7 +372,19 @@ def last_ingest_date(db_path: Path) -> date:
     return parse_date(str(row[0])[:10])
 
 
+#: Verified incident-date precision and interval (processing/incident_dates.py),
+#: passed through as ``date_precision`` - which the extended analysis's
+#: date-precision scenarios accept as explicit - with the event's date basis.
+#: Older snapshots without the columns give NULLs (unverified).
+_DATE_COLUMNS = (("event_date_precision", "date_precision"), ("event_date_earliest", "event_date_earliest"),
+                 ("event_date_latest", "event_date_latest"), ("date_basis", "date_basis"))
+
+
 def load_victim_events(db_path: Path) -> pd.DataFrame:
+    with closing(connect_read_only(db_path)) as conn:
+        present = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    date_columns = ",\n               ".join(
+        f"d.{column} AS {alias}" if column in present else f"NULL AS {alias}" for column, alias in _DATE_COLUMNS)
     query = """
         SELECT v.entity_id,
                v.entity_name,
@@ -392,6 +404,7 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
                d.records_affected,
                d.vendor_organization_name,
                d.date_confidence,
+               {date_columns},
                d.confidence_score,
                d.total_data_sources,
                (SELECT COUNT(*)
@@ -410,7 +423,7 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
           AND v.entity_name IS NOT NULL
           AND TRIM(v.entity_name) != ''
         ORDER BY v.entity_name COLLATE NOCASE, d.event_date, d.title
-    """
+    """.replace("{date_columns}", date_columns)
     with closing(connect_read_only(db_path)) as conn:
         df = pd.read_sql_query(query, conn)
         if df.empty:
@@ -2222,6 +2235,9 @@ def main() -> int:
         "minimum event date": events["event_date"].min().isoformat(),
         "maximum event date": events["event_date"].max().isoformat(),
         "first-of-month event dates": int(sum(d.day == 1 for d in events["event_date"])),
+        "verified incident-date precision": {
+            str(k): int(v) for k, v in events.get("date_precision", pd.Series(dtype=object))
+            .fillna("unverified").value_counts().items()},
         "same-day entity-event groups collapsed": int(len(same_day)),
         "covariate coverage": covariate_coverage,
         "unresolved victim attributions": {**unresolved_info, "repeats": unresolved_sensitivity},

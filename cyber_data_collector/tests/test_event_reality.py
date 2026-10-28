@@ -57,7 +57,7 @@ def conn(monkeypatch):
     events = [
         ("act", "Business - ACT Government", "Helping Canberra businesses to start up.",
          {"formal_entity_name": "Australian Capital Territory Government", "overall_confidence": 0.83}),
-        ("lush", "LUSH data breach", "Privacy Policy. We respect your privacy.",
+        ("lush", "LUSH data breach", "Privacy Policy. LUSH respects your privacy.",
          {"formal_entity_name": "Lush Retail", "overall_confidence": 0.2,
           "reasoning": "Lush confirmed unauthorised access to customer data in January 2024.",
           "sources_consulted": ["https://example.com/lush-breach"]}),

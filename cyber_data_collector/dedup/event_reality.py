@@ -141,19 +141,32 @@ def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = 
     event = conn.execute(
         "SELECT title, event_date, victim_organization_name FROM DeduplicatedEvents "
         "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
+    from cyber_data_collector.processing.active_evidence import evidence_page, member_condition, research_names
+
+    # Active members only, and a page only when it belongs to its record
+    # (processing/active_evidence.py) - the rule every evidence reader shares.
     rows = conn.execute(
-        """SELECT e.enriched_event_id, COALESCE(e.title, ''), COALESCE(r.source_url, ''),
+        f"""SELECT e.enriched_event_id, COALESCE(e.title, ''), COALESCE(r.source_url, ''),
                   COALESCE(NULLIF(r.raw_content, ''), r.raw_description, ''),
                   e.perplexity_enrichment_data
            FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
-           WHERE m.deduplicated_event_id = ?""", (dedup_id,)).fetchall()
+           WHERE m.deduplicated_event_id = ? {member_condition(conn)}""", (dedup_id,)).fetchall()
+    victim = event[2] if event else None
+    rows = [(r[0], r[1], r[2], *evidence_page(r[1], [*research_names(r[4]), victim], r[3]), r[4]) for r in rows]
     # Records with page text first, then a stable order, so a large event
     # always shows the same ten.
     rows = sorted(rows, key=lambda r: (not r[3], r[0]))
-    records = [{"title": r[1], "url": r[2], "page_text": (r[3] or "")[:PAGE_CHARS] or "(none stored)",
-                "perplexity": _perplexity(r[4])} for r in rows[:max_records]]
+    records = []
+    for r in rows[:max_records]:
+        record = {"title": r[1], "url": r[2],
+                  "page_text": (r[3] or "")[:PAGE_CHARS] or ("(withheld: it appears to be another article)"
+                                                             if r[4] else "(none stored)"),
+                  "perplexity": _perplexity(r[5])}
+        if r[4]:
+            record["page_withheld"] = r[4]
+        records.append(record)
     return {
         "event": {"title": event[0] if event else "", "date": event[1] if event else None,
                   "victim": event[2] if event else None, "record_count": len(rows)},

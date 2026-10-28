@@ -131,6 +131,8 @@ Initial discovered events before any LLM processing. One row per discovered arti
 | `source_metadata` | TEXT | Yes | NULL | JSON blob with source-specific metadata. See [source_metadata JSON](#rawevents-source_metadata) |
 | `publication_date` | TEXT | Yes | NULL | Day the source was published (`YYYY-MM-DD`): the source's own date, else the page's metadata, else a full date in the URL path. Never the incident date. See `processing/publication_dates.py` |
 | `publication_date_source` | TEXT | Yes | NULL | Where `publication_date` came from: `source`, `page metadata: <field>` or `URL path` |
+| `event_date_precision` | TEXT | Yes | NULL | How precisely the source states `event_date`: `day`, `month` or `year`; NULL = not stated |
+| `event_date_basis` | TEXT | Yes | NULL | Where the source's `event_date` comes from (e.g. `Webber list heading (month)`, `stated in the source page`) |
 | `discovered_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | When the pipeline discovered this event |
 | `is_processed` | BOOLEAN | No | `FALSE` | Whether this event has been through LLM enrichment |
 | `processing_attempted_at` | TIMESTAMP | Yes | NULL | Timestamp of last enrichment attempt |
@@ -291,6 +293,9 @@ Final unique events after entity-based deduplication. The primary table used for
 | `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, misused or leaked data |
 | `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the three sum to 1) |
 | `first_reported_date` | TEXT | Yes | NULL | Earliest `RawEvents.publication_date` among the event's records |
+| `event_date_precision` | TEXT | Yes | NULL | Verified precision of `event_date` (`day` / `month` / `year`), set only when the records carrying it agree; NULL = unverified |
+| `event_date_earliest` | TEXT | Yes | NULL | First day of the incident-date interval (NULL when unverified) |
+| `event_date_latest` | TEXT | Yes | NULL | Last day of the incident-date interval (NULL when unverified) |
 | `reporting_lag_days` | INTEGER | Yes | NULL | `first_reported_date` minus `event_date`, only when the event date is not itself a publication or discovery date (see `date_basis`, `date_precision`) |
 | `evidence_status` | TEXT | Yes | NULL | `supported` (an active record holds its own page text, >= 300 chars, and one has validated Perplexity research), `partial` (one of them, or only another page's text) or `unsupported` (neither). Written by `dedup_admin.py recover-evidence` (`processing/evidence_recovery.py`); NULL = not assessed yet, shown as `not assessed` |
 | `evidence_status_reason` | TEXT | Yes | NULL | What the evidence lacks, record by record, and where retrieval stands (re-fetch queued / given up, research retrying / quarantined, labelled report or replacement queued) |
