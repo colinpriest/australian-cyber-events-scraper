@@ -198,6 +198,7 @@ python run_full_pipeline.py --skip-classification
 | `--missed-merge-min-certainty F` | Certainty required to merge a missed duplicate | 0.9 |
 | `--skip-entity-sizing` | Skip estimating size bands for new entities | False |
 | `--entity-size-limit N` | Cap entities sized per run | No limit |
+| `--evidence-recovery-limit N` | Incidents with no usable evidence given new retrieval work per run (see [Incidents with no usable evidence](docs/11-evidence-recovery.md)) | 100 |
 | `--continue-on-error` | Continue if a phase fails | False |
 | `--enrich-limit N` | Most records automatic Perplexity enrichment takes per run (0 = no limit); the rest waits for the next run | 500 |
 | `--api-budget P=N ...` | Requests allowed this run per paid API (`openai`, `perplexity`, `typesafe`); also `API_BUDGET_<PROVIDER>` | Unlimited |
@@ -620,6 +621,32 @@ next refresh - processing a stored copy again rather than storing it twice -
 and once that report is a record, merges its event into the labelled one and
 splits the inactive pages out and rejects them. A cited report that is
 processed and still rejected is reported, not left waiting.
+
+**Incidents with no usable evidence.** On 2026-10-28, 169 of 1,202 active
+incidents had neither 300 characters of stored page text nor validated
+Perplexity research (on the evening copy, 121 of 152 were Cyber Daily stories
+ingested that day with no page text at all). `dedup_admin.py recover-evidence`
+(`processing/evidence_recovery.py`, the second hygiene step) finds what each
+incident's records lack and queues retrieval through the existing queues only,
+at most `--evidence-recovery-limit` (100) incidents a run: the record's own page
+re-fetched (the Cyber Daily re-fetch, or `rescrape-short-pages` for any other
+source, which then queues the record's unvalidated research again), Perplexity
+enrichment (unsupported incidents first), the report a label cites, and - only
+when all of those are out of reach - one stored replacement search whose best
+citation becomes a **new record with its own URL**, joined to the incident only
+by the calibrated duplicate check. Another page's text is never passed off as
+the record's own. Every incident gets `DeduplicatedEvents.evidence_status`:
+`supported` (own page text and validated research), `partial` (one of them, or
+only another page's text) or `unsupported` (neither; `evidence_uncertain_fields`
+lists the fields nothing supports), with the reason. Exports, the main and
+entity dashboards and the quality report (with a trend table) show it.
+Details: [docs/11-evidence-recovery.md](docs/11-evidence-recovery.md).
+
+```bash
+python scripts/dedup_admin.py recover-evidence --dry-run     # what would be queued
+python scripts/dedup_admin.py recover-evidence               # queue + mark status
+python scripts/dedup_admin.py recover-evidence --status-only # re-mark only
+```
 
 **Calibrating** (`scripts/calibrate_source_gate.py`,
 `calibrate_event_reality.py`, `calibrate_duplicates.py`): samples are
@@ -1662,7 +1689,9 @@ repeating the title, a worker crash) writes `[anonymisation failed] (reason)`,
 is counted, and makes the script exit 1; `--no-llm` writes `[not anonymised]`;
 an LLM export without `OPENAI_API_KEY` fails instead of falling back to raw
 text. `--anonymize` requires `--detailed` and drops the identifying columns
-(title, victim, attacker, entity and source JSON). Source text comes only from
+(title, victim, attacker, entity and source JSON, and the evidence-status
+reason, which names pages). Both exports carry each incident's
+`evidence_status` (`unsupported` = every field uncertain). Source text comes only from
 exact relationships (`EventDeduplicationMap`, `DeduplicatedEventSources`) -
 never title matching; an event with none says so in Export Notes.
 
@@ -1764,6 +1793,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 | [08-dashboard-generation.md](docs/08-dashboard-generation.md) | Dashboard SQL queries, Chart.js charts, and OAIC comparison |
 | [10-quality-gate.md](docs/10-quality-gate.md) | Continuous quality metrics, label regression, synthetic cases and the publication gate |
 | [10-supplier-incidents.md](docs/10-supplier-incidents.md) | Supplier incidents: co-victims, same-incident merges, calibration, counting once per organisation |
+| [11-evidence-recovery.md](docs/11-evidence-recovery.md) | Incidents with no usable evidence: diagnosis, retrieval through existing queues, `evidence_status` |
 | [data-dictionary.md](docs/data-dictionary.md) | Complete database schema, table definitions, and field descriptions |
 
 These documents contain sufficient detail for independent review and replication of each pipeline stage.

@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from cyber_data_collector.utils.llm_models import (  # noqa: E402
     add_model_arguments, apply_model_arguments, chat_params, openai_fast_model,
 )
+from cyber_data_collector.processing.evidence_recovery import select_columns  # noqa: E402
 from cyber_data_collector.reporting.population import (  # noqa: E402
     ReconciliationCheck,
     count_incidents,
@@ -320,6 +321,8 @@ def _row(event_data: Dict, description: str, anonymised: str, notes: List[str]) 
         'Entity Type': event_data['industry'],
         'Attack Type': event_data['event_type'],
         'Export Notes': "; ".join(n for n in notes if n),
+        # How far stored evidence supports the row; 'unsupported' = every field uncertain.
+        'Evidence Status': event_data.get('evidence_status') or 'not assessed',
     }
 
 
@@ -491,7 +494,8 @@ def export_events_to_excel(
                 attacking_entity_name,
                 records_affected,
                 description,
-                summary
+                summary,
+                {select_columns(conn, "DeduplicatedEvents")}
             FROM DeduplicatedEvents
             WHERE {where}
         """
@@ -551,6 +555,7 @@ def export_events_to_excel(
                     'event_type': event_type,
                     'victim_organization_name': event['victim_organization_name'],
                     'attacking_entity_name': event['attacking_entity_name'],
+                    'evidence_status': event['evidence_status'],
                 },
                 'source_text': source_text,
                 'source_note': source_note,
@@ -611,6 +616,7 @@ def export_events_to_excel(
             'F': 25,   # Entity Type
             'G': 20,   # Attack Type
             'H': 50,   # Export Notes
+            'I': 14,   # Evidence Status
         }
 
         # Apply column widths

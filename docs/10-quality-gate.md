@@ -81,6 +81,9 @@ Thresholds live in [`cyber_data_collector/quality/thresholds.json`](../cyber_dat
 | | `coverage.events.<source>.<YYYY-MM>`, `coverage.events.all.<YYYY-MM>` | info | Active events with a record from the source, by event month |
 | | `coverage.records_flagged_months`, `coverage.events_flagged_months` | 0 | Complete months (the current one is not judged) in which a monthly source (`Perplexity`, `GoogleSearch`, `WebberInsurance`) had zero volume, or under 0.5 x its trailing 6-month median (when that median is at least 5) |
 | evidence | `evidence.events_without_evidence_share` | <= 2% | Active events none of whose records has >= 300 characters of page text or validated Perplexity research - unverifiable, and invisible to the calibrated filters |
+| | `evidence.status.unsupported_share` | <= 2% | The same question as the evidence status asks it (`processing/evidence_recovery.py`): another page's text or a block page is not the record's own page, so this can be slightly higher. `evidence.status.supported` / `partial` / `unsupported` / `partial_share` are recorded for the trend |
+| | `evidence.status.stored_stale` | 0 | Active events whose stored `evidence_status` (what exports and dashboards show) is missing or no longer matches the evidence |
+| | `evidence.recovery.needed` / `pending` / `exhausted` | info | Unsupported events whose retrieval is not yet queued (per-run cap), queued and waiting, or out of reach on every route |
 | backlog | `backlog.raw_unprocessed` | info | Raw records not yet processed (new, or failed and left for retry) |
 | | `backlog.raw_unprocessed_stale` | 0 | ...of which found more than 30 days ago: a retry that keeps failing |
 | | `backlog.raw_processing_errors` | 0 | `processing_error` values that are not filter rejections |
@@ -150,7 +153,10 @@ SELECT created_at, reasons_json FROM QualityRuns WHERE publication_allowed = 0;
 publication_allowed, blocking_failures, failed, warned, not_measured,
 reasons_json)` and `QualityMetrics(run_id, metric, metric_group, value,
 threshold, status, blocking, detail, examples_json)`. The reports show each
-metric beside its value in the previous recorded run.
+metric beside its value in the previous recorded run, and an **Evidence status
+trend** table: this run and the last 12 recorded runs of
+`evidence.status.supported` / `partial` / `unsupported` / `unsupported_share`
+and `evidence.recovery.pending` / `exhausted` (`gate.metric_history`).
 
 ## 7. First run (copy of the live database, 2026-10-27)
 

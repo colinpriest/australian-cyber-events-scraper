@@ -574,6 +574,10 @@ class UnifiedPipeline:
            get the report their label cites queued for the next refresh;
            processed reports are merged into their labelled event and its
            inactive records split out and rejected.
+        -0.5 ``recover-evidence`` - incidents with neither page text nor
+           validated research get the retrieval they lack queued (page
+           re-fetch, labelled report, last a replacement search; capped) and
+           every incident its ``evidence_status``; re-marked at the end.
         0. ``check-sources --apply`` - Google-sourced records count only if
            the page itself reports an incident (calibrated Jev gate; menus,
            help pages and policies do not). Junk records are removed and, where
@@ -671,13 +675,22 @@ class UnifiedPipeline:
         # duplicate and supplier merges change membership after the first
         # refresh (on 2026-10-28 they left 145 events with outdated roles), and
         # reconcile-timelines and the recurrence check read victims by role.
-        steps = [evidence, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
+        # recover-evidence after label-evidence and before the re-scrape: it
+        # queues re-fetches (fetched by rescrape-short-pages straight after),
+        # labelled reports and, when nothing else can reach an incident's
+        # evidence, one replacement search; at most --evidence-recovery-limit
+        # incidents a run. Again at the end (--status-only): every step in
+        # between changes what each incident's evidence status should be.
+        recovery = ["recover-evidence", "--limit", str(getattr(args, 'evidence_recovery_limit', 100))]
+        if getattr(args, 'report_event_rejections', False):
+            recovery.append("--dry-run")
+        steps = [evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
                  ["research-timelines"],
                  ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
                  coherence, duplicates, suppliers, ["classify-entities", "--stale-only"],
                  ["reconcile-timelines", "--queue-gaps"],
-                 ["publication-dates", "--no-fetch"]]
+                 ["publication-dates", "--no-fetch"], ["recover-evidence", "--status-only"]]
         for step in steps:
             try:
                 if run_step(dedup_admin.main, base + step) != 0:
@@ -1232,6 +1245,9 @@ Examples:
     parser.add_argument('--report-event-rejections', action='store_true',
                         help='Report Jev\'s rejections (non-incidents) and merges (duplicates) '
                              'without applying them, even when calibrated cut-offs exist')
+    parser.add_argument('--evidence-recovery-limit', type=int, default=100, metavar='N',
+                        help='Incidents with no usable evidence given new retrieval work per run '
+                             '(re-fetches, labelled reports, replacement searches)')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')

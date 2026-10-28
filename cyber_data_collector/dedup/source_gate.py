@@ -101,10 +101,14 @@ CREATE TABLE IF NOT EXISTS SourceReplacements (
 );
 """
 #: Added after the table was first created; NULL status on older rows = 'searched'.
+#: ``purpose`` says who asked: NULL = this gate (a removed junk record);
+#: ``evidence_recovery`` = an event with no usable evidence
+#: (``processing/evidence_recovery.py``), whose row also names the event.
 REPLACEMENT_COLUMNS = (("status", "TEXT"), ("attempts", "INTEGER NOT NULL DEFAULT 0"), ("last_error", "TEXT"),
-                       ("updated_at", "TEXT"))
+                       ("updated_at", "TEXT"), ("purpose", "TEXT"), ("deduplicated_event_id", "TEXT"))
 STATUS_PENDING = "pending"
 STATUS_SEARCHED = "searched"
+PURPOSE_SOURCE_GATE = "source_gate"
 
 
 class ReplacementSearchUnavailable(RuntimeError):
@@ -328,19 +332,72 @@ def _parse_date(text: str) -> Optional[date]:
 
 def _store_replacement(conn: sqlite3.Connection, enriched_id: str, query: str, model: str, *, status: str,
                        answer: Optional[str] = None, citations: Sequence[str] = (), raw_id: Optional[str] = None,
-                       error: Optional[str] = None) -> None:
+                       error: Optional[str] = None, purpose: Optional[str] = None,
+                       event_id: Optional[str] = None) -> None:
     now = datetime.now().isoformat()
     conn.execute(
         """INSERT INTO SourceReplacements (enriched_event_id, query, model, answer, citations_json, raw_event_id,
-                                           created_at, status, attempts, last_error, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                                           created_at, status, attempts, last_error, updated_at, purpose,
+                                           deduplicated_event_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
            ON CONFLICT (enriched_event_id) DO UPDATE SET
                query = excluded.query, model = excluded.model, answer = excluded.answer,
                citations_json = excluded.citations_json, raw_event_id = excluded.raw_event_id,
                status = excluded.status, attempts = SourceReplacements.attempts + 1,
-               last_error = excluded.last_error, updated_at = excluded.updated_at""",
-        (enriched_id, query, model, answer, json.dumps(list(citations)), raw_id, now, status, error, now))
+               last_error = excluded.last_error, updated_at = excluded.updated_at,
+               purpose = excluded.purpose, deduplicated_event_id = excluded.deduplicated_event_id""",
+        (enriched_id, query, model, answer, json.dumps(list(citations)), raw_id, now, status, error, now,
+         purpose, event_id))
     conn.commit()
+
+
+def search_and_queue(conn: sqlite3.Connection, key: str, query: str, org: str, when: Optional[date],
+                     search: Optional[Callable[[str, str], Dict[str, Any]]] = None, *,
+                     metadata: Dict[str, Any], purpose: Optional[str] = None,
+                     event_id: Optional[str] = None) -> Optional[str]:
+    """Run one replacement search and queue its best citation as a new raw record.
+
+    The queued record is the cited page itself - its own URL, scraped and
+    enriched like any other record - never text passed off as another page.
+    The search is stored in ``SourceReplacements`` under ``key``: ``searched``
+    (whatever it found) or ``pending`` when it failed (retried later).
+
+    Returns:
+        The queued raw_event_id, or None (nothing found, or the search failed).
+
+    Raises:
+        ReplacementSearchUnavailable: no search function and no ``PERPLEXITY_API_KEY``.
+    """
+    from cyber_data_collector.dedup.corroboration import _perplexity_search
+
+    ensure_replacement_schema(conn)
+    if search is None:
+        if not os.getenv("PERPLEXITY_API_KEY"):
+            raise ReplacementSearchUnavailable(
+                f"Replacement evidence for {key} ({org}) cannot be searched: PERPLEXITY_API_KEY is not set.")
+        search = _perplexity_search
+    model = perplexity_model()
+    try:
+        result = search(query, model)
+    except Exception as exc:  # noqa: BLE001 - stored as pending, retried every run
+        logger.warning("Replacement search failed for %s (queued for retry): %s", key, exc)
+        _store_replacement(conn, key, query, model, status=STATUS_PENDING, error=str(exc)[:500],
+                           purpose=purpose, event_id=event_id)
+        return None
+    answer = result.get("answer") or ""
+    citations = [c for c in (result.get("citations") or []) if c]
+    raw_id = None
+    if answer.strip().upper().startswith("FOUND: YES") and citations:
+        raw_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO RawEvents (raw_event_id, source_type, source_event_id, raw_title, raw_description, "
+            "raw_content, event_date, source_url, source_metadata, discovered_at, is_processed) "
+            "VALUES (?, 'Perplexity', NULL, ?, ?, NULL, ?, ?, ?, ?, 0)",
+            (raw_id, f"{org} cyber incident", answer, when.isoformat() if when else None, citations[0],
+             json.dumps({**metadata, "citations": citations[:8]}), datetime.now().isoformat()))
+    _store_replacement(conn, key, query, model, status=STATUS_SEARCHED, answer=answer, citations=citations,
+                       raw_id=raw_id, purpose=purpose, event_id=event_id)
+    return raw_id
 
 
 def replace_evidence(conn: sqlite3.Connection, enriched_id: str, event_id: Optional[str],
@@ -364,8 +421,6 @@ def replace_evidence(conn: sqlite3.Connection, enriched_id: str, event_id: Optio
         ReplacementSearchUnavailable: a replacement is needed and there is no
             search function and no ``PERPLEXITY_API_KEY``.
     """
-    from cyber_data_collector.dedup.corroboration import _perplexity_search
-
     ensure_replacement_schema(conn)
     previous = conn.execute("SELECT COALESCE(status, ?) FROM SourceReplacements WHERE enriched_event_id = ?",
                             (STATUS_SEARCHED, enriched_id)).fetchone()
@@ -387,44 +442,26 @@ def replace_evidence(conn: sqlite3.Connection, enriched_id: str, event_id: Optio
     # Events about to be rejected are excluded - they cannot cover anything.
     if _covered(conn, org, when, exclude_events):
         return None
-    if search is None:
-        if not os.getenv("PERPLEXITY_API_KEY"):
-            raise ReplacementSearchUnavailable(
-                f"Replacement evidence for {enriched_id} ({org}) cannot be searched: PERPLEXITY_API_KEY is not "
-                "set. Nothing more is removed until it is.")
-        search = _perplexity_search
-    model = perplexity_model()
+    if search is None and not os.getenv("PERPLEXITY_API_KEY"):
+        raise ReplacementSearchUnavailable(
+            f"Replacement evidence for {enriched_id} ({org}) cannot be searched: PERPLEXITY_API_KEY is not "
+            "set. Nothing more is removed until it is.")
     query = REPLACEMENT_PROMPT.format(org=org, date=when_text or "unknown",
                                       summary=str(research.get("reasoning") or "")[:600])
-    try:
-        result = search(query, model)
-    except Exception as exc:  # noqa: BLE001 - stored as pending, retried every run
-        logger.warning("Replacement search failed for %s (queued for retry): %s", enriched_id, exc)
-        _store_replacement(conn, enriched_id, query, model, status=STATUS_PENDING, error=str(exc)[:500])
-        return None
-    answer = result.get("answer") or ""
-    citations = [c for c in (result.get("citations") or []) if c]
-    raw_id = None
-    if answer.strip().upper().startswith("FOUND: YES") and citations:
-        raw_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO RawEvents (raw_event_id, source_type, source_event_id, raw_title, raw_description, "
-            "raw_content, event_date, source_url, source_metadata, discovered_at, is_processed) "
-            "VALUES (?, 'Perplexity', NULL, ?, ?, NULL, ?, ?, ?, ?, 0)",
-            (raw_id, f"{org} cyber incident", answer, when.isoformat() if when else None, citations[0],
-             json.dumps({"origin": "source-gate replacement search", "replaces": enriched_id,
-                         "citations": citations[:8]}), datetime.now().isoformat()))
-    _store_replacement(conn, enriched_id, query, model, status=STATUS_SEARCHED, answer=answer, citations=citations,
-                       raw_id=raw_id)
-    return raw_id
+    return search_and_queue(conn, enriched_id, query, org, when, search,
+                            metadata={"origin": "source-gate replacement search", "replaces": enriched_id})
 
 
 def retry_pending_replacements(conn: sqlite3.Connection, search=None) -> List[Dict[str, str]]:
-    """Retry every replacement search that failed earlier; returns those that queued a record."""
+    """Retry every replacement search this gate started that failed earlier; returns those that queued a record.
+
+    Searches started for evidence recovery are retried by that module, from
+    the event they were made for."""
     ensure_replacement_schema(conn)
     queued = []
-    for (enriched_id,) in conn.execute("SELECT enriched_event_id FROM SourceReplacements WHERE status = ?",
-                                       (STATUS_PENDING,)).fetchall():
+    for (enriched_id,) in conn.execute("SELECT enriched_event_id FROM SourceReplacements WHERE status = ? "
+                                       "AND COALESCE(purpose, ?) = ?",
+                                       (STATUS_PENDING, PURPOSE_SOURCE_GATE, PURPOSE_SOURCE_GATE)).fetchall():
         raw_id = replace_evidence(conn, enriched_id, None, search=search)
         if raw_id:
             queued.append({"replaces": enriched_id, "raw_event_id": raw_id})
@@ -444,7 +481,8 @@ def prune_redundant_replacements(conn: sqlite3.Connection) -> List[str]:
     for enriched_id, raw_id in conn.execute(
             """SELECT s.enriched_event_id, s.raw_event_id FROM SourceReplacements s
                JOIN RawEvents r ON r.raw_event_id = s.raw_event_id
-               WHERE s.raw_event_id IS NOT NULL AND COALESCE(r.is_processed, 0) = 0""").fetchall():
+               WHERE s.raw_event_id IS NOT NULL AND COALESCE(r.is_processed, 0) = 0
+                 AND COALESCE(s.purpose, ?) = ?""", (PURPOSE_SOURCE_GATE, PURPOSE_SOURCE_GATE)).fetchall():
         research = _research(conn, enriched_id)
         org = str(research.get("formal_entity_name") or "").strip()
         when = _parse_date(str(research.get("earliest_event_date") or "")[:10])

@@ -2635,6 +2635,32 @@ def cmd_label_evidence(args) -> int:
     return 1 if blocked else 0
 
 
+def cmd_recover_evidence(args) -> int:
+    """Diagnose incidents with no usable evidence, queue retrieval and mark evidence status; see evidence_recovery.
+
+    Exit 2 when a replacement search was needed and could not run
+    (no PERPLEXITY_API_KEY); the other retrieval and the statuses still happen.
+    """
+    from cyber_data_collector.processing import evidence_recovery
+
+    conn = _connect(args.db)
+    try:
+        if args.status_only:
+            evidence_recovery.ensure_schema(conn)
+            counts = evidence_recovery.mark_status(conn)
+            print("Evidence status: " + ", ".join(f"{s} {counts[s]}" for s in evidence_recovery.STATUSES)
+                  + f" ({counts['changed']} changed)")
+            return 0
+        report = evidence_recovery.recover(conn, limit=args.limit, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    print(("[dry run] " if args.dry_run else "") + report.summary(dry_run=args.dry_run))
+    if report.errors:
+        print("ERROR: " + "; ".join(report.errors), file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_reconcile_timelines(args) -> int:
     """Reconcile events against organisation timelines and resolve the mismatches; see timeline_reconciliation.
 
@@ -3275,6 +3301,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "event's inactive records")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_label_evidence)
+
+    p = sub.add_parser("recover-evidence",
+                       help="Find what each incident with no usable evidence lacks (page text, research), "
+                            "queue retrieval through the existing re-fetch, enrichment, label-evidence and "
+                            "replacement-search queues, and mark every incident's evidence status")
+    p.add_argument("--limit", type=int, default=100, help="Incidents given new retrieval work per run")
+    p.add_argument("--dry-run", action="store_true", help="Report what would be queued; write nothing")
+    p.add_argument("--status-only", action="store_true",
+                   help="Only (re)write DeduplicatedEvents.evidence_status; queue nothing")
+    p.set_defaults(func=cmd_recover_evidence)
 
     p = sub.add_parser("reconcile-timelines",
                        help="Match each organisation's events to its researched timeline; report "

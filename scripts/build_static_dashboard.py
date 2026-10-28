@@ -4832,9 +4832,12 @@ def describe_population(conn: sqlite3.Connection, period: ReportingPeriod) -> Di
         f"{period.start_iso} to {period.end_iso}; {classified:,} with an ASD classification. "
         f"Excludes {breakdown['merged']:,} merged and {breakdown['rejected']:,} rejected "
         f"records (history), {breakdown['active_dated_outside_period']:,} active incidents dated "
-        f"outside the period and {breakdown['active_undated']:,} undated."
+        f"outside the period and {breakdown['active_undated']:,} undated. "
     )
-    return {**breakdown, 'classified_in_period': classified, 'note': note}
+    from cyber_data_collector.processing import evidence_recovery
+    evidence = evidence_recovery.stored_counts(conn, period)
+    note += evidence_recovery.describe_counts(evidence)
+    return {**breakdown, 'classified_in_period': classified, 'note': note, 'evidence_status': evidence}
 
 
 def build_reconciliation_checks(

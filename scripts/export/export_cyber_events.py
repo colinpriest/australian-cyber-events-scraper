@@ -65,6 +65,7 @@ class CyberEventsExporter:
     # Columns that identify the incident outright; an --anonymize export drops them.
     ANONYMISED_DROP_COLUMNS = (
         'title', 'victim_organization_name', 'attacking_entity_name', 'entities', 'sources',
+        'evidence_status_reason',   # names the pages behind the incident
     )
     last_anonymisation_failures = 0
 
@@ -497,7 +498,10 @@ class CyberEventsExporter:
             True if successful, False otherwise
         """
         try:
-            # Base query for deduplicated events
+            # Base query for deduplicated events. evidence_status says how far
+            # the stored evidence supports the row: every field of an
+            # 'unsupported' incident (listed in evidence_uncertain_fields) is uncertain.
+            from cyber_data_collector.processing.evidence_recovery import select_columns
             base_query = """
                 SELECT 
                     de.deduplicated_event_id,
@@ -523,7 +527,8 @@ class CyberEventsExporter:
                     de.victim_organization_name,
                     de.victim_organization_industry,
                     de.created_at,
-                    de.updated_at
+                    de.updated_at,
+                    """ + select_columns(self.conn, "de") + """
                 FROM DeduplicatedEvents de
             """
             
