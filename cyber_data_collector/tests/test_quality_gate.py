@@ -163,6 +163,18 @@ def test_short_gap_same_victim_pairs_and_titles(db):
     assert found["duplicates.identical_title_pairs"].value == 0
 
 
+def test_undated_same_victim_pairs_are_counted_not_compared(db, monkeypatch):
+    from cyber_data_collector.dedup import duplicate_judgement as dj
+
+    pairs = [{"organisation": "Acme", "a": "E1", "b": "E2", "gap_days": 12},
+             {"organisation": "Acme", "a": "E1", "b": "E3", "gap_days": dj.GAP_UNKNOWN}]
+    monkeypatch.setattr(dj, "candidate_pairs", lambda conn: pairs)
+    found = metrics.measure_duplicates(_ro(db), load_thresholds(), TODAY)
+    assert found["duplicates.same_victim_pairs"].value == 2
+    assert found["duplicates.same_victim_pairs_short_gap"].value == 1
+    assert "1 undated pairs not judged" in found["duplicates.same_victim_pairs_short_gap"].detail
+
+
 def test_absent_retry_columns_are_not_measured_never_zero(tmp_path):
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)

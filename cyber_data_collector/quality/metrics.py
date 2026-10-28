@@ -358,7 +358,8 @@ def measure_duplicates(conn: sqlite3.Connection, thresholds: Thresholds, today: 
     short_gap = int(thresholds.setting("duplicates", "short_gap_days"))
     out: Measurements = {}
     pairs = candidate_pairs(conn)    # every pair of active events sharing a victim (role)
-    dated = [p for p in pairs if p["gap_days"] is not None]
+    # Undated pairs are judged too; their gap is GAP_UNKNOWN (text), not a number.
+    dated = [p for p in pairs if isinstance(p["gap_days"], int)]
     short = sorted((p for p in dated if p["gap_days"] <= short_gap), key=lambda p: p["gap_days"])
     out["duplicates.same_victim_pairs"] = Measurement(
         value=len(pairs), detail="pairs of active events sharing a victim-role entity")
