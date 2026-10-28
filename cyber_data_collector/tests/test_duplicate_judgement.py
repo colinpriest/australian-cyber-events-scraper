@@ -192,6 +192,16 @@ def test_event_date_basis_and_precision_are_stored(conn):
     assert dp.refresh_event_date_provenance(conn) == 0        # idempotent
 
 
+def test_events_are_paired_when_their_victims_are_one_organisation_under_two_names(conn):
+    """2026-10-29: "ALS Global" and "ALS", or "St Vincent's Health Australia" and "St Vincent's
+    Health", were one organisation in the recurrence analysis but separate entity rows, so a
+    leak-site claim and the disclosure days later were never compared and counted as a repeat."""
+    conn.execute("INSERT INTO EntitiesV2 VALUES (2, 'ACT Government Pty Ltd')")
+    conn.execute("UPDATE DeduplicatedEventEntities SET entity_id = 2 WHERE deduplicated_event_id = 'e2'")
+    [pair] = dj.candidate_pairs(conn)
+    assert (pair["a"], pair["b"], pair["gap_days"]) == ("e1", "e2", 15)
+
+
 def test_undated_events_are_still_paired_by_victim(conn):
     """2026-10-28: undated events were left out of the candidates, so 35 undated reports of
     one incident were never compared. A missing date is no evidence of a separate incident."""
