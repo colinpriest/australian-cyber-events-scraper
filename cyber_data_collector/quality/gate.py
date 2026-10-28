@@ -85,6 +85,8 @@ class QualityReport:
     allowed: bool
     reasons: List[str]
     previous: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: Recorded runs, newest first, with the TREND_METRICS values: ``[{"created_at", metric: value...}]``.
+    history: List[Dict[str, Any]] = field(default_factory=list)
 
     def count(self, status: str) -> int:
         return sum(1 for m in self.metrics if m.status == status)
@@ -98,6 +100,7 @@ class QualityReport:
             "counts": {s: self.count(s) for s in (PASS, FAIL, WARN, NOT_MEASURED, INFO)},
             "metrics": [m.to_dict() for m in self.metrics],
             "previous_run": self.previous,
+            "history": self.history,
         }
 
 
@@ -134,7 +137,41 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
                            created_at=datetime.now().isoformat(timespec="seconds"), db_path=_db_path(conn),
                            thresholds=thresholds, metrics=metrics, allowed=allowed, reasons=reasons)
     report.previous = previous_values(conn)
+    report.history = metric_history(conn, TREND_METRICS)
     return report
+
+
+#: Shown run by run in the report's trend table.
+TREND_METRICS = ("evidence.status.supported", "evidence.status.partial", "evidence.status.unsupported",
+                 "evidence.status.unsupported_share", "evidence.recovery.pending", "evidence.recovery.exhausted")
+TREND_RUNS = 12
+
+
+def metric_history(conn: sqlite3.Connection, metrics: Tuple[str, ...] = TREND_METRICS,
+                   runs: int = TREND_RUNS) -> List[Dict[str, Any]]:
+    """The last ``runs`` recorded runs (newest first) with these metrics' values."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='QualityRuns'").fetchone():
+        return []
+    out = []
+    for run_id, created_at in conn.execute("SELECT run_id, created_at FROM QualityRuns "
+                                           "ORDER BY created_at DESC, run_id DESC LIMIT ?", (runs,)).fetchall():
+        marks = ",".join("?" * len(metrics))
+        values = dict(conn.execute(f"SELECT metric, value FROM QualityMetrics WHERE run_id = ? AND metric IN ({marks})",
+                                   (run_id, *metrics)).fetchall())
+        out.append({"created_at": created_at, **values})
+    return out
+
+
+def _trend_table(report: "QualityReport") -> Optional[Tuple[str, List[str], List[List[str]]]]:
+    """This run and the recorded ones before it, for TREND_METRICS (None when this run has none of them)."""
+    current = {m.name: m.value for m in report.metrics if m.name in TREND_METRICS}
+    if not current:
+        return None
+    header = ["run"] + [name.split(".", 1)[1] for name in TREND_METRICS]
+    rows = [[f"{report.created_at} (this run)"] + [_fmt(current.get(n)) for n in TREND_METRICS]]
+    rows += [[str(h["created_at"])] + [_fmt(h.get(n)) for n in TREND_METRICS] for h in report.history
+             if any(h.get(n) is not None for n in TREND_METRICS)]
+    return "Evidence status trend", header, rows
 
 
 def previous_values(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
@@ -267,7 +304,8 @@ def render_markdown(report: QualityReport) -> str:
         for m in flagged:
             lines.append(f"### `{m.name}` ({m.status})")
             lines += [f"- {str(e).replace(chr(10), ' ')}" for e in m.examples] + [""]
-    for title, header, rows in _coverage_tables(report):
+    trend = _trend_table(report)
+    for title, header, rows in ([trend] if trend else []) + _coverage_tables(report):
         lines += [f"## {title}", "", "| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
         lines += ["| " + " | ".join(r) + " |" for r in rows] + [""]
     return "\n".join(lines)
@@ -303,7 +341,8 @@ def render_html(report: QualityReport) -> str:
                      f"<td>{e(_fmt(m.value))}</td><td>{e(_fmt(prev['value'])) if prev else ''}</td>"
                      f"<td>{e(m.threshold)}</td><td>{e(m.detail)}{examples}</td></tr>")
     parts.append("</table></div>")
-    for title, header, rows in _coverage_tables(report):
+    trend = _trend_table(report)
+    for title, header, rows in ([trend] if trend else []) + _coverage_tables(report):
         parts.append(f"<h2>{e(title)}</h2><div class='wrap'><table><tr>"
                      + "".join(f"<th>{e(h)}</th>" for h in header) + "</tr>")
         parts += ["<tr>" + "".join(f"<td>{e(c)}</td>" for c in r) + "</tr>" for r in rows]

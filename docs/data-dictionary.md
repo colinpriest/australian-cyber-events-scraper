@@ -292,6 +292,20 @@ Final unique events after entity-based deduplication. The primary table used for
 | `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the three sum to 1) |
 | `first_reported_date` | TEXT | Yes | NULL | Earliest `RawEvents.publication_date` among the event's records |
 | `reporting_lag_days` | INTEGER | Yes | NULL | `first_reported_date` minus `event_date`, only when the event date is not itself a publication or discovery date (see `date_basis`, `date_precision`) |
+| `evidence_status` | TEXT | Yes | NULL | `supported` (an active record holds its own page text, >= 300 chars, and one has validated Perplexity research), `partial` (one of them, or only another page's text) or `unsupported` (neither). Written by `dedup_admin.py recover-evidence` (`processing/evidence_recovery.py`); NULL = not assessed yet, shown as `not assessed` |
+| `evidence_status_reason` | TEXT | Yes | NULL | What the evidence lacks, record by record, and where retrieval stands (re-fetch queued / given up, research retrying / quarantined, labelled report or replacement queued) |
+| `evidence_uncertain_fields` | TEXT (JSON) | Yes | NULL | For an `unsupported` event, the set fields nothing supports (`title`, `event_date`, `event_type`, `severity`, `victim_organization_name`, `attacking_entity_name`, `attack_method`, `records_affected`); `[]` otherwise |
+| `evidence_status_at` | TEXT | Yes | NULL | When `evidence_status` last changed |
+
+Evidence retrieval state ([11-evidence-recovery.md](11-evidence-recovery.md))
+lives in the tables of the mechanisms it reuses:
+`PageRescrapes` (`status` `queued` = asked for by evidence recovery for a
+record of any source; `retry` / `stored` / `gave_up` as before),
+`CyberDailyRefetches`, and `SourceReplacements` (`purpose` NULL = a source-gate
+replacement for a removed junk record, `evidence_recovery` = a search for an
+incident with no usable evidence, with its `deduplicated_event_id`). A
+replacement record is a new `RawEvents` row with its own URL and
+`source_metadata.evidence_for` naming the incident.
 
 The descriptions shown in `dashboard/ai_incidents.html` are in `EventDescriptions`
 (`deduplicated_event_id`, `purpose = 'ai_incident_report'`, `prompt_version`,

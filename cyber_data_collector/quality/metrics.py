@@ -197,6 +197,64 @@ def measure_evidence(conn: sqlite3.Connection, thresholds: Thresholds, today: da
     }
 
 
+def _evidence_status_unavailable(reason: str) -> Measurements:
+    from cyber_data_collector.processing import evidence_recovery as er
+
+    names = ([f"evidence.status.{s}" for s in (*er.STATUSES, "unsupported_share", "partial_share", "stored_stale")]
+             + [f"evidence.recovery.{s}" for s in (er.ROUTE_NEEDED, er.ROUTE_PENDING, er.ROUTE_EXHAUSTED)])
+    return {name: Measurement.unavailable(reason) for name in names}
+
+
+def measure_evidence_status(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Each active event's evidence status (``processing/evidence_recovery.py``), computed afresh.
+
+    ``supported``: a record's own page text and validated research;
+    ``partial``: one of them, or only another page's text; ``unsupported``:
+    neither, so every field is uncertain. Unsupported events are split by where
+    retrieval stands, and ``stored_stale`` counts events whose stored
+    ``evidence_status`` no longer matches (the hygiene step has not run since).
+    """
+    from cyber_data_collector.processing import evidence_recovery as er
+
+    needed = {"perplexity_enrichment_data", "perplexity_validated", "perplexity_status",
+              "perplexity_attempt_count", "is_specific_event"}
+    missing = needed - columns(conn, "EnrichedEvents")
+    if missing or not {"raw_content", "source_metadata"} <= columns(conn, "RawEvents"):
+        reason = f"EnrichedEvents.{'/'.join(sorted(missing)) or '...'} or RawEvents.raw_content/source_metadata missing"
+        return _evidence_status_unavailable(reason)
+    tables = [t for t in ("PageRescrapes", "CyberDailyRefetches", "SourceReplacements") if not has_table(conn, t)]
+    if tables:
+        # Read-only: the tables the diagnosis joins are created by the hygiene step.
+        reason = f"{', '.join(tables)} missing (run dedup_admin.py recover-evidence)"
+        return _evidence_status_unavailable(reason)
+    events = er.assess_events(conn)
+    counts = er.status_counts(events)
+    unsupported = [e for e in events if e.status == er.UNSUPPORTED]
+    detail = (f"{counts[er.SUPPORTED]} supported, {counts[er.PARTIAL]} partial, {counts[er.UNSUPPORTED]} unsupported "
+              f"of {len(events)} active events")
+    examples = [f"{e.event_id}: {e.title[:60]} - {e.reason[:160]}" for e in unsupported[:EXAMPLES]]
+    out: Measurements = {f"evidence.status.{s}": Measurement(value=counts[s], detail=detail) for s in er.STATUSES}
+    out["evidence.status.unsupported_share"] = Measurement(value=_share(counts[er.UNSUPPORTED], len(events)),
+                                                            detail=detail, examples=examples)
+    out["evidence.status.partial_share"] = Measurement(value=_share(counts[er.PARTIAL], len(events)), detail=detail)
+    for state, what in ((er.ROUTE_NEEDED, "retrieval not yet queued (capped per run)"),
+                        (er.ROUTE_PENDING, "retrieval queued, waiting"),
+                        (er.ROUTE_EXHAUSTED, "every route tried; evidence out of reach")):
+        hits = [e for e in unsupported if e.recovery == state]
+        out[f"evidence.recovery.{state}"] = Measurement(
+            value=len(hits), detail=f"unsupported events: {what}",
+            examples=[f"{e.event_id}: {e.reason[:160]}" for e in hits[:EXAMPLES]])
+    if er.has_schema(conn):
+        stale = [e for e in events if e.stored_status != e.status]
+        out["evidence.status.stored_stale"] = Measurement(
+            value=len(stale), detail="active events whose stored evidence_status is missing or out of date",
+            examples=[f"{e.event_id}: stored {e.stored_status}, now {e.status}" for e in stale[:EXAMPLES]])
+    else:
+        out["evidence.status.stored_stale"] = Measurement.unavailable(
+            "DeduplicatedEvents.evidence_status missing (run dedup_admin.py recover-evidence)")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Retry backlogs
 # ---------------------------------------------------------------------------
@@ -462,6 +520,7 @@ def measure_staleness(conn: sqlite3.Connection, thresholds: Thresholds, today: d
 MEASURES = (
     ("coverage", measure_coverage),
     ("evidence", measure_evidence),
+    ("evidence", measure_evidence_status),
     ("backlog", measure_backlogs),
     ("duplicates", measure_duplicates),
     ("dates", measure_dates),

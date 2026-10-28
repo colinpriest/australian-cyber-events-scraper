@@ -63,6 +63,7 @@ def _build_pipeline_args(
         force_dedup=False,
         skip_data_hygiene=False,
         report_event_rejections=False,
+        evidence_recovery_limit=100,
         skip_recurrence_check=False,
         recurrence_window=90,
         recurrence_min_certainty=0.85,

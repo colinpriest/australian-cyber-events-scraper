@@ -186,9 +186,12 @@ class PerplexityBackfillProcessor:
                     )
                 """
 
-            # Order by priority: placeholder dates first, then by date
-            query += """
+            # Order by priority: records of incidents with no usable evidence
+            # first (evidence_recovery marks them), then placeholder dates,
+            # then by date.
+            query += f"""
                 ORDER BY
+                    {self._unsupported_first()}
                     CASE WHEN CAST(strftime('%d', ee.event_date) AS INTEGER) = 1 THEN 0 ELSE 1 END,
                     COALESCE(ee.perplexity_attempt_count, 0) ASC,
                     ee.event_date DESC,
@@ -203,6 +206,20 @@ class PerplexityBackfillProcessor:
 
             logger.info(f"Found {len(events)} events needing enrichment")
             return events
+
+    def _unsupported_first(self) -> str:
+        """ORDER BY term putting records of ``unsupported`` incidents first ('' before the column exists)."""
+        from cyber_data_collector.processing import evidence_recovery
+        from cyber_data_collector.reporting.population import incident_filter
+
+        if not evidence_recovery.has_schema(self.db._conn):
+            return ""
+        where, _ = incident_filter(alias="d")
+        return f"""CASE WHEN EXISTS (
+                        SELECT 1 FROM EventDeduplicationMap m
+                        JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+                        WHERE m.enriched_event_id = ee.enriched_event_id AND {where}
+                          AND d.evidence_status = '{evidence_recovery.UNSUPPORTED}') THEN 0 ELSE 1 END,"""
 
     def _record_failure(self, event: Dict, reason: str, exc: Optional[BaseException] = None) -> None:
         """Record a failed attempt (or just log it on a dry run)."""

@@ -20,6 +20,10 @@ phase:
    it is evidence of: its event is merged into the labelled one (a cached
    ``different`` ruling still blocks it), and the labelled event's inactive
    records are split out together and rejected, now that it has real evidence.
+
+Evidence recovery (``processing/evidence_recovery.py``) also asks for the cited
+report of a labelled-real event whose active records hold no usable evidence
+(no page text, no validated research) - ``queue(include_events=...)``.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from cyber_data_collector.dedup import event_reality
 
@@ -86,9 +90,38 @@ def _queued(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return out
 
 
+def _stored_copies(conn: sqlite3.Connection, url: str) -> List[Any]:
+    """``(raw_event_id, source_url, source_metadata)`` of records holding this page."""
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return [r for r in conn.execute(
+        "SELECT raw_event_id, source_url, source_metadata FROM RawEvents WHERE source_url LIKE ?",
+        (f"%{tail}%",)) if _same_page(r[1] or "", url)]
+
+
+def enriched_copy(conn: sqlite3.Connection, url: str) -> Optional[str]:
+    """A record already holding this page and enriched, which :func:`queue` will not queue again."""
+    for raw_id, _, _ in _stored_copies(conn, url):
+        if conn.execute("SELECT 1 FROM EnrichedEvents WHERE raw_event_id = ?", (raw_id,)).fetchone():
+            return raw_id
+    return None
+
+
+def cited_reports(labels_path: Path = event_reality.LABELS_PATH) -> Dict[str, Dict[str, str]]:
+    """``{labelled event id: {"url", "rationale"}}`` for real labels that cite a URL."""
+    return _cited_urls(labels_path)
+
+
+def queued_reports(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Records queued (or processed) as a labelled event's cited report."""
+    return _queued(conn)
+
+
 def queue(conn: sqlite3.Connection, labels_path: Path = event_reality.LABELS_PATH,
-          dry_run: bool = False) -> List[Dict[str, str]]:
+          dry_run: bool = False, include_events: Iterable[str] = ()) -> List[Dict[str, str]]:
     """Queue the cited report of every labelled-real Active event that has no active record.
+
+    ``include_events`` are also queued although they have active records: events
+    whose records hold no usable evidence (evidence recovery decides which).
 
     A report already stored that never became a record (Cyber Daily's ZircoDATA
     article was stored in 2025, behind its registration wall, and dropped) is
@@ -100,10 +133,11 @@ def queue(conn: sqlite3.Connection, labels_path: Path = event_reality.LABELS_PAT
 
     resolver = EventResolver(conn)
     already = [(q["event"], q["url"]) for q in _queued(conn)]
+    included = set(include_events)
     queued = []
     for event_id, cited in sorted(_cited_urls(labels_path).items()):
         now, status = resolver.resolve(event_id)
-        if status != "Active" or _active_members(conn, now):
+        if status != "Active" or (_active_members(conn, now) and now not in included):
             continue
         if any(e == event_id and _same_page(u or "", cited["url"]) for e, u in already):
             continue
@@ -111,10 +145,7 @@ def queue(conn: sqlite3.Connection, labels_path: Path = event_reality.LABELS_PAT
             "SELECT title, event_date, victim_organization_name FROM DeduplicatedEvents "
             "WHERE deduplicated_event_id = ?", (now,)).fetchone()
         link = {"event": event_id, "labels_file": Path(labels_path).name}
-        tail = cited["url"].rstrip("/").rsplit("/", 1)[-1]
-        stored = [r for r in conn.execute(
-            "SELECT raw_event_id, source_url, source_metadata FROM RawEvents WHERE source_url LIKE ?",
-            (f"%{tail}%",)) if _same_page(r[1] or "", cited["url"])]
+        stored = _stored_copies(conn, cited["url"])
         reusable = [r for r in stored if not conn.execute(
             "SELECT 1 FROM EnrichedEvents WHERE raw_event_id = ?", (r[0],)).fetchone()]
         entry = {"event": event_id, "url": cited["url"], "title": title}

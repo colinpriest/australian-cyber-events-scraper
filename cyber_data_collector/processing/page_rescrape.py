@@ -20,6 +20,16 @@ Every attempt is recorded in ``PageRescrapes`` (attempt count, last error),
 and a page is given up after ``MAX_ATTEMPTS`` failures, so dead pages are not
 fetched on every run. Social, profile and marketplace URLs, which the scraper
 never fetches, are given up at once.
+
+Records from other sources are re-fetched when something asks for them:
+:func:`queue_pages` stores a ``queued`` row (evidence recovery does this for
+incidents with no usable evidence, ``processing/evidence_recovery.py``), and
+from then on the record is a candidate like a short Google page.
+
+When real text is stored for a record whose Perplexity research is not
+validated, that research is queued again (attempts and quarantine reset): it
+failed or was never tried on the snippet the record held, and the page is new
+evidence. Validated research is left alone.
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.dedup.source_gate import MIN_PAGE_CHARS, SOURCE_TYPE
 
@@ -42,13 +52,15 @@ FETCH_TIMEOUT_SECONDS = 45
 STATUS_STORED = "stored"
 STATUS_RETRY = "retry"
 STATUS_GAVE_UP = "gave_up"
+#: Asked for by another step and not tried yet (any source).
+STATUS_QUEUED = "queued"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS PageRescrapes (
     raw_event_id     TEXT PRIMARY KEY,
     url              TEXT,
     attempts         INTEGER NOT NULL DEFAULT 0,  -- failed attempts; reset by nothing
-    status           TEXT NOT NULL,               -- stored / retry / gave_up
+    status           TEXT NOT NULL,               -- queued / stored / retry / gave_up
     last_error       TEXT,
     last_chars       INTEGER,                     -- length of the text fetched last time
     last_attempt_at  TEXT NOT NULL
@@ -70,21 +82,44 @@ class RescrapeReport:
     stored: List[Dict[str, Any]] = field(default_factory=list)
     failed: List[Dict[str, Any]] = field(default_factory=list)
     gave_up: int = 0           # pages reaching MAX_ATTEMPTS (or never fetchable) this run
+    requeued_research: int = 0  # unvalidated enrichments queued for Perplexity again
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
 
 
+def queue_pages(conn: sqlite3.Connection, raw_event_ids: Sequence[str]) -> List[str]:
+    """Ask for these records' pages to be fetched again, whatever their source. Idempotent.
+
+    A record that already has a ``PageRescrapes`` row (queued, retrying, stored
+    or given up) is left as it is. Returns the records newly queued; does not
+    commit.
+    """
+    ensure_schema(conn)
+    queued = []
+    for raw_id in raw_event_ids:
+        row = conn.execute("SELECT source_url FROM RawEvents WHERE raw_event_id = ?", (raw_id,)).fetchone()
+        if row is None or not (row[0] or "").strip():
+            continue
+        if conn.execute("SELECT 1 FROM PageRescrapes WHERE raw_event_id = ?", (raw_id,)).fetchone():
+            continue
+        conn.execute("INSERT INTO PageRescrapes (raw_event_id, url, attempts, status, last_attempt_at) "
+                     "VALUES (?, ?, 0, ?, ?)", (raw_id, row[0], STATUS_QUEUED, datetime.now().isoformat()))
+        queued.append(raw_id)
+    return queued
+
+
 def short_pages(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Active Google records with too little stored text, not yet given up on."""
+    """Active records with too little stored text, not yet given up on: every
+    Google record, and records of other sources :func:`queue_pages` asked for."""
     ensure_schema(conn)
     sql = f"""
         SELECT r.raw_event_id, r.source_url, LENGTH(TRIM(COALESCE(r.raw_content, ''))) AS chars,
                COALESCE(p.attempts, 0) AS attempts
         FROM RawEvents r
         LEFT JOIN PageRescrapes p ON p.raw_event_id = r.raw_event_id
-        WHERE r.source_type = ?
+        WHERE (r.source_type = ? OR p.raw_event_id IS NOT NULL)
           AND EXISTS (SELECT 1 FROM EnrichedEvents e
                       WHERE e.raw_event_id = r.raw_event_id AND e.status = 'Active')
           AND LENGTH(TRIM(COALESCE(r.raw_content, ''))) < ?
@@ -131,8 +166,10 @@ def _record_attempt(conn: sqlite3.Connection, page: Dict[str, Any], status: str,
          datetime.now().isoformat()))
 
 
-def _store_text(conn: sqlite3.Connection, raw_event_id: str, text: str, origin: str) -> None:
-    """Store the page text, and record in source_metadata that it is the page's own."""
+def _store_text(conn: sqlite3.Connection, raw_event_id: str, text: str, origin: str) -> int:
+    """Store the page text, and record in source_metadata that it is the page's own.
+
+    Queues the record's unvalidated research again; returns how many enrichments were queued."""
     row = conn.execute("SELECT source_metadata FROM RawEvents WHERE raw_event_id = ?", (raw_event_id,)).fetchone()
     try:
         meta = json.loads(row[0]) if row and row[0] else {}
@@ -144,6 +181,10 @@ def _store_text(conn: sqlite3.Connection, raw_event_id: str, text: str, origin: 
                  "content_rescraped_at": datetime.now().isoformat()})
     conn.execute("UPDATE RawEvents SET raw_content = ?, source_metadata = ? WHERE raw_event_id = ?",
                  (text.strip(), json.dumps(meta), raw_event_id))
+    return conn.execute(
+        "UPDATE EnrichedEvents SET perplexity_status = NULL, perplexity_attempt_count = 0, "
+        "perplexity_last_error = NULL WHERE raw_event_id = ? AND status = 'Active' "
+        "AND COALESCE(perplexity_validated, 0) != 1", (raw_event_id,)).rowcount
 
 
 def apply_result(conn: sqlite3.Connection, page: Dict[str, Any], text: Optional[str],
@@ -155,7 +196,8 @@ def apply_result(conn: sqlite3.Connection, page: Dict[str, Any], text: Optional[
     problem = assess(text, meta, page["chars"])
     chars = len(text.strip()) if text else 0
     if problem is None:
-        _store_text(conn, page["raw_event_id"], text, meta.get("content_origin") or ORIGIN_PAGE)
+        report.requeued_research += _store_text(conn, page["raw_event_id"], text,
+                                                meta.get("content_origin") or ORIGIN_PAGE)
         _record_attempt(conn, page, STATUS_STORED, None, chars, failed=False)
         report.stored.append({**page, "new_chars": chars})
         outcome = f"stored {chars} chars (was {page['chars']})"

@@ -88,6 +88,8 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     # does not (the column defaults to 'Active', so none exist).
     where, params = incident_filter(None, "d")
 
+    from cyber_data_collector.processing.evidence_recovery import select_columns
+
     rows = conn.execute(
         f"""
         SELECT v.entity_id                            AS entity_id,
@@ -98,6 +100,7 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                d.event_date                           AS event_date,
                d.records_affected                     AS records_affected,
                d.vendor_organization_name             AS vendor,
+               {select_columns(conn, "d")},
                COALESCE(
                    NULLIF(TRIM(d.summary), ''),
                    NULLIF(TRIM(d.description), ''),
@@ -184,6 +187,8 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "records": r["records_affected"],
             "vendor": r["vendor"],
             "members": r["members"],
+            "evidence": r["evidence_status"],
+            "evidence_reason": r["evidence_status_reason"],
             "description": description,
             "attribution": (ATTRIBUTION_UNRESOLVED if (rep["entity_id"], r["event_id"]) in unresolved_by_key
                             else ""),
@@ -262,6 +267,10 @@ PAGE = """<!doctype html>
   .size-LARGE   {{ background: #fdf0e2; color: #8a5312; border-color: #f0dcc2; }}
   .size-HUGE    {{ background: #fbe6e6; color: #8c2f2f; border-color: #f0cbcb; }}
   .size-UNKNOWN {{ background: #eef0f3; color: #7b818b; border-color: #dfe3e8; }}
+  .evidence {{ display: inline-block; font-size: 10.5px; font-weight: 700; padding: 0 5px;
+               border-radius: 3px; border: 1px solid; }}
+  .evidence-unsupported {{ background: #fbe6e6; color: #8c2f2f; border-color: #f0cbcb; }}
+  .evidence-partial, .evidence-not-assessed {{ background: #eef0f3; color: #7b818b; border-color: #dfe3e8; }}
   .date {{ white-space: nowrap; color: #444; font-variant-numeric: tabular-nums; }}
   .title {{ font-weight: 500; }}
   .desc {{ color: #555; font-size: 13.5px; }}
@@ -289,6 +298,8 @@ PAGE = """<!doctype html>
     .size-LARGE   {{ background: #33260f; color: #e0ad63; border-color: #4a3818; }}
     .size-HUGE    {{ background: #331a1a; color: #e88a8a; border-color: #4d2626; }}
     .size-UNKNOWN {{ background: #21252c; color: #8b919b; border-color: #2c313a; }}
+    .evidence-unsupported {{ background: #3a2020; color: #f0a8a8; border-color: #5a2c2c; }}
+    .evidence-partial, .evidence-not-assessed {{ background: #21252c; color: #8b919b; border-color: #2c313a; }}
   }}
 </style>
 <h1>Cyber events by entity</h1>
@@ -377,7 +388,11 @@ function render() {{
             '</div><div class="meta">' +
             r.members + ' source record(s)' +
             (r.records ? ' · ' + Number(r.records).toLocaleString() + ' records' : '') +
-            (r.vendor ? ' · via ' + esc(r.vendor) : '') + '</div></td>';
+            (r.vendor ? ' · via ' + esc(r.vendor) : '') +
+            (r.evidence && r.evidence !== 'supported'
+              ? ' <span class="evidence evidence-' + esc(r.evidence.replace(' ', '-')) + '" title="' +
+                esc(r.evidence_reason) + '">evidence ' + esc(r.evidence) + '</span>' : '') +
+            '</div></td>';
     html += '<td class="desc">' + esc(r.description) + '</td>';
     html += '</tr>';
     prev = r.entity;
@@ -409,8 +424,11 @@ def population_note(conn: sqlite3.Connection, stats: Dict[str, Any]) -> str:
     reconcile([ReconciliationCheck(
         "Entity dashboard events within active incidents", active, stats["events"],
         relation="<=")], context="entity_dashboard")
+    from cyber_data_collector.processing import evidence_recovery
+
     return (f"Active incidents only ({active} in the database; "
-            f"{active - stats['events']} have no victim-role organisation and are not listed). ")
+            f"{active - stats['events']} have no victim-role organisation and are not listed). "
+            + evidence_recovery.describe_counts(evidence_recovery.stored_counts(conn)) + " ")
 
 
 def build_html(rows: List[Dict[str, Any]], stats: Dict[str, Any], note: str = "") -> str:

@@ -153,6 +153,16 @@ names the evidence that showed the problem. Done items move to the README or
   pins (`httpcore` / `h11`, `typing-extensions`, `idna`); regenerate with a
   resolver, install into an empty environment, and keep `pip check` in CI.
 
+## Evidence recovery follow-ups (2026-10-28)
+
+- **Cyber Daily backfill stored 2,724 of 4,682 stories with no page text**
+  (325 are records of active incidents, classified from the feed's
+  standfirst). Evidence recovery leaves them to the Cyber Daily re-fetch, which
+  waits 24 hours; why the first scrape stored nothing is not yet known
+  ([11-evidence-recovery.md](11-evidence-recovery.md)).
+- Funlab (`1043b84f`): its label cites a report already stored as another
+  event's record; `dedup_admin.py merge` them, or let `check-duplicates` decide.
+
 ## Recently closed (2026-10-27)
 
 - Random Forest filter retired; Jev page gate with a durable retry queue and
