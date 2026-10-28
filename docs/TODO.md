@@ -137,6 +137,16 @@ names the evidence that showed the problem. Done items move to the README or
 - **Rediscovered records are re-classified each run** (rolling three-month
   window). Deliberate, so a record first seen as a snippet is re-judged once
   scraped, but it costs LLM calls; cache by evidence fingerprint.
+- **Recalibrate event reality, duplicates and coherence on the new evidence.** Their cut-offs were
+  measured on evidence that included pages belonging to other articles (39% of stored pages on
+  2026-10-28) and the first 1,200 characters only; the evidence readers now withhold mismatched
+  pages and send whole pages. The calibrations still apply (same model and question versions) but
+  were not measured on this evidence.
+- **Records point at the wrong article at ingest.** Webber list items are paired with another
+  item's link (435 records), Perplexity discovery returns a URL for a different story (334), and
+  Google results a page that does not name the organisation (191). Fix the pairing in
+  `datasources/webber_insurance.py` and validate a Perplexity event's URL names its organisation
+  before storing it.
 - **AI involvement calibration needs re-measuring when the question changes.** The cut-off in
   `evaluation/ai_involvement_calibration.json` applies only to `ai-involvement-v2` on the recorded Jev
   model; a new question version falls back to the most probable option until it is re-labelled.

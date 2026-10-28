@@ -117,6 +117,8 @@ class CyberEventDataV2:
         ensure_support_schema(self._conn)
         from cyber_data_collector.processing.publication_dates import ensure_schema as ensure_publication_schema
         ensure_publication_schema(self._conn)
+        from cyber_data_collector.processing.incident_dates import ensure_schema as ensure_incident_schema
+        ensure_incident_schema(self._conn)
         self._conn.commit()
         if added:
             self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
@@ -153,8 +155,9 @@ class CyberEventDataV2:
                         raw_event_id, source_type, source_event_id, raw_title,
                         raw_description, raw_content, event_date, source_url,
                         source_metadata, discovered_at, is_processed,
-                        publication_date, publication_date_source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        publication_date, publication_date_source,
+                        event_date_precision, event_date_basis
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     raw_event_id,
                     source_type,
@@ -169,6 +172,8 @@ class CyberEventDataV2:
                     False,
                     published,
                     SOURCE_FROM_SOURCE if published else None,
+                    raw_data.get('event_date_precision'),
+                    raw_data.get('event_date_basis'),
                 ))
                 self._conn.commit()
                 return raw_event_id

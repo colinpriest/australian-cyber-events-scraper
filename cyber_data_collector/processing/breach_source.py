@@ -198,26 +198,42 @@ def event_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
     """What the questions are answered from. Deterministic, so its hash decides reuse."""
     event = conn.execute("SELECT title, victim_organization_name FROM DeduplicatedEvents "
                          "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
+    from cyber_data_collector.processing.active_evidence import evidence_page, member_condition, research_names
+
+    # Active members only, and a page only when it belongs to its record
+    # (processing/active_evidence.py) - the rule every evidence reader shares.
     rows = conn.execute(
-        """SELECT e.enriched_event_id, COALESCE(e.title, ''), COALESCE(e.description, ''),
+        f"""SELECT e.enriched_event_id, COALESCE(e.title, ''), COALESCE(e.description, ''),
                   COALESCE(r.raw_content, ''), e.perplexity_enrichment_data
            FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
-           WHERE m.deduplicated_event_id = ?""", (dedup_id,)).fetchall()
+           WHERE m.deduplicated_event_id = ? {member_condition(conn)}""", (dedup_id,)).fetchall()
+    victim = event[1] if event else None
+    withheld = {}
+    checked = []
+    for r in rows:
+        page, note = evidence_page(r[1], [*research_names(r[4]), victim], r[3])
+        if note:
+            withheld[r[0]] = note
+        checked.append((r[0], r[1], r[2], page, r[4]))
     # Records with page text first, then a stable order: a large event always
     # shows the same records, so its input hash is stable.
-    rows = sorted(rows, key=lambda r: (not r[3].strip(), r[0]))
+    rows = sorted(checked, key=lambda r: (not r[3].strip(), r[0]))
     records, budget = [], EVENT_PAGE_CHARS
     for r in rows[:MAX_RECORDS]:
         text = r[3].strip()
         page = text[:min(PAGE_CHARS, budget)]
         budget -= len(page)
         record = {"title": r[1], "snippet": r[2][:SNIPPET_CHARS],
-                  "page_text": page or ("(none stored)" if not text else "(left out: the event's text budget is spent)"),
+                  "page_text": page or ("(withheld: it appears to be another article)" if r[0] in withheld
+                                        else "(none stored)" if not text
+                                        else "(left out: the event's text budget is spent)"),
                   "research": _research(r[4])}
         if page and len(page) < len(text):
             record["page_text_cut"] = f"first {len(page)} of {len(text)} characters"
+        if r[0] in withheld:
+            record["page_withheld"] = withheld[r[0]]
         records.append(record)
     state = {"event": {"title": event[0] if event else "", "victim": event[1] if event else None,
                        "record_count": len(rows)},

@@ -462,11 +462,13 @@ class EventReport:
     first_reported: int = 0
     dated_by_first_report: List[str] = field(default_factory=list)
     lags: int = 0
+    precision: Any = None   # incident_dates.PrecisionReport, after refresh_event_dates
 
     def summary(self) -> str:
-        return (f"{self.first_reported} event(s) with a first-report date; "
+        text = (f"{self.first_reported} event(s) with a first-report date; "
                 f"{len(self.dated_by_first_report)} undated event(s) dated by their first report; "
                 f"{self.lags} reporting lag(s) measurable")
+        return f"{text}; {self.precision.summary()}" if self.precision is not None else text
 
 
 def refresh_events(conn: sqlite3.Connection) -> EventReport:
@@ -517,9 +519,11 @@ def refresh_event_dates(conn: sqlite3.Connection) -> EventReport:
     report) and as a hygiene step. The caller commits.
     """
     from cyber_data_collector.dedup.date_provenance import refresh_event_date_provenance
+    from cyber_data_collector.processing.incident_dates import refresh_event_precision
 
     first = refresh_events(conn)
     refresh_event_date_provenance(conn)
     report = refresh_events(conn)
     report.dated_by_first_report = first.dated_by_first_report
+    report.precision = refresh_event_precision(conn)
     return report

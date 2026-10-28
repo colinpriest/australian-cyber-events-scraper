@@ -2969,8 +2969,15 @@ def cmd_publication_dates(args) -> int:
     """Store every record's publication date and each event's first report; see publication_dates."""
     from cyber_data_collector.processing.publication_dates import backfill, refresh_event_dates
 
+    from cyber_data_collector.processing.incident_dates import repair_webber_dates
+
     conn = _connect(args.db)
     try:
+        webber = repair_webber_dates(conn, dry_run=args.dry_run)
+        if webber.raw:
+            print(f"Webber: {webber.raw} record(s) moved off the invented 15th to their heading month "
+                  f"({webber.enriched} enriched record(s), {webber.events} event(s); {webber.publication_cleared} "
+                  "heading month(s) cleared as publication dates)" + (" - dry run" if args.dry_run else ""))
         report = backfill(conn, limit=args.limit, concurrency=args.concurrency,
                           dry_run=args.dry_run or args.no_fetch, use_browser=not args.no_browser)
         if args.dry_run:

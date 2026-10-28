@@ -1240,10 +1240,42 @@ their metadata or URL, 506 state no date, 268 failed (the browser pass was not
 run); 77 undated events dated by their first report; 674 events have a
 measurable lag.
 
+**Incident dates are intervals with verified precision**
+(`processing/incident_dates.py`). A raw record holds only an incident date its
+source states (`RawEvents.event_date_precision` / `event_date_basis`); the
+publication date is never copied into it, and the search window's first day is
+no longer stored as one. Webber list headings ("Vertel - June 2025") are a
+month, stored as the 1st with precision `month` - they used to become the 15th
+(all 832 Webber records), outranking any day the article stated; a stated day
+now wins, and the newsletter date in the link is the publication date.
+`publication-dates` repairs stored Webber records (idempotent). Each event's
+`event_date_precision` is set only when the records carrying its date agree on
+a verified precision (a source-stated one, or a citation-checked Perplexity
+date), with `event_date_earliest` / `event_date_latest` as the interval; NULL
+means unverified. The recurrence analyses read it (`date_precision`), so the
+extended analysis's date scenarios treat verified months as intervals instead
+of guessing from every 1st.
+
 **Undated events are still deduplicated.** The duplicate check pairs every two
 events sharing a victim, dated or not (`gap_days` is then "unknown"); undated
 events used to be left out, so 35 undated reports of the OpenAI agent's
 Medicare incident were never compared.
+
+### Which records and pages may drive event decisions
+
+`processing/active_evidence.py` is the one rule every evidence reader uses
+(event reality, duplicates, breach source, AI involvement): **active member
+records only** (inactive ones stay for audit), and a stored **page only when it
+belongs to its record** - it names the record's organisation (whole name, or
+its first distinctive word: "NAB", "Uber") or, with no name, the title's
+distinctive words. A page that does not is withheld from the evidence and the
+record says so (`page_withheld`); its title, snippet and research still count.
+On 2026-10-28 **1,051 of 2,690** stored pages behind active events failed the
+check - another article entirely (the "Mackay Sugar ransomware" record held a
+page about the OpenAI agent; a "WA Department of Health" record an iTnews page
+about Garmin): Webber 435, Perplexity 334, Google 191, OAIC 80, Cyber Daily 11.
+In most of them the record's URL itself points at the other article, so the
+pairing goes wrong at ingest (see `docs/TODO.md`).
 
 ### Dashboard
 

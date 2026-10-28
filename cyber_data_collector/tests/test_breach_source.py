@@ -178,10 +178,10 @@ def test_evidence_is_the_whole_page_within_the_budget_and_any_cut_is_stated(conn
     80% of pages mentioning AI first did so after that point."""
     menu = "Home | News | Subscribe | " * 60                             # ~1,560 characters of chrome
     conn.execute("UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = 'r0'",
-                 (menu + "The attackers used an AI agent to reach the portal.",))
+                 (menu + "Acme said the attackers used an AI agent to reach the portal.",))
     record = bs.event_state(conn, "d0")["records"][0]
     assert record["page_text"].endswith("AI agent to reach the portal.") and "page_text_cut" not in record
-    conn.execute("UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = 'r0'", ("x" * (bs.PAGE_CHARS + 500),))
+    conn.execute("UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = 'r0'", ("Acme " + "x" * (bs.PAGE_CHARS + 495),))
     record = bs.event_state(conn, "d0")["records"][0]
     assert len(record["page_text"]) == bs.PAGE_CHARS
     assert record["page_text_cut"] == f"first {bs.PAGE_CHARS} of {bs.PAGE_CHARS + 500} characters"

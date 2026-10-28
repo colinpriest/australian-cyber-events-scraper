@@ -170,8 +170,9 @@ class WebberInsuranceDataSource(DataSource):
                 month = month_map.get(month_name.lower())
 
                 if month:
-                    # Use the 15th as a default day for the month
-                    return datetime(year, month, 15)
+                    # A month, not a day: stored as its 1st with precision "month".
+                    # (It used to become the 15th - a day nobody reported.)
+                    return datetime(year, month, 1)
 
             return None
         except (ValueError, AttributeError) as exc:
@@ -179,7 +180,7 @@ class WebberInsuranceDataSource(DataSource):
             return None
 
     def _parse_date(self, text: str, url: str = "") -> Optional[datetime]:
-        """Robustly parse date strings from text and URL."""
+        """A day stated in the page's text, else the newsletter date in its URL (see the callers)."""
         try:
             # First try to extract specific date patterns from text
             date_patterns = [
@@ -241,13 +242,25 @@ class WebberInsuranceDataSource(DataSource):
             content_block = soup.find('article') or soup.find('div', class_="content") or soup
             description = content_block.get_text(strip=True, separator="\n")
 
-            # Use section date as primary source, fallback to content/URL parsing
-            event_date = section_date or self._parse_date(content_block.get_text(), url)
+            # A day the article states wins; the list heading gives only a month.
+            # The date in the link is the newsletter's (a publication date), never
+            # the incident's.
+            stated = self._parse_date(content_block.get_text())
+            published = self._parse_date("", url)
+            if stated:
+                event_date, precision, basis = stated, "day", "stated in the source page"
+            elif section_date:
+                event_date, precision, basis = section_date, "month", "Webber list heading (month)"
+            else:
+                event_date, precision, basis = None, None, None
 
             entity_name_match = re.match(r'([^-–]+)', title)
             entity_name = entity_name_match.group(1).strip() if entity_name_match else title
 
-            return self._convert_details_to_event(url, title, description, event_date, entity_name)
+            event = self._convert_details_to_event(url, title, description, event_date, entity_name,
+                                                   published=published)
+            event.event_date_precision, event.event_date_basis = precision, basis
+            return event
 
         except Exception as e:
             # A failed detail page is a failure. It used to be replaced by
@@ -258,7 +271,8 @@ class WebberInsuranceDataSource(DataSource):
             self.note_failure(f"Webber Insurance detail page could not be read: {url}", e)
             return None
 
-    def _convert_details_to_event(self, url: str, title: str, description: str, event_date: Optional[datetime], entity_name: str) -> CyberEvent:
+    def _convert_details_to_event(self, url: str, title: str, description: str, event_date: Optional[datetime],
+                                  entity_name: str, published: Optional[datetime] = None) -> CyberEvent:
         """Converts the scraped details into a CyberEvent object."""
         entity = AffectedEntity(
             name=entity_name,
@@ -276,7 +290,7 @@ class WebberInsuranceDataSource(DataSource):
             domain="webberinsurance.com.au",
             credibility_score=0.8,
             relevance_score=1.0,
-            publication_date=event_date
+            publication_date=published
         )
 
         confidence = ConfidenceScore(

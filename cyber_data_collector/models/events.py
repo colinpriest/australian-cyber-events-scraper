@@ -135,6 +135,9 @@ class CyberEvent(BaseModel):
     secondary_types: List[CyberEventType] = Field(default_factory=list, description="Secondary event categories")
     severity: EventSeverity = Field(..., description="Event severity level")
     event_date: Optional[datetime] = Field(None, description="When the event occurred")
+    event_date_precision: Optional[str] = Field(
+        None, description="How precisely the source states event_date: day, month or year (None = not stated)")
+    event_date_basis: Optional[str] = Field(None, description="Where the source's event_date comes from")
     discovery_date: Optional[datetime] = Field(None, description="When the event was discovered")
     publication_date: Optional[datetime] = Field(None, description="When the event was first reported")
     last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Last update timestamp")
