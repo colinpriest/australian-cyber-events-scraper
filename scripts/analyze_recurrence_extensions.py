@@ -25,7 +25,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.analyze_recurrent_timing import last_ingest_date, load_victim_events, parse_date
+from scripts.analyze_recurrent_timing import (
+    UNRESOLVED_ATTRIBUTION_POLICIES, apply_attribution_policy, last_ingest_date, load_victim_events, parse_date,
+)
 from scripts.recurrence_extended import linkage_supplier, sequence_bias, timing_precision
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -127,7 +129,13 @@ def size_reference(events: pd.DataFrame) -> pd.DataFrame:
 
 def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                  bootstrap: int = 200, date_draws: int = 100,
-                 seed: int = 20261027) -> dict[str, Any]:
+                 seed: int = 20261027, unresolved_attributions: str = "include") -> dict[str, Any]:
+    """Run every extended analysis on one snapshot.
+
+    ``unresolved_attributions`` keeps (``include``) or drops (``exclude``)
+    victim rows the calibrated attribution check left unresolved; the counts
+    are in the summary's ``unresolved_attributions`` either way.
+    """
     if bootstrap < 1 or date_draws < 1:
         raise ValueError("bootstrap and date draws must both be positive")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -138,6 +146,7 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         end = censor_date or last_ingest_date(snapshot)
         raw_events = add_first_discovery(load_victim_events(snapshot), snapshot)
         events, coverage = observed_by(raw_events, end)
+        events, unresolved = apply_attribution_policy(events, unresolved_attributions)
         if events.empty:
             raise RuntimeError("No victim events were available by the analysis cutoff")
         reference = size_reference(events)
@@ -161,6 +170,7 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         "bootstrap_replicates": bootstrap,
         "date_draws": date_draws,
         "observation_coverage": coverage,
+        "unresolved_attributions": unresolved,
         "organisation_size_reference": reference.to_dict(orient="records"),
         "analyses": results,
     }
@@ -189,6 +199,11 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         f"cutoff and {coverage['excluded_first_discovered_after_cutoff']} first discovered "
         f"after it. {coverage['retained_unknown_discovery_date']} retained attributions "
         "have unknown discovery dates.", "",
+        f"Victim attributions left unresolved by the calibrated attribution check: "
+        f"{unresolved['victim-event attributions unresolved']} on "
+        f"{unresolved['events with an unresolved attribution']} incident(s), "
+        f"{'included' if unresolved['policy'] == 'include' else 'excluded'} here "
+        f"(--unresolved-attributions).", "",
         "Historical cutoffs filter known discovery dates, but the snapshot contains "
         "present-day incident links, fields, and classifications. It is not a complete "
         "historical database snapshot; retrospective and prospective interpretations "
@@ -213,10 +228,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bootstrap", type=int, default=200, help="Bootstrap replicates")
     parser.add_argument("--date-draws", type=int, default=100, help="Date-uncertainty draws")
     parser.add_argument("--seed", type=int, default=20261027, help="Random seed")
+    parser.add_argument("--unresolved-attributions", choices=UNRESOLVED_ATTRIBUTION_POLICIES, default="include",
+                        help="Keep (default) or drop victim rows whose attribution is unresolved")
     args = parser.parse_args(argv)
     summary = run_analysis(Path(args.db), Path(args.out_dir),
                            parse_date(args.censor_date) if args.censor_date else None,
-                           args.bootstrap, args.date_draws, args.seed)
+                           args.bootstrap, args.date_draws, args.seed, args.unresolved_attributions)
     print(f"Wrote extended recurrence analyses to {Path(args.out_dir).resolve()}")
     print(f"Observation cutoff: {summary['censor_date']}")
     return 0

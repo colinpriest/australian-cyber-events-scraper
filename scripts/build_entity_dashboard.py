@@ -126,9 +126,15 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     # listed once under each, and never twice under one organisation stored
     # under two name variants - those are listed under one representative
     # variant, with its size.
-    from cyber_data_collector.dedup.victim_counting import organisation_groups, within_event_duplicates
+    from cyber_data_collector.dedup.victim_counting import (
+        ATTRIBUTION_UNRESOLVED, organisation_groups, unresolved_rows, within_event_duplicates,
+    )
 
-    drop = within_event_duplicates(conn, [(r["entity_id"], r["entity"], r["event_id"]) for r in rows])
+    victims = [(r["entity_id"], r["entity"], r["event_id"]) for r in rows]
+    drop = within_event_duplicates(conn, victims)
+    # A victim the calibrated attribution check flagged (probably wrong, no
+    # replacement it could trust) stays listed, marked "attribution unresolved".
+    unresolved = unresolved_rows(conn, victims, drop)
     rows = [r for r in rows if (r["entity_id"], r["event_id"]) not in drop]
     groups = organisation_groups(conn, [r["entity_id"] for r in rows])
     reps = {r["entity_id"]: r for r in rows if groups.get(r["entity_id"], r["entity_id"]) == r["entity_id"]}
@@ -140,9 +146,12 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             reps[rep["entity_id"]] = rep
     seen = set()
     resolved = []
+    unresolved_by_key: Dict[Any, str] = {}
     for r in rows:
         rep = reps.get(groups.get(r["entity_id"], r["entity_id"]), r)
         key = (rep["entity_id"], r["event_id"])
+        if (r["entity_id"], r["event_id"]) in unresolved:
+            unresolved_by_key.setdefault(key, unresolved[(r["entity_id"], r["event_id"])])
         if key in seen:
             continue
         seen.add(key)
@@ -176,6 +185,9 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "vendor": r["vendor"],
             "members": r["members"],
             "description": description,
+            "attribution": (ATTRIBUTION_UNRESOLVED if (rep["entity_id"], r["event_id"]) in unresolved_by_key
+                            else ""),
+            "attribution_reason": unresolved_by_key.get((rep["entity_id"], r["event_id"]), ""),
         })
     return out
 
@@ -207,6 +219,8 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                     if by_size.get(size)},
         "estimated": sum(1 for done in estimated.values() if done),
         "unestimated": sum(1 for done in estimated.values() if not done),
+        "unresolved_rows": sum(1 for r in rows if r.get("attribution")),
+        "unresolved_events": len({r["event_id"] for r in rows if r.get("attribution")}),
     }
 
 
@@ -253,6 +267,10 @@ PAGE = """<!doctype html>
   .desc {{ color: #555; font-size: 13.5px; }}
   .meta {{ color: #8a8f98; font-size: 12px; margin-top: 2px; }}
   .dup {{ background: #fff8e6; }}
+  .unres {{ display: inline-block; font-size: 10.5px; font-weight: 700;
+            letter-spacing: .03em; padding: 1px 6px; border-radius: 4px;
+            background: #fdecec; color: #8c2f2f; border: 1px solid #f0cbcb;
+            cursor: help; white-space: nowrap; }}
   .empty {{ padding: 30px; text-align: center; color: #889; background: #fff;
             border: 1px solid #dfe3e8; border-radius: 8px; }}
   @media (prefers-color-scheme: dark) {{
@@ -265,6 +283,7 @@ PAGE = """<!doctype html>
     input[type=search], select {{ background: #14161a; color: #e6e8ec;
                                   border-color: #333944; }}
     .dup {{ background: #2a2412; }}
+    .unres {{ background: #331a1a; color: #e88a8a; border-color: #4d2626; }}
     .size-SMALL   {{ background: #1c2f22; color: #8ed0a1; border-color: #2b4634; }}
     .size-MEDIUM  {{ background: #182634; color: #8ab8e6; border-color: #27394d; }}
     .size-LARGE   {{ background: #33260f; color: #e0ad63; border-color: #4a3818; }}
@@ -287,6 +306,7 @@ PAGE = """<!doctype html>
     </select>
   </label>
   <label><input type="checkbox" id="multi"> Only entities with more than one event</label>
+  <label><input type="checkbox" id="unres"> Only attribution unresolved</label>
   <span class="stat" id="stat"></span>
 </div>
 <div id="host"></div>
@@ -297,6 +317,7 @@ const host = document.getElementById('host');
 const q = document.getElementById('q');
 const multi = document.getElementById('multi');
 const size = document.getElementById('size');
+const unres = document.getElementById('unres');
 const stat = document.getElementById('stat');
 
 function esc(s) {{
@@ -315,6 +336,7 @@ function render() {{
   // look single-event and vanish.
   if (multi.checked) rows = rows.filter(r => counts[r.entity] > 1);
   if (size.value) rows = rows.filter(r => r.size === size.value);
+  if (unres.checked) rows = rows.filter(r => r.attribution);
   if (needle) rows = rows.filter(r =>
     (r.entity + ' ' + r.title + ' ' + r.description).toLowerCase().includes(needle));
 
@@ -347,7 +369,12 @@ function render() {{
     html += '<td><span class="size size-' + esc(r.size) + '" title="' +
             esc(tip) + '">' + esc(r.size) + '</span></td>';
     html += '<td class="date">' + esc(r.date) + '</td>';
-    html += '<td><div class="title">' + esc(r.title) + '</div><div class="meta">' +
+    // An unresolved attribution keeps the incident but says the victim may be
+    // wrong; the reason is the attribution check's own.
+    html += '<td><div class="title">' + esc(r.title) +
+            (r.attribution ? ' <span class="unres" title="' + esc(r.attribution_reason) + '">' +
+                             esc(r.attribution) + '</span>' : '') +
+            '</div><div class="meta">' +
             r.members + ' source record(s)' +
             (r.records ? ' · ' + Number(r.records).toLocaleString() + ' records' : '') +
             (r.vendor ? ' · via ' + esc(r.vendor) : '') + '</div></td>';
@@ -360,6 +387,7 @@ function render() {{
 
 q.addEventListener('input', render);
 multi.addEventListener('change', render);
+unres.addEventListener('change', render);
 size.addEventListener('change', render);
 render();
 </script>
@@ -394,6 +422,8 @@ def build_html(rows: List[Dict[str, Any]], stats: Dict[str, Any], note: str = ""
            f"{'y has' if stats['multi_entities'] == 1 else 'ies have'} more than "
            f"one event. "
            + (f"By size: {by_size}. " if by_size else "")
+           + (f"{stats['unresolved_rows']} row(s) on {stats['unresolved_events']} event(s) have an "
+              f"unresolved victim attribution (kept, marked). " if stats.get("unresolved_rows") else "")
            + f"Generated {datetime.now():%Y-%m-%d %H:%M}.")
     return PAGE.format(sub=html.escape(sub),
                        rows=script_json(rows, ensure_ascii=False))
@@ -422,6 +452,8 @@ def main() -> int:
           f"{stats['rows']} row(s)")
     print(f"  {stats['multi_entities']} entities have more than one event "
           f"({stats['multi_rows']} rows) - the review candidates")
+    print(f"  {stats['unresolved_rows']} row(s) on {stats['unresolved_events']} event(s) marked "
+          f"'attribution unresolved'")
     print(f"  {stats['estimated']} of {stats['entities']} entities have been "
           f"sized: "
           + (", ".join(f"{n} {size}" for size, n in stats["by_size"].items())

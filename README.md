@@ -579,6 +579,23 @@ needed and unavailable, and `--apply` refuses when its labels file is
 missing, unreadable or empty. A calibration measured on another model or
 question version makes the step report-only, and the log says so.
 
+**Flagged victims are reassessed, and unresolved ones are marked.** When
+`check-victim-attribution` finds a recorded victim below the cut-off and
+neither a co-victim nor a calibrated replacement can take its place, it
+*flags* the pair and leaves it. Each action row records the hash of the input
+it judged and the event's member signature, and every run judges every pair
+again (Jev is asked only where the evidence, the timeline or the membership
+changed). So a flagged pair ends each run **confirmed** (re-judged at or above
+the cut-off, or labelled correct: a `confirmed` row clears the flag),
+**replaced** (demoted or re-attributed), or **still flagged** with its reason.
+A still-flagged pair is an *unresolved attribution*. The incident stays in
+every count, and victim counting, the by-entity dashboard ("attribution
+unresolved" badge and filter) and the recurrence analysis (counts and repeats
+with them included and excluded, `--unresolved-attributions exclude`) mark it
+separately. On the 2026-10-28 copy, 43 active pairs were flagged; 15 had
+changed input and are re-judged on the next run. Details:
+[docs/10-victim-attribution-and-timelines.md](docs/10-victim-attribution-and-timelines.md).
+
 **Labels** (all blind to the model being calibrated, each with a written
 reason; reviewed where flagged): `evaluation/source_gate_labels.csv` (170
 pages), `evaluation/event_reality_labels.csv` (168 events),
@@ -1027,7 +1044,14 @@ python scripts/dedup_admin.py roles-status --invalidate-all    # after changing 
 
 Run `classify-entities --stale-only` after any merge pass (`apply-missed`,
 `consolidate`, `adjudicate-clusters`). The dashboard shows a "roles stale"
-badge and filter.
+badge and filter. `run_full_pipeline.py` runs it three times: early in data
+hygiene, again after the steps that merge and split (`check-coherence`,
+`check-duplicates`, `find-supplier-victims`), and last after the recurrence
+check, followed by `check-victims` and `check-victim-attribution`
+(`run_role_refresh`). Until 2026-10-28 it ran only the first time, and the later
+merges left 145 events with outdated roles. If any active event still has
+outdated or missing roles at the end (a failed model call), the run records an
+error and ends degraded.
 
 ### Deduplication Review Dashboard
 
@@ -1373,7 +1397,21 @@ python scripts/analyze_recurrence_extensions.py \
 
 # Or run the existing report and the extended analyses together
 python scripts/analyze_recurrent_timing.py --extended --bootstrap 500 --date-draws 100
+
+# Sensitivity: without victim attributions left unresolved by the attribution check
+python scripts/analyze_recurrent_timing.py --unresolved-attributions exclude \
+  --out-dir analysis/recurrent_timing_resolved_only --bootstrap 500
 ```
+
+**Unresolved victim attributions.** Victim rows that the calibrated attribution
+check flagged and could not resolve are tagged `attribution_unresolved` when the
+data loads. Every run reports, under "unresolved victim attributions" in the
+data-quality summary (and `analysis_summary.json`), how many rows, events and
+organisations they are. It also reports the observed repeats per elapsed-time
+band with them included and excluded, and how many repeats involve one. They
+are kept by default (`--unresolved-attributions include`; `exclude` drops them
+from the whole analysis, in both scripts). On the 2026-10-28 copy, 41
+attributions were unresolved and 19 of 150 observed repeats involved one.
 
 The standalone command writes `extended_recurrence_report.md`, a JSON summary,
 and detailed CSVs under `analysis/recurrent_timing_extended/`. With `--extended`,

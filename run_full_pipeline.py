@@ -501,6 +501,7 @@ class UnifiedPipeline:
             self.run_missed_merge_check(args)
             self.run_data_hygiene(args)
             self.run_recurrence_check(args)
+            self.run_role_refresh(args)
             self.run_entity_sizing(args)
 
             self.results['deduplication']['success'] = True
@@ -600,10 +601,14 @@ class UnifiedPipeline:
            cut-off (``evaluation/duplicate_calibration.json``); report-only
            without a calibration for the current model and question. Runs
            after the victim check because pairs are formed by victim.
-        5. ``check-victim-attribution`` - Jev asks whether each event's
-           recorded victim (one with a researched timeline) is really the
-           organisation affected. **Report-only**: there are no labelled
-           victim attributions to calibrate a cut-off on.
+        5. ``check-victim-attribution --apply`` - Jev asks whether each
+           event's recorded victim is really the organisation affected;
+           calibrated demotion / re-attribution, otherwise flagged.
+        6. ``check-coherence``, ``check-duplicates``, ``find-supplier-victims``
+           change membership, so ``classify-entities --stale-only`` runs again
+           before ``reconcile-timelines``. After the recurrence check (which
+           merges too) :meth:`run_role_refresh` settles roles and attributions
+           a last time.
 
         Steps 2 and 4 research each multi-event organisation's incident
         timeline once (Perplexity, stored) and escalate the cases Jev scores in
@@ -662,11 +667,16 @@ class UnifiedPipeline:
         # Again at the end (no fetching): merges and splits change first reports.
         # canonicalise-entities: reviewed aliases fold; name-structure proposals
         # fold only when Perplexity confirms one organisation (verdicts stored).
+        # classify-entities --stale-only again after suppliers: coherence splits,
+        # duplicate and supplier merges change membership after the first
+        # refresh (on 2026-10-28 they left 145 events with outdated roles), and
+        # reconcile-timelines and the recurrence check read victims by role.
         steps = [evidence, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
                  ["research-timelines"],
                  ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
-                 coherence, duplicates, suppliers, ["reconcile-timelines", "--queue-gaps"],
+                 coherence, duplicates, suppliers, ["classify-entities", "--stale-only"],
+                 ["reconcile-timelines", "--queue-gaps"],
                  ["publication-dates", "--no-fetch"]]
         for step in steps:
             try:
@@ -748,6 +758,64 @@ class UnifiedPipeline:
             self.results['deduplication']['errors'].append(f"recurrence: {exc}")
         finally:
             conn.close()
+
+    def run_role_refresh(self, args) -> None:
+        """Settle entity roles and victim attributions after the last membership change.
+
+        Roles are judged against an event's members (``role_maintenance``), so
+        every merge or split leaves them describing records the event no
+        longer has. The recurrence check merges after data hygiene, and most
+        hygiene merges come after hygiene's first role refresh, so this runs
+        last:
+
+        1. ``classify-entities --stale-only`` - every event whose members
+           changed since its roles were classified.
+        2. ``check-victims`` and ``check-victim-attribution --apply`` (skipped
+           with ``--skip-data-hygiene``; report-only with
+           ``--report-event-rejections``). Every pair is judged again, but Jev
+           is asked only where the input changed - new members, evidence, a
+           refreshed timeline, other victims - so earlier flags are settled:
+           confirmed, demoted or re-attributed (calibrated), or kept flagged
+           with the reason.
+
+        Then no active event may have outdated or missing roles; any that do
+        (a failed model call) are recorded as an error, so the run ends
+        degraded rather than reporting success. Never fails the phase.
+        """
+        import sqlite3
+
+        from cyber_data_collector.dedup.role_maintenance import staleness_report
+        from scripts import dedup_admin
+
+        base = ["--db", self.db_path]
+        steps = [["classify-entities", "--stale-only"]]
+        if not getattr(args, 'skip_data_hygiene', False):
+            attribution = ["check-victim-attribution"]
+            if not getattr(args, 'report_event_rejections', False):
+                attribution.append("--apply")
+            steps += [["check-victims"], attribution]
+        for step in steps:
+            try:
+                if run_step(dedup_admin.main, base + step) != 0:
+                    raise RuntimeError(f"{step[0]} failed")
+            except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
+                logger.warning("Role refresh step %s failed: %s", step[0], exc)
+                self.results['deduplication']['errors'].append(f"{step[0]}: {exc}")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            report = staleness_report(conn)
+        finally:
+            conn.close()
+        self.results['deduplication']['roles'] = report
+        if report['outdated'] or report['never_classified']:
+            message = (f"{report['outdated']} active event(s) still have outdated roles and "
+                       f"{report['never_classified']} have none after the role refresh")
+            logger.error(message)
+            self.results['deduplication']['errors'].append(f"roles: {message}")
+        else:
+            logger.info("Entity roles current for all %d active events", report['active'])
 
     def run_entity_sizing(self, args) -> None:
         """Give newly discovered entities an ordinal size band.

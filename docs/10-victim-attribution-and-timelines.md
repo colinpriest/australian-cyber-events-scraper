@@ -138,6 +138,68 @@ wrong victims, four are fixed (UN Women, Aussie Fluid Power, Ambulance
 Tasmania, TAFE SA); the NSW driver-licence exposure filed under Optus is not
 below the cut-off.
 
+### Flags are reassessed; unresolved attributions are marked, not dropped
+
+A flag is a judgement on one input. Every run judges every pair again, and Jev
+is asked only where the input changed: its stored answer is keyed on a hash of
+the evidence, the organisation's timeline, the event's other victims and so
+its membership. Each `VictimAttributionActions` row now records that
+`input_hash` and the event's `member_signature` (columns added in place on
+older tables). A pair whose latest action is `flagged` ends every calibrated
+run as one of:
+
+| Outcome | When | Row written |
+|---|---|---|
+| **confirmed** (flag cleared) | re-judged at or above the cut-off, or labelled `correct` | `confirmed`, reason says what changed ("event membership changed", "evidence, timeline or co-victims changed", "input unchanged", "flag predates input tracking") |
+| **replaced** | still below the cut-off and now a co-victim remains (`demoted`) or a calibrated replacement qualifies (`reattributed`) | as before |
+| **still flagged** | still below the cut-off, no trusted replacement | a new `flagged` row only when the reason or the input changed |
+
+A pair labelled `wrong` is never confirmed. Without a calibration for the
+current models and questions nothing is confirmed and flags stay. The command
+prints and returns a `flag_review` (flags reassessed, how many with changed
+input, the three outcomes, unresolved now).
+
+**Unresolved** = an active event-victim pair whose latest action is `flagged`
+(`victim_judgement.unresolved_attributions`). The incident is real and kept;
+who it happened to is not settled. It is exposed separately:
+
+* `victim_counting.unresolved_rows` marks the (organisation, event) rows,
+  including a kept name standing for a flagged spelling of the same
+  organisation dropped within the event;
+* the by-entity dashboard shows an "attribution unresolved" badge (hover: the
+  flag's reason), a filter, and the count in the subtitle;
+* the recurrence analysis tags `attribution_unresolved` on each victim row and
+  reports, under "unresolved victim attributions" in the data-quality summary,
+  how many rows, events and organisations are unresolved and the observed
+  repeats per elapsed-time band with them **included** and **excluded**, plus
+  how many repeats involve one. `--unresolved-attributions exclude` (both
+  `analyze_recurrent_timing.py` and `analyze_recurrence_extensions.py`; default
+  `include`) runs the whole analysis without them.
+
+On the 2026-10-28 copy: 43 active pairs flagged (none confirmed yet - every
+stored score is still below 0.15), 15 of them with input changed since the
+flag, which the next run re-judges. The dashboard marks 43 rows on 43 events.
+In the recurrence cohort 41 attributions are unresolved; 19 of 150 observed
+repeats involve one (136 repeats with them excluded).
+
+### Roles are refreshed after the last membership change
+
+Roles carry a signature of the members they were classified against
+(`role_maintenance`), so staleness is derived. But `classify-entities
+--stale-only` ran once, early in data hygiene, and `check-coherence`,
+`check-duplicates`, `find-supplier-victims` and the recurrence check change
+membership after it. On the 2026-10-28 copy all 145 events with outdated roles
+had been merged after their roles were classified: 295 `check-duplicates`
+decisions and 16 recurrence merges. The refresh now also runs:
+
+1. after `find-supplier-victims`, before `reconcile-timelines` (which, like
+   the recurrence check, reads victims by role);
+2. after the recurrence check (`run_full_pipeline.py` `run_role_refresh`):
+   `classify-entities --stale-only`, `check-victims`,
+   `check-victim-attribution --apply`, then a check that no active event has
+   outdated or missing roles. Any left (a failed model call) are recorded as an
+   error and the run ends degraded.
+
 ## 3. Timeline reconciliation (`dedup/timeline_reconciliation.py`)
 
 `reconcile-timelines` refreshes stale timelines first, then matches each event
@@ -185,7 +247,13 @@ python scripts/dedup_admin.py check-events --apply
 python scripts/dedup_admin.py check-victims
 python scripts/dedup_admin.py check-victim-attribution --apply    # calibrated; needs the labels file
 python scripts/dedup_admin.py check-duplicates --apply
+python scripts/dedup_admin.py classify-entities --stale-only       # roles after the merges and splits
 python scripts/dedup_admin.py reconcile-timelines --queue-gaps     # no --apply until re-dating is calibrated
+# after the recurrence check (run_full_pipeline.py does this as run_role_refresh)
+python scripts/dedup_admin.py classify-entities --stale-only
+python scripts/dedup_admin.py check-victims
+python scripts/dedup_admin.py check-victim-attribution --apply    # settles earlier flags
+python scripts/dedup_admin.py roles-status                         # expect 0 outdated
 ```
 
 Recalibrating (new model or question version): `calibrate_victim_attribution.py

@@ -14,6 +14,14 @@ variants with the project's strict test,
 :meth:`EntityResolver.same_organisation` (aliases first), so callers can key
 on one representative entity per organisation and drop duplicate
 (organisation, event) rows.
+
+**Unresolved attributions.** When the calibrated victim-attribution step
+scores a recorded victim as probably wrong but no co-victim or calibrated
+replacement can take its place, it flags the pair and leaves the role
+(:func:`victim_judgement.unresolved_attributions`). Such an incident is real
+and still counted, but under an organisation it may not have happened to.
+:func:`unresolved_rows` marks those rows so callers can show them as
+:data:`ATTRIBUTION_UNRESOLVED` and report the analysis with and without them.
 """
 
 from __future__ import annotations
@@ -220,6 +228,48 @@ def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, 
                 continue
             kept.append((eid, name))
     return drop
+
+
+ATTRIBUTION_UNRESOLVED = "attribution unresolved"
+
+
+def unresolved_attributions(conn: sqlite3.Connection) -> Dict[Tuple[str, int], Dict[str, object]]:
+    """Flagged active victim pairs, keyed ``(event id, entity id)``; see :mod:`victim_judgement`."""
+    from cyber_data_collector.dedup.victim_judgement import unresolved_attributions as flagged
+    return flagged(conn)
+
+
+def unresolved_rows(conn: sqlite3.Connection, rows: Iterable[Tuple[int, str, str]], drop: set,
+                    resolver: Optional[EntityResolver] = None,
+                    flagged: Optional[Dict[Tuple[str, int], Dict[str, object]]] = None) -> Dict[Tuple[int, str], str]:
+    """Kept ``(entity id, event id)`` victim rows whose attribution is unresolved, with the flag's reason.
+
+    ``rows`` are ``(entity id, entity name, event id)`` before
+    :func:`within_event_duplicates` removed ``drop``. A kept row is unresolved
+    when its own pair is flagged, or when it stands for a flagged variant of
+    the same organisation dropped from that event.
+    """
+    flagged = unresolved_attributions(conn) if flagged is None else flagged
+    if not flagged:
+        return {}
+    rows = list(rows)
+    names = {(int(eid), did): name for eid, name, did in rows}
+    out: Dict[Tuple[int, str], str] = {}
+    for eid, name, did in rows:
+        key = (int(eid), did)
+        if key in drop:
+            continue
+        flag = flagged.get((did, int(eid)))
+        if flag is None:
+            for (other, other_did) in drop:
+                if other_did == did and (did, other) in flagged:
+                    resolver = resolver or _resolver(conn)
+                    if same_within_event(resolver, name, names.get((other, did))):
+                        flag = flagged[(did, other)]
+                        break
+        if flag is not None:
+            out[key] = str(flag.get("reason") or "flagged by victim attribution")
+    return out
 
 
 def one_row_per_organisation(rows: Iterable[Tuple[int, str]],
