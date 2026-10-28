@@ -1,0 +1,5 @@
+scenario,status,standardized_rate_0_90,standardized_rate_91_180,standardized_rate_ratio
+baseline,estimated,4.812280074202678,5.286926594055155,1.0986323556679354
+active_same_overrides,estimated,4.811990679648518,5.284772314449496,1.0982507378496236
+model_same_probability_ge_0.9,estimated,4.812280074202678,5.286926594055155,1.0986323556679354
+model_victim_probability_lt_0.5_excluded,estimated,3.506378179370804,4.040509548964195,1.1523313636663222

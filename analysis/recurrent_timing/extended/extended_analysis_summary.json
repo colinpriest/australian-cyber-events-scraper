@@ -1,0 +1,256 @@
+{
+  "source_database": "D:\\dev\\australian-cyber-events-scraper\\instance\\cyber_events.db",
+  "snapshot_sha256": "176fa241aee3e6ba357947ecf9cbd72f330a197a64be31088989477d4e40bf95",
+  "censor_date": "2026-10-29",
+  "seed": 20260805,
+  "bootstrap_replicates": 500,
+  "date_draws": 100,
+  "observation_coverage": {
+    "input_attributions": 1016,
+    "excluded_after_incident_cutoff": 0,
+    "excluded_first_discovered_after_cutoff": 0,
+    "retained_unknown_discovery_date": 0,
+    "retained_attributions": 1016
+  },
+  "unresolved_attributions": {
+    "policy": "include",
+    "victim-event attributions unresolved": 43,
+    "events with an unresolved attribution": 43,
+    "organisations with an unresolved attribution": 42,
+    "victim-event attributions analysed": 1016
+  },
+  "organisation_size_reference": [
+    {
+      "organisation_size": "SMALL",
+      "organisations": 93,
+      "weight": 0.10414333706606943
+    },
+    {
+      "organisation_size": "MEDIUM",
+      "organisations": 275,
+      "weight": 0.3079507278835386
+    },
+    {
+      "organisation_size": "LARGE",
+      "organisations": 272,
+      "weight": 0.3045912653975364
+    },
+    {
+      "organisation_size": "HUGE",
+      "organisations": 179,
+      "weight": 0.20044792833146696
+    },
+    {
+      "organisation_size": "UNKNOWN",
+      "organisations": 74,
+      "weight": 0.08286674132138858
+    }
+  ],
+  "analyses": {
+    "timing_and_date_precision": {
+      "section": "## Timing-band and date-precision sensitivity\n\nRates are per 100 entity-years. Four band schemes, size-specific rates, and a kernel-smoothed rate are directly standardized to the fixed baseline organisation-size distribution, including UNKNOWN; see `timing_band_size_adjusted.csv`, `timing_band_size_strata.csv`, and `timing_smooth_size_adjusted.csv`. The smooth-curve interval resamples organisations and retains fixed weights. An estimate is unavailable when a nonzero-weight size stratum lacks exposure; no unsupported group is silently dropped. Baseline size weights: {'SMALL': 0.10414333706606943, 'MEDIUM': 0.3079507278835386, 'LARGE': 0.3045912653975364, 'HUGE': 0.20044792833146696, 'UNKNOWN': 0.08286674132138858}. Recorded current size is an imperfect proxy, not a direct adjustment for visibility, attack surface or target value; size estimates may be stale or missing.\n\n| Days | Repeat events | Exposure days | Unadjusted rate | Size-standardized rate | Unsupported sizes |\n|---|---:|---:|---:|---:|---|\n| 1-90 | 13 | 87567 | 5.42 | 4.81 | none |\n| 91-180 | 13 | 79273 | 5.99 | 5.29 | none |\n| 181-270 | 13 | 70834 | 6.70 | 5.73 | none |\n\nPrecision evidence among victim-event attributions: {'unknown': 462, 'explicit_month': 259, 'explicit_day': 166, 'ambiguous_first_of_month': 129}. An initial day of a month is ambiguous, not proof that the date was imputed. `timing_date_precision_size_adjusted.csv` compares explicit month/year intervals, two separately labelled ambiguous-first scenarios, and complete histories with explicitly day-precise metadata (137 entities, 2 with observed repeats). Insufficient explicit date precision for a reliable precisely dated subset. Imputation percentiles show sensitivity to date assumptions, not confidence intervals for incidence.\n\n| Date scenario | 91\u2013180-day size-standardized median rate | 2.5\u201397.5% of date draws | Valid draws |\n|---|---:|---:|---:|\n| stored dates | 5.29 | 5.29\u20135.29 | 1/1 |\n| known intervals | 4.94 | 4.41\u20135.29 | 100/100 |\n| ambiguous firsts as month | 5.07 | 4.41\u20135.94 | 100/100 |\n| ambiguous firsts as month or year | 4.42 | 3.41\u20135.35 | 100/100 |\n| explicit day only complete histories | 0.00 | 0.00\u20130.00 | 1/1 |\n\nA separate prospective size-adjusted protocol freezes the cohort and recorded size at registration, and compares 91\u2013180 days with the adjacent 1\u201390 and 181\u2013270 days using a conditional test within size strata. The fixed end is 2028-10-27 and at least 20 comparison events in supported strata are required. Current size-adjusted validation status: **unavailable**. The test assumes independent Poisson counts within size strata; shared incidents, sparse strata, mutable records and missing earlier history limit interpretation. The original unadjusted registered protocol is retained separately in `timing_peak_validation.json`; its definition has not been changed. Preserve `timing_size_adjusted_registration.json` for future validation.\n",
+      "precision_counts": {
+        "unknown": 462,
+        "explicit_month": 259,
+        "explicit_day": 166,
+        "ambiguous_first_of_month": 129
+      },
+      "precise_entities": 137,
+      "precise_repeating_entities": 2,
+      "validation": {
+        "status": "unavailable",
+        "reason": "No cohort was frozen by the registration date; a later database cannot prove a prospective cohort.",
+        "registered_on": "2026-10-27",
+        "validation_end": "2028-10-27"
+      },
+      "size_validation": {
+        "status": "unavailable",
+        "reason": "No size-adjusted cohort was frozen on the registration date."
+      },
+      "size_weights": {
+        "SMALL": 0.10414333706606943,
+        "MEDIUM": 0.3079507278835386,
+        "LARGE": 0.3045912653975364,
+        "HUGE": 0.20044792833146696,
+        "UNKNOWN": 0.08286674132138858
+      },
+      "size_reference_weights": {
+        "SMALL": 0.10414333706606943,
+        "MEDIUM": 0.3079507278835386,
+        "LARGE": 0.3045912653975364,
+        "HUGE": 0.20044792833146696,
+        "UNKNOWN": 0.08286674132138858
+      },
+      "band_schemes": [
+        "pre_specified",
+        "60_day_boundaries",
+        "shifted_boundary",
+        "wide_first_band"
+      ],
+      "date_imputations": 100,
+      "outputs": [
+        "timing_band_sensitivity.csv",
+        "timing_smooth_hazard.csv",
+        "timing_band_size_adjusted.csv",
+        "timing_band_size_strata.csv",
+        "timing_smooth_size_adjusted.csv",
+        "timing_date_precision_size_adjusted.csv",
+        "timing_date_precision_sensitivity.csv",
+        "timing_date_precision_coverage.csv",
+        "timing_peak_validation.json",
+        "timing_peak_size_adjusted_validation.json",
+        "timing_smooth_hazard.png"
+      ]
+    },
+    "linkage_and_shared_incidents": {
+      "section": "### Linkage and shared-incident sensitivity\n\nThe scenarios below are independent alternatives to the baseline. Rates are recorded repeat events per 100 entity-years at risk; rate ratios compare days 91\u2013180 with days 1\u201390. Each rate is directly standardised to the same baseline distribution of organisation sizes, so differing size composition between scenarios and time bands is accounted for.\n\nBaseline size weights: {'SMALL': 0.10414333706606943, 'MEDIUM': 0.3079507278835386, 'LARGE': 0.3045912653975364, 'HUGE': 0.20044792833146696, 'UNKNOWN': 0.08286674132138858}. UNKNOWN is a separate stratum. Organisation size is a current recorded category, not a complete measurement of exposure, target value or reporting visibility.\n\n| Scenario | Evidence status | Decisions applied | Victim attributions | Incidents | 0\u201390 events / days | 91\u2013180 events / days | Size-standardised ratio | Adjustment status |\n|---|---|---:|---:|---:|---:|---:|---:|---|\n| baseline | observed cohort | 0 | 1016 | 895 | 13 / 87567 | 13 / 79273 | 1.10 | estimated |\n| active_same_overrides | evaluated | 2 | 1016 | 893 | 13 / 87582 | 13 / 79325 | 1.10 | estimated |\n| model_same_probability_ge_0.9 | evaluated | 0 | 1016 | 895 | 13 / 87567 | 13 / 79273 | 1.10 | estimated |\n| model_victim_probability_lt_0.5_excluded | evaluated | 129 | 887 | 785 | 8 / 76921 | 9 / 70341 | 1.15 | estimated |\n\nStored scores cover 246 in-cohort incident pairs and 999 victim attributions. Active different-incident overrides vetoed 0 override merges and 1 model-candidate merges, including conflicts created transitively. 0 current incident(s) contain an active different-incident override; these cannot be split reliably without per-report victim and date attribution.\nModel scores are uncalibrated stored judgments, not confirmed truth; thresholds 0.9 and 0.5 define sensitivity scenarios, not validation. A merged incident uses the earliest observed date and the union of attributed victims. Evidence can be stale. Missing judgment or override tables are reported as unavailable. These scenarios cannot identify missing judgments or unrecorded victims.\n\n53 recorded incidents have multiple attributed victims, involving 162 distinct victims and 346 event-level victim pairs; 26 shared incidents have a supplier name recorded. Supplier names alone are not counted as victims. The observed network has 774 components, largest 22 organisations.\nThe size-standardised bootstrap compares resampling organisations with resampling connected components (500 requested replicates):\n\n| Resampling unit | Metric | Estimate | 95% percentile interval | Valid replicates |\n|---|---|---:|---:|---:|\n| entity | rate_0_90 | 4.81 | 2.34\u20137.61 | 500 |\n| entity | rate_91_180 | 5.29 | 2.56\u20138.72 | 500 |\n| entity | rate_ratio | 1.10 | 0.50\u20132.68 | 500 |\n| shared_incident_component | rate_0_90 | 4.81 | 2.14\u20137.33 | 500 |\n| shared_incident_component | rate_91_180 | 5.29 | 1.95\u20138.14 | 500 |\n| shared_incident_component | rate_ratio | 1.10 | 0.44\u20132.28 | 500 |\n\nComponents connect organisations through any recorded shared incident, not only incidents with a named supplier. Bootstrap intervals use fixed baseline weights and retain all sizes within each component; draws lacking exposure in any required stratum are omitted and valid counts are shown. Small cells, zero early events and missing shared incidents limit inference. Stratum-specific rates are in linkage_size_strata.csv; crude results remain separately available for comparison.",
+      "outputs": [
+        "linkage_sensitivity.csv",
+        "shared_incident_dependencies.csv",
+        "recurrence_cluster_bootstrap.csv",
+        "linkage_size_standardized.csv",
+        "linkage_size_strata.csv",
+        "recurrence_size_standardized_bootstrap.csv"
+      ],
+      "scenarios": [
+        {
+          "scenario": "baseline",
+          "status": "observed cohort",
+          "decisions_applied": 0,
+          "victim_attributions": 1016,
+          "incidents": 895,
+          "entities": 893,
+          "repeat_intervals_0_180": 26,
+          "days_0_90": 87567,
+          "days_91_180": 79273,
+          "events_0_90": 13,
+          "events_91_180": 13,
+          "rate_0_90_per_100_years": 5.422419404570215,
+          "rate_91_180_per_100_years": 5.989744301338413,
+          "rate_ratio": 1.1046257868378893
+        },
+        {
+          "scenario": "active_same_overrides",
+          "status": "evaluated",
+          "decisions_applied": 2,
+          "victim_attributions": 1016,
+          "incidents": 893,
+          "entities": 893,
+          "repeat_intervals_0_180": 26,
+          "days_0_90": 87582,
+          "days_91_180": 79325,
+          "events_0_90": 13,
+          "events_91_180": 13,
+          "rate_0_90_per_100_years": 5.421490717270672,
+          "rate_91_180_per_100_years": 5.9858178380081934,
+          "rate_ratio": 1.1040907658367476
+        },
+        {
+          "scenario": "model_same_probability_ge_0.9",
+          "status": "evaluated",
+          "decisions_applied": 0,
+          "victim_attributions": 1016,
+          "incidents": 895,
+          "entities": 893,
+          "repeat_intervals_0_180": 26,
+          "days_0_90": 87567,
+          "days_91_180": 79273,
+          "events_0_90": 13,
+          "events_91_180": 13,
+          "rate_0_90_per_100_years": 5.422419404570215,
+          "rate_91_180_per_100_years": 5.989744301338413,
+          "rate_ratio": 1.1046257868378893
+        },
+        {
+          "scenario": "model_victim_probability_lt_0.5_excluded",
+          "status": "evaluated",
+          "decisions_applied": 129,
+          "victim_attributions": 887,
+          "incidents": 785,
+          "entities": 791,
+          "repeat_intervals_0_180": 17,
+          "days_0_90": 76921,
+          "days_91_180": 70341,
+          "events_0_90": 8,
+          "events_91_180": 9,
+          "rate_0_90_per_100_years": 3.798702564969254,
+          "rate_91_180_per_100_years": 4.673305753401288,
+          "rate_ratio": 1.2302373437966478
+        }
+      ],
+      "shared_incidents": 53,
+      "shared_victims": 162,
+      "components": 774,
+      "largest_component": 22,
+      "within_incident_different_overrides": 0,
+      "blocked_merges": {
+        "active_same_overrides": 0,
+        "model_same_probability_ge_0.9": 1
+      },
+      "size_reference_weights": {
+        "SMALL": 0.10414333706606943,
+        "MEDIUM": 0.3079507278835386,
+        "LARGE": 0.3045912653975364,
+        "HUGE": 0.20044792833146696,
+        "UNKNOWN": 0.08286674132138858
+      },
+      "size_standardized_scenarios": [
+        {
+          "scenario": "baseline",
+          "status": "estimated",
+          "standardized_rate_0_90": 4.812280074202678,
+          "standardized_rate_91_180": 5.286926594055155,
+          "standardized_rate_ratio": 1.0986323556679354
+        },
+        {
+          "scenario": "active_same_overrides",
+          "status": "estimated",
+          "standardized_rate_0_90": 4.811990679648518,
+          "standardized_rate_91_180": 5.284772314449496,
+          "standardized_rate_ratio": 1.0982507378496236
+        },
+        {
+          "scenario": "model_same_probability_ge_0.9",
+          "status": "estimated",
+          "standardized_rate_0_90": 4.812280074202678,
+          "standardized_rate_91_180": 5.286926594055155,
+          "standardized_rate_ratio": 1.0986323556679354
+        },
+        {
+          "scenario": "model_victim_probability_lt_0.5_excluded",
+          "status": "estimated",
+          "standardized_rate_0_90": 3.506378179370804,
+          "standardized_rate_91_180": 4.040509548964195,
+          "standardized_rate_ratio": 1.1523313636663222
+        }
+      ]
+    },
+    "event_order_transitions_and_observation_bias": {
+      "section": "## Event order and attack-type transitions\n\nComparisons use the same reference distribution of baseline unique organisations by current recorded size (SMALL, MEDIUM, LARGE, HUGE, UNKNOWN), including unknown size as its own stratum. Contradictory size labels for an organisation are treated as UNKNOWN. Direct standardized rates are unavailable if any reference stratum lacks exposure; no missing stratum is extrapolated. Size helps account for differences associated with visibility, exposure and target value, but those factors are not directly measured here and size adjustment cannot remove all confounding. The reference weights are in `recurrence_size_reference_weights.csv`.\n\nThese first/later recorded-incident rates are standardized to that common size distribution. Spells end at the next recorded incident or the censor date; censored spells contribute exposure. Use the size-stratified CSV to inspect sparse groups; Poisson intervals do not account for dependence between incidents at one organisation.\n\n| dimension | group | organisations | repeats | reference weight covered | standardized rate per 100 entity years | status |\n| --- | --- | --- | --- | --- | --- | --- |\n| Event order | First observed | 893 | 69 | 1.00 | 2.75 | available |\n| Event order | Second or later observed | 69 | 54 | 1.00 | 19.61 | available |\n\nTransition counts and within-size conditional shares appear in `attack_type_transitions_by_size.csv`. These are conditional on a subsequent observed incident. Unknown types remain Unknown; different or unknown types on the same day are labelled Multiple or ambiguous. Cells are sparse and are not causal estimates.\n\n| size | prior attack type | next attack type | transitions | organisations | share of prior type within size |\n| --- | --- | --- | --- | --- | --- |\n| HUGE | Data Breach | Data Breach | 39 | 26 | 0.62 |\n| HUGE | Data Breach | Denial of Service | 5 | 4 | 0.08 |\n| HUGE | Data Breach | Financial Fraud | 1 | 1 | 0.02 |\n| HUGE | Data Breach | Infrastructure Attack | 1 | 1 | 0.02 |\n| HUGE | Data Breach | Insider Threat | 2 | 2 | 0.03 |\n| HUGE | Data Breach | Other | 9 | 8 | 0.14 |\n| HUGE | Data Breach | Phishing | 1 | 1 | 0.02 |\n| HUGE | Data Breach | Ransomware | 1 | 1 | 0.02 |\n| HUGE | Data Breach | State-Sponsored Attack | 1 | 1 | 0.02 |\n| HUGE | Data Breach | Supply Chain Attack | 1 | 1 | 0.02 |\n| HUGE | Data Breach | Vulnerability Exploit | 2 | 2 | 0.03 |\n| HUGE | Denial of Service | Data Breach | 2 | 2 | 0.67 |\n| HUGE | Denial of Service | Vulnerability Exploit | 1 | 1 | 0.33 |\n| HUGE | Financial Fraud | Data Breach | 2 | 2 | 0.67 |\n| HUGE | Financial Fraud | Identity Theft | 1 | 1 | 0.33 |\n| HUGE | Insider Threat | Ransomware | 1 | 1 | 1.00 |\n| HUGE | Other | Data Breach | 2 | 2 | 0.40 |\n| HUGE | Other | Financial Fraud | 1 | 1 | 0.20 |\n| HUGE | Other | Other | 1 | 1 | 0.20 |\n| HUGE | Other | Supply Chain Attack | 1 | 1 | 0.20 |\n\nShowing 20 of 50 rows; the CSV contains all rows.\n\n## Reporting and observation bias\n\nSource history: available; 0 event IDs with all known discovery dates after the cutoff excluded; 0 source records lack discovery dates. Organisation sizes are current recorded estimates and may not describe their size at the incident date.\n\nSource groups refer to the prior incident, are mutually exclusive, and show source availability\u2014not the chance that an incident was reported. Calendar groups are the prior incident's cohort, not calendar-time-adjusted rate ratios. Missing source history is Unknown.\n\nThe following source and calendar rates are standardized to the same fixed size weights. Size-specific rates and exposure are in `recurrence_order_source_calendar_by_size.csv`.\n\n| dimension | group | organisations | repeats | reference weight covered | standardized rate per 100 entity years | status |\n| --- | --- | --- | --- | --- | --- | --- |\n| Prior incident source | CyberDaily | 251 | 16 | 1.00 | 3.91 | available |\n| Prior incident source | GoogleSearch | 73 | 1 | 1.00 | 0.44 | available |\n| Prior incident source | Multiple sources | 360 | 60 | 1.00 | 5.46 | available |\n| Prior incident source | OAIC | 1 | 0 | 0.30 |  | unavailable: missing size exposure |\n| Prior incident source | Perplexity | 141 | 32 | 1.00 | 5.30 | available |\n| Prior incident source | WebberInsurance | 132 | 14 | 1.00 | 2.44 | available |\n| Prior incident calendar cohort | 2019\u20132021 | 137 | 33 | 1.00 | 3.43 | available |\n| Prior incident calendar cohort | 2022\u20132023 | 177 | 30 | 1.00 | 3.99 | available |\n| Prior incident calendar cohort | 2024 onward | 617 | 42 | 1.00 | 5.56 | available |\n| Prior incident calendar cohort | Through 2018 | 21 | 18 | 0.92 |  | unavailable: missing size exposure |\n\nThe following simulations remove some already recorded follow-ups under stated hypothetical observation probabilities: 75% for all follow-ups, or 50% for small and medium organisations and 100% for other recorded sizes, including Unknown. First observed incidents are retained. They illustrate sensitivity and do not estimate or reconstruct unreported attacks.\n\nThe following table uses fixed size standardization for each simulation draw; the full size-specific results, support and valid draw counts are in `observation_bias_by_size.csv`. A missing rate means one or more reference size groups have no exposure.\n\n| family | scenario | order group | size | replicates | valid rate draws | median repeats | median rate | p05 rate | p95 rate | reference weight covered |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| reporting | uniform 75% follow-up observation | All observed orders | STANDARDIZED | 100 | 100 | 92.50 | 3.10 | 2.88 | 3.35 | 1.00 |\n| reporting | lower observation for small organisations | All observed orders | STANDARDIZED | 100 | 100 | 117.00 | 3.80 | 3.64 | 3.95 | 1.00 |\n\nThe prior-history scenarios hypothetically assign an unobserved earlier incident to a fraction of organisations; they relabel existing spells without fabricating dates or exposure. They are not corrections or estimates of the true unobserved history.\n\n| family | scenario | order group | size | replicates | valid rate draws | median repeats | median rate | p05 rate | p95 rate | reference weight covered |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| history | 0% missing prior history | First | STANDARDIZED | 1 | 1 | 69.00 | 2.75 | 2.75 | 2.75 | 1.00 |\n| history | 0% missing prior history | Later | STANDARDIZED | 1 | 1 | 54.00 | 19.61 | 19.61 | 19.61 | 1.00 |\n| history | 25% missing prior history | First | STANDARDIZED | 100 | 100 | 52.00 | 2.79 | 2.49 | 3.05 | 1.00 |\n| history | 25% missing prior history | Later | STANDARDIZED | 100 | 100 | 71.00 | 6.73 | 5.90 | 7.41 | 1.00 |\n| history | 50% missing prior history | First | STANDARDIZED | 100 | 100 | 34.50 | 2.81 | 2.25 | 3.22 | 1.00 |\n| history | 50% missing prior history | Later | STANDARDIZED | 100 | 100 | 88.50 | 5.13 | 4.79 | 5.59 | 1.00 |\n\nThe original aggregate CSVs are unadjusted descriptive counts, supplied for continuity; they should not be used as size-adjusted comparisons.\n\nThese are associations in a selected, publicly reported dataset, conditional on an observed first incident. They do not establish causal effects or population attack risk. Sparse groups and reporting changes can be important.",
+      "outputs": [
+        "analysis\\recurrent_timing\\extended\\event_order_rates.csv",
+        "analysis\\recurrent_timing\\extended\\attack_type_transitions.csv",
+        "analysis\\recurrent_timing\\extended\\observation_bias_strata.csv",
+        "analysis\\recurrent_timing\\extended\\observation_bias_thinning.csv",
+        "analysis\\recurrent_timing\\extended\\prior_history_sensitivity.csv",
+        "analysis\\recurrent_timing\\extended\\recurrence_order_source_calendar_by_size.csv",
+        "analysis\\recurrent_timing\\extended\\recurrence_order_source_calendar_standardized.csv",
+        "analysis\\recurrent_timing\\extended\\attack_type_transitions_by_size.csv",
+        "analysis\\recurrent_timing\\extended\\observation_bias_by_size.csv",
+        "analysis\\recurrent_timing\\extended\\recurrence_size_reference_weights.csv"
+      ],
+      "source_history_status": "available",
+      "future_only_events_excluded": 0,
+      "undated_source_records": 0,
+      "same_day_type_ambiguities": 0,
+      "bias_replicates": 100,
+      "size_reference_weights": {
+        "SMALL": 0.10414333706606943,
+        "MEDIUM": 0.3079507278835386,
+        "LARGE": 0.3045912653975364,
+        "HUGE": 0.20044792833146696,
+        "UNKNOWN": 0.08286674132138858
+      }
+    }
+  }
+}
