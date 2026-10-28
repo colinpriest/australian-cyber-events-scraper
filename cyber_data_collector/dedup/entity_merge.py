@@ -51,6 +51,17 @@ EXPLICIT_ALIASES: Dict[str, str] = {
     "Commonwealth entities": "Australian Government",
     "Federal Government": "Australian Government",
     "the Australian Government": "Australian Government",
+    # Medicare is a programme Services Australia administers, not an
+    # organisation; coverage of the 2026 OpenAI-agent incident filed one
+    # incident under both names (9 and 8 events), so they were never compared.
+    "Medicare": "Services Australia",
+    "Australia's Medicare": "Services Australia",
+    "Australia’s Medicare": "Services Australia",
+    "Australia's government healthcare system (Medicare)": "Services Australia",
+    "Australia’s government healthcare system (Medicare)": "Services Australia",
+    "Medicare Australia": "Services Australia",
+    "Australian Institute of Health and Welfare (AIHW)": "Australian Institute of Health and Welfare",
+    "AIHW": "Australian Institute of Health and Welfare",
     "Austal (U.S. arm)": "Austal",
     "Austal Limited": "Austal",
     "Austal USA": "Austal",
@@ -155,11 +166,23 @@ def preferred_name(names: Sequence[str], usage: Dict[str, int]) -> str:
     return max(names, key=score)
 
 
-def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
+def is_organisation_list(name: str) -> bool:
+    """A name listing several organisations ("ANZ, NAB, Westpac, Commonwealth Bank")."""
+    parts = [part for part in re.split(r",|;", name or "") if part.strip()]
+    # Each part a name of its own (two or more words): "Smith, Jones & Co" is one firm.
+    return len(parts) >= 2 and all(len(_tokens(part)) >= 2 for part in parts)
+
+
+def canonical_groups(conn: sqlite3.Connection, explicit_only: bool = False,
+                     include_ambiguous_acronyms: bool = False) -> List[Tuple[str, List[str]]]:
     """Groups of entity names that denote the same organisation.
 
     Returns ``(name_to_keep, names_to_fold_in)`` for every group with more than
-    one spelling, largest group first.
+    one spelling, largest group first. ``explicit_only`` returns only the
+    folds :data:`EXPLICIT_ALIASES` names, with no structural widening.
+    ``include_ambiguous_acronyms`` adds, as single-name groups, every fit of an
+    acronym that fits several organisations - only for a caller that verifies
+    each fold (:mod:`entity_alias_verification`).
     """
     rows = conn.execute(
         """
@@ -170,6 +193,11 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
         """
     ).fetchall()
 
+    from cyber_data_collector.dedup.entity_resolution import stored_aliases
+
+    # Known aliases: the reviewed list, plus every alias stored by a person or
+    # confirmed by Perplexity. They fold directly; nothing else does unverified.
+    known = {**stored_aliases(conn), **EXPLICIT_ALIASES}
     usage: Dict[str, int] = {}
     for name, count in conn.execute(f"""
         SELECT v.entity_name, COUNT(*) FROM EnrichedEventEntities ee
@@ -186,7 +214,20 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
         # classification, not here.
         if is_descriptive_label(name) or is_non_organisation(name) or _is_date(name):
             continue
-        target = EXPLICIT_ALIASES.get(name, name)
+        # A list of organisations is none of them: one naming the four major
+        # banks was folded into Westpac.
+        if is_organisation_list(name) and name not in known:
+            continue
+        if explicit_only:
+            target = known.get(name)
+            if target is None and name not in known.values():
+                continue
+            target = target or name
+            buckets.setdefault(target, [])
+            if name not in buckets[target]:
+                buckets[target].append(name)
+            continue
+        target = known.get(name, name)
         key = canonical_key(target) or target.strip().lower()
         buckets.setdefault(key, [])
         if name not in buckets[key]:
@@ -239,14 +280,36 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
         for token in anchors:
             by_anchor.setdefault(token, []).append(k)
     # Only names sharing a token can match, which keeps this near-linear
-    # instead of comparing all 3,500 names pairwise.
-    for candidates in by_anchor.values():
+    # instead of comparing all 3,500 names pairwise. An acronym match is held
+    # back: one short acronym fits many names, and joining them all through it
+    # folded Marks & Spencer, Media Super and Moody's into Mackay Sugar ("MS").
+    acronym_links: Dict[str, set] = {}
+    for candidates in ([] if explicit_only else by_anchor.values()):
         for i, left in enumerate(candidates):
             for right in candidates[i + 1:]:
                 if find(left) == find(right):
                     continue
-                if same_organisation_by_structure(reps[left], reps[right]):
+                if not same_organisation_by_structure(reps[left], reps[right]):
+                    continue
+                if is_acronym_of(reps[left], reps[right]):
+                    acronym_links.setdefault(left, set()).add(right)
+                elif is_acronym_of(reps[right], reps[left]):
+                    acronym_links.setdefault(right, set()).add(left)
+                else:
                     union(left, right)
+    # An acronym joins the names it fits only when they are already one organisation.
+    # Otherwise each fit is proposed as its own pair (``ambiguous``) for the
+    # caller's verification to decide - "NAB" fitted both "National Australia
+    # Bank" and "National Australia Bank (NAB)" before they were folded.
+    ambiguous: List[Tuple[str, List[str]]] = []
+    for short, longs in acronym_links.items():
+        roots = {find(k) for k in longs} - {find(short)}
+        if len(roots) == 1:
+            union(next(iter(roots)), short)
+        elif len(roots) > 1:
+            logger.info("Acronym %r fits %d different organisations; each proposed separately", reps[short],
+                        len(roots))
+            ambiguous.extend((reps[k], [reps[short]]) for k in sorted(longs))
 
     merged_buckets: Dict[str, List[str]] = {}
     for k in keys:
@@ -258,12 +321,14 @@ def canonical_groups(conn: sqlite3.Connection) -> List[Tuple[str, List[str]]]:
         if len(names) < 2:
             continue
         # An explicit alias names its own winner; otherwise score the spellings.
-        forced = {EXPLICIT_ALIASES[n] for n in names if n in EXPLICIT_ALIASES}
+        forced = {known[n] for n in names if n in known}
         keep = (sorted(forced)[0] if len(forced) == 1 and sorted(forced)[0] in names
                 else preferred_name(names, usage))
         groups.append((keep, [n for n in names if n != keep]))
 
     groups.sort(key=lambda g: -len(g[1]))
+    if include_ambiguous_acronyms:
+        groups.extend(ambiguous)
     return groups
 
 

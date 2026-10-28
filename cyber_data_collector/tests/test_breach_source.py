@@ -171,3 +171,34 @@ def test_dashboard_counts_classified_events(conn, tmp_path):
     series = prepare_source_split_comparison(oaic, db_path)
     assert series["periods"] == ["2025 H1"]
     assert (series["db_malicious"], series["db_human"], series["db_system"]) == ([1], [1], [0])
+
+
+def test_evidence_is_the_whole_page_within_the_budget_and_any_cut_is_stated(conn):
+    """2026-10-28: pages were cut to their first 1,200 characters, mostly site chrome;
+    80% of pages mentioning AI first did so after that point."""
+    menu = "Home | News | Subscribe | " * 60                             # ~1,560 characters of chrome
+    conn.execute("UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = 'r0'",
+                 (menu + "The attackers used an AI agent to reach the portal.",))
+    record = bs.event_state(conn, "d0")["records"][0]
+    assert record["page_text"].endswith("AI agent to reach the portal.") and "page_text_cut" not in record
+    conn.execute("UPDATE RawEvents SET raw_content = ? WHERE raw_event_id = 'r0'", ("x" * (bs.PAGE_CHARS + 500),))
+    record = bs.event_state(conn, "d0")["records"][0]
+    assert len(record["page_text"]) == bs.PAGE_CHARS
+    assert record["page_text_cut"] == f"first {bs.PAGE_CHARS} of {bs.PAGE_CHARS + 500} characters"
+
+
+def test_records_past_the_event_budget_are_named_not_hidden(conn, monkeypatch):
+    monkeypatch.setattr(bs, "EVENT_PAGE_CHARS", 30)
+    monkeypatch.setattr(bs, "MAX_RECORDS", 2)
+    for n in range(1, 3):
+        conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, raw_content) VALUES (?, 'GoogleSearch', ?)",
+                     (f"extra{n}", "y" * 50))
+        conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, status, is_australian_event, "
+                     "is_specific_event) VALUES (?, ?, ?, 'Active', 1, 1)", (f"ex{n}", f"extra{n}", f"Report {n}"))
+        conn.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                     "VALUES (?, ?, ?, 'd0')", (f"mx{n}", f"extra{n}", f"ex{n}"))
+    state = bs.event_state(conn, "d0")
+    first, second = state["records"]
+    assert first["page_text"] == "Acme ransomware: page text"                 # 26 of the 30 characters
+    assert second["page_text"] == "yyyy" and second["page_text_cut"] == "first 4 of 50 characters"
+    assert state["event"]["record_count"] == 3 and state["other_record_titles"] == ["Report 2"]

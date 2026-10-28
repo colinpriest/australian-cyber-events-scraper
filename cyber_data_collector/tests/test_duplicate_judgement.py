@@ -190,3 +190,12 @@ def test_event_date_basis_and_precision_are_stored(conn):
     assert changed == 2
     assert tuple(row) == ("publication date (may lag the incident)", "day")
     assert dp.refresh_event_date_provenance(conn) == 0        # idempotent
+
+
+def test_undated_events_are_still_paired_by_victim(conn):
+    """2026-10-28: undated events were left out of the candidates, so 35 undated reports of
+    one incident were never compared. A missing date is no evidence of a separate incident."""
+    conn.execute("UPDATE DeduplicatedEvents SET event_date = NULL WHERE deduplicated_event_id = 'e2'")
+    [pair] = dj.candidate_pairs(conn)
+    assert (pair["a"], pair["b"], pair["gap_days"]) == ("e1", "e2", dj.GAP_UNKNOWN)
+    assert dj.build_pair_state(conn, pair)["gap_days"] == dj.GAP_UNKNOWN

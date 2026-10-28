@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import logging
 import os
 import sqlite3
@@ -122,6 +123,23 @@ setup_logging(log_file="logs/unified_pipeline.log")
 # so WARNINGs/ERRORs don't get drowned out by per-request HTTP chatter.
 install_run_summary()
 logger = logging.getLogger(__name__)
+
+
+def run_step(main, argv: List[str]) -> int:
+    """Run a script's ``main(argv)`` from inside the pipeline.
+
+    The pipeline itself runs under ``asyncio.run()``, and a step that runs its
+    own coroutines with ``asyncio.run()`` (rescrape-short-pages, the Cyber Daily
+    re-fetch) fails inside a running loop with "asyncio.run() cannot be called
+    from a running event loop". Such a call goes to a worker thread, which has
+    no loop; the caller still waits for it, as it did before.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return main(argv)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(main, argv).result()
 
 
 class UnifiedPipeline:
@@ -449,7 +467,7 @@ class UnifiedPipeline:
             # Canonical enum values before anything compares them (legacy
             # "EventSeverity.HIGH" spellings re-enter via re-enrichment).
             from scripts import dedup_admin
-            if dedup_admin.main(["--db", self.db_path, "normalise-enums"]) != 0:
+            if run_step(dedup_admin.main, ["--db", self.db_path, "normalise-enums"]) != 0:
                 raise RuntimeError("normalise-enums failed")
 
             force_rebuild = getattr(args, 'force_dedup', False)
@@ -531,7 +549,7 @@ class UnifiedPipeline:
                           "--min-certainty", str(certainty)]
             if not apply:
                 cmd.append("--dry-run")
-            if dedup_admin.main(cmd) != 0:
+            if run_step(dedup_admin.main, cmd) != 0:
                 raise RuntimeError("adjudicate-candidates failed")
             if not apply:
                 logger.info("Missed-merge proposals written to "
@@ -638,13 +656,21 @@ class UnifiedPipeline:
         evidence = ["label-evidence"]
         if getattr(args, 'report_event_rejections', False):
             evidence.append("--dry-run")
-        steps = [evidence, ["rescrape-short-pages"], ["research-timelines"], ["classify-pages"],
-                 sources, check,
+        # publication-dates after the re-scrape and before any judgement: every
+        # record's publication date, each event's first report and reporting lag,
+        # and a date for an event no record dates (its first report, so marked).
+        # Again at the end (no fetching): merges and splits change first reports.
+        # canonicalise-entities: reviewed aliases fold; name-structure proposals
+        # fold only when Perplexity confirms one organisation (verdicts stored).
+        steps = [evidence, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
+                 ["research-timelines"],
+                 ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
-                 coherence, duplicates, suppliers, ["reconcile-timelines", "--queue-gaps"]]
+                 coherence, duplicates, suppliers, ["reconcile-timelines", "--queue-gaps"],
+                 ["publication-dates", "--no-fetch"]]
         for step in steps:
             try:
-                if dedup_admin.main(base + step) != 0:
+                if run_step(dedup_admin.main, base + step) != 0:
                     raise RuntimeError(f"{step[0]} failed")
             except Exception as exc:  # noqa: BLE001 - never fail a completed dedup
                 logger.warning("Data hygiene step %s failed: %s", step[0], exc)
@@ -1031,7 +1057,7 @@ class UnifiedPipeline:
                 and not args.skip_classification):
             from scripts import enrich_pii_and_source_category
             try:
-                code = enrich_pii_and_source_category.main(["--db", self.db_path])
+                code = run_step(enrich_pii_and_source_category.main, ["--db", self.db_path])
             except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
                 code = f"error: {exc}"
             if code != 0:
@@ -1044,7 +1070,7 @@ class UnifiedPipeline:
             # AI incident report. Stored, so only new or changed events are asked.
             from scripts import classify_ai_involvement
             try:
-                code = classify_ai_involvement.main(["--db", self.db_path])
+                code = run_step(classify_ai_involvement.main, ["--db", self.db_path])
             except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
                 code = f"error: {exc}"
             if code != 0:

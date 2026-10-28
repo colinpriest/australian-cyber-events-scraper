@@ -65,6 +65,9 @@ class FakeDescriber:
 @pytest.fixture
 def db_path(tmp_path, monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # No committed labels or calibration leak in: each test sets its own.
+    monkeypatch.setattr(ai, "CALIBRATION_PATH", tmp_path / "no_calibration.json")
+    monkeypatch.setattr(ai, "LABELS_PATH", tmp_path / "no_labels.csv")
     path = tmp_path / "instance" / "t.db"
     initialize_database(str(path))
     c = sqlite3.connect(path)
@@ -203,7 +206,8 @@ def test_report_lists_only_ai_incidents_oldest_first_with_descriptions(conn):
     rows = re.findall(r'<tr data-category="(\w+)"><td class="nowrap">([\d-]+)</td><td>([^<]+)</td>', page)
     assert rows == [("vulnerability", "2025-03-02", "Retailer"), ("attacker", "2026-06-15", "Services Australia")]
     assert RANSOM not in page
-    assert "p = 0.85" in page and "p = 0.91" in page
+    assert "P(AI) = 0.95" in page and "P(AI) = 0.96" in page                   # 1 - P(no AI)
+    assert "NOT CALIBRATED" in page                                            # no calibration in the test
     assert "&lt;b&gt;bold&lt;/b&gt;" in page and "<b>bold</b>" not in page     # escaped
     assert NO_DESCRIPTION in page                                             # missing, and says so
     assert "2 of 3 incidents" in page
@@ -260,3 +264,85 @@ def test_dashboard_build_writes_the_chart_and_the_report(db_path, tmp_path, monk
     assert 'id="aiInvolvementChart"' in page and "__AI_INV__" not in page
     report = (out.parent / "ai_incidents.html").read_text(encoding="utf-8")
     assert "Services Australia" in report and "Retailer" in report
+
+
+def _choice(attacker, vulnerability, no_ai):
+    probs = {"ai_attacker": attacker, "ai_vulnerability": vulnerability, "no_ai": no_ai}
+    return SimpleNamespace(answer=max(probs, key=probs.get), probabilities=probs)
+
+
+def test_close_scores_never_become_a_definite_category():
+    """Vercel on 2026-10-28: attacker 0.48, vulnerability 0.42, no AI 0.10 was published as AI-attacker."""
+    vercel = {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10}
+    assert not ai.is_settled(vercel)
+    label, basis = ai.decide(vercel)
+    assert label == ai.AI_UNCERTAIN and "category unsettled" in basis
+    # Settled either way.
+    assert ai.decide({"ai_attacker": 0.9, "ai_vulnerability": 0.05, "no_ai": 0.05})[0] == ai.AI_ATTACKER
+    assert ai.decide({"ai_attacker": 0.03, "ai_vulnerability": 0.02, "no_ai": 0.95})[0] == ai.NO_AI
+    # Involvement itself unsettled (P(AI) 0.5) without a calibration.
+    assert ai.decide({"ai_attacker": 0.45, "ai_vulnerability": 0.05, "no_ai": 0.5})[0] == ai.AI_UNCERTAIN
+
+
+def test_a_calibrated_cutoff_decides_involvement():
+    weak = ai.values_from_judgement(_choice(0.45, 0.10, 0.45), cutoff=0.8)
+    assert weak["ai_involvement"] == ai.NO_AI and weak["ai_attacker_probability"] == 0.45
+    strong = ai.values_from_judgement(_choice(0.85, 0.05, 0.10), cutoff=0.8)
+    assert strong["ai_involvement"] == ai.AI_ATTACKER and "calibrated cut-off 0.800" in strong["ai_involvement_basis"]
+
+
+def test_an_unsettled_answer_is_escalated_and_the_reasoned_answer_stored(conn, monkeypatch):
+    """Jev's unsettled distribution goes to the reasoning model; its answer decides and is kept."""
+    from cyber_data_collector.utils import escalation
+
+    calls = []
+
+    def fake_escalate(conn_, subject_type, subject_id, question_id, version, state, question, options, client=None):
+        calls.append(subject_id)
+        assert set(options) == set(ai.LABELS)
+        return {"ai_attacker": 0.05, "ai_vulnerability": 0.9, "no_ai": 0.05}
+
+    monkeypatch.setattr(escalation, "escalate_choice", fake_escalate)
+    monkeypatch.setitem(SCRIPT, MEDICARE, {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10})
+    report = _run(conn)
+    row = conn.execute("SELECT ai_involvement, ai_involvement_escalated, ai_vulnerability_probability "
+                       "FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd0'").fetchone()
+    assert calls == ["d0"] and report.escalated == 1
+    assert tuple(row) == (ai.AI_VULNERABILITY, 1, 0.9)
+
+
+def test_a_failed_escalation_leaves_the_event_undecided(conn, monkeypatch):
+    from cyber_data_collector.utils import escalation
+
+    monkeypatch.setattr(escalation, "escalate_choice", lambda *a, **k: None)
+    monkeypatch.setitem(SCRIPT, MEDICARE, {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10})
+    with pytest.raises(ai.AIInvolvementIncomplete):
+        _run(conn)
+    assert conn.execute("SELECT ai_involvement FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd0'"
+                        ).fetchone()[0] is None
+
+
+def test_a_label_is_ground_truth_whatever_jev_says():
+    values = ai.values_from_judgement(_choice(0.95, 0.03, 0.02), cutoff=0.8, label="no_ai")
+    assert (values["ai_involvement"], values["ai_involvement_basis"]) == (ai.NO_AI, ai.BASIS_LABEL)
+
+
+def test_a_calibration_for_another_model_or_question_is_not_applied(tmp_path, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps({"cutoff": 0.7, **ai.calibration_identity()}))
+    assert ai.active_calibration(path)["cutoff"] == 0.7
+    path.write_text(json.dumps({"cutoff": 0.7, "model": "jev-1.14.0", "question_version": "ai-involvement-v1"}))
+    assert ai.active_calibration(path) is None
+    assert ai.active_calibration(tmp_path / "missing.json") is None
+
+
+def test_cutoff_is_the_smallest_meeting_precision():
+    from scripts.calibrate_ai_involvement import choose_cutoff
+
+    rows = [{"p": p, "weight": 1.0, "is_ai": is_ai, "category_right": True, "stratum": "A"}
+            for p, is_ai in [(0.99, True), (0.97, True), (0.95, True), (0.9, True), (0.8, True),
+                             (0.7, False), (0.6, True), (0.1, False)]]
+    chosen, _ = choose_cutoff(rows, precision=0.95, min_flags=3)
+    # Flagging down to 0.8 is all right; reaching 0.7 lets a non-AI event in (5/6 < 0.95).
+    assert chosen["cutoff"] == 0.8 and chosen["flagged_labelled"] == 5 and chosen["weighted_precision"] == 1.0

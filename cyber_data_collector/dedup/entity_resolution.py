@@ -174,6 +174,43 @@ def name_similarity(left: Optional[str], right: Optional[str]) -> float:
     return max(jaccard, containment * 0.95)
 
 
+#: Alias sources trusted to fold without asking: reviewed by a person, or
+#: confirmed by Perplexity (entity_alias_verification). ``rule`` aliases were
+#: made by name structure alone and are verified before they are trusted.
+TRUSTED_ALIAS_SOURCES = ("human", "llm")
+
+
+def stored_aliases(conn: sqlite3.Connection, sources: Sequence[str] = TRUSTED_ALIAS_SOURCES) -> Dict[str, str]:
+    """``{raw_name: canonical_name}`` from ``EntityAliases`` for the given sources."""
+    marks = ", ".join("?" for _ in sources)
+    try:
+        return dict(conn.execute(f"SELECT raw_name, canonical_name FROM EntityAliases WHERE source IN ({marks})",
+                                 tuple(sources)).fetchall())
+    except sqlite3.Error:
+        return {}
+
+
+def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str]) -> Optional[str]:
+    """The organisation's canonical name when ``name`` is a stored alias of it, else ``name``.
+
+    Looked up before an entity is found or created, so a record naming "NAB"
+    or "Medicare" files under the organisation already known instead of
+    recreating the variant. Exact (case-insensitive) first, then normalised
+    (punctuation, '&', accents).
+    """
+    if not name or not name.strip():
+        return name
+    aliases = stored_aliases(conn, (*TRUSTED_ALIAS_SOURCES, "rule", "learned"))
+    if not aliases:
+        return name
+    lowered = {raw.lower(): canonical for raw, canonical in aliases.items()}
+    hit = lowered.get(name.strip().lower())
+    if hit is None:
+        wanted = normalize_name(name)
+        hit = next((canonical for raw, canonical in aliases.items() if normalize_name(raw) == wanted), None)
+    return hit or name
+
+
 class EntityResolver:
     """Resolves entity names to keys and candidate blocks, with learned aliases.
 

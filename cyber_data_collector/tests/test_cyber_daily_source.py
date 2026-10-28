@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
+import requests
 
 from cyber_data_collector.datasources.cyber_daily import (
     CyberDailyDataSource,
@@ -20,6 +21,7 @@ from cyber_data_collector.datasources.cyber_daily import (
     article_id,
     parse_feed,
 )
+from cyber_data_collector.datasources import cyber_daily
 from cyber_data_collector.dedup import source_gate
 from cyber_data_collector.filtering.page_gate import DiscoveryPageGate
 from cyber_data_collector.models.config import DataSourceConfig, DateRange
@@ -470,3 +472,38 @@ def test_refetch_runs_inside_discovery_for_cyber_daily(env):
     pipeline.close()
     assert url in FakeScraper.fetched
     assert _rows(env.path, "SELECT status FROM CyberDailyRefetches WHERE url = ?", url) == [("updated",)]
+
+
+class _Response:
+    def __init__(self, status, headers=None, content=b"<rss/>"):
+        self.status_code, self.headers, self.content = status, headers or {}, content
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code} Client Error")
+
+
+def test_throttled_feed_pages_are_waited_out_and_asked_again(monkeypatch):
+    """2026-10-28: single 429s deep in the feed lost 2021-03 and 2021-05."""
+    answers = [_Response(429, {"Retry-After": "40"}), _Response(503), _Response(200, content=b"ok")]
+    monkeypatch.setattr(cyber_daily.requests, "get", lambda *a, **k: answers.pop(0))
+    waits = []
+    source = _source(FakeFeed([]))
+    assert source._http_get("https://www.cyberdaily.au/security", {"limitstart": 4836}, sleep=waits.append) == b"ok"
+    assert waits == [40, cyber_daily.THROTTLE_WAITS[1]]          # Retry-After wins over a shorter wait
+
+
+def test_a_feed_page_still_throttled_after_every_wait_fails(monkeypatch):
+    monkeypatch.setattr(cyber_daily.requests, "get", lambda *a, **k: _Response(429))
+    waits = []
+    with pytest.raises(requests.HTTPError):
+        _source(FakeFeed([]))._http_get("https://www.cyberdaily.au/security", {"limitstart": 0}, sleep=waits.append)
+    assert waits == list(cyber_daily.THROTTLE_WAITS)
+
+
+def test_other_http_errors_are_not_retried(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cyber_daily.requests, "get", lambda *a, **k: calls.append(1) or _Response(404))
+    with pytest.raises(requests.HTTPError):
+        _source(FakeFeed([]))._http_get("https://www.cyberdaily.au/security", {}, sleep=lambda s: None)
+    assert len(calls) == 1

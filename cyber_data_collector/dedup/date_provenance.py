@@ -8,8 +8,9 @@ only to the month or year is stored as the 1st (35% of active events on
 repeat attack. Nothing records the provenance directly, so it is derived per
 record by comparing the stored incident date with the dates around it:
 
-* ``published`` - the source's publication date (``source_metadata``), or the
-  date the source itself carried;
+* ``published`` - the source's publication date (``RawEvents.publication_date``,
+  see :mod:`cyber_data_collector.processing.publication_dates`; else
+  ``source_metadata``), or the date the source itself carried;
 * ``found``     - when the pipeline discovered the record (``discovered_at``);
 * ``researched``- Perplexity's earliest event date for the record.
 
@@ -87,8 +88,9 @@ def _states_day(lowered: str, year: int, month: int, dom: int, names: str) -> bo
 
 def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str],
                  discovered_at: Any, perplexity_data: Optional[str],
-                 text: Optional[str] = None) -> Dict[str, Any]:
-    """Provenance for one record's date; ``text`` is the record's own page text."""
+                 text: Optional[str] = None, publication_date: Any = None) -> Dict[str, Any]:
+    """Provenance for one record's date; ``text`` is the record's own page text and
+    ``publication_date`` its stored ``RawEvents.publication_date``."""
     try:
         meta = json.loads(source_metadata or "{}")
     except (TypeError, ValueError):
@@ -98,7 +100,8 @@ def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str]
     except (TypeError, ValueError):
         pplx = {}
     incident_day = _day(incident)
-    published = _day(meta.get("publication_date") if isinstance(meta, dict) else None) or _day(source_date)
+    published = (_day(publication_date) or _day(meta.get("publication_date") if isinstance(meta, dict) else None)
+                 or _day(source_date))
     found = _day(discovered_at)
     researched = _day(pplx.get("earliest_event_date") if isinstance(pplx, dict) else None)
     if incident_day is None:
@@ -120,16 +123,18 @@ def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str]
 def event_dates(conn: sqlite3.Connection, dedup_id: str, max_records: int) -> Dict[str, Any]:
     """Per-record provenance in the same order as ``event_reality._evidence_state``,
     plus a summary over all of the event's records."""
+    # A database not yet upgraded (or opened read-only) may lack the column.
+    has_publication = "publication_date" in {c[1] for c in conn.execute("PRAGMA table_info(RawEvents)")}
     rows = conn.execute(
-        """SELECT e.enriched_event_id, COALESCE(NULLIF(r.raw_content, ''), r.raw_description, ''),
+        f"""SELECT e.enriched_event_id, COALESCE(NULLIF(r.raw_content, ''), r.raw_description, ''),
                   e.event_date, r.event_date, r.source_metadata, r.discovered_at,
-                  e.perplexity_enrichment_data
+                  e.perplexity_enrichment_data, {"r.publication_date" if has_publication else "NULL"}
            FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
            WHERE m.deduplicated_event_id = ?""", (dedup_id,)).fetchall()
     rows = sorted(rows, key=lambda r: (not r[1], r[0]))
-    per_record: List[Dict[str, Any]] = [record_dates(*r[2:], text=r[1]) for r in rows]
+    per_record: List[Dict[str, Any]] = [record_dates(*r[2:7], text=r[1], publication_date=r[7]) for r in rows]
     stored = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
                           (dedup_id,)).fetchone()
     event_day = _day(stored[0] if stored else None)
@@ -148,7 +153,9 @@ def event_date_provenance(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, 
     """What the event's own date is: its basis and precision.
 
     The basis is the most common basis among the records carrying the event
-    date; an event date no record carries was set by a repair pass
+    date; an event date no record carries but that is the event's first
+    report (the earliest publication date of its records) is a publication
+    date; any other date no record carries was set by a repair pass
     (consensus, text extraction or research).
     """
     summary = event_dates(conn, dedup_id, max_records=10 ** 6)
@@ -160,6 +167,8 @@ def event_date_provenance(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, 
         basis = "no date"
     elif carrying:
         basis = Counter(carrying).most_common(1)[0][0]
+    elif event_day == min((r["published"] for r in summary["records"] if r["published"]), default=None):
+        basis = "publication date (may lag the incident)"
     else:
         basis = "set by a repair pass (no record carries it)"
     return {"date_basis": basis, "date_precision": precision(event_day)}
@@ -167,6 +176,9 @@ def event_date_provenance(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, 
 
 def refresh_event_date_provenance(conn: sqlite3.Connection) -> int:
     """Store ``date_basis`` / ``date_precision`` on every active event; returns how many changed."""
+    from cyber_data_collector.processing.publication_dates import ensure_schema
+
+    ensure_schema(conn)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
     for column in ("date_basis", "date_precision"):
         if column not in columns:

@@ -29,6 +29,7 @@ import json
 import logging
 import sqlite3
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -87,14 +88,23 @@ def pair_id(a: str, b: str) -> str:
     return "|".join(sorted((a, b)))
 
 
+#: ``gap_days`` shown to Jev when either event has no date.
+GAP_UNKNOWN = "unknown - one or both events have no date"
+
+
 def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    """Every pair of active events sharing a victim, earliest first within each pair."""
+    """Every pair of active events sharing a victim, earliest first within each pair.
+
+    Undated events are paired too: until 2026-10-28 they were left out, so 35
+    undated reports of the OpenAI agent's Medicare incident were never
+    compared with each other or with the dated event.
+    """
     from cyber_data_collector.dedup.recurrence_check import load_recurrence_events
 
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
-        events = load_recurrence_events(conn)
+        events = load_recurrence_events(conn, include_undated=True)
     finally:
         conn.row_factory = previous
     by_entity = defaultdict(list)
@@ -102,7 +112,7 @@ def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         by_entity[e.entity_id].append(e)
     pairs: Dict[str, Dict[str, Any]] = {}
     for es in by_entity.values():
-        es = sorted(es, key=lambda e: (e.event_date, e.dedup_id))
+        es = sorted(es, key=lambda e: (e.event_date is None, e.event_date or date.max, e.dedup_id))
         for i, a in enumerate(es):
             for b in es[i + 1:]:
                 if a.dedup_id == b.dedup_id:
@@ -110,7 +120,7 @@ def candidate_pairs(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                 pid = pair_id(a.dedup_id, b.dedup_id)
                 pairs.setdefault(pid, {"pair_id": pid, "a": a.dedup_id, "b": b.dedup_id,
                                        "organisation": a.entity_name, "entity_id": a.entity_id,
-                                       "gap_days": a.gap_to(b)})
+                                       "gap_days": a.gap_to(b) if a.gap_to(b) is not None else GAP_UNKNOWN})
     return sorted(pairs.values(), key=lambda p: p["pair_id"])
 
 

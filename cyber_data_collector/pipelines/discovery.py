@@ -1365,6 +1365,9 @@ class EventDiscoveryEnrichmentPipeline:
             # Don't acquire lock here - caller should already have it
             logger.debug(f"[ENTITY] Using existing database connection for entity: {entity_name}")
             cursor = self.db._conn.cursor()
+            # A stored alias ("NAB", "Medicare") files under its organisation.
+            from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+            entity_name = canonical_entity_name(self.db._conn, entity_name.strip())
 
             # Check if entity already exists
             logger.debug(f"[ENTITY] Checking if entity exists: {entity_name}")
@@ -1793,6 +1796,15 @@ class EventDiscoveryEnrichmentPipeline:
 
         return None
 
+    def _store_publication_date(self, raw_event_id: str, scrape_meta: Dict[str, Any]) -> None:
+        """Keep the page's own publication date (its metadata) unless the source already gave one."""
+        from cyber_data_collector.processing.publication_dates import SOURCE_PAGE_META, store
+
+        with self.db._lock:
+            store(self.db._conn, raw_event_id, scrape_meta['publication_date'],
+                  f"{SOURCE_PAGE_META}: {scrape_meta.get('publication_date_how')}")
+            self.db._conn.commit()
+
     def _fallback_event_date(self, event, month_start: Optional[datetime] = None) -> Optional[datetime.date]:
         """Return a fallback event date when no event date is available."""
         if hasattr(event, 'data_sources') and event.data_sources:
@@ -2115,6 +2127,8 @@ class EventDiscoveryEnrichmentPipeline:
 
             perplexity_attempted = scrape_meta.get('perplexity_attempted', False)
             perplexity_succeeded = scrape_meta.get('perplexity_succeeded', False)
+            if scrape_meta.get('publication_date'):
+                self._store_publication_date(event['raw_event_id'], scrape_meta)
             if content and len(content.strip()) > 50:
                 self._update_raw_event_content(event['raw_event_id'], content, url)
                 self.db.log_processing_attempt(

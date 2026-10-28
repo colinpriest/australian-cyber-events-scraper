@@ -2,7 +2,7 @@
 
 Lists the active incidents in the dashboard window (2020 to date) whose
 ``ai_involvement`` is AI-attacker or AI-vulnerability, with date, victim(s),
-category (and Jev's probability for it) and a 2-4 sentence description. Labels
+category (with Jev's P(AI), or "labelled") and a 2-4 sentence description. Labels
 and descriptions are written by ``scripts/classify_ai_involvement.py`` (a
 pipeline step); this page only reads them, so it makes no model calls. An
 incident with no stored description says so on the page and in the log.
@@ -31,7 +31,9 @@ from cyber_data_collector.reporting.population import ReportingPeriod, count_inc
 logger = logging.getLogger(__name__)
 
 REPORT_FILE = "ai_incidents.html"
-CATEGORY_TEXT = {ai.AI_ATTACKER: "AI attacker", ai.AI_VULNERABILITY: "AI vulnerability"}
+CATEGORY_TEXT = {ai.AI_ATTACKER: "AI attacker", ai.AI_VULNERABILITY: "AI vulnerability",
+                 ai.AI_UNCERTAIN: "AI - unsettled"}
+BADGE = {ai.AI_ATTACKER: "attacker", ai.AI_VULNERABILITY: "vulnerability", ai.AI_UNCERTAIN: "uncertain"}
 NO_DESCRIPTION = "Description not generated yet (run scripts/classify_ai_involvement.py)."
 
 
@@ -53,7 +55,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
     incidents = ai.ai_incidents(conn, period)
     total = count_incidents(conn, period)
     unjudged = _unjudged(conn, period)
-    counts = {label: sum(1 for i in incidents if i["ai_involvement"] == label) for label in ai.AI_LABELS}
+    counts = {label: sum(1 for i in incidents if i["ai_involvement"] == label) for label in ai.AI_INVOLVED_LABELS}
     missing = [i["deduplicated_event_id"] for i in incidents if not i["description"]]
     if missing:
         logger.warning("AI incident report: %d incident(s) have no description yet: %s",
@@ -67,9 +69,15 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
         when = html_escape((item["event_date"] or "undated")[:10])
         victims = "<br>".join(html_escape(v) for v in item["victims"]) or '<span class="muted">not recorded</span>'
         category = html_escape(CATEGORY_TEXT[item["ai_involvement"]])
-        prob = item["probability"]
-        prob_text = f'<div class="muted">p = {prob:.2f}</div>' if prob is not None else ""
-        badge = "attacker" if item["ai_involvement"] == ai.AI_ATTACKER else "vulnerability"
+        if item.get("ai_involvement_basis") == ai.BASIS_LABEL:
+            prob_text = '<div class="muted">labelled</div>'
+        elif item.get("p_ai") is not None:
+            prob_text = f'<div class="muted">P(AI) = {item["p_ai"]:.2f}</div>'
+        else:
+            prob_text = ""
+        badge = BADGE[item["ai_involvement"]]
+        if item.get("ai_involvement_basis") and item["ai_involvement"] == ai.AI_UNCERTAIN:
+            prob_text += f'<div class="muted">{html_escape(item["ai_involvement_basis"])}</div>'
         if item["description"]:
             description = html_escape(item["description"])
         else:
@@ -82,7 +90,9 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
 
     notes = [f"{len(incidents)} of {total} incidents dated {period.start_iso} to {period.end_iso} involved AI: "
              f"{counts[ai.AI_ATTACKER]} with AI as the attacker, "
-             f"{counts[ai.AI_VULNERABILITY]} with the victim's AI attacked."]
+             f"{counts[ai.AI_VULNERABILITY]} with the victim's AI attacked, "
+             f"{counts[ai.AI_UNCERTAIN]} where the evidence does not settle whether or how AI was involved "
+             "(listed, not counted as either)."]
     if unjudged:
         notes.append(f'<span class="missing">{unjudged} incident(s) have not been judged yet and are not '
                      "listed.</span>")
@@ -90,6 +100,20 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
         notes.append(f'<span class="missing">{len(missing)} listed incident(s) have no description yet.</span>')
     note_html = " ".join(notes)
     built = (built_on or date.today()).isoformat()
+    calibration = ai.active_calibration()
+    if calibration:
+        at = calibration.get("at_cutoff") or {}
+        method_html = html_escape(
+            f"Listed when Jev's probability that AI was involved, P(AI), judged from the news sources' full "
+            f"text, reaches {calibration['cutoff']:.2f} - the cut-off at which "
+            f"{at.get('correct_labelled')} of {at.get('flagged_labelled')} blind-labelled events were "
+            f"really AI incidents (weighted precision {at.get('weighted_precision', 0):.2f}). The category is "
+            "the more probable of attacker and vulnerability; labelled events show their label.")
+    else:
+        method_html = html_escape(
+            "Category is Jev's most probable of three (AI attacker, AI vulnerability, no AI) from the news "
+            "sources' full text; P(AI) is 1 minus the probability of no AI. NOT CALIBRATED: no labelled cut-off "
+            "matches the current model and question.")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -124,6 +148,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
             white-space: nowrap; }}
   .badge.attacker {{ color: var(--attacker); background: var(--attacker-bg); }}
   .badge.vulnerability {{ color: var(--vuln); background: var(--vuln-bg); }}
+  .badge.uncertain {{ color: var(--muted); background: var(--line); }}
   .muted {{ color: var(--muted); font-size: .85rem; }}
   .missing {{ color: var(--warn); }}
 </style>
@@ -137,11 +162,11 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
 <main>
   <div class="summary">
     <div>{note_html}</div>
-    <div class="muted">Category is Jev's most probable of three (AI attacker, AI vulnerability, no AI) from the
-      news sources' text; p is its probability. Not yet calibrated on labelled examples.</div>
+    <div class="muted">{method_html}</div>
     <div class="filters">
       <label><input type="checkbox" data-filter="attacker" checked> AI attacker</label>
       <label><input type="checkbox" data-filter="vulnerability" checked> AI vulnerability</label>
+      <label><input type="checkbox" data-filter="uncertain" checked> Unsettled</label>
     </div>
   </div>
   <div class="table-wrap">

@@ -877,11 +877,14 @@ def accepted(scores: Dict[str, float], labels: Dict[Tuple[str, str], str], kind:
 def _entity_for(conn: sqlite3.Connection, cand: VictimCandidate, index: _EntityIndex) -> int:
     if cand.entity_id is not None:
         return cand.entity_id
-    hit = index.find(cand.name)
+    from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+
+    name = canonical_entity_name(conn, cand.name)
+    hit = index.find(name)
     if hit:
         return hit[0]
     cur = conn.execute("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES (?, 'organisation')",
-                       (cand.name,))
+                       (name,))
     return int(cur.lastrowid)
 
 

@@ -1089,8 +1089,9 @@ separate incidents. Anything blocking never produced, no adjudicator could
 recover.
 
 ```bash
-python scripts/dedup_admin.py canonicalise-entities --dry-run
-python scripts/dedup_admin.py canonicalise-entities   # 413 names -> 200 organisations
+python scripts/dedup_admin.py canonicalise-entities --dry-run          # proposals; nothing asked
+python scripts/dedup_admin.py canonicalise-entities                    # reviewed aliases + Perplexity-confirmed folds
+python scripts/dedup_admin.py canonicalise-entities --explicit-only    # reviewed aliases only
 
 python scripts/dedup_admin.py redate --dry-run
 python scripts/dedup_admin.py redate                  # member consensus + text
@@ -1105,8 +1106,21 @@ python scripts/dedup_admin.py reconcile-entities
 ASIC events with byte-identical titles, dates and descriptions were never even
 compared. Names that only a human would know are equivalent ("Australia" for
 the Commonwealth, "CommBank"/"Commonwealth Bank") are listed in
-`EXPLICIT_ALIASES`; every fold is remembered in `EntityAliases` so a future
-ingest resolves the variant instead of recreating it.
+`EXPLICIT_ALIASES` and fold directly. Every other fold - proposed by name
+structure (containment, acronyms, spelling) - is **confirmed by Perplexity**
+before it is applied (`dedup/entity_alias_verification.py`): both names, an
+incident each appeared in, and a verdict of same / parent-subsidiary / related /
+different / unsure with citations. Only `same` folds. Structure alone is not
+safe: on 2026-10-28 it would have folded Marks & Spencer, Media Super and
+Moody's into Mackay Sugar ("MS"), IBM into Australian Cyber Security Magazine
+and a list of the four major banks into Westpac (an acronym now joins names only
+when they are already one organisation, and a list of organisations is never
+folded). Every verdict is stored in `EntityAliasDecisions` and never asked
+again; every fold is remembered in `EntityAliases` (source `human` or `llm`) so
+a future ingest resolves the variant instead of recreating it. The step runs in
+every refresh; a pair Perplexity could not decide stays unfolded and the step
+exits 1. Medicare is folded into Services Australia, which administers it:
+coverage of the 2026 OpenAI-agent incident filed it under both.
 
 **Dates.** Merging took the *earliest* member date, so one bad extraction
 captured the event: MediSecure has 77 source records, 64 saying April 2024, and
@@ -1122,6 +1136,43 @@ every active event by the `victim` **role** finally attributed to it and asks
 one LLM call per organisation whether those events are one incident. This is
 the follow-up pass - it catches what blocking missed, including the many events
 with no scalar victim that the cluster pass skipped.
+
+### Publication dates, first reports and reporting lag
+
+A report's publication date is not the incident date, and the enrichment gate
+never passes one off as the other. It is stored in its own right instead, so
+reporting lag can be modelled (`processing/publication_dates.py`):
+
+| Column | Meaning |
+|---|---|
+| `RawEvents.publication_date` | the day the source was published: the source's own date (feed, listing, Google's page metadata), else the page's metadata (JSON-LD `datePublished`, `article:published_time`, ...; never a *modified* date), else a full date in the URL path |
+| `RawEvents.publication_date_source` | where that came from |
+| `DeduplicatedEvents.first_reported_date` | the earliest publication date of the event's records |
+| `DeduplicatedEvents.reporting_lag_days` | first report minus incident date, only where the incident date is not itself a publication or discovery date (filter on `date_precision` for day-level lags) |
+
+An event with no incident date is dated by its first report, with
+`date_basis = 'publication date (may lag the incident)'`; the duplicate checks
+are shown that basis. Until 2026-10-28 no Google or Perplexity record stored a
+publication date (Google records took the *search window's* first day), which
+left 129 active events undated and outside every chart.
+
+```bash
+python scripts/dedup_admin.py publication-dates [--no-browser] [--no-fetch] [--dry-run]
+```
+
+It runs in every refresh (after the short-page re-scrape, and again without
+fetching at the end of the hygiene steps), and after every deduplication. Pages
+are fetched by plain HTTP; a page the site refuses to a plain client is fetched
+again by a browser (Playwright); failures are retried up to 3 times
+(`PublicationDateFetches`). First live run: 1,128 of 1,902 pages dated from
+their metadata or URL, 506 state no date, 268 failed (the browser pass was not
+run); 77 undated events dated by their first report; 674 events have a
+measurable lag.
+
+**Undated events are still deduplicated.** The duplicate check pairs every two
+events sharing a victim, dated or not (`gap_days` is then "unknown"); undated
+events used to be left out, so 35 undated reports of the OpenAI agent's
+Medicare incident were never compared.
 
 ### Dashboard
 
@@ -1155,11 +1206,19 @@ Every active event carries `DeduplicatedEvents.ai_involvement`, one of:
 | `No-AI` | no AI involvement reported (speculation, commentary or AI as the victim's business does not count) |
 
 Jev answers one Choice per event over the members' evidence (the same
-evidence as the breach-source question); the most probable option is the
-label, and all three probabilities are stored in `ai_attacker_probability`,
-`ai_vulnerability_probability` and `no_ai_probability` (the full answer in
-`ModelJudgements`, reused until the evidence, question or model changes). The
-label is **not calibrated** on labelled examples yet. Each AI incident also gets
+evidence as the breach-source question: each record's **whole page** up to
+12,000 characters, 60,000 per event, any cut stated - until 2026-10-28 it was
+the first 1,200 characters, mostly site menus, and 80% of pages mentioning AI
+first did so after that point). All three probabilities are stored in
+`ai_attacker_probability`, `ai_vulnerability_probability` and
+`no_ai_probability` (the full answer in `ModelJudgements`, reused until the
+evidence, question or model changes). The label is decided by a **calibrated
+cut-off** on P(AI) = 1 - P(No-AI) when `evaluation/ai_involvement_calibration.json`
+matches the current model and question (`scripts/calibrate_ai_involvement.py`
+`sample` / `packet` / `calibrate`, from blind labels in
+`evaluation/ai_involvement_labels.csv`); labelled events take their label.
+Without a matching calibration the label is the most probable option, and
+`ai_involvement_basis`, the report and the dashboard say so. Each AI incident also gets
 a 2-4 sentence description from the fast OpenAI model, stored in
 `EventDescriptions` and rewritten only when its evidence changes. The step runs
 in every refresh after the breach-source step; it requires `TYPESAFE_API_KEY`

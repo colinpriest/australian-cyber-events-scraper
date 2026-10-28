@@ -129,6 +129,8 @@ Initial discovered events before any LLM processing. One row per discovered arti
 | `event_date` | DATE | Yes | NULL | Date of the event as reported by the source |
 | `source_url` | VARCHAR(2048) | Yes | NULL | URL of the original article or source page |
 | `source_metadata` | TEXT | Yes | NULL | JSON blob with source-specific metadata. See [source_metadata JSON](#rawevents-source_metadata) |
+| `publication_date` | TEXT | Yes | NULL | Day the source was published (`YYYY-MM-DD`): the source's own date, else the page's metadata, else a full date in the URL path. Never the incident date. See `processing/publication_dates.py` |
+| `publication_date_source` | TEXT | Yes | NULL | Where `publication_date` came from: `source`, `page metadata: <field>` or `URL path` |
 | `discovered_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | When the pipeline discovered this event |
 | `is_processed` | BOOLEAN | No | `FALSE` | Whether this event has been through LLM enrichment |
 | `processing_attempted_at` | TIMESTAMP | Yes | NULL | Timestamp of last enrichment attempt |
@@ -283,15 +285,22 @@ Final unique events after entity-based deduplication. The primary table used for
 | `date_confidence` | REAL | Yes | NULL | Confidence in the event date (0.0–1.0) |
 | `entity_confidence` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0) |
 | `data_source_reliability` | REAL | Yes | NULL | Reliability score for data source (0.0–1.0) |
-| `ai_involvement` | VARCHAR(20) | Yes | NULL | `AI-attacker`, `AI-vulnerability` or `No-AI`: Jev's most probable option (`scripts/classify_ai_involvement.py`, uncalibrated). NULL = not judged yet |
+| `ai_involvement` | VARCHAR(20) | Yes | NULL | `AI-attacker`, `AI-vulnerability` or `No-AI` (`scripts/classify_ai_involvement.py`): the label if the event is labelled, else AI-involved when P(AI) = 1 - `no_ai_probability` reaches the calibrated cut-off, else (no matching calibration) Jev's most probable option. NULL = not judged yet |
+| `ai_involvement_basis` | TEXT | Yes | NULL | How `ai_involvement` was decided: `labelled`, `calibrated: P(AI) >= <cut-off>` / `< <cut-off>`, or `most probable option (not calibrated)` |
 | `ai_attacker_probability` | REAL | Yes | NULL | Jev's probability that AI was the attacker or its instrument |
 | `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, misused or leaked data |
 | `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the three sum to 1) |
+| `first_reported_date` | TEXT | Yes | NULL | Earliest `RawEvents.publication_date` among the event's records |
+| `reporting_lag_days` | INTEGER | Yes | NULL | `first_reported_date` minus `event_date`, only when the event date is not itself a publication or discovery date (see `date_basis`, `date_precision`) |
 
 The descriptions shown in `dashboard/ai_incidents.html` are in `EventDescriptions`
 (`deduplicated_event_id`, `purpose = 'ai_incident_report'`, `prompt_version`,
 `input_hash` of evidence + prompt + model, `model`, `description`, `created_at`);
 a new row is written only when the evidence changes.
+
+`PublicationDateFetches` (`raw_event_id`, `attempts`, `status`: stored / retry / no date on page / gave up, `last_error`, `last_attempt_at`) records each page fetched for its publication date.
+
+`EntityAliasDecisions` (`name`, `other_name`, `verdict`: same / parent_subsidiary / related / different / unsure, `canonical_name`, `reason`, `citations_json`, `model`, `prompt_version`, `decided_at`) holds Perplexity's verdict on every entity fold the name-structure rules proposed; only `same` folds, and accepted folds are written to `EntityAliases` with source `llm`.
 
 **Indexes:**
 - `idx_dedup_events_australian` on `(is_australian_event)`
