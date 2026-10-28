@@ -48,6 +48,12 @@ logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 FETCH_TIMEOUT_SECONDS = 45
+#: Hard limit on one page, retries included. Playwright's own timeouts do not
+#: cover every call (a page whose context was destroyed mid-navigation hung the
+#: 2026-10-29 run for six hours), so a page past this is a failed attempt.
+PAGE_DEADLINE_SECONDS = 4 * FETCH_TIMEOUT_SECONDS
+#: Closing the browser after a hang can hang too; past this it is abandoned.
+CLOSE_DEADLINE_SECONDS = 60
 
 STATUS_STORED = "stored"
 STATUS_RETRY = "retry"
@@ -213,14 +219,17 @@ def apply_result(conn: sqlite3.Connection, page: Dict[str, Any], text: Optional[
 
 
 async def _scrape_all(conn: sqlite3.Connection, pages: List[Dict[str, Any]], fetch: Optional[Fetch],
-                      concurrency: int, report: RescrapeReport) -> None:
+                      concurrency: int, report: RescrapeReport,
+                      deadline: float = PAGE_DEADLINE_SECONDS) -> None:
     async def run(fetcher: Fetch) -> None:
         sem = asyncio.Semaphore(max(1, concurrency))
 
         async def one(page: Dict[str, Any]) -> None:
             async with sem:
                 try:
-                    text, meta = await fetcher(page["url"])
+                    text, meta = await asyncio.wait_for(fetcher(page["url"]), timeout=deadline)
+                except asyncio.TimeoutError:
+                    text, meta = None, {"error": f"no answer within {deadline:g}s (fetch abandoned)"}
                 except Exception as exc:  # noqa: BLE001 - one page's failure is recorded, not fatal
                     text, meta = None, {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
             # Single-threaded event loop: the connection is used from one thread.
@@ -248,11 +257,15 @@ async def _scrape_all(conn: sqlite3.Connection, pages: List[Dict[str, Any]], fet
 
         await run(fetch_page)
     finally:
-        await scraper.close()
+        try:
+            await asyncio.wait_for(scraper.close(), timeout=CLOSE_DEADLINE_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Browser did not close within %ss; abandoned", CLOSE_DEADLINE_SECONDS)
 
 
 def rescrape_short_pages(conn: sqlite3.Connection, limit: Optional[int] = None, dry_run: bool = False,
-                         concurrency: int = 3, fetch: Optional[Fetch] = None) -> RescrapeReport:
+                         concurrency: int = 3, fetch: Optional[Fetch] = None,
+                         deadline: float = PAGE_DEADLINE_SECONDS) -> RescrapeReport:
     """Re-fetch every short Google page not yet given up on.
 
     Raises:
@@ -263,5 +276,5 @@ def rescrape_short_pages(conn: sqlite3.Connection, limit: Optional[int] = None, 
     report = RescrapeReport(candidates=len(pages))
     if dry_run or not pages:
         return report
-    asyncio.run(_scrape_all(conn, pages, fetch, concurrency, report))
+    asyncio.run(_scrape_all(conn, pages, fetch, concurrency, report, deadline))
     return report
