@@ -1139,6 +1139,38 @@ stores every answer in `ModelJudgements` and re-asks only events whose
 evidence changed. It requires `TYPESAFE_API_KEY` and exits non-zero if any
 event could not be judged.
 
+#### AI involvement
+
+```bash
+python scripts/classify_ai_involvement.py [--dry-run] [--no-descriptions]   # Jev, every active event
+python scripts/build_ai_incident_report.py                                   # dashboard/ai_incidents.html alone
+```
+
+Every active event carries `DeduplicatedEvents.ai_involvement`, one of:
+
+| Value | Meaning |
+|---|---|
+| `AI-attacker` | an AI system was the attacker or the attacker's instrument (the OpenAI agent that reached Services Australia's Medicare statistics portal in 2026; deepfakes or AI-written phishing the reporting says were used) |
+| `AI-vulnerability` | the victim's own AI was attacked, misused or leaked data (prompt injection, a jailbroken chatbot, exposed model or training data) |
+| `No-AI` | no AI involvement reported (speculation, commentary or AI as the victim's business does not count) |
+
+Jev answers one Choice per event over the members' evidence (the same
+evidence as the breach-source question); the most probable option is the
+label, and all three probabilities are stored in `ai_attacker_probability`,
+`ai_vulnerability_probability` and `no_ai_probability` (the full answer in
+`ModelJudgements`, reused until the evidence, question or model changes). The
+label is **not calibrated** on labelled examples yet. Each AI incident also gets
+a 2-4 sentence description from the fast OpenAI model, stored in
+`EventDescriptions` and rewritten only when its evidence changes. The step runs
+in every refresh after the breach-source step; it requires `TYPESAFE_API_KEY`
+(exit 2 without it) and exits 1 if any event could not be judged or described.
+
+The main dashboard shows AI incidents per half-year (stacked: attacker /
+vulnerability, with the count not yet judged), reconciled against the
+database, and links to `dashboard/ai_incidents.html`, written and published
+with it: every AI incident in the dashboard window, oldest first, with date,
+victim(s), category (and its probability) and the description.
+
 Unknown, missing or unrecognised severity is never scored as 0: severity
 averages (by industry, by attack type, per month) use known severities only and
 each chart says how many events it excluded. Personal-information rates use only

@@ -48,12 +48,15 @@ from cyber_data_collector.reporting.population import (  # noqa: E402
     dashboard_period,
     half_year,
     half_year_from_label,
+    half_years_between,
     incident_filter,
     population_breakdown,
     reconcile,
     span_of,
     sum_counts,
 )
+# The AI incident list, written next to index.html and linked from the AI chart.
+from scripts.build_ai_incident_report import REPORT_FILE as AI_REPORT_FILE  # noqa: E402
 from scripts.oaic.oaic_dataset import (  # noqa: E402
     legacy_files_newest_first as _oaic_files_newest_first,
     load_for_dashboard,
@@ -63,6 +66,7 @@ logger = logging.getLogger(__name__)
 
 # First day the dashboard reports on (see cyber_data_collector.reporting.population).
 DASHBOARD_START = DASHBOARD_REPORTING_START
+
 
 ASD_VALID_STAKEHOLDER_CATEGORIES = [
     "Member(s) of the public",
@@ -1038,6 +1042,51 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
         'periods': periods,
         'database_counts': database_counts
     }
+
+
+def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Incidents per half-year in which AI was the attacker, or the victim's AI was attacked.
+
+    Reads ``DeduplicatedEvents.ai_involvement`` (scripts/classify_ai_involvement.py,
+    Jev). Every half-year in the window is listed, with zeros, so the axis is
+    continuous. ``unjudged`` counts incidents with no label yet; a database
+    without the columns gives ``available = False`` (the chart says so).
+    """
+    from cyber_data_collector.processing import ai_involvement
+
+    period = ReportingPeriod.from_iso(start_date, end_date)
+    periods = [p.label for p in half_years_between(period.start.year, period.end)]
+    empty = {'periods': periods, 'attacker': [0] * len(periods), 'vulnerability': [0] * len(periods),
+             'unjudged': 0, 'available': False, 'report': AI_REPORT_FILE}
+    if not ai_involvement.has_schema(conn):
+        logger.warning("AI involvement not classified (no ai_involvement column): "
+                       "run scripts/classify_ai_involvement.py")
+        empty['unjudged'] = count_incidents(conn, period)
+        return empty
+    where, params = _incidents(start_date, end_date)
+    rows = conn.execute(f"""
+        SELECT strftime('%Y', event_date) || CASE WHEN CAST(strftime('%m', event_date) AS INTEGER) <= 6
+                                                  THEN ' H1' ELSE ' H2' END AS half,
+               ai_involvement, COUNT(*) AS n
+        FROM DeduplicatedEvents
+        WHERE {where} AND (ai_involvement IN (?, ?) OR ai_involvement IS NULL)
+        GROUP BY half, ai_involvement
+    """, [*params, *ai_involvement.AI_LABELS]).fetchall()
+    attacker = dict.fromkeys(periods, 0)
+    vulnerability = dict.fromkeys(periods, 0)
+    unjudged = 0
+    for half, label, n in rows:
+        if label is None:
+            unjudged += n
+        elif label == ai_involvement.AI_ATTACKER:
+            attacker[half] = attacker.get(half, 0) + n
+        else:
+            vulnerability[half] = vulnerability.get(half, 0) + n
+    if unjudged:
+        logger.warning("AI involvement chart: %d incident(s) not judged yet", unjudged)
+    return {'periods': periods, 'attacker': [attacker[p] for p in periods],
+            'vulnerability': [vulnerability[p] for p in periods], 'unjudged': unjudged,
+            'available': True, 'report': AI_REPORT_FILE}
 
 
 # ---------------------------------------------------------------------------
@@ -2735,6 +2784,9 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     sbi = script_json(data['severity_by_industry'])
     sbat = script_json(data['severity_by_attack_type'])
     rbat = script_json(data['records_by_attack_type'])
+    ai_inv = script_json(data.get('ai_involvement') or {'periods': [], 'attacker': [], 'vulnerability': [],
+                                                        'unjudged': 0, 'available': False,
+                                                        'report': AI_REPORT_FILE})
     mcs = script_json(data['monthly_counts_stats'])
     etc = script_json(data['event_type_correlation'])
     oaic_comp = script_json(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
@@ -2871,6 +2923,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         <div class="chart-container">
           <div class="chart-title">Database: Average Records Affected by Attack Type</div>
           <canvas id="recordsByAttackTypeChart"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container" style="height: 420px;">
+          <div class="chart-title">Database: Incidents Involving AI per Half-Year</div>
+          <div id="aiInvolvementSubtitle" style="font-size: 0.9rem; color: #6b7280; margin-top: -8px; margin-bottom: 6px; text-align: center;"></div>
+          <div style="height: 320px; position: relative;">
+            <canvas id="aiInvolvementChart"></canvas>
+          </div>
         </div>
       </div>
       <div class="col-lg-6 col-md-12">
@@ -3022,6 +3083,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const recordsHistogram = __RH__;
     const maxRecordsPerMonth = __MRP__;
     const recordsByAttackType = __RBAT__;
+    const aiInvolvement = __AI_INV__;
     const monthlyCountsStats = __MCS__;
     const eventTypeCorrelation = __ETC__;
     const oaicComparison = __OAIC_COMP__;
@@ -4666,6 +4728,41 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         }
       });
     })();
+
+    // 14) Incidents involving AI per half-year (Jev: AI attacker / AI vulnerability)
+    (function() {
+      const d = aiInvolvement;
+      const sub = document.getElementById('aiInvolvementSubtitle');
+      const total = d.attacker.reduce((a, b) => a + b, 0) + d.vulnerability.reduce((a, b) => a + b, 0);
+      const parts = [];
+      if (!d.available) {
+        parts.push('Not classified yet: run scripts/classify_ai_involvement.py');
+      } else {
+        parts.push(`${total.toLocaleString()} incident(s)`);
+        if (d.unjudged) parts.push(`${d.unjudged.toLocaleString()} not judged yet`);
+      }
+      sub.innerHTML = parts.join('; ') + ` &middot; <a href="${d.report}">List of AI incidents</a>`;
+      new Chart(document.getElementById('aiInvolvementChart').getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: d.periods,
+          datasets: [
+            { label: 'AI attacker', data: d.attacker, backgroundColor: '#dc2626' },
+            { label: "AI vulnerability (victim's AI attacked)", data: d.vulnerability, backgroundColor: '#2563eb' }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          scales: {
+            x: { stacked: true, title: { display: true, text: 'Half-year' } },
+            y: { stacked: true, beginAtZero: true, ticks: { precision: 0 },
+                 title: { display: true, text: 'Unique events' } }
+          }
+        }
+      });
+    })();
   </script>
 </body>
 </html>
@@ -4694,6 +4791,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__SBI__', sbi)
             .replace('__SBAT__', sbat)
             .replace('__RBAT__', rbat)
+            .replace('__AI_INV__', ai_inv)
             .replace('__MCS__', mcs)
             .replace('__ETC__', etc)
             .replace('__OAIC_COMP__', oaic_comp)
@@ -4881,6 +4979,18 @@ def build_reconciliation_checks(
         checks.append(ReconciliationCheck(
             "OAIC source split: database within population", expected_split, shown_split,
             "classified subset", relation='<='))
+
+    ai_chart = data.get('ai_involvement') or {}
+    if ai_chart.get('available'):
+        from cyber_data_collector.processing.ai_involvement import AI_LABELS
+        where_ai, params_ai = incident_filter(period)
+        ai_incidents = int(conn.execute(
+            f"SELECT COUNT(*) FROM DeduplicatedEvents WHERE {where_ai} AND ai_involvement IN (?, ?)",
+            [*params_ai, *AI_LABELS]).fetchone()[0])
+        checks.append(ReconciliationCheck(
+            "AI involvement per half-year", ai_incidents,
+            sum_counts(ai_chart.get('attacker', [])) + sum_counts(ai_chart.get('vulnerability', [])),
+            "incidents labelled AI-attacker or AI-vulnerability"))
     return checks
 
 
@@ -4989,6 +5099,7 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             'severity_by_industry': get_severity_by_industry(conn, start_date, end_date),
             'severity_by_attack_type': get_severity_by_attack_type(conn, start_date, end_date),
             'records_by_attack_type': get_records_affected_by_attack_type(conn, start_date, end_date),
+            'ai_involvement': get_ai_involvement_by_half_year(conn, start_date, end_date),
             'monthly_counts_stats': compute_monthly_counts_stats(monthly_counts),
             'event_type_correlation': compute_event_type_correlation_matrix(event_type_mix),
             'oaic_comparison': oaic_comparison,
@@ -5093,6 +5204,10 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
     html = build_html(data, start_date, end_date)
     out_file.write_text(html, encoding='utf-8')
     logger.info(f'Static dashboard generated: {out_file}')
+    # The AI incident list the AI chart links to, published with index.html.
+    from scripts.build_ai_incident_report import write_report as write_ai_report
+    with get_connection(db_path) as conn:
+        write_ai_report(conn, str(out_dir_path), reporting_period)
     return str(out_file)
 
 

@@ -92,12 +92,12 @@ def _module_schema_steps(conn: sqlite3.Connection) -> None:
         corroboration, event_facts, org_timeline, page_classifier, record_fingerprints,
     )
     from cyber_data_collector.dedup.schema import migrate as migrate_dedup
-    from cyber_data_collector.processing import retry_queue
+    from cyber_data_collector.processing import ai_involvement, retry_queue
     from cyber_data_collector.storage import asd_schema
     from cyber_data_collector.utils import jev
 
     migrate_dedup(conn)
     asd_schema.ensure_schema(conn)
     for module in (jev, org_timeline, corroboration, page_classifier, record_fingerprints, event_facts,
-                   retry_queue):
+                   retry_queue, ai_involvement):
         module.ensure_schema(conn)

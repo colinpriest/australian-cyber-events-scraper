@@ -1039,6 +1039,19 @@ class UnifiedPipeline:
                 logger.error(message)
                 self.results['classification'].setdefault('errors', []).append(message)
 
+            # AI involvement (Jev: AI-attacker / AI-vulnerability / No-AI, with all
+            # three probabilities), and a description of each AI incident for the
+            # AI incident report. Stored, so only new or changed events are asked.
+            from scripts import classify_ai_involvement
+            try:
+                code = classify_ai_involvement.main(["--db", self.db_path])
+            except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
+                code = f"error: {exc}"
+            if code != 0:
+                message = f"AI-involvement classification did not complete ({code})"
+                logger.error(message)
+                self.results['classification'].setdefault('errors', []).append(message)
+
         # Phase 2c: OAIC statistics (data.gov.au), validated; a failing extract
         # keeps the last valid dataset and the run ends degraded.
         if not args.discover_only and not args.classify_only and not args.dashboard_only:

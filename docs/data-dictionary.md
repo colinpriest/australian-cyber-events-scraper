@@ -283,6 +283,15 @@ Final unique events after entity-based deduplication. The primary table used for
 | `date_confidence` | REAL | Yes | NULL | Confidence in the event date (0.0–1.0) |
 | `entity_confidence` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0) |
 | `data_source_reliability` | REAL | Yes | NULL | Reliability score for data source (0.0–1.0) |
+| `ai_involvement` | VARCHAR(20) | Yes | NULL | `AI-attacker`, `AI-vulnerability` or `No-AI`: Jev's most probable option (`scripts/classify_ai_involvement.py`, uncalibrated). NULL = not judged yet |
+| `ai_attacker_probability` | REAL | Yes | NULL | Jev's probability that AI was the attacker or its instrument |
+| `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, misused or leaked data |
+| `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the three sum to 1) |
+
+The descriptions shown in `dashboard/ai_incidents.html` are in `EventDescriptions`
+(`deduplicated_event_id`, `purpose = 'ai_incident_report'`, `prompt_version`,
+`input_hash` of evidence + prompt + model, `model`, `description`, `created_at`);
+a new row is written only when the evidence changes.
 
 **Indexes:**
 - `idx_dedup_events_australian` on `(is_australian_event)`
