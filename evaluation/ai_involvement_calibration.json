@@ -1,0 +1,358 @@
+{
+  "question_version": "ai-involvement-v3+ai-involvement-escalation-v1",
+  "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+  "calibrated_on_database": "cyber_events.db",
+  "cutoff": 0.67,
+  "precision_target": 0.95,
+  "min_flags": 10,
+  "at_cutoff": {
+    "cutoff": 0.67,
+    "flagged_labelled": 36,
+    "correct_labelled": 35,
+    "weighted_precision": 0.9722222222222222,
+    "weighted_recall": 0.9722222222222222,
+    "unweighted_precision_ci95": [
+      0.8582996626496918,
+      0.9950797197044302
+    ],
+    "category_agreement": 0.9714285714285714
+  },
+  "labelled_used": 122,
+  "unsure_excluded": 0,
+  "missing": 0,
+  "labels_file": "evaluation\\ai_involvement_labels.csv",
+  "sample_file": "evaluation\\ai_involvement_sample.csv",
+  "generated": "2026-10-29T08:04:44.445125",
+  "bootstrap_out_of_sample_precision": {
+    "replicates": 1000,
+    "median": 1.0,
+    "mean": 0.9535301659554756,
+    "p05": 0.7692307692307693
+  },
+  "curve": [
+    {
+      "cutoff": 0.0,
+      "flagged_labelled": 122,
+      "correct_labelled": 36,
+      "weighted_precision": 0.03278685538537761,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.2214059197562548,
+        0.38126918926969533
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.01,
+      "flagged_labelled": 55,
+      "correct_labelled": 36,
+      "weighted_precision": 0.5515128303332056,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.5225365801066263,
+        0.7663746663584595
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.02,
+      "flagged_labelled": 52,
+      "correct_labelled": 36,
+      "weighted_precision": 0.6923076923076923,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.5573015506778113,
+        0.8008543760864647
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.03,
+      "flagged_labelled": 49,
+      "correct_labelled": 36,
+      "weighted_precision": 0.7346938775510204,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.5973744384734165,
+        0.8378886875485057
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.05,
+      "flagged_labelled": 47,
+      "correct_labelled": 36,
+      "weighted_precision": 0.7659574468085106,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.6277546774315923,
+        0.8639686357607541
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.07,
+      "flagged_labelled": 44,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8181818181818182,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.6803916324485767,
+        0.9048730744174144
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.08,
+      "flagged_labelled": 43,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8372093023255814,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7002730466408176,
+        0.9188347549714246
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.1,
+      "flagged_labelled": 42,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8571428571428571,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7215861764782122,
+        0.9328412431581007
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.13,
+      "flagged_labelled": 42,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8571428571428571,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7215861764782122,
+        0.9328412431581007
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.16,
+      "flagged_labelled": 41,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8780487804878049,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7445549235115514,
+        0.9467674200265919
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.24,
+      "flagged_labelled": 40,
+      "correct_labelled": 36,
+      "weighted_precision": 0.9,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7694792561952611,
+        0.9604211124044252
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.26,
+      "flagged_labelled": 39,
+      "correct_labelled": 35,
+      "weighted_precision": 0.8974358974358975,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.7642084129775517,
+        0.9593873444171301
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.65,
+      "flagged_labelled": 38,
+      "correct_labelled": 35,
+      "weighted_precision": 0.9210526315789473,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.792003210797347,
+        0.972785898605735
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.67,
+      "flagged_labelled": 36,
+      "correct_labelled": 35,
+      "weighted_precision": 0.9722222222222222,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.8582996626496918,
+        0.9950797197044302
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.76,
+      "flagged_labelled": 36,
+      "correct_labelled": 35,
+      "weighted_precision": 0.9722222222222222,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.8582996626496918,
+        0.9950797197044302
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.79,
+      "flagged_labelled": 35,
+      "correct_labelled": 35,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.9010957324106112,
+        1.0
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.81,
+      "flagged_labelled": 34,
+      "correct_labelled": 34,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.9444444444444444,
+      "unweighted_precision_ci95": [
+        0.8984820937803899,
+        1.0
+      ],
+      "category_agreement": 0.9705882352941176
+    },
+    {
+      "cutoff": 0.84,
+      "flagged_labelled": 33,
+      "correct_labelled": 33,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.9166666666666666,
+      "unweighted_precision_ci95": [
+        0.8957265699643882,
+        1.0
+      ],
+      "category_agreement": 0.9696969696969697
+    },
+    {
+      "cutoff": 0.85,
+      "flagged_labelled": 32,
+      "correct_labelled": 32,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.8888888888888888,
+      "unweighted_precision_ci95": [
+        0.8928172849426366,
+        1.0
+      ],
+      "category_agreement": 0.96875
+    },
+    {
+      "cutoff": 0.88,
+      "flagged_labelled": 31,
+      "correct_labelled": 31,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.8611111111111112,
+      "unweighted_precision_ci95": [
+        0.889740999265246,
+        0.9999999999999999
+      ],
+      "category_agreement": 0.967741935483871
+    },
+    {
+      "cutoff": 0.89,
+      "flagged_labelled": 29,
+      "correct_labelled": 29,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.8055555555555556,
+      "unweighted_precision_ci95": [
+        0.8830264055344442,
+        1.0
+      ],
+      "category_agreement": 0.9655172413793104
+    },
+    {
+      "cutoff": 0.9,
+      "flagged_labelled": 28,
+      "correct_labelled": 28,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.7777777777777778,
+      "unweighted_precision_ci95": [
+        0.8793527963418923,
+        1.0
+      ],
+      "category_agreement": 0.9642857142857143
+    },
+    {
+      "cutoff": 0.92,
+      "flagged_labelled": 27,
+      "correct_labelled": 27,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.75,
+      "unweighted_precision_ci95": [
+        0.8754409628553641,
+        1.0
+      ],
+      "category_agreement": 0.9629629629629629
+    },
+    {
+      "cutoff": 0.95,
+      "flagged_labelled": 26,
+      "correct_labelled": 26,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.7222222222222222,
+      "unweighted_precision_ci95": [
+        0.8712669561953784,
+        1.0
+      ],
+      "category_agreement": 0.9615384615384616
+    },
+    {
+      "cutoff": 0.97,
+      "flagged_labelled": 25,
+      "correct_labelled": 25,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.6944444444444444,
+      "unweighted_precision_ci95": [
+        0.8668035060468213,
+        1.0
+      ],
+      "category_agreement": 0.96
+    },
+    {
+      "cutoff": 0.99,
+      "flagged_labelled": 24,
+      "correct_labelled": 24,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.6666666666666666,
+      "unweighted_precision_ci95": [
+        0.8620194241710247,
+        1.0
+      ],
+      "category_agreement": 1.0
+    },
+    {
+      "cutoff": 1.0,
+      "flagged_labelled": 22,
+      "correct_labelled": 22,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.6111111111111112,
+      "unweighted_precision_ci95": [
+        0.8513404742740388,
+        1.0
+      ],
+      "category_agreement": 1.0
+    }
+  ]
+}
