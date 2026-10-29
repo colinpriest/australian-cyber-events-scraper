@@ -257,14 +257,38 @@ def verify_stored_aliases(conn: sqlite3.Connection, search: Optional[Search] = N
     return out
 
 
+#: Stored verdicts that say two names are not one entity. ``unsure`` settles nothing either way.
+CONFLICT_VERDICTS = ("different", "parent_subsidiary", "related")
+
+
+def _recorded_conflict(known: Dict[Tuple[str, str], Dict[str, Any]], name: str,
+                       members: Sequence[str]) -> Optional[Tuple[str, str]]:
+    """``(member, verdict)`` for the first stored verdict that ``name`` is not the same entity as a member."""
+    for member in members:
+        stored = known.get(_pair(name, member))
+        if stored and stored["verdict"] in CONFLICT_VERDICTS:
+            return member, stored["verdict"]
+    return None
+
+
 def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[str]]],
                     search: Optional[Search] = None,
                     report: Optional[VerificationReport] = None) -> List[Tuple[str, List[str]]]:
-    """Keep only the folds Perplexity confirms; names it rejects are regrouped among themselves.
+    """Keep only the folds Perplexity confirms and no recorded verdict contradicts.
 
-    Each name is checked against the group's chosen name; names that are not
-    the same organisation form a residual group with its own chosen name (so
-    "M&S" can still join "Marks & Spencer" when "Mackay Sugar" rejects both).
+    Each name is checked against the group's chosen name (the head), and
+    **every stored verdict between any two members is honoured**: a name joins
+    the fold only if none of ``different`` / ``parent_subsidiary`` /
+    ``related`` is recorded between it and the head or any name already
+    joined. So with A=B and A=C confirmed but B and C recorded as different
+    organisations, B and C never fold together - the one with fewer recorded
+    conflicts (then the earlier) joins A, the other is left out (reported as
+    rejected with the conflicting verdict) without asking. A question is put
+    to Perplexity only for a pair with no stored verdict whose answer can
+    change the fold: a name already barred by a recorded conflict is not asked
+    about. Names that are not folded are regrouped among themselves with their
+    own chosen name (so "M&S" can still join "Marks & Spencer" when "Mackay
+    Sugar" rejects both).
     """
     from cyber_data_collector.dedup.entity_merge import preferred_name
 
@@ -276,19 +300,28 @@ def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[s
         pending = [keep, *drop]
         while len(pending) >= 2:
             head = pending[0] if pending[0] == keep else preferred_name(pending, {})
-            joined, left = [], []
-            for name in pending:
-                if name == head:
+            others = [n for n in pending if n != head]
+            # Fewest recorded conflicts first, so a consistent fold is as large as it can be.
+            order = sorted(others, key=lambda n: (sum(1 for o in pending if o != n and _recorded_conflict(known, n, [o])),
+                                                  others.index(n)))
+            joined: List[str] = []
+            barred: Dict[str, Tuple[str, str]] = {}
+            for name in order:
+                conflict = _recorded_conflict(known, name, [head, *joined])
+                if conflict is not None:
+                    barred[name] = conflict
+                    report.reused += 1          # a stored verdict decided it; nothing asked
                     continue
                 verdict = verify_pair(conn, head, name, search, known, report)
                 if verdict == "same":
                     joined.append(name)
                     report.accepted.append((name, head))
                 else:
-                    left.append(name)
-                    if verdict is not None:
-                        report.rejected.append((name, head, verdict))
+                    barred[name] = (head, verdict or "")
+            for name in order:
+                if name in barred and barred[name][1]:        # undecided pairs are retried, not rejected
+                    report.rejected.append((name, *barred[name]))
             if joined:
-                out.append((head, joined))
-            pending, keep = left, None
+                out.append((head, [n for n in others if n in joined]))
+            pending, keep = [n for n in others if n in barred], None
     return out

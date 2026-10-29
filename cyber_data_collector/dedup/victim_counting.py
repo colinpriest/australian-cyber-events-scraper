@@ -15,6 +15,20 @@ variants with the project's strict test,
 on one representative entity per organisation and drop duplicate
 (organisation, event) rows.
 
+**Acronyms are candidates, not proof.** "AP" is Advance Press in one record and
+Associated Press in another, and ``AP`` is the initialism of both, so the
+structural test that joins "FRV" to "Fire Rescue Victoria" would join it to
+either, collapsing victims that are different organisations - inside an event
+and across the recurrence counts. :class:`AcronymPolicy` therefore accepts an
+acronym as the organisation only through an established identifier: a
+reviewed or model-confirmed global alias (``EntityAliases``,
+``EXPLICIT_ALIASES``), or - inside one event - a stored resolution of that
+very event (``EntityMentionResolutions``). An acronym that fits several
+organisations, or is registered as a contextual alias
+(``ContextualEntityAliases``), and has neither stays unresolved and distinct.
+An acronym that fits exactly one organisation and conflicts with no alias
+keeps resolving without a model call.
+
 **Unresolved attributions.** When the calibrated victim-attribution step
 scores a recorded victim as probably wrong but no co-victim or calibrated
 replacement can take its place, it flags the pair and leaves the role
@@ -26,11 +40,12 @@ and still counted, but under an organisation it may not have happened to.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from cyber_data_collector.dedup.entity_resolution import EntityResolver
+from cyber_data_collector.dedup.entity_resolution import EntityResolver, canonical_key
 
 
 def _resolver(conn: sqlite3.Connection) -> EntityResolver:
@@ -42,6 +57,110 @@ def _resolver(conn: sqlite3.Connection) -> EntityResolver:
     # Fitted on every entity name, so the one-distinctive-word rule ("Qantas"
     # vs "Qantas Airways") only fires for words that really are distinctive.
     resolver.fit(names)
+    return with_acronym_policy(conn, resolver)
+
+
+class AcronymPolicy:
+    """When may an acronym be treated as the organisation it abbreviates?
+
+    ``entity_merge.is_acronym_of`` says only that an acronym *fits* a name.
+    Built from the entity names (to see every organisation an acronym fits),
+    the trusted global aliases and the contextual aliases, this decides
+    whether the fit is identity:
+
+    1. A trusted global alias (reviewed, or confirmed by Perplexity) settles
+       it: the acronym is the organisation its alias names, and the name it is
+       compared with is that organisation or is not.
+    2. A registered contextual alias (``ContextualEntityAliases``) is
+       ambiguous by definition - the design is that such an acronym is placed
+       one record at a time - so the fit is not identity.
+    3. An acronym that fits more than one distinct organisation is ambiguous.
+    4. Otherwise the acronym fits exactly one organisation and nothing
+       contradicts it: identity, as before.
+
+    Event-level context (a stored resolution of this very event) is applied by
+    :func:`within_event_duplicates`.
+    """
+
+    def __init__(self, names: Iterable[str], trusted: Optional[Dict[str, str]] = None,
+                 contextual: Optional[Dict[str, List[str]]] = None):
+        from cyber_data_collector.dedup.entity_merge import acronym_forms
+
+        self.trusted: Dict[str, str] = dict(trusted or {})
+        self.contextual: Dict[str, List[str]] = dict(contextual or {})
+        self._by_form: Dict[str, List[str]] = defaultdict(list)
+        for name in {n for n in names if n}:
+            for form in acronym_forms(name):
+                self._by_form[form].append(name)
+        self._cache: Dict[Tuple[str, str], bool] = {}
+
+    @classmethod
+    def from_connection(cls, conn: sqlite3.Connection) -> "AcronymPolicy":
+        from cyber_data_collector.dedup.contextual_aliases import contextual_aliases
+        from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
+        from cyber_data_collector.dedup.entity_resolution import stored_aliases
+
+        try:
+            names = [r[0] for r in conn.execute("SELECT entity_name FROM EntitiesV2")]
+        except sqlite3.Error:
+            names = []
+        try:
+            contextual = contextual_aliases(conn)
+        except sqlite3.Error:
+            contextual = {}
+        return cls(names, {**stored_aliases(conn), **EXPLICIT_ALIASES}, contextual)
+
+    @staticmethod
+    def relation(left: Optional[str], right: Optional[str]) -> Optional[Tuple[str, str]]:
+        """``(acronym, longer name)`` when one name is the initialism of the other."""
+        from cyber_data_collector.dedup.entity_merge import is_acronym_of
+
+        if not left or not right:
+            return None
+        if is_acronym_of(left, right):
+            return left, right
+        if is_acronym_of(right, left):
+            return right, left
+        return None
+
+    @staticmethod
+    def _same_without_acronyms(left: str, right: str) -> bool:
+        from cyber_data_collector.dedup.entity_merge import same_organisation_by_structure
+
+        if canonical_key(left) and canonical_key(left) == canonical_key(right):
+            return True
+        return same_organisation_by_structure(left, right, acronyms=False)
+
+    def organisations_fitting(self, short: str) -> List[str]:
+        """One name per distinct organisation the acronym fits (stored names and contextual candidates)."""
+        letters = "".join(t for t in re.split(r"[^a-z0-9]+", short.lower()) if t)
+        fits = list(self._by_form.get(letters, ())) + list(self.contextual.get(short.strip(), ()))
+        reps: List[str] = []
+        for name in sorted(set(fits)):
+            if not any(self._same_without_acronyms(name, rep) for rep in reps):
+                reps.append(name)
+        return reps
+
+    def is_identity(self, short: str, long: str) -> bool:
+        """May the fit of ``short`` to ``long`` be treated as one organisation?"""
+        key = (short, long)
+        if key not in self._cache:
+            self._cache[key] = self._decide(short, long)
+        return self._cache[key]
+
+    def _decide(self, short: str, long: str) -> bool:
+        alias = self.trusted.get(short.strip())
+        if alias is not None:
+            return self._same_without_acronyms(alias, long) or canonical_key(alias) == canonical_key(long)
+        if short.strip() in self.contextual:
+            return False
+        return len(self.organisations_fitting(short)) <= 1
+
+
+def with_acronym_policy(conn: sqlite3.Connection, resolver: EntityResolver) -> EntityResolver:
+    """Attach (once) the :class:`AcronymPolicy` of ``conn`` to ``resolver``; returns it."""
+    if getattr(resolver, "acronym_policy", None) is None:
+        resolver.acronym_policy = AcronymPolicy.from_connection(conn)
     return resolver
 
 
@@ -54,6 +173,9 @@ def same_organisation(resolver: EntityResolver, left: Optional[str], right: Opti
     Same when they share a canonical key or a learned alias, have the same
     words apart from "the" and legal forms, or pass the canonicaliser's
     structural test (:func:`entity_merge.same_organisation_by_structure`).
+    An acronym and the name it abbreviates are the same only when
+    :class:`AcronymPolicy` (attached to ``resolver``) accepts the fit; a
+    resolver without a policy accepts none.
     Otherwise :meth:`EntityResolver.same_organisation` must hold **and** the
     shorter name must keep an identifying word once place, portfolio and
     institution words are removed (:func:`entity_merge.distinctive_core`),
@@ -76,8 +198,14 @@ def same_organisation(resolver: EntityResolver, left: Optional[str], right: Opti
     words_r = [t for t in _tokens(right) if t not in _IGNORED]
     if words_l and words_l == words_r:
         return True
-    if same_organisation_by_structure(left, right):
+    if same_organisation_by_structure(left, right, acronyms=False):
         return True
+    fit = AcronymPolicy.relation(left, right)
+    if fit is not None:
+        # An acronym fits, which is a candidate and not identity; see AcronymPolicy.
+        policy = getattr(resolver, "acronym_policy", None)
+        if policy is not None and policy.is_identity(*fit):
+            return True
     if not resolver.same_organisation(left, right) or lines_of_business_conflict(left, right):
         return False
     # A place word in one name only scopes it to a jurisdiction the other does
@@ -134,7 +262,7 @@ def organisation_groups(conn: sqlite3.Connection, entity_ids: Iterable[int],
     ids = sorted({int(i) for i in entity_ids if i is not None})
     if not ids:
         return {}
-    resolver = resolver or _resolver(conn)
+    resolver = with_acronym_policy(conn, resolver) if resolver else _resolver(conn)
     names: Dict[int, str] = {}
     for chunk in (ids[i:i + 500] for i in range(0, len(ids), 500)):
         for eid, name in conn.execute(
@@ -198,6 +326,39 @@ def organisation_groups(conn: sqlite3.Connection, entity_ids: Iterable[int],
     return out
 
 
+def _resolved_acronyms(conn: sqlite3.Connection, by_event: Dict[str, list]) -> Dict[str, List[Tuple[str, str]]]:
+    """``{event id: [(acronym, organisation it was resolved to)]}`` from the event's stored resolutions.
+
+    Only decisions about the event's own victim links count
+    (``EntityMentionResolutions``, link table ``DeduplicatedEventEntities``,
+    subject = the event) and only those that name an organisation: an
+    unresolved mention is not evidence.
+    """
+    out: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+    ids = sorted(by_event)
+    try:
+        for chunk in (ids[i:i + 500] for i in range(0, len(ids), 500)):
+            for subject, raw, canonical in conn.execute(
+                    "SELECT subject_id, raw_name, canonical_name FROM EntityMentionResolutions "
+                    "WHERE link_table = 'DeduplicatedEventEntities' AND canonical_name IS NOT NULL "
+                    f"AND subject_id IN ({','.join('?' * len(chunk))})", chunk):
+                out[subject].append((raw, canonical))
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def _resolved_to(resolver: EntityResolver, resolutions: Iterable[Tuple[str, str]],
+                 left: str, right: str) -> bool:
+    """Did this event's own context resolve the acronym in one name to the organisation in the other?"""
+    fit = AcronymPolicy.relation(left, right)
+    if fit is None:
+        return False
+    short, long = fit
+    return any(raw == short and (canonical == long or same_organisation(resolver, canonical, long))
+               for raw, canonical in resolutions)
+
+
 def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, str, str]],
                             resolver: Optional[EntityResolver] = None) -> set:
     """``(entity id, event id)`` rows that repeat another victim of the same event under another name.
@@ -205,7 +366,7 @@ def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, 
     ``rows`` are ``(entity id, entity name, event id)``. Within each event the
     variant with most victim roles overall is kept (then the lowest id).
     """
-    resolver = resolver or _resolver(conn)
+    resolver = with_acronym_policy(conn, resolver) if resolver else _resolver(conn)
     weight: Dict[int, int] = defaultdict(int)
     try:
         for eid, n in conn.execute(
@@ -218,11 +379,13 @@ def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, 
     for eid, name, did in rows:
         if (int(eid), name) not in by_event[did]:
             by_event[did].append((int(eid), name))
+    resolved = _resolved_acronyms(conn, by_event)
     drop = set()
     for did, victims in by_event.items():
         kept: List[Tuple[int, str]] = []
         for eid, name in sorted(victims, key=lambda v: (-weight.get(v[0], 0), v[0])):
-            if any(k[0] == eid or same_within_event(resolver, k[1], name) for k in kept):
+            if any(k[0] == eid or same_within_event(resolver, k[1], name)
+                   or _resolved_to(resolver, resolved.get(did, ()), k[1], name) for k in kept):
                 if not any(k[0] == eid for k in kept):
                     drop.add((eid, did))
                 continue
@@ -263,7 +426,7 @@ def unresolved_rows(conn: sqlite3.Connection, rows: Iterable[Tuple[int, str, str
         if flag is None:
             for (other, other_did) in drop:
                 if other_did == did and (did, other) in flagged:
-                    resolver = resolver or _resolver(conn)
+                    resolver = with_acronym_policy(conn, resolver) if resolver else _resolver(conn)
                     if same_within_event(resolver, name, names.get((other, did))):
                         flag = flagged[(did, other)]
                         break

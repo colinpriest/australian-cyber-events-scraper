@@ -332,13 +332,23 @@ def canonical_groups(conn: sqlite3.Connection, explicit_only: bool = False,
     return groups
 
 
-def merge_entities(conn: sqlite3.Connection, keep: str, drop: Iterable[str]) -> int:
-    """Repoint every link from ``drop`` onto ``keep`` and delete the duplicates.
+def merge_entities(conn: sqlite3.Connection, keep: str, drop: Iterable[str], source: str = "unspecified",
+                   sources: Optional[Dict[str, str]] = None) -> int:
+    """Fold each ``drop`` entity into ``keep``, losing nothing, and record every fold. Returns how many folded.
 
-    ``INSERT OR IGNORE`` semantics are needed because an event can already link
-    to both spellings; the update is done with ``UPDATE OR IGNORE`` followed by
-    a delete of whatever could not move, which leaves exactly one link.
+    Each fold is one atomic step (:func:`entity_merge_ledger.merge_pair`):
+    attributes the dropped row carries are inherited **before** it is
+    deleted; its links move onto ``keep``; where a record or event already
+    links both spellings the surviving link keeps the stronger role and the
+    other is recorded, never dropped silently; and an ``EntityMerges`` row
+    holds the original rows, links, roles and ids so
+    ``dedup_admin.py unmerge-entity`` can restore them exactly. ``source`` (or
+    ``sources[name]``) says who decided: ``human`` for a reviewed alias,
+    ``llm`` for a model-confirmed one, ``structure`` for name structure alone.
+    Does not commit.
     """
+    from cyber_data_collector.dedup.entity_merge_ledger import merge_pair
+
     row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?",
                        (keep,)).fetchone()
     if row is None:
@@ -346,45 +356,15 @@ def merge_entities(conn: sqlite3.Connection, keep: str, drop: Iterable[str]) -> 
         return 0
     keep_id = row[0]
 
-    moved = 0
+    folded = 0
     for name in drop:
         got = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?",
                            (name,)).fetchone()
         if got is None or got[0] == keep_id:
             continue
-        drop_id = got[0]
-        for table in LINK_TABLES:
-            conn.execute(f"UPDATE OR IGNORE {table} SET entity_id = ? WHERE entity_id = ?",
-                         (keep_id, drop_id))
-            conn.execute(f"DELETE FROM {table} WHERE entity_id = ?", (drop_id,))
-        # The scalar columns store names, not ids, so they move separately.
-        conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? "
-                     "WHERE victim_organization_name = ?", (keep, name))
-        conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = ? "
-                     "WHERE vendor_organization_name = ?", (keep, name))
-        conn.execute("DELETE FROM EntitiesV2 WHERE entity_id = ?", (drop_id,))
-        moved += 1
-    return moved
-
-
-def inherit_attributes(conn: sqlite3.Connection, keep: str) -> None:
-    """Fill blank kind/industry/nationality on the surviving entity.
-
-    The best-spelled name is not always the best-populated row, so a merge
-    should not lose an ``is_australian`` flag or industry that one of the
-    dropped spellings carried. Only blanks are filled - nothing is overwritten.
-    """
-    conn.execute(
-        """
-        UPDATE EntitiesV2 SET
-            entity_kind = COALESCE(entity_kind, (
-                SELECT entity_kind FROM EntitiesV2 x WHERE x.entity_name = ?
-                  AND x.entity_kind IS NOT NULL LIMIT 1)),
-            is_australian = COALESCE(is_australian, (
-                SELECT is_australian FROM EntitiesV2 x WHERE x.entity_name = ?
-                  AND x.is_australian IS NOT NULL LIMIT 1))
-        WHERE entity_name = ?
-        """, (keep, keep, keep))
+        if merge_pair(conn, keep_id, got[0], (sources or {}).get(name, source)):
+            folded += 1
+    return folded
 
 
 class NamedOrganisation(BaseModel):
@@ -695,29 +675,36 @@ def initialism(name: str) -> str:
     return "".join(w[0] for w in words) if len(words) >= 2 else ""
 
 
+def acronym_forms(long: str) -> frozenset:
+    """The acronyms ``long`` can be written as: its initials, and the initials with a leading
+    all-consonant token ("HWL") kept whole. Empty for a one-word name."""
+    words = [w for w in _tokens(long) if w not in _ACRONYM_SKIP]
+    if len(words) < 2:
+        return frozenset()
+    expanded = "".join(w if len(w) <= 4 and not any(
+        c in "aeiou" for c in w) else w[0] for w in words)
+    return frozenset({"".join(w[0] for w in words), expanded})
+
+
 def is_acronym_of(short: str, long: str) -> bool:
     """True when ``short`` is the initialism of ``long``.
 
     Handles names that already contain an acronym: "HWLE" against "HWL
     Ebsworth" takes H, W, L from the first token and E from the second.
+
+    This is a *candidate* relation, not proof of identity: one short acronym
+    fits many organisations ("AP" is Advance Press and Associated Press).
+    Counting code decides when a fit may be treated as identity
+    (:class:`victim_counting.AcronymPolicy`).
     """
     letters = "".join(_tokens(short))
     if not (2 <= len(letters) <= 6) or not letters.isalpha():
         return False
-    words = [w for w in _tokens(long) if w not in _ACRONYM_SKIP]
-    if len(words) < 2:
-        return False
-
-    if letters == "".join(w[0] for w in words):
-        return True
-    # Expand a leading all-consonant token ("HWL") into its own letters.
-    expanded = "".join(w if len(w) <= 4 and not any(
-        c in "aeiou" for c in w) else w[0] for w in words)
-    return letters == expanded
+    return letters in acronym_forms(long)
 
 
 def same_organisation_by_structure(
-    left: str, right: str, rare_tokens: Optional[frozenset] = None
+    left: str, right: str, rare_tokens: Optional[frozenset] = None, acronyms: bool = True
 ) -> bool:
     """True when two names denote one organisation on structure alone.
 
@@ -729,6 +716,9 @@ def same_organisation_by_structure(
     extra words are allowed to be anything - "Lion" and "Lion Dairy & Drinks"
     are the same company, and nothing but rarity distinguishes that from "Bank"
     and "Bank of Queensland", where the shared token is worthless.
+
+    ``acronyms=False`` leaves out the initialism rule: an acronym is a
+    candidate, not proof, and counting code decides it separately.
     """
     a, b = _tokens(left), _tokens(right)
 
@@ -745,7 +735,7 @@ def same_organisation_by_structure(
     if not a or not b or a == b:
         return bool(a and a == b)
 
-    if is_acronym_of(left, right) or is_acronym_of(right, left):
+    if acronyms and (is_acronym_of(left, right) or is_acronym_of(right, left)):
         return True
 
     if lines_of_business_conflict(left, right):
