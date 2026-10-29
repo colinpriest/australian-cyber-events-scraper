@@ -172,9 +172,15 @@ names the evidence that showed the problem. Done items move to the README or
 
 - **Cyber Daily backfill stored 2,724 of 4,682 stories with no page text**
   (325 are records of active incidents, classified from the feed's
-  standfirst). Evidence recovery leaves them to the Cyber Daily re-fetch, which
-  waits 24 hours; why the first scrape stored nothing is not yet known
-  ([11-evidence-recovery.md](11-evidence-recovery.md)).
+  standfirst). Cause found 2026-10-29: the scrape hit the site with hundreds of
+  concurrent requests and was throttled (HTTP 429); the scraper now limits
+  requests per host, and `discovery_queue.py refetch-cyberdaily --until-empty`
+  drains the backlog ([11-evidence-recovery.md](11-evidence-recovery.md)).
+- **Newsletter tokens in stored source URLs.** 24 stored `RawEvents.source_url`
+  values (22 Webber, 2 Google) carry `utm_*` tracking and a `token` that names
+  a subscriber. Re-fetches no longer send or log them, but the stored URLs
+  still hold them: strip the query from Webber's newsletter links at ingest
+  (`datasources/webber_insurance.py`) and from stored rows.
 - Funlab (`1043b84f`): its label cites a report already stored as another
   event's record; `dedup_admin.py merge` them, or let `check-duplicates` decide.
 

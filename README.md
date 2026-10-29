@@ -278,7 +278,13 @@ With CyberDaily among the sources, every run also does two more things:
   retried by later runs with back-off, and given up after 5. A 404/410 is
   never retried. Given-up months and stories are reported until `release`.
 - **Incomplete stories are re-queued.** A story whose stored text is cut off
-  or under 300 characters is fetched again, at most 200 per run. That
+  or under 300 characters is fetched again, at most 200 per run;
+  `refetch-cyberdaily --until-empty` drains the whole backlog in one command
+  (2 pages at a time, stops when the site throttles, resumable). The stories
+  had no text because the 2026-10-28 backfill fetched hundreds of pages at once
+  and the site answered HTTP 429; the scraper now allows 2 requests per host in
+  flight, and a throttled answer is the site's, not the story's, so it never
+  counts towards giving a story up. That
   includes records filtered out on the feed's standfirst alone; when the full
   text arrives they are reopened and classified again. The first run left
   2,724 such records (the discovery scrape got no text).
@@ -291,6 +297,7 @@ With CyberDaily among the sources, every run also does two more things:
 ```bash
 python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
 python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
+python scripts/discovery_queue.py refetch-cyberdaily --until-empty [--max-minutes N] [--concurrency N]   # drain the backlog
 python scripts/discovery_queue.py status    # failed searches with type and next retry; stories no longer fetched
 python scripts/discovery_queue.py release   # given-up months and stories back in the queue
 python run_full_pipeline.py --cyberdaily-backfill-since none --skip-cyberdaily-refetch   # opt out for a run
@@ -665,7 +672,20 @@ Details: [docs/11-evidence-recovery.md](docs/11-evidence-recovery.md).
 python scripts/dedup_admin.py recover-evidence --dry-run     # what would be queued
 python scripts/dedup_admin.py recover-evidence               # queue + mark status
 python scripts/dedup_admin.py recover-evidence --status-only # re-mark only
+python scripts/dedup_admin.py recover-evidence --until-empty [--api-budget perplexity=800]   # drain every route
 ```
+
+`--until-empty` repeats queue -> fetch (Cyber Daily stories, queued pages) ->
+research -> mark until nothing more can be retrieved, a paid API's budget is
+spent (`--api-budget`), the site throttles or a round changes nothing; it
+exits 0 only when it ran dry and is resumed by running it again. A route that is
+given up (a story gone from the site, a page that failed three times, research
+that used its attempts) hands the incident to the next route - the record's
+research, then one replacement search whose best citation becomes a record with
+its own URL - never another page's text. The quality report shows each route's
+queued / attempted / succeeded / failing (by failure type) / exhausted counts
+and the age of its oldest queued item, with a trend
+([docs/11-evidence-recovery.md](docs/11-evidence-recovery.md)).
 
 **Calibrating** (`scripts/calibrate_source_gate.py`,
 `calibrate_event_reality.py`, `calibrate_duplicates.py`): samples are

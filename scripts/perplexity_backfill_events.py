@@ -575,6 +575,24 @@ class PerplexityBackfillProcessor:
         logger.info("=" * 80)
 
 
+async def enrich_waiting(db_path: str, limit: int) -> int:
+    """Research the first ``limit`` records waiting for Perplexity (records of unsupported incidents first).
+
+    Used by ``dedup_admin.py recover-evidence --until-empty``. Returns the number of records tried. Raises
+    ``RuntimeError`` when ``PERPLEXITY_API_KEY`` is not set: no other model is substituted.
+    """
+    api_key = ConfigManager().load().get("PERPLEXITY_API_KEY")
+    if not api_key:
+        raise RuntimeError("PERPLEXITY_API_KEY is not set; records cannot be researched")
+    db = CyberEventDataV2(db_path)
+    try:
+        processor = PerplexityBackfillProcessor(db=db, perplexity_engine=PerplexityEnrichmentEngine(api_key=api_key))
+        await processor.process_backfill(limit=limit)
+        return int(processor.stats['total_candidates'])
+    finally:
+        db.close()
+
+
 async def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Backfill events with Perplexity enrichment")

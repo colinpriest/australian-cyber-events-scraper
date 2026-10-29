@@ -140,7 +140,7 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
                            created_at=datetime.now().isoformat(timespec="seconds"), db_path=_db_path(conn),
                            thresholds=thresholds, metrics=metrics, allowed=allowed, reasons=reasons)
     report.previous = previous_values(conn)
-    report.history = metric_history(conn, TREND_METRICS)
+    report.history = metric_history(conn, TREND_METRICS + ROUTE_METRICS)
     return report
 
 
@@ -148,6 +148,10 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
 TREND_METRICS = ("evidence.status.supported", "evidence.status.partial", "evidence.status.unsupported",
                  "evidence.status.unsupported_share", "evidence.recovery.pending", "evidence.recovery.exhausted")
 TREND_RUNS = 12
+#: Evidence-recovery route progress (``recovery.route.<route>.<field>``), shown as one cell per route per run.
+ROUTE_NAMES = ("cyberdaily_refetch", "page_rescrape", "research", "label_report", "replacement_search")
+ROUTE_FIELDS = ("queued", "succeeded", "failing", "exhausted", "oldest_queued_days")
+ROUTE_METRICS = tuple(f"recovery.route.{route}.{field_}" for route in ROUTE_NAMES for field_ in ROUTE_FIELDS)
 
 
 def metric_history(conn: sqlite3.Connection, metrics: Tuple[str, ...] = TREND_METRICS,
@@ -163,6 +167,31 @@ def metric_history(conn: sqlite3.Connection, metrics: Tuple[str, ...] = TREND_ME
                                    (run_id, *metrics)).fetchall())
         out.append({"created_at": created_at, **values})
     return out
+
+
+def _route_cell(values: Dict[str, Any], route: str) -> str:
+    got = {f: values.get(f"recovery.route.{route}.{f}") for f in ROUTE_FIELDS}
+    if all(v is None for v in got.values()):
+        return "-"
+    age = got["oldest_queued_days"]
+    return (f"{_fmt(got['queued'])} queued, {_fmt(got['succeeded'])} ok, {_fmt(got['failing'])} failing, "
+            f"{_fmt(got['exhausted'])} exhausted" + (f", oldest {_fmt(age)} d" if age else ""))
+
+
+def _route_trend_table(report: "QualityReport") -> Optional[Tuple[str, List[str], List[List[str]]]]:
+    """Per-route recovery progress, this run and the recorded ones before it."""
+    current = {m.name: m.value for m in report.metrics if m.name in ROUTE_METRICS}
+    if not current:
+        return None
+    header = ["run", *ROUTE_NAMES]
+    rows = [[f"{report.created_at} (this run)"] + [_route_cell(current, r) for r in ROUTE_NAMES]]
+    rows += [[str(h["created_at"])] + [_route_cell(h, r) for r in ROUTE_NAMES] for h in report.history
+             if any(h.get(n) is not None for n in ROUTE_METRICS)]
+    return "Evidence recovery routes trend (queued / succeeded / failing / exhausted, oldest queued item)", header, rows
+
+
+def _trend_tables(report: "QualityReport") -> List[Tuple[str, List[str], List[List[str]]]]:
+    return [t for t in (_trend_table(report), _route_trend_table(report)) if t]
 
 
 def _trend_table(report: "QualityReport") -> Optional[Tuple[str, List[str], List[List[str]]]]:
@@ -322,8 +351,7 @@ def render_markdown(report: QualityReport) -> str:
         for m in flagged:
             lines.append(f"### `{m.name}` ({m.status})")
             lines += [f"- {str(e).replace(chr(10), ' ')}" for e in m.examples] + [""]
-    trend = _trend_table(report)
-    for title, header, rows in ([trend] if trend else []) + _coverage_tables(report):
+    for title, header, rows in _trend_tables(report) + _coverage_tables(report):
         lines += [f"## {title}", "", "| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
         lines += ["| " + " | ".join(r) + " |" for r in rows] + [""]
     return "\n".join(lines)
@@ -359,8 +387,7 @@ def render_html(report: QualityReport) -> str:
                      f"<td>{e(_fmt(m.value))}</td><td>{e(_fmt(prev['value'])) if prev else ''}</td>"
                      f"<td>{e(m.threshold)}</td><td>{e(m.detail)}{examples}</td></tr>")
     parts.append("</table></div>")
-    trend = _trend_table(report)
-    for title, header, rows in ([trend] if trend else []) + _coverage_tables(report):
+    for title, header, rows in _trend_tables(report) + _coverage_tables(report):
         parts.append(f"<h2>{e(title)}</h2><div class='wrap'><table><tr>"
                      + "".join(f"<th>{e(h)}</th>" for h in header) + "</tr>")
         parts += ["<tr>" + "".join(f"<td>{e(c)}</td>" for c in r) + "</tr>" for r in rows]

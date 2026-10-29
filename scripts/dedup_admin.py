@@ -2683,9 +2683,19 @@ def cmd_recover_evidence(args) -> int:
 
     Exit 2 when a replacement search was needed and could not run
     (no PERPLEXITY_API_KEY); the other retrieval and the statuses still happen.
+    With --until-empty it also runs the retrieval (Cyber Daily re-fetch, page re-fetch, Perplexity research,
+    replacement search) round after round; see :func:`_drain_evidence`.
     """
     from cyber_data_collector.processing import evidence_recovery
 
+    if args.api_budget:
+        from cyber_data_collector.utils.api_budget import configure as configure_api_budget
+        configure_api_budget(args.api_budget)
+    if args.until_empty:
+        if args.dry_run or args.status_only:
+            print("ERROR: --until-empty cannot be combined with --dry-run or --status-only", file=sys.stderr)
+            return 2
+        return _drain_evidence(args)
     conn = _connect(args.db)
     try:
         if args.status_only:
@@ -2702,6 +2712,41 @@ def cmd_recover_evidence(args) -> int:
         print("ERROR: " + "; ".join(report.errors), file=sys.stderr)
         return 2
     return 0
+
+
+def _drain_evidence(args) -> int:
+    """``recover-evidence --until-empty``: rounds of queue -> fetch -> research until nothing more can be retrieved.
+
+    Exit 0 when nothing is left to retrieve (what remains is exhausted or waits on another step), 2 when it
+    stopped for a reason a later run can fix (the site throttled, an API budget was spent, a key is missing,
+    no progress) - run it again to resume.
+    """
+    import asyncio
+
+    from cyber_data_collector.processing import cyberdaily_refetch, evidence_recovery, page_rescrape
+    from scripts.perplexity_backfill_events import enrich_waiting
+
+    minutes = cyberdaily_refetch.DEFAULT_DRAIN_MINUTES if args.max_minutes is None else (args.max_minutes or None)
+    steps = evidence_recovery.Steps(
+        refetch=lambda conn, ids: cyberdaily_refetch.drain(
+            conn, days=0, only=ids, first=ids, max_minutes=minutes, concurrency=cyberdaily_refetch.DRAIN_CONCURRENCY),
+        rescrape=lambda conn: page_rescrape.rescrape_short_pages(conn).attempted,
+        research=lambda conn, limit: asyncio.run(enrich_waiting(args.db, limit)),
+    )
+    conn = _connect(args.db)
+    try:
+        evidence_recovery.ensure_schema(conn)
+        try:
+            report = evidence_recovery.drain(conn, steps, limit=args.limit, max_rounds=args.max_rounds)
+        except (page_rescrape.ScraperUnavailable, RuntimeError) as exc:
+            print(f"ERROR: evidence recovery could not continue: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        conn.close()
+    print(report.summary())
+    from cyber_data_collector.utils.api_budget import budget
+    print(budget.summary())
+    return 0 if report.complete else 2
 
 
 def cmd_reconcile_timelines(args) -> int:
@@ -3367,6 +3412,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="Report what would be queued; write nothing")
     p.add_argument("--status-only", action="store_true",
                    help="Only (re)write DeduplicatedEvents.evidence_status; queue nothing")
+    p.add_argument("--until-empty", action="store_true",
+                   help="Drain: round after round, queue work, run the Cyber Daily re-fetch for these incidents' "
+                        "stories, the page re-fetch queue and Perplexity research, until nothing more can be "
+                        "retrieved, an API budget is spent, the site throttles or a round makes no progress "
+                        "(resumable; --limit is then incidents queued per round)")
+    p.add_argument("--max-rounds", type=int, default=20, help="Most rounds a drain makes (default 20)")
+    p.add_argument("--max-minutes", type=float, default=None,
+                   help="Time budget for each Cyber Daily re-fetch inside a drain, in minutes "
+                        "(default: cyberdaily_refetch.DEFAULT_DRAIN_MINUTES)")
+    p.add_argument("--api-budget", nargs="+", default=None, metavar="PROVIDER=N",
+                   help="Requests allowed per paid API during this run, e.g. perplexity=800 "
+                        "(default: API_BUDGET_<PROVIDER> env, else unlimited); a drain stops when it is spent")
     p.set_defaults(func=cmd_recover_evidence)
 
     p = sub.add_parser("reconcile-timelines",

@@ -787,6 +787,15 @@ Which stories:
   rejected by a filter (`Rejected at ...`) or a hygiene step (an enrichment
   that is not active) are never re-fetched.
 
+`discovery_queue.py refetch-cyberdaily --until-empty` drains the queue instead of
+taking 200 a run (see the commands below): batches of 200, 2 pages at a time,
+until nothing incomplete is left, `--max-minutes` (default 360) pass, or the
+site throttles three times in a row (exit 2: wait, then run it again; it resumes).
+A throttled answer (HTTP 429/503) is the site's, not the story's: the story
+is retried after 2 hours and the answer does not count towards giving it up.
+Stored URLs are fetched, logged and recorded without their query string:
+newsletter links carry `utm_*` tracking and a subscriber's `token`.
+
 At most 200 incomplete stories are fetched per run (`--repair-limit`). Stories
 an active enrichment uses go first, then the newest. Stories stored or
 re-fetched in the last 24 hours are skipped, since the run has just scraped its
@@ -796,7 +805,11 @@ new ones. Fetches are one at a time, 2 seconds apart, and each is logged in
 **The 2026-10-28 backlog.** The first run stored 4,682 Cyber Daily records.
 The discovery scrape got no text for 2,724 of them: every one is logged
 "Insufficient content retrieved", 2.5 to 3 minutes each, during the hours of
-the backfill. The scraper's own error was not kept then; it is now
+the backfill. Cause (diagnosed 2026-10-29, [11-evidence-recovery.md](11-evidence-recovery.md)):
+the scrape fetched hundreds of pages from one site at once and the site
+throttled it (HTTP 429, recorded by the later runs, which keep the error); the
+scraper now allows 2 requests per host in flight. The stories themselves are
+fine: the re-fetch returned whole text for every one tried. The scraper's own error was not kept then; it is now
 (`ProcessingLog.result_data`: `scrape_error`, `error_type`). 337 of those
 records are used by active events, judged on the standfirst. The other 2,387
 were filtered out on the standfirst. All of them are now queued for repair:
@@ -808,6 +821,7 @@ page judgement and one fast-model classification each on the next run.
 python run_full_pipeline.py --cyberdaily-refetch-days 365      # or --cyberdaily-refetch-all, --skip-cyberdaily-refetch
 python scripts/discovery_queue.py refetch-cyberdaily --all     # on its own; --dry-run counts the candidates
 python scripts/discovery_queue.py refetch-cyberdaily --repair-limit 0   # every incomplete story, no per-run limit
+python scripts/discovery_queue.py refetch-cyberdaily --until-empty      # drain: batches until empty, time budget or throttled
 ```
 
 ### Failures, retries and monitoring

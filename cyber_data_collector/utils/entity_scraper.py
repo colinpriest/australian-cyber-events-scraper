@@ -5,6 +5,7 @@ import re
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlsplit
 import logging
 import os
 
@@ -148,6 +149,27 @@ def is_blocked_domain(url: str) -> bool:
     return any(domain in url_lower for domain in BLOCKED_DOMAINS)
 
 
+#: Pages fetched from one host at the same time. Discovery hands the scraper a
+#: whole month's URLs at once; on 2026-10-28 that was hundreds of Cyber Daily
+#: pages together, the site answered HTTP 429, and 2,724 stories were stored
+#: with no text. One host sees at most this many requests in flight, however
+#: many tasks are waiting (``SCRAPER_HOST_CONCURRENCY`` overrides it).
+DEFAULT_HOST_CONCURRENCY = 2
+
+
+def host_concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("SCRAPER_HOST_CONCURRENCY", DEFAULT_HOST_CONCURRENCY)))
+    except ValueError:
+        return DEFAULT_HOST_CONCURRENCY
+
+
+def host_of(url: str) -> str:
+    """The host a URL is fetched from (lower case, ``www.`` removed); '' when it has none."""
+    host = (urlsplit(url or "").hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
 class PlaywrightScraper:
     """
     A robust Playwright-based scraper designed to fetch web page content while
@@ -178,6 +200,7 @@ class PlaywrightScraper:
         self.browser = None
         self.pdf_extractor = PDFExtractor() if PDFExtractor else None
         self.logger = logging.getLogger(__name__)
+        self._host_slots: Dict[str, asyncio.Semaphore] = {}
 
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
@@ -234,6 +257,23 @@ class PlaywrightScraper:
         return random.choice(user_agents)
 
     async def get_page_text(
+        self,
+        url: str,
+        timeout: int = 30,
+        event_date: str = None,
+        return_metadata: bool = False,
+        expected_terms: Optional[List[str]] = None,
+    ) -> Optional[str] | tuple[Optional[str], Dict[str, bool]]:
+        """Fetch a page like :meth:`_fetch_page_text`, with at most
+        :func:`host_concurrency` requests to one host in flight at a time."""
+        host = host_of(url)
+        slot = self._host_slots.get(host)
+        if slot is None:
+            slot = self._host_slots[host] = asyncio.Semaphore(host_concurrency())
+        async with slot:
+            return await self._fetch_page_text(url, timeout, event_date, return_metadata, expected_terms)
+
+    async def _fetch_page_text(
         self,
         url: str,
         timeout: int = 30,
