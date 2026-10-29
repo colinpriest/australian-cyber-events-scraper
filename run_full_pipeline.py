@@ -611,7 +611,12 @@ class UnifiedPipeline:
            date provenance) and merges pairs at or above the **calibrated**
            cut-off (``evaluation/duplicate_calibration.json``); report-only
            without a calibration for the current model and question. Runs
-           after the victim check because pairs are formed by victim.
+           after the victim check because pairs are formed by victim. It also
+           judges every pair of AI-involved events within a year, whatever
+           their victim, with a question that knows how rare AI incidents are,
+           and merges them at their own calibrated cut-off
+           (``evaluation/ai_duplicate_calibration.json``; report-only until
+           pairs have been labelled and calibrated).
         5. ``check-victim-attribution --apply`` - Jev asks whether each
            event's recorded victim is really the organisation affected;
            calibrated demotion / re-attribution, otherwise flagged.

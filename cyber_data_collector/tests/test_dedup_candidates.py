@@ -58,6 +58,19 @@ def test_candidate_pairs_link_supplier_fragments_with_different_victims():
     assert frozenset(("qld", "inst")) in pairs        # shared supplier name
 
 
+def test_an_oversized_entity_bucket_is_subdivided_by_rank_not_skipped():
+    """Records sharing a generic name used to be skipped whole once the bucket passed MAX_ENTITY_BUCKET, which
+    lost every duplicate inside it. Each member now keeps its best-ranked partners (candidate_ranking)."""
+    records = [_rec(f"g{i}", f"Government agency report number {i} apple", "Government", date="2026-05-%02d" % (i % 28 + 1))
+               for i in range(Adjudicator.MAX_ENTITY_BUCKET + 10)]
+    # Two members cite one article: the strongest evidence, so their pair must survive the subdivision.
+    records[3].source_urls = records[40].source_urls = ["https://www.abc.net.au/news/2026-05-07/the-one-story/1"]
+    pairs = {frozenset((l.enriched_event_id, r.enriched_event_id)) for l, r in Adjudicator().candidate_pairs(records)}
+    everything = len(records) * (len(records) - 1) // 2
+    assert frozenset(("g3", "g40")) in pairs
+    assert 0 < len(pairs) < everything
+
+
 class _Fake:
     def __init__(self):
         self.calls = 0
