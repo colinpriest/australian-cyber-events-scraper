@@ -524,7 +524,8 @@ def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
     """Observed repeats per elapsed-time band with unresolved attributions included and excluded.
 
     ``events`` must still hold the unresolved rows. A repeat involves an
-    unresolved attribution when the event before or after it is one.
+    unresolved attribution when its own organisation's attribution on the event
+    before or after it is one (see :func:`repeats_involving_unresolved`).
     """
     flags = _unresolved_flags(events)
     labels = band_labels(bounds)
@@ -543,15 +544,30 @@ def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
         out[name] = {"observed repeats": int(len(repeats)),
                      "entities with a repeat": int(repeats["entity_id"].nunique()),
                      "repeats by elapsed band": by_band}
-    unresolved_ids = set(events.loc[flags, "deduplicated_event_id"].astype(str))
     involved = 0
-    if unresolved_ids and out["included"]["observed repeats"]:
+    if flags.any() and out["included"]["observed repeats"]:
         spells, _ = build_spells(events, censor_date)
-        repeats = spells[spells["event"] == 1]
-        involved = sum(bool(unresolved_ids & set(f"{p}|{n}".split("|")))
-                       for p, n in zip(repeats["prior_event_ids"], repeats["next_event_ids"]))
+        involved = repeats_involving_unresolved(events, spells[spells["event"] == 1])
     out["repeats involving an unresolved attribution"] = int(involved)
     return out
+
+
+def repeats_involving_unresolved(events: pd.DataFrame, repeats: pd.DataFrame) -> int:
+    """Repeats whose own organisation has an unresolved attribution on the event before or after it.
+
+    The flag belongs to an (organisation, incident) pair, not to the incident: a supplier
+    incident has several customers, and when one is flagged another customer's repeat on
+    that same incident is not unresolved.
+    """
+    flags = _unresolved_flags(events)
+    flagged = {(int(e), str(d)) for e, d in zip(events.loc[flags, "entity_id"],
+                                                events.loc[flags, "deduplicated_event_id"])}
+    if not flagged:
+        return 0
+    return sum(any((int(entity), event) in flagged
+                   for event in set(f"{prior}|{following}".split("|")) if event)
+               for entity, prior, following in zip(repeats["entity_id"], repeats["prior_event_ids"],
+                                                   repeats["next_event_ids"]))
 
 
 def collapse_entity_same_day_events(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:

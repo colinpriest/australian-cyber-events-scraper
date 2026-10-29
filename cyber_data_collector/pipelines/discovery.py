@@ -60,7 +60,12 @@ from cyber_data_collector.processing.retry_queue import (
     MONTH_COMPLETE,
     MONTH_GAVE_UP,
     MONTH_WAITING,
+    STAGE_MARK_PROCESSED,
+    STAGE_STORE_ENRICHED,
+    STAGE_STORE_RAW,
     RetryQueue,
+    StorageError,
+    classify_failure,
 )
 from cyber_data_collector.utils.api_budget import is_budget_refusal
 
@@ -256,6 +261,7 @@ class EventDiscoveryEnrichmentPipeline:
             'records_failed_temporary': 0,
             'records_failed_permanent': 0,
             'records_quarantined': 0,
+            'storage_quarantines_released': 0,
             'source_months_failed': 0,
         }
 
@@ -545,13 +551,11 @@ class EventDiscoveryEnrichmentPipeline:
                 self._collect_source(name, source, date_range) for name, source in valid_sources.items()])
             all_raw_events = []
             failed_sources: Dict[str, List[str]] = {}
+            searches = []
             for name, source_events, failures, error_types, items_seen in collected:
                 all_raw_events.extend(source_events)
-                source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
-                status = self.retry_queue.record_discovery(source_type, year, month, len(source_events), failures,
-                                                           error_types=error_types, items_seen=items_seen)
-                if status != "complete":
-                    failed_sources[source_type] = failures
+                searches.append((SOURCE_TYPES_BY_COLLECTOR.get(name, name), len(source_events), failures,
+                                 error_types, items_seen))
             for name in set(collector.data_sources) - set(valid_sources):
                 # Enabled but not configured (no key, no client): nothing was searched.
                 source_type = SOURCE_TYPES_BY_COLLECTOR.get(name, name)
@@ -565,18 +569,39 @@ class EventDiscoveryEnrichmentPipeline:
             raw_events_stored = 0
             raw_event_ids = []
             source_by_id: Dict[str, str] = {}
+            store_failures: Dict[str, List[str]] = {}
             for event in all_raw_events:
-                raw_event_id = await self._store_raw_event(event, start_date)
-                if raw_event_id:
-                    raw_events_stored += 1
-                    raw_event_ids.append(raw_event_id)
-                    source_by_id[raw_event_id] = self._determine_source_type(event.data_sources)
-                    setattr(event, "raw_event_id", raw_event_id)
-                    # Log successful raw event storage
-                    await self._log_processing_success(raw_event_id, 'raw_event_storage', {
-                        'source_type': source_by_id[raw_event_id],
-                        'title': event.title[:100]
-                    })
+                try:
+                    raw_event_id = await self._store_raw_event(event, start_date)
+                except StorageError as exc:
+                    # Not stored, so not in the retry queue: the source's search of this month is recorded as
+                    # having lost this event, and the month is searched again (below).
+                    logger.error("[DISCOVERY] Could not store '%s' (%s): %s", event.title[:60], exc.kind, exc)
+                    store_failures.setdefault(self._determine_source_type(event.data_sources), []).append(
+                        f"storing '{event.title[:80]}' failed ({exc.kind}): {exc}"[:500])
+                    continue
+                raw_events_stored += 1
+                raw_event_ids.append(raw_event_id)
+                source_by_id[raw_event_id] = self._determine_source_type(event.data_sources)
+                setattr(event, "raw_event_id", raw_event_id)
+                # Log successful raw event storage
+                await self._log_processing_success(raw_event_id, 'raw_event_storage', {
+                    'source_type': source_by_id[raw_event_id],
+                    'title': event.title[:100]
+                })
+            # What each source's search lost is its own failures plus the events that could not be stored.
+            for source_type, found, failures, error_types, items_seen in searches:
+                lost = store_failures.pop(source_type, [])
+                types = list(error_types)[:len(failures)]
+                types += [error_type_from_text(f) for f in failures[len(types):]]
+                status = self.retry_queue.record_discovery(
+                    source_type, year, month, found, list(failures) + lost,
+                    error_types=types + [OTHER] * len(lost), items_seen=items_seen)
+                if status != "complete":
+                    failed_sources[source_type] = list(failures) + lost
+            for source_type, lost in sorted(store_failures.items()):   # an event typed as a source not searched
+                self.retry_queue.record_discovery(source_type, year, month, 0, lost, error_types=[OTHER] * len(lost))
+                failed_sources[source_type] = lost
             # Durable before any fallible step: what was found, from which
             # source, for which month.
             self.retry_queue.register(raw_event_ids, source_by_id, year, month)
@@ -689,9 +714,15 @@ class EventDiscoveryEnrichmentPipeline:
         budget) is retried indefinitely; a permanent one is quarantined after
         ``retry_queue.MAX_PERMANENT_ATTEMPTS``.
 
+        Records an earlier version quarantined for a temporary storage failure
+        (their stored reason names a locked database, an I/O error ...) are
+        released first; a temporary storage failure no longer counts toward
+        quarantine.
+
         Returns:
             ``{'due': n, 'completed': n, 'waiting': n}``
         """
+        self.stats['storage_quarantines_released'] += self.retry_queue.release_temporary_storage_quarantines(now=now)
         due = self.retry_queue.due(now=now, limit=limit)
         waiting = self.retry_queue.waiting(now=now)
         self.stats['retry_due'] += len(due)
@@ -827,6 +858,7 @@ class EventDiscoveryEnrichmentPipeline:
         processed_raw_event_ids = set()
         successful_raw_event_ids = set()
         failed_stores = 0
+        temporary_stores = 0
 
         for i, event in enumerate(processed_events):
             if i % 10 == 0:  # Log every 10th event
@@ -834,33 +866,37 @@ class EventDiscoveryEnrichmentPipeline:
             raw_event_id = getattr(event, "raw_event_id", None)
             if raw_event_id:
                 processed_raw_event_ids.add(raw_event_id)
-            enriched_event_id = await self._store_enriched_event(event, raw_event_id)
-            if enriched_event_id:
-                enriched_event_ids.append(enriched_event_id)
-                enriched_event_map[enriched_event_id] = event
-                if raw_event_id:
-                    successful_raw_event_ids.add(raw_event_id)
-                    await self._log_processing_success(raw_event_id, 'enrichment', {
-                        'enriched_event_id': enriched_event_id,
-                        'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
-                        'evidence_basis': event.evidence_basis,
-                    })
-            else:
+            try:
+                enriched_event_id = await self._store_enriched_event(event, raw_event_id)
+            except StorageError as exc:
+                # The store failing (a locked database) is retried with back-off and never counts toward
+                # quarantine; the record failing (an integrity or validation error) does.
                 failed_stores += 1
+                if exc.is_temporary:
+                    temporary_stores += 1
                 if raw_event_id:
                     failed_raw_event_ids.add(raw_event_id)
-                    self._queue_failure(raw_event_id, "store_enriched", "enriched event could not be stored",
-                                        KIND_PERMANENT)
+                    self._queue_failure(raw_event_id, exc.stage, str(exc), exc.kind)
+                continue
+            enriched_event_ids.append(enriched_event_id)
+            enriched_event_map[enriched_event_id] = event
+            if raw_event_id:
+                successful_raw_event_ids.add(raw_event_id)
+                await self._log_processing_success(raw_event_id, 'enrichment', {
+                    'enriched_event_id': enriched_event_id,
+                    'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
+                    'evidence_basis': event.evidence_basis,
+                })
 
         logger.info(f"[PIPELINE] Completed storing {len(enriched_event_ids)} enriched events for {label}")
 
         # Check if too many events failed to store
         if failed_stores > 0:
             failure_rate = failed_stores / len(processed_events)
-            logger.warning(f"[WARNING] {failed_stores}/{len(processed_events)} events failed to store ({failure_rate:.1%} failure rate)")
+            logger.warning(f"[WARNING] {failed_stores}/{len(processed_events)} events failed to store ({failure_rate:.1%} failure rate; {temporary_stores} temporary, retried with back-off)")
             if failure_rate > 0.5:  # More than 50% failure rate
                 logger.error(f"[CRITICAL] High failure rate ({failure_rate:.1%}) - stopping pipeline")
-                raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%})")
+                raise RuntimeError(f"Too many events failed to store: {failed_stores}/{len(processed_events)} ({failure_rate:.1%}; {temporary_stores} temporary, queued for retry)")
 
         # Records the ledger rejected were already marked processed with the
         # stage and reason; re-marking them here would overwrite that with a
@@ -872,12 +908,20 @@ class EventDiscoveryEnrichmentPipeline:
         raw_events_to_mark = successful_raw_event_ids | filtered_raw_event_ids
 
         logger.info(f"[PIPELINE] Marking {len(raw_events_to_mark)} raw events as processed for {label}")
+        unmarked_ids = set()
         for raw_event_id in sorted(raw_events_to_mark):
             error_message = None
             if raw_event_id in filtered_raw_event_ids:
                 error_message = "Filtered out during processing"
-            self.db.mark_raw_event_processed(raw_event_id, error_message=error_message)
-        completed_ids = raw_events_to_mark | (ledger_rejected_ids & set(raw_event_ids))
+            try:
+                self.db.mark_raw_event_processed(raw_event_id, error_message=error_message)
+            except Exception as exc:  # noqa: BLE001 - recorded with its kind; the record stays in the queue
+                failure = StorageError.from_exception(STAGE_MARK_PROCESSED, exc)
+                logger.error("[RETRY] Could not mark %s processed (%s): %s", raw_event_id, failure.kind, failure)
+                unmarked_ids.add(raw_event_id)
+                failed_raw_event_ids.add(raw_event_id)
+                self._queue_failure(raw_event_id, failure.stage, str(failure), failure.kind)
+        completed_ids = (raw_events_to_mark - unmarked_ids) | (ledger_rejected_ids & set(raw_event_ids))
         self.retry_queue.record_success(completed_ids)
 
         pending = failed_raw_event_ids | held_ids
@@ -1053,8 +1097,14 @@ class EventDiscoveryEnrichmentPipeline:
             cyberdaily_config=cyberdaily_config,
         )
 
-    async def _store_raw_event(self, event, month_start: Optional[datetime] = None):
-        """Store a discovered event as a raw event, avoiding duplicates"""
+    async def _store_raw_event(self, event, month_start: Optional[datetime] = None) -> str:
+        """Store a discovered event as a raw event, avoiding duplicates.
+
+        Returns the raw event id. A failure raises :class:`StorageError` (a
+        constraint violation stops the pipeline as before): returning ``None``
+        lost the record without a trace, and the month was then recorded as
+        searched completely.
+        """
         try:
             # Determine source type from data sources
             source_type = self._determine_source_type(event.data_sources)
@@ -1111,22 +1161,32 @@ class EventDiscoveryEnrichmentPipeline:
             if "NOT NULL constraint" in str(e) or "FOREIGN KEY constraint" in str(e) or "UNIQUE constraint" in str(e):
                 logger.error(f"[CRITICAL] Database constraint violation - stopping pipeline")
                 raise RuntimeError(f"Critical database error storing raw event: {e}") from e
-            return None
+            raise StorageError.from_exception(STAGE_STORE_RAW, e) from e
 
-    async def _store_enriched_event(self, event, raw_event_id: str, processing_year: int = None, processing_month: int = None) -> Optional[str]:
-        """Store a processed event as an enriched event without fallback dates."""
+    async def _store_enriched_event(self, event, raw_event_id: str, processing_year: int = None, processing_month: int = None) -> str:
+        """Store a processed event as an enriched event without fallback dates.
+
+        Returns the enriched event id. A failure raises :class:`StorageError`
+        carrying what failed and whether the store (temporary: a locked
+        database, an I/O error) or the record (permanent: an integrity or
+        validation error) is to blame - never ``None``, which used to be
+        recorded as a permanent failure whatever the cause. A database
+        constraint violation stops the pipeline as before.
+        """
         try:
             logger.debug(f"[ENRICHED] Starting to store event: {getattr(event, 'title', 'NO_TITLE')[:50]}...")
 
             if not raw_event_id:
                 logger.warning(f"[WARNING] No raw_event_id provided for event: {event.title[:50]}...")
-                return None
+                raise StorageError(STAGE_STORE_ENRICHED, "event has no raw_event_id", KIND_PERMANENT)
             if getattr(event, "classification_status", None) != "classified":
                 # Storage marks every row a specific incident, so an event the
                 # classifier did not judge must never reach it.
                 logger.error("[ENRICHED] Refusing to store unclassified event '%s' (status %r)",
                              event.title[:50], getattr(event, "classification_status", None))
-                return None
+                raise StorageError(STAGE_STORE_ENRICHED, "refusing to store an event the classifier did not "
+                                   f"classify (status {getattr(event, 'classification_status', None)!r})",
+                                   KIND_PERMANENT)
 
             logger.debug(f"[ENRICHED] Processing event data...")
             # Handle event_date without fallback dates
@@ -1214,6 +1274,8 @@ class EventDiscoveryEnrichmentPipeline:
             logger.debug(f"[ENRICHED] Successfully stored enriched event {enriched_event_id}: {event.title[:50]}...")
             return enriched_event_id
 
+        except StorageError:
+            raise
         except Exception as e:
             logger.error(f"[ERROR] Failed to store enriched event '{event.title[:50]}...': {e}")
             logger.error(f"[ERROR] Event data: title='{getattr(event, 'title', 'NO_TITLE')}', event_date='{getattr(event, 'event_date', 'NO_DATE')}', description='{getattr(event, 'description', 'NO_DESC')[:100]}...'")
@@ -1221,7 +1283,7 @@ class EventDiscoveryEnrichmentPipeline:
             if "NOT NULL constraint" in str(e) or "FOREIGN KEY constraint" in str(e) or "UNIQUE constraint" in str(e):
                 logger.error(f"[CRITICAL] Database constraint violation - stopping pipeline")
                 raise RuntimeError(f"Critical database error storing enriched event: {e}") from e
-            return None
+            raise StorageError.from_exception(STAGE_STORE_ENRICHED, e) from e
 
     @staticmethod
     def _valid_count_or_none(value: Any, title: str) -> Optional[int]:

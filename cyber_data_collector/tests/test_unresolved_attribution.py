@@ -159,6 +159,46 @@ def test_recurrence_reports_unresolved_attributions_included_and_excluded(db, co
     assert sensitivity["repeats involving an unresolved attribution"] == 1
 
 
+def test_a_flag_on_a_shared_supplier_incident_marks_only_that_customers_repeat(db, conn):
+    """ProctorU's incident p1 has two co-equal customers, each with a later event of their own.
+
+    Flagging the University of Tasmania on p1 must not make Sydney's repeat (p1 -> u2) unresolved:
+    the flag belongs to the (organisation, incident) pair, not to the incident id.
+    """
+    from scripts.analyze_recurrent_timing import (
+        DEFAULT_ELAPSED_BOUNDS, apply_attribution_policy, attribution_sensitivity, load_victim_events,
+        repeats_involving_unresolved, build_spells,
+    )
+
+    for did, when in (("u2", "2021-01-01"), ("t2", "2021-03-01")):
+        conn.execute("INSERT INTO DeduplicatedEvents (deduplicated_event_id, master_enriched_event_id, title, "
+                     "event_date, status) VALUES (?, ?, ?, ?, 'Active')", (did, did + "-m", did, when))
+    conn.executemany("INSERT INTO DeduplicatedEventEntities VALUES (?,?,?)",
+                     [("u2", 1, "victim"), ("t2", 2, "victim")])
+    _act(conn, "p1", 2, "flagged")
+    events = load_victim_events(db)
+
+    flagged = events[events["attribution_unresolved"]]
+    assert list(zip(flagged["entity_name"], flagged["deduplicated_event_id"])) == [("University of Tasmania", "p1")]
+
+    sensitivity = attribution_sensitivity(events, date(2024, 1, 1), DEFAULT_ELAPSED_BOUNDS)
+    assert sensitivity["included"]["observed repeats"] == 3     # Sydney p1->u2, Tasmania p1->t2, Medibank m1->m2
+    assert sensitivity["repeats involving an unresolved attribution"] == 1   # only Tasmania's, not Sydney's
+    spells, _ = build_spells(events, date(2024, 1, 1))
+    repeats = spells[spells["event"] == 1]
+    assert repeats_involving_unresolved(events, repeats) == 1
+    # Judged one organisation at a time: Tasmania's repeat counts, Sydney's does not.
+    for name, expected in (("University of Tasmania", 1), ("University of Sydney", 0)):
+        assert repeats_involving_unresolved(events, repeats[repeats["entity_name"] == name]) == expected
+
+    # `exclude` drops only Tasmania's p1 row; Sydney keeps p1 and its repeat.
+    kept, info = apply_attribution_policy(events, "exclude")
+    assert info["victim-event attributions unresolved"] == 1
+    assert ("University of Sydney", "p1") in set(zip(kept["entity_name"], kept["deduplicated_event_id"]))
+    assert ("University of Tasmania", "p1") not in set(zip(kept["entity_name"], kept["deduplicated_event_id"]))
+    assert sensitivity["excluded"]["observed repeats"] == 2     # Sydney's and Medibank's
+
+
 def test_recurrence_without_flags_is_unchanged(db):
     from scripts.analyze_recurrent_timing import apply_attribution_policy, load_victim_events
 

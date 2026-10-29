@@ -209,8 +209,9 @@ class CyberEventDataV2:
                 result = cursor.fetchone()
                 return result['raw_event_id'] if result else None
             except sqlite3.Error as e:
+                # Not "no such event": a failed lookup answered None stored duplicates.
                 self._logger.error("Error checking for existing raw event: %s", e)
-                return None
+                raise
 
     def get_known_source_urls(self, source_type: str) -> Set[str]:
         """Return all source_url values already stored for a given source type."""
@@ -364,6 +365,7 @@ class CyberEventDataV2:
             except sqlite3.Error as e:
                 self._logger.error("Error marking raw event as processed: %s", e)
                 self._conn.rollback()
+                raise
 
     # =========================================================================
     # ENRICHED EVENT OPERATIONS
@@ -399,8 +401,10 @@ class CyberEventDataV2:
                         "Enriched event already exists for raw_event_id %s", raw_event_id
                     )
                     return existing["enriched_event_id"]
-            except sqlite3.Error:
-                pass  # Fall through to insert
+            except sqlite3.Error as e:
+                # Not "none exists": inserting after a failed lookup could store a second one.
+                self._logger.error("Error checking for an existing enriched event: %s", e)
+                raise
 
         enriched_event_id = str(uuid.uuid4())
 
