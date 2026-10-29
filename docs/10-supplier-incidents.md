@@ -305,6 +305,27 @@ Group / Sharp Office Systems ...); the strict test makes 8, all right
 (Medibank / Medibank Private Limited, Meta / Meta Platforms, Inc., BlueScope /
 BlueScope Steel, ANU / The ANU, Bunnings, JBS, Novati, youX).
 
+**Acronyms are candidates, not proof** (`victim_counting.AcronymPolicy`). "AP"
+is the initialism of Advance Press and of Associated Press, so the structural
+test that joins "FRV" to "Fire Rescue Victoria" cannot also join it to both.
+A name and an acronym that abbreviates it are one organisation only when
+
+1. a confirmed global alias (`EntityAliases` reviewed or model-confirmed, or
+   `EXPLICIT_ALIASES`) says so - then it is the organisation the alias names,
+   and no other it happens to fit; or
+2. inside one event, that event's own stored resolution
+   (`EntityMentionResolutions`, link table `DeduplicatedEventEntities`, with
+   an organisation named) resolved the acronym to it; or
+3. the acronym fits exactly one organisation among the stored entity names and
+   is not registered as a contextual alias - the case that needs no model.
+
+An acronym that fits several organisations, or is registered in
+`ContextualEntityAliases`, and has neither 1 nor 2 stays unresolved and
+distinct, so ten co-equal universities that include "UC" do not collapse into
+the University of Canberra or of California. A resolver without a policy
+accepts no acronym. On the 2026-10-29 copy no victim count or recurrence repeat
+changed. Regression tests: `tests/test_victim_acronyms.py`.
+
 ## Refresh position
 
 After `check-duplicates` (same-victim merges) and before
