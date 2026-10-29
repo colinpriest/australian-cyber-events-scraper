@@ -120,12 +120,85 @@ routes and the statuses are still written.
 python scripts/dedup_admin.py recover-evidence --dry-run       # what would be queued
 python scripts/dedup_admin.py recover-evidence [--limit 100]   # queue + mark status
 python scripts/dedup_admin.py recover-evidence --status-only   # re-mark only
+python scripts/dedup_admin.py recover-evidence --until-empty [--api-budget perplexity=800] [--max-minutes N]
 ```
 
 The hygiene phase runs `recover-evidence --limit N` straight after
 `label-evidence` (so `rescrape-short-pages` fetches what it queued in the same
 run) and `recover-evidence --status-only` last. Idempotent: a second run queues
 nothing new and writes only statuses that changed.
+
+## 6. Draining the queues (`--until-empty`)
+
+A normal run queues work for at most 100 incidents and the refresh fetches at
+most 200 Cyber Daily stories, so the 2026-10-29 backlog (122 unsupported
+incidents, 2,723 stories) took many refreshes. `recover-evidence --until-empty`
+works through it in one command, round after round (`evidence_recovery.drain`):
+
+1. **Queue** (`recover`): page re-fetches, labelled reports, and a replacement
+   search for an incident whose own page and research are both out of reach.
+2. **Fetch** what waits for these incidents: their Cyber Daily stories first
+   (`cyberdaily_refetch.drain`, restricted to those stories, the incident's
+   stories first), then the queued non-Cyber Daily pages
+   (`rescrape-short-pages`' queue), then Perplexity research for their records
+   (`perplexity_backfill_events.enrich_waiting`, records of unsupported
+   incidents first).
+3. **Mark** every incident's status, and go round again.
+
+It stops, and says why, when nothing is left to retrieve (`nothing left to
+retrieve`; what remains is exhausted or waits on another step such as
+`check-duplicates`), a round changed nothing (`no progress`), the Cyber Daily
+site throttled (`throttled`), a paid API's budget is spent (`API budget spent`;
+`--api-budget perplexity=800` or `API_BUDGET_PERPLEXITY`), a key is missing
+(`blocked`, exit 2) or `--max-rounds` (20) rounds passed. Exit 0 only when it
+ran dry. Everything is stored as it happens, so any stop is resumed by running
+the command again.
+
+**Routes fall through, in this order, without human help.** A route is
+`exhausted` exactly when its queue has stopped trying: a Cyber Daily story gone
+from the site (HTTP 404/410, one failure) or given up at the re-fetch's own cap
+of 5 failures (`CyberDailyRefetches.gave_up_at`); a page re-fetch that failed 3
+times; research that used its 3 attempts or was quarantined. An incident whose
+record's page is exhausted is researched next (records of unsupported incidents
+go first in the enrichment queue); when page and research are both exhausted
+the replacement search runs, and its best citation becomes a **new record with
+its own URL**, joined to the incident only by the calibrated duplicate check.
+Another page's text is never stored as the record's own. (Until 2026-10-29 a
+404 counted as one failure of three and the story stayed `pending` forever,
+holding the later routes back; the module also disagreed with the re-fetch
+about the cap.)
+
+**Progress is measured per route** (section 3, the quality report):
+queued, attempted, succeeded, failing by failure type, exhausted and the age of
+the oldest queued item, with a trend table (`processing/recovery_progress.py`,
+[10-quality-gate.md](10-quality-gate.md)).
+
+### Why 2,724 Cyber Daily stories had no text (diagnosed 2026-10-29)
+
+The discovery scrape fetches every URL of a month at once; the 2026-10-28
+backfill handed the scraper hundreds of Cyber Daily pages together and the
+site answered **HTTP 429** (`ProcessingLog.result_data` of the later runs, where
+the scrape error is kept: `{"scrape_error": "HTTP 429", "error_type":
+"throttled"}`; the backfill's own errors were not kept, only "Insufficient
+content retrieved", 2.5 to 3 minutes each while pages timed out or were
+refused). Nothing is wrong with the stories or with the re-fetch: on a copy of
+the database, 5 of 5 stories fetched one at a time came back whole, as did 10
+more in a drain of two at a time (about 6 seconds a story, 0 throttled), and
+the 20 earlier re-fetches in the live database all succeeded. What changed:
+
+- `PlaywrightScraper.get_page_text` now allows at most 2 requests per host in
+  flight (`SCRAPER_HOST_CONCURRENCY`), however many tasks are waiting;
+- a throttled re-fetch (429/503) is a fact about the site, not the story: it is
+  retried after 2 hours and does not count towards giving the story up, and
+  three throttled answers in a row end a run;
+- stored URLs may carry a newsletter's tracking query, including a `token`
+  naming the subscriber (24 stored URLs do: 22 Webber, 2 Google). Re-fetches
+  now use scheme, host and path only, and log and record nothing else.
+
+```bash
+python scripts/discovery_queue.py refetch-cyberdaily --until-empty            # ~2,700 stories: about 4.5 hours at 2 at a time
+python scripts/discovery_queue.py refetch-cyberdaily --until-empty --max-minutes 120
+```
 
 On the 21:39 copy the first run queued 38 page re-fetches and 1 labelled
 report, made no searches (no incident had exhausted its own routes), and

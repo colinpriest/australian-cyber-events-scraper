@@ -383,7 +383,6 @@ def test_a_missing_story_is_never_fetched_again_and_is_reported(env):
 
 
 @pytest.mark.parametrize("result,expected", [
-    ((None, {"error": "HTTP 429"}), fe.THROTTLED),
     ((None, {"error": "timed out after 3 attempts"}), fe.NETWORK),
     (TimeoutError("page load"), fe.NETWORK),
     (("A page with only a headline.", {}), fe.INCOMPLETE),

@@ -13,7 +13,7 @@ import sqlite3
 import statistics
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from cyber_data_collector.quality.model import Measurement, Thresholds
@@ -259,6 +259,44 @@ def measure_evidence_status(conn: sqlite3.Connection, thresholds: Thresholds, to
     else:
         out["evidence.status.stored_stale"] = Measurement.unavailable(
             "DeduplicatedEvents.evidence_status missing (run dedup_admin.py recover-evidence)")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Evidence-recovery routes
+# ---------------------------------------------------------------------------
+
+#: Per route and field: ``recovery.route.<route>.<field>`` (see processing/recovery_progress.py).
+RECOVERY_FIELDS = ("queued", "attempted", "succeeded", "failing", "exhausted", "oldest_queued_days")
+
+
+def measure_recovery_routes(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Queued, attempted, succeeded, failing (by failure type), exhausted and age, per recovery route.
+
+    The saved report of 2026-10-29 said 2,723 stories and 122 incidents were
+    "awaiting recovery" and nothing more; whether either number was falling,
+    how the attempts had gone and how long the oldest item had waited were
+    unanswerable. Each number is recorded on every run, so the trend is a
+    query away (``recovery.route.<route>.<field>`` in ``QualityMetrics``).
+    """
+    from cyber_data_collector.processing import recovery_progress as rp
+
+    out: Measurements = {}
+    for route, progress in rp.measure(conn, datetime.now()).items():
+        if isinstance(progress, str):
+            for name in RECOVERY_FIELDS:
+                out[f"recovery.route.{route}.{name}"] = Measurement.unavailable(progress)
+            continue
+        detail = f"{rp.DESCRIPTIONS[route]}: {progress.describe()}"
+        for name in RECOVERY_FIELDS:
+            value = getattr(progress, name, None)
+            value = 0.0 if value is None else value          # nothing queued: nothing has waited
+            out[f"recovery.route.{route}.{name}"] = Measurement(
+                value=value, detail=detail if name != "oldest_queued_days" else
+                f"{detail}; oldest item waiting for its first attempt, in days")
+        for kind, n in sorted(progress.failing_by_type.items()):
+            out[f"recovery.route.{route}.failing.{kind}"] = Measurement(
+                value=n, detail=f"{rp.DESCRIPTIONS[route]}: attempts that failed with '{kind}' and will be retried")
     return out
 
 
@@ -741,6 +779,7 @@ MEASURES = (
     ("coverage", measure_cyberdaily),
     ("evidence", measure_evidence),
     ("evidence", measure_evidence_status),
+    ("evidence", measure_recovery_routes),
     ("backlog", measure_backlogs),
     ("duplicates", measure_duplicates),
     ("dates", measure_dates),
