@@ -1,0 +1,201 @@
+name,label,rationale,labeller
+Broadmeadow-based office technology supplier,descriptive,Describes an unnamed supplier by location and line of business.,claude-opus-5.5 subagent
+Australian ASX-listed fintech,descriptive,Describes an unnamed listed fintech firm.,claude-opus-5.5 subagent
+law enforcement agencies in Australia and offshore,descriptive,A group of unnamed law enforcement agencies.,claude-opus-5.5 subagent
+Click Studios,named,Click Studios is the specific company behind Passwordstate.,claude-opus-5.5 subagent
+Germany,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label descriptive: A country taking part in a takedown, not one specific organisation.",claude-opus-5.5 subagent
+Smoke Alarm Solutions,named,Smoke Alarm Solutions is a specific Australian smoke alarm company.,claude-opus-5.5 subagent
+AAA Collections,named,AAA Collections is a specific debt collection business.,claude-opus-5.5 subagent
+The Smith Family,named,The Smith Family is a specific Australian charity.,claude-opus-5.5 subagent
+Australian Government Department,descriptive,An unnamed department of the Australian Government.,claude-opus-5.5 subagent
+Australian Government,unsure,"Formal name of the Commonwealth government, but here it stands in for an unnamed health service.",claude-opus-5.5 subagent
+AACA,named,An acronym identifying one specific organisation.,claude-opus-5.5 subagent
+Lion,named,Lion is the specific Australian brewing and beverage company.,claude-opus-5.5 subagent
+Australian charity,descriptive,An unnamed Australian charity.,claude-opus-5.5 subagent
+Australia’s largest producer of gold,descriptive,A description of a gold producer rather than its name.,claude-opus-5.5 subagent
+CyberDaily,named,CyberDaily is a specific publication.,claude-opus-5.5 subagent
+Australian airline,descriptive,An unnamed Australian airline.,claude-opus-5.5 subagent
+Quantum Radiology,named,Quantum Radiology is a specific radiology provider.,claude-opus-5.5 subagent
+SunDoctors,named,SunDoctors is a specific skin cancer clinic chain.,claude-opus-5.5 subagent
+Canteen,named,Canteen is the specific Australian youth cancer charity.,claude-opus-5.5 subagent
+University of Technology Sydney,named,University of Technology Sydney is a specific university.,claude-opus-5.5 subagent
+Victorian medical centre,descriptive,An unnamed Victorian medical centre.,claude-opus-5.5 subagent
+Australian university,descriptive,An unnamed Australian university.,claude-opus-5.5 subagent
+BLK Sport,named,BLK Sport is a specific sportswear company.,claude-opus-5.5 subagent
+Aussie cyber agencies,descriptive,A group of Australian cyber agencies.,claude-opus-5.5 subagent
+Entities in Taiwan,descriptive,Unnamed entities located in Taiwan.,claude-opus-5.5 subagent
+Australian health department,unsure,Could informally mean the federal Department of Health or just an unnamed health agency.,claude-opus-5.5 subagent
+Cyber crime squad detectives,descriptive,"A group of police detectives, not a named organisation.",claude-opus-5.5 subagent
+Virtual Ideas,named,Virtual Ideas is a specific IT services company.,claude-opus-5.5 subagent
+Western Australia Police Force (WAPF),named,Western Australia Police Force is a specific organisation.,claude-opus-5.5 subagent
+Unique Cars and Parts,named,Unique Cars and Parts is a specific business and website.,claude-opus-5.5 subagent
+Victorian courts,descriptive,"A group of courts in Victoria, not one named organisation.",claude-opus-5.5 subagent
+NSW Rural Fire Service,named,NSW Rural Fire Service is a specific agency.,claude-opus-5.5 subagent
+Club Old Bar,named,Club Old Bar is a specific registered club.,claude-opus-5.5 subagent
+NSW Department of Health,named,NSW Department of Health is a specific agency.,claude-opus-5.5 subagent
+Sitro Group Australia,named,Sitro Group Australia is a specific company.,claude-opus-5.5 subagent
+Cyble's Research and Intelligence Labs,named,A specific research unit of the company Cyble.,claude-opus-5.5 subagent
+Nitro PDF,named,Nitro PDF is a specific software company.,claude-opus-5.5 subagent
+TP-Link,named,TP-Link is a specific networking company.,claude-opus-5.5 subagent
+Canada,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label descriptive: A country name, not one specific organisation.",claude-opus-5.5 subagent
+Privacy watchdog,descriptive,A role description (privacy regulator) rather than a name.,claude-opus-5.5 subagent
+government,descriptive,Generic word for a government.,claude-opus-5.5 subagent
+National Tertiary Education Union WA Notre Dame branch,named,A specific branch of the National Tertiary Education Union.,claude-opus-5.5 subagent
+AFL Fan Website,descriptive,An unnamed AFL fan website.,claude-opus-5.5 subagent
+Gucci,named,Gucci is a specific fashion house.,claude-opus-5.5 subagent
+medical imaging firm,descriptive,An unnamed medical imaging firm.,claude-opus-5.5 subagent
+Big Interest Group Pty Ltd,named,Big Interest Group Pty Ltd is a specific company.,claude-opus-5.5 subagent
+Hotel Quarantine,descriptive,A type of quarantine program; no specific organisation or state is named.,claude-opus-5.5 subagent
+ReportCy,named,ReportCy is a specific named platform.,claude-opus-5.5 subagent
+Vibetech,named,Vibetech is a specific company.,claude-opus-5.5 subagent
+The Guardian,named,The Guardian is a specific news organisation.,claude-opus-5.5 subagent
+AHM,named,AHM is the specific health insurance brand owned by Medibank.,claude-opus-5.5 subagent
+ClubsNSW,named,ClubsNSW is a specific industry body.,claude-opus-5.5 subagent
+Southern Phone Company,named,Southern Phone Company is a specific telco.,claude-opus-5.5 subagent
+SecurityScorecard,named,SecurityScorecard is a specific security company.,claude-opus-5.5 subagent
+Rural Fire Service,named,"Rural Fire Service names a specific agency, here the Queensland RFS from context.",claude-opus-5.5 subagent
+Federal Court,named,Federal Court refers to the Federal Court of Australia.,claude-opus-5.5 subagent
+NT Health,named,NT Health is a specific territory health agency.,claude-opus-5.5 subagent
+Bad Packets,named,Bad Packets is a specific threat intelligence firm.,claude-opus-5.5 subagent
+US companies,descriptive,A group of unnamed US companies.,claude-opus-5.5 subagent
+Romania,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label descriptive: A country name, not one specific organisation.",claude-opus-5.5 subagent
+Australian Human Resources Institute,named,Australian Human Resources Institute is a specific professional body.,claude-opus-5.5 subagent
+National Cyber Security Coordinator,named,A specific Australian Government office.,claude-opus-5.5 subagent
+Australian Red Cross,named,Australian Red Cross is a specific organisation.,claude-opus-5.5 subagent
+foreign firms,descriptive,A group of unnamed foreign firms.,claude-opus-5.5 subagent
+state police,descriptive,Unnamed state police forces.,claude-opus-5.5 subagent
+Official Visitors Program,named,The Official Visitors Program is a specific NSW government program.,claude-opus-5.5 subagent
+St Vincent’s Heath,named,"Misspelling of St Vincent's Health, a specific health provider.",claude-opus-5.5 subagent
+Australian estate agencies,descriptive,A group of unnamed real estate agencies.,claude-opus-5.5 subagent
+Singapore,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label descriptive: A country name used as a location, not an organisation.",claude-opus-5.5 subagent
+BIG4,named,BIG4 is the specific holiday park brand.,claude-opus-5.5 subagent
+state law enforcement,descriptive,Unnamed state law enforcement agencies.,claude-opus-5.5 subagent
+Hollard,named,Hollard is a specific insurer.,claude-opus-5.5 subagent
+Parliament,unsure,Parliament could mean Australia's federal Parliament but the context does not say which.,claude-opus-5.5 subagent
+JBS-owned beef facilities,descriptive,"A group of facilities owned by JBS, not one named organisation.",claude-opus-5.5 subagent
+Big Four Banks,descriptive,"A group of four banks, not one organisation.",claude-opus-5.5 subagent
+Erindale Vikings,named,Erindale Vikings is a specific sports club.,claude-opus-5.5 subagent
+SA hospital,descriptive,An unnamed South Australian hospital.,claude-opus-5.5 subagent
+Spirit Super,named,Spirit Super is a specific superannuation fund.,claude-opus-5.5 subagent
+Wiz,named,Wiz is a specific cloud security company.,claude-opus-5.5 subagent
+NSW pharmacy management firm,descriptive,An unnamed NSW pharmacy management firm.,claude-opus-5.5 subagent
+WA trade supplier,descriptive,An unnamed WA trade supplier.,claude-opus-5.5 subagent
+Australia-based petroleum distribution and logistics company,descriptive,An unnamed petroleum distribution company.,claude-opus-5.5 subagent
+Super VPN,named,Super VPN is a specific VPN app.,claude-opus-5.5 subagent
+Secure VPN,named,Secure VPN is a specific free VPN app named in that breach.,claude-opus-5.5 subagent
+Australian Aviation,unsure,"Could be the Australian Aviation publication, a firm name fragment, or just the aviation sector.",claude-opus-5.5 subagent
+Australian College of Business Intelligence,named,Australian College of Business Intelligence is a specific college.,claude-opus-5.5 subagent
+Exetel,named,Exetel is a specific telco.,claude-opus-5.5 subagent
+Western Australia’s Mandurah State Emergency Service,named,Mandurah State Emergency Service is a specific SES unit.,claude-opus-5.5 subagent
+Health Management Systems,unsure,Could be the company Health Management Systems or a generic phrase; context does not settle it.,claude-opus-5.5 subagent
+Australian company,descriptive,An unnamed Australian company.,claude-opus-5.5 subagent
+Western Australia,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label descriptive: A state name used as a location, not an organisation.",claude-opus-5.5 subagent
+Sakura Mobile,named,Sakura Mobile is a specific Japanese telco.,claude-opus-5.5 subagent
+MyDeal,named,MyDeal is a specific online retailer.,claude-opus-5.5 subagent
+Accounting and Adviser,unsure,Generic-sounding words that may be a truncated firm name or a description.,claude-opus-5.5 subagent
+Ausfec Limited,named,Ausfec Limited is a specific company.,claude-opus-5.5 subagent
+Australian National Maritime Museum,named,Australian National Maritime Museum is a specific institution.,claude-opus-5.5 subagent
+Australian construction company,descriptive,An unnamed Australian construction company.,claude-opus-5.5 subagent
+Victorian RV dealer,descriptive,An unnamed Victorian RV dealer.,claude-opus-5.5 subagent
+Finsure,named,Finsure is a specific mortgage aggregator.,claude-opus-5.5 subagent
+Department of Education,named,"Department of Education names a specific department, the SA one from context.",claude-opus-5.5 subagent
+Southern Adelaide Local Health Network (SALHN),named,Full proper name of a specific SA local health network.,claude-opus-5.5 subagent
+NSW petroleum distributor,descriptive,Describes an unnamed NSW petroleum distributor.,claude-opus-5.5 subagent
+My Rewards,named,My Rewards is a specific rewards-program company.,claude-opus-5.5 subagent
+RACGP,named,Acronym for the Royal Australian College of General Practitioners.,claude-opus-5.5 subagent
+Indigenous health organisation,descriptive,An unnamed Indigenous health organisation.,claude-opus-5.5 subagent
+Spain,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label named: A specific country (its government/authorities), not a kind of organisation.",claude-opus-5.5 subagent
+Bondi Markets,named,Bondi Markets is a specific named market operator.,claude-opus-5.5 subagent
+China,unsure,"Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label named: A specific country (its state), not a description.",claude-opus-5.5 subagent
+BigFooty,named,BigFooty is a specific AFL fan website/forum.,claude-opus-5.5 subagent
+Respect,named,Respect is the brand name of a specific Australian aged-care provider.,claude-opus-5.5 subagent
+AC Laser,named,AC Laser is a specific Melbourne laser-cutting firm.,claude-opus-5.5 subagent
+Ledger,named,Ledger is a specific hardware-wallet company.,claude-opus-5.5 subagent
+Australian Bank,descriptive,Capitalised generic phrase for an unnamed Australian bank.,claude-opus-5.5 subagent
+The Brown & Hurley Group Pty Ltd,named,Full registered name of a specific company.,claude-opus-5.5 subagent
+Colt Telecom,named,Colt Telecom is a specific telecommunications company.,claude-opus-5.5 subagent
+"Australian mobile, internet and NBN provider",descriptive,Describes a provider by its services; the specific company (Tangerine) is not named.,claude-opus-5.5 subagent
+NGOs,descriptive,"A group of non-governmental organisations, not one.",claude-opus-5.5 subagent
+Reflections Holidays,named,Reflections Holidays is a specific NSW holiday-park operator.,claude-opus-5.5 subagent
+Australian organisation,descriptive,An unnamed Australian organisation.,claude-opus-5.5 subagent
+Tasmanian government agencies,descriptive,"A group of Tasmanian government agencies, not one specific body.",claude-opus-5.5 subagent
+Australian health,descriptive,"A sector fragment, not an organisation name.",claude-opus-5.5 subagent
+Sharp Office Systems,named,Sharp Office Systems is a specific company.,claude-opus-5.5 subagent
+Shenzhen Zhenhua Data Information Technology Co.,named,Full proper name of a specific Chinese company.,claude-opus-5.5 subagent
+Education Department,named,"In context, informally names the South Australian education department.",claude-opus-5.5 subagent
+Zig Inge Group,named,Zig Inge Group is a specific named company.,claude-opus-5.5 subagent
+Genea,named,Genea is a specific IVF clinic company.,claude-opus-5.5 subagent
+Terence C Ringland & Co,named,A specific named firm.,claude-opus-5.5 subagent
+Mexican government,named,Refers to one specific national government (Mexico).,claude-opus-5.5 subagent
+Australian Ministry of Interior,named,"Purports to name one specific federal ministry (Home Affairs, misnamed).",claude-opus-5.5 subagent
+Energy One,named,Energy One is a specific listed company.,claude-opus-5.5 subagent
+"Australian online and in-store women’s lingerie, swimwear and underwear retailer",descriptive,Long description of an unnamed lingerie retailer.,claude-opus-5.5 subagent
+Adelaide school,descriptive,An unnamed school in Adelaide.,claude-opus-5.5 subagent
+SBS,named,Acronym of the Special Broadcasting Service.,claude-opus-5.5 subagent
+Australian Cyber Security,unsure,"Truncated phrase that could be the ACSC, a magazine or generic wording.",claude-opus-5.5 subagent
+CyberTrackerAU,named,CyberTrackerAU is a specific named tracking account/service.,claude-opus-5.5 subagent
+Oscars Group,named,Oscars Group is a specific hospitality company.,claude-opus-5.5 subagent
+Way Forward,named,Way Forward reads as a specific company name among named customers.,claude-opus-5.5 subagent
+Your Community Health,named,Your Community Health is a specific Victorian community health service.,claude-opus-5.5 subagent
+Five Eyes Law Enforcement Group (FELEG),named,A specific named international law-enforcement group.,claude-opus-5.5 subagent
+territory and state police,descriptive,Plural category of police forces.,claude-opus-5.5 subagent
+Euro,unsure,Fragment of a rail-pass brand (likely Eurail); cannot tell which organisation.,claude-opus-5.5 subagent
+Australian Venue Management Association,named,Full proper name of a specific association.,claude-opus-5.5 subagent
+state-owned utilities,descriptive,"Category of utilities, not one organisation.",claude-opus-5.5 subagent
+Distinctive Systems,named,Distinctive Systems is a specific company.,claude-opus-5.5 subagent
+IKAD Engineering,named,IKAD Engineering is a specific company.,claude-opus-5.5 subagent
+Australian healthcare provider,descriptive,An unnamed Australian healthcare provider.,claude-opus-5.5 subagent
+Institute of Psychiatry,named,Refers to the specific NSW Institute of Psychiatry.,claude-opus-5.5 subagent
+TFE Hotels,named,TFE Hotels is a specific hotel group.,claude-opus-5.5 subagent
+Queensland,unsure,Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label named: A specific state (its government).,claude-opus-5.5 subagent
+Qld pharmacy chain,descriptive,An unnamed Queensland pharmacy chain.,claude-opus-5.5 subagent
+Super Gardens,named,Super Gardens is a specific named business.,claude-opus-5.5 subagent
+Prime Properties,named,Prime Properties is a specific named real estate business.,claude-opus-5.5 subagent
+Banks,descriptive,Plural category of banks.,claude-opus-5.5 subagent
+Philippine authorities,descriptive,"Unspecified Philippine authorities, a group rather than one body.",claude-opus-5.5 subagent
+Napoleon Perdis,named,Napoleon Perdis is a specific cosmetics company.,claude-opus-5.5 subagent
+Event Secretary,named,Event Secretary is a specific equestrian event-entry platform.,claude-opus-5.5 subagent
+Pegasus Group Australia,named,Pegasus Group Australia is a specific company.,claude-opus-5.5 subagent
+companies,descriptive,Generic plural 'companies'.,claude-opus-5.5 subagent
+Generation Life,named,Generation Life is a specific financial services company.,claude-opus-5.5 subagent
+French authorities,descriptive,"Unspecified French authorities, a group rather than one body.",claude-opus-5.5 subagent
+Pennant Hills Golf Club,named,Pennant Hills Golf Club is a specific club.,claude-opus-5.5 subagent
+Cyber Daily,named,Cyber Daily is a specific news publication.,claude-opus-5.5 subagent
+European law enforcement agencies,descriptive,A group of unnamed European agencies.,claude-opus-5.5 subagent
+Linkt,named,Linkt is a specific toll brand (Transurban).,claude-opus-5.5 subagent
+Australian fibre installation firm,descriptive,An unnamed Australian fibre installation firm.,claude-opus-5.5 subagent
+Victorian car dealership,descriptive,An unnamed Victorian car dealership.,claude-opus-5.5 subagent
+University of Adelaide,named,University of Adelaide is a specific university.,claude-opus-5.5 subagent
+Vodafone,named,Vodafone is a specific telecommunications company.,claude-opus-5.5 subagent
+DoorDash,named,DoorDash is a specific company.,claude-opus-5.5 subagent
+Poole Group,named,Poole Group is a specific named company.,claude-opus-5.5 subagent
+Life360,named,Life360 is a specific company.,claude-opus-5.5 subagent
+St James' Anglican School,named,A specific named school.,claude-opus-5.5 subagent
+ACCC,named,Acronym of the Australian Competition and Consumer Commission.,claude-opus-5.5 subagent
+ATF Services,named,ATF Services is a specific company.,claude-opus-5.5 subagent
+Victorian government schools,descriptive,"A category of schools, not one organisation.",claude-opus-5.5 subagent
+conveyancer,descriptive,An unnamed conveyancer.,claude-opus-5.5 subagent
+Outback Pharmacies,named,Outback Pharmacies is a specific named pharmacy business.,claude-opus-5.5 subagent
+Australian health service website,descriptive,An unnamed Australian health service website.,claude-opus-5.5 subagent
+Sydney pharmacy,descriptive,An unnamed Sydney pharmacy.,claude-opus-5.5 subagent
+Law In Order,named,Law In Order is a specific legal services company.,claude-opus-5.5 subagent
+Australian rare car part website,descriptive,An unnamed car-parts website.,claude-opus-5.5 subagent
+Adelaide private hospital,descriptive,An unnamed Adelaide private hospital.,claude-opus-5.5 subagent
+Australian jewellery brand,descriptive,An unnamed jewellery brand.,claude-opus-5.5 subagent
+Sweden,unsure,Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label named: A specific country (its authorities).,claude-opus-5.5 subagent
+US,unsure,Labellers differed on whether a bare country or state name identifies one organisation (its government) or a place. Original label named: A specific country (its government).,claude-opus-5.5 subagent
+Australian Personal Protective Equipment (PPE) Maker,descriptive,Capitalised description of a PPE maker; the company (Ansell) is not named.,claude-opus-5.5 subagent
+Australian critical infrastructure provider,descriptive,An unnamed critical infrastructure provider.,claude-opus-5.5 subagent
+unknown commercial entity,descriptive,"Explicitly an unknown, unnamed entity.",claude-opus-5.5 subagent
+Brighton Australia,named,Brighton Australia is a specific contractor company.,claude-opus-5.5 subagent
+Australian government entities,descriptive,A group of government entities.,claude-opus-5.5 subagent
+Quest Apartments and Hotels,named,Quest Apartments and Hotels is a specific hotel chain.,claude-opus-5.5 subagent
+Perpetual,named,Perpetual is a specific financial services company.,claude-opus-5.5 subagent
+Australian Telecommunications Company,descriptive,Capitalised generic phrase for an unnamed telco.,claude-opus-5.5 subagent
+Fresh Produce Safety Centre Australia,named,Full proper name of a specific organisation.,claude-opus-5.5 subagent
+Australian legal network management service,descriptive,An unnamed legal network service.,claude-opus-5.5 subagent
+Australian gelato giant,descriptive,An unnamed gelato company.,claude-opus-5.5 subagent
+Bendigo and Adelaide Bank,named,Bendigo and Adelaide Bank is a specific bank.,claude-opus-5.5 subagent
+Smithfield NSW switchboard manufacturer,descriptive,Describes an unnamed manufacturer by location and product.,claude-opus-5.5 subagent
+government agencies,descriptive,Generic plural 'government agencies'.,claude-opus-5.5 subagent
+Heart Foundation,named,Heart Foundation is a specific charity.,claude-opus-5.5 subagent
