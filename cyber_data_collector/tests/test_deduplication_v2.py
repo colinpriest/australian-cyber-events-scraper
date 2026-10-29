@@ -464,9 +464,27 @@ class TestDeduplicationEngine:
         ]
         
         master = engine._select_master_event(events)
-        
+
         # Should select the event with more complete data
         assert master.event_id == "2"
+
+    def test_merge_group_covers_every_record_when_master_is_not_first(self):
+        """The merged event and merged_events together name each record exactly once."""
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="Event 1", summary="Short summary",
+                       event_date=date(2023, 1, 1)),
+            CyberEvent(event_id="2", title="Event 2",
+                       summary="This is a much longer and more detailed summary that provides more "
+                               "information about the event",
+                       event_date=date(2023, 1, 2), records_affected=1000),
+        ]
+
+        merged, group = engine._merge_group(events)
+
+        assert merged.event_id == "2"
+        assert group.master_event.event_id == "2"
+        assert [e.event_id for e in group.merged_events] == ["1"]
     
     def test_merge_event_data(self):
         """Test merging data from multiple events"""
