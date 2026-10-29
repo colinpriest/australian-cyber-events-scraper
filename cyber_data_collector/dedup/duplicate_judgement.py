@@ -25,13 +25,12 @@ Labelled pairs are ground truth either way: ``different`` is never merged,
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import logging
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
