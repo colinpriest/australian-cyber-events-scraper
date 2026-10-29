@@ -45,10 +45,12 @@ def conn(tmp_path, template):
               "size_confidence, size_method) VALUES (2, 'ACME HEALTH PTY LTD', 'organisation', 'Healthcare', 1, "
               "'LARGE', 0.8, 'perplexity')")
     c.execute("INSERT INTO EntitiesV2 (entity_id, entity_name) VALUES (3, 'Other Org')")
-    c.execute("INSERT INTO RawEvents (raw_event_id, source_type, raw_title) VALUES ('r1', 'Perplexity', 't')")
+    # One record per enrichment: a record holds at most one active enrichment (storage/enrichment_uniqueness.py).
     for eid in ("e1", "e2", "e3"):
+        c.execute("INSERT INTO RawEvents (raw_event_id, source_type, raw_title) VALUES (?, 'Perplexity', 't')",
+                  ("r" + eid[1],))
         c.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, is_australian_event, is_specific_event) "
-                  "VALUES (?, 'r1', 't', 1, 1)", (eid,))
+                  "VALUES (?, ?, 't', 1, 1)", (eid, "r" + eid[1]))
     for did, name, vendor in (("d1", "ACME HEALTH PTY LTD", None), ("d2", "Other Org", "ACME HEALTH PTY LTD"),
                               ("d3", "Acme Health", None)):
         c.execute("INSERT INTO DeduplicatedEvents (deduplicated_event_id, master_enriched_event_id, title, "
@@ -119,7 +121,7 @@ def test_the_ledger_holds_what_is_needed_to_restore_the_fold(conn):
     collided = next(l for l in links if l["subject_id"] == "e1")
     assert collided["row"]["relationship_type"] == "victim" and collided["kept_row_before"]["relationship_type"] == "affected"
     assert json.loads(entry["roles_json"])["EnrichedEventEntities"] == {"victim": 2}
-    assert json.loads(entry["source_ids_json"])["raw_event_ids"] == ["r1"]
+    assert json.loads(entry["source_ids_json"])["raw_event_ids"] == ["r1", "r2"]
     assert json.loads(entry["scalar_json"]) == {"victim": ["d1"], "vendor": ["d2"]}
     assert json.loads(entry["references_json"]) == {"EntityNotes": 1}
     assert json.loads(entry["alias_json"])["canonical_name"] == "Acme Health"

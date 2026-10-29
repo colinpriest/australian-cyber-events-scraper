@@ -17,6 +17,7 @@ from cyber_data_collector.processing.record_evidence import (
 from cyber_data_collector.utils.entity_scraper import is_blocked_domain
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from cyber_data_collector.models.events import (
+    CLASSIFIER_ADJUSTED_VERSION,
     CyberEvent,
     CyberEventType,
     EventSeverity,
@@ -395,11 +396,15 @@ CRITICAL REQUIREMENTS:
 
         event_copy.attribution = enhancement.attribution or event_copy.attribution
 
-        if enhancement.confidence_adjustments and event_copy.confidence:
+        # An unknown score (None) stays unknown: an adjustment or a cap of nothing is not a score.
+        if enhancement.confidence_adjustments and event_copy.confidence and event_copy.confidence.overall is not None:
             overall_adjustment = enhancement.confidence_adjustments.get("overall", 0.0)
             event_copy.confidence.overall = min(max(event_copy.confidence.overall + overall_adjustment, 0.0), 1.0)
+            event_copy.confidence.model = openai_fast_model()
+            event_copy.confidence.score_version = CLASSIFIER_ADJUSTED_VERSION
 
-        if event_copy.evidence_basis == BASIS_SNIPPET_ONLY and event_copy.confidence:
+        if (event_copy.evidence_basis == BASIS_SNIPPET_ONLY and event_copy.confidence
+                and event_copy.confidence.overall is not None):
             event_copy.confidence.overall = min(event_copy.confidence.overall, SNIPPET_ONLY_CONFIDENCE_CAP)
 
         return event_copy

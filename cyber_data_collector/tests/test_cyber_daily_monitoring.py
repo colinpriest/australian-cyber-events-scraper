@@ -25,6 +25,7 @@ from cyber_data_collector.processing.retry_queue import (
     MONTH_COMPLETE,
     MONTH_DUE,
     MONTH_GAVE_UP,
+    MONTH_PARKED,
     MONTH_NEVER,
     MONTH_WAITING,
     RetryQueue,
@@ -74,7 +75,7 @@ def _http_error(status: int) -> requests.HTTPError:
     (TimeoutError(), fe.NETWORK),
     (ET.ParseError("junk"), fe.PARSE),
     (CyberDailyFeedError("not an RSS feed"), fe.PARSE),
-    (ValueError("something odd"), fe.OTHER),
+    (ValueError("something odd"), fe.UNKNOWN),
 ])
 def test_exceptions_are_classified(exc, expected):
     assert fe.classify_error(exc) == expected
@@ -101,8 +102,8 @@ def test_classification_follows_the_cause_chain():
     ("Insufficient content retrieved", fe.INCOMPLETE),
     ("security feed returned no items", fe.PARSE),
     ("Google daily quota exceeded; remaining queries not run", fe.THROTTLED),
-    ("something nobody anticipated", fe.OTHER),
-    ("", fe.OTHER),
+    ("something nobody anticipated", fe.UNKNOWN),
+    ("", fe.UNKNOWN),
 ])
 def test_stored_messages_are_classified(text, expected):
     assert fe.error_type_from_text(text) == expected
@@ -171,7 +172,7 @@ def _queue(clock):
     return conn, RetryQueue(conn, clock=lambda: clock[0])
 
 
-def test_a_temporary_failure_is_backed_off_then_searched_again_and_given_up_at_the_cap():
+def test_a_temporary_failure_is_backed_off_then_searched_again_and_parked_at_the_cap():
     now = [datetime(2026, 10, 28, 9, 0)]
     _, queue = _queue(now)
     assert queue.source_month_retry("CyberDaily", 2021, 3) == MONTH_NEVER
@@ -186,8 +187,10 @@ def test_a_temporary_failure_is_backed_off_then_searched_again_and_given_up_at_t
     queue.record_discovery("CyberDaily", 2021, 3, 0, throttled)          # type classified from the message
     [row] = queue.failed_discoveries()
     assert row["gave_up_at"] and row["failed_attempts"] == MAX_SOURCE_MONTH_ATTEMPTS
-    now[0] += timedelta(days=30)
-    assert queue.source_month_retry("CyberDaily", 2021, 3) == MONTH_GAVE_UP
+    now[0] += timedelta(days=3)
+    # Parked, not given up: it is not searched on its own, but a probe or a configuration change reopens it.
+    assert queue.source_month_retry("CyberDaily", 2021, 3) == MONTH_PARKED
+    assert row["give_up_reason"] == "temporary"
 
     assert queue.release_source_months("CyberDaily") == 1
     assert queue.source_month_retry("CyberDaily", 2021, 3) == MONTH_DUE

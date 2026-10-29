@@ -893,7 +893,7 @@ final_filter_result = self.filter_system.should_keep_event(
         'llm_analysis': {
             'is_australian_event': enriched_data.is_australian_event,
             'is_specific_event': enriched_data.is_specific_event,
-            'confidence_score': getattr(enriched_data, 'confidence_score', 0.7),
+            'confidence_score': getattr(enriched_data, 'confidence_score', None),
             'primary_entity': getattr(enriched_data, 'primary_entity', None)
         }
     }
@@ -923,9 +923,11 @@ After all filtering stages, a final confidence threshold is applied as part of t
 ```python
 high_confidence_events = [
     event for event in deduplicated_events
-    if event.confidence.overall >= collector.config.confidence_threshold
+    if event.confidence.overall is None or event.confidence.overall >= collector.config.confidence_threshold
 ]
 ```
+
+An event with **no** confidence score (`overall is None`) is not below the threshold: nothing measured one, so nothing can drop it (an uncalibrated cut-off may not remove records). It is kept and counted in the log line and in `get_collection_stats()["events_without_confidence"]`. A missing score is stored as NULL and never as a default such as 0.7; where a score exists, `EnrichedEvents.confidence_model` / `confidence_version` say where it came from (`source-prior-v1` or `classifier-adjusted-v1`). See the README section "Confidence is unknown, not 0.7".
 
 **Threshold value:** `0.6` (set in `_build_collection_config()` in `discovery.py`)
 **Default in config model:** `0.7` (defined in `CollectionConfig`, overridden to `0.6` by the pipeline)
