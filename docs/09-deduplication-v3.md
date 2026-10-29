@@ -334,8 +334,10 @@ Two independent bucket types, deliberately over-generating:
 **Buckets, not a transitive closure.** The first implementation unioned any two
 records sharing a distinctive token, which chained **807 of 845 events into one
 cluster** - A shares a word with B, B with C, and the corpus collapses. Buckets
-are independent, deduplicated against subsets, and capped at twice the
-adjudication limit. A regression test (`test_clusters_do_not_chain_transitively`)
+are independent and deduplicated against subsets; a bucket larger than the
+adjudication limit is covered by overlapping neighbourhoods (section 8m), and
+only one larger than `MAX_BUCKET_SIZE` (400, too diffuse to be one incident) is
+dropped - counted and logged. A regression test (`test_clusters_do_not_chain_transitively`)
 pins this.
 
 The rarity cut-off was then found to be too tight in the other direction: at
@@ -347,9 +349,11 @@ now 3%, with the size cap as the guard.
 
 Nothing is applied unless the partition covers every record exactly once. A
 partition that drops a record would silently delete an event; one that assigns
-a record twice would double-count it. Both are rejected, as are LLM failures
-and oversized clusters, and every rejection degrades to "every record its own
-incident" - which changes nothing when applied.
+a record twice would double-count it. Both are rejected, as are LLM failures,
+and every rejection degrades to "every record its own incident" - which changes
+nothing when applied. A cluster too large to show whole is covered by
+overlapping neighbourhoods whose answers are reconciled (section 8m), not cut
+into slices.
 
 ### Verified behaviour
 
@@ -1097,6 +1101,80 @@ shown another record's date and basis. `date_provenance.event_dates` now returns
 stale until `dedup_admin.py recalibrate --step duplicates`.
 
 ---
+
+## 8m. Matching across large incident groups (2026-10-29)
+
+**The problem.** Whole-group adjudication (`cluster_adjudicator`) shows the model every record of a group at once,
+which is what lets it see one incident behind a long tail of coverage. A group can only be so big (the prompt loses
+track of indices past about 20 records), and the two ways of handling a bigger one lost incidents: a bucket of more
+than twice the limit was skipped outright, and anything else was cut into **disjoint slices** (`candidate_components`
+refuses a union that would pass the size cap, `_adjudicate_chunked` cut every 20 records). Two reports of one supplier
+incident on opposite sides of a cut were never in front of the model together. A supplier breach reported once per
+customer is exactly the shape that is large, spread over weeks, and chained through shared articles and rare words.
+
+**What replaces it** (`dedup/neighbourhoods.py`, used by `adjudicate-candidates`, `adjudicate-clusters` and
+`reconcile-entities` through `ClusterAdjudicator`):
+
+1. *Links* (`build_links`, `supplier_pairs`). Events are linked by the evidence that they are about one incident,
+   scored by `candidate_ranking.score_pair`: a shared non-hub source article (+3), the same supplier (+3), corpus-rare
+   words shared (+1.5 each, up to 3), an equal record count (+2) or attack method (+0.5), and the closeness of the two
+   events' date intervals (up to +2; 0 days apart when the intervals overlap, nothing when a date is unknown). Events
+   recording the same supplier are linked even when they share no article or word, because a supplier breach names a
+   different customer each time (suppliers with more than 100 events are skipped and counted). In a bucket that shares a
+   blocking key already, a pair needs article, supplier or rare-word evidence to be linked at all; dates and counts only
+   order neighbours.
+2. *Plan* (`plan`). Connected groups of at most `max_size` (20) events are one neighbourhood, exactly as before. A larger
+   group is covered by neighbourhoods built from each event: the event, its `neighbours` (8) strongest links, then the
+   events most strongly linked to those until `max_size` is reached. A greedy set cover then picks the neighbourhoods
+   that put the most not-yet-shown strong links together, until every link (each event's strongest) is inside one. The
+   neighbourhoods are ordered by links settled, ties by id. With `--recent-days` only links touching a changed event
+   must be covered.
+3. *Ask* (`ClusterAdjudicator.adjudicate_plan`). One partition per neighbourhood, with the same prompt
+   (`cluster-partition-v2`), excerpts and `AdjudicationCache` as a whole group, under `call_budget` (`--call-budget`,
+   default 250): cached answers are free and do not count; once the budget is spent the rest are answered only from the
+   cache and counted in `stats["budget_skipped"]` and printed. `ClusterAdjudicator.answer` returns **None** for "no
+   answer" (no client, a failed call, an invalid partition, the budget) - never a partition that keeps everything apart,
+   which reconciliation would read as a verdict.
+4. *Reconcile* (`reconcile`). For every pair of events shown together, the answers say *together* (same group, with that
+   group's certainty), *apart* (different groups) or nothing. A pair is **joined** when some answer says together at or
+   above `link_min_certainty` (0.7), no answer says apart, and nothing blocks it (`dedup_admin._merge_blocker`: a
+   human `different` ruling between any members, or a `duplicate_labels.csv` / `ai_duplicate_labels.csv` `different`
+   label between the events they now resolve to). Incidents are built strongest link first (most agreeing answers, then
+   highest certainty) by union; two partial incidents are unioned only when **no** pair across them is separated or
+   blocked. A shared event placed in different groups by overlapping neighbourhoods therefore goes with the group it is
+   consistent with, or stays out of both (`refused_unions` counts the unions refused; `contradicted_links` and
+   `blocked_links` list the pairs). An incident's certainty is the lowest on the links that built it; its
+   *representative* is the member most strongly linked to the others.
+5. *Merge.* The caller's rules are unchanged: report-only unless applied, `--min-certainty`, the ledger's refusal of
+   `different` rulings and labels. Each merge now carries the customer victims of the event merged away
+   (`supplier_victims.carry_victims`; not the supplier, not a description, not another name for a victim the target
+   already has; audited in `SupplierVictimAttachments`), as `merge_pairs` always did for supplier incidents.
+
+Reconciliation decides what may be *unioned*, not whether to merge: nothing here is calibrated (a partition's
+certainty is the model's own number), so the routine step stays report-only and a human confirms. No cap is placed on
+an incident's size - a supplier incident with sixty customers is legitimate - but the largest is reported.
+
+**Measured** (copy of the 2026-10-29 database, 1,090 active events, no model: `scripts/measure_neighbourhoods.py`
+partitions what it is shown by a known key):
+
+| | Disjoint slices | Neighbourhoods |
+|---|---|---|
+| Strong candidate links (shared article or rare word) | 692 over 637 events in 81 groups; one group of 420 | the same |
+| Calls for a full cover | 127 | 200 (80 whole groups + 120 overlapping, largest 20); budget 250 |
+| Links shown together | 541 of 692 | 692 of 692 |
+| Same-supplier groups (10) recovered whole | 1 (0 of the 9 crossing a slice) | 3 (2 of 9) |
+| Same, supplier clue as a link (19 groups) | 0 | 19 |
+| Article-chain groups (32) recovered whole | 31 | 32 |
+| Incidents joining different keys | - | 0 |
+
+With the stand-in applied to a copy through `adjudicate-candidates`, 35 merges (1,090 -> 1,055 active events) kept the
+910 distinct victim organisations; the same merges without carrying them left 878. Budget behaviour is covered by
+tests (the budget bounds calls; a later run uses the stored answers and continues; budget 0 gives the stored result).
+
+**Limits.** A neighbourhood sees only its members, so a veto ("apart") from a view lacking context can keep a true
+pair out: that costs recall, never precision, and is counted. Two events three or more links apart that never share a
+neighbourhood are not compared unless the supplier clue links them. The stand-in measures planning and reconciliation,
+not the model; real partitions will disagree more.
 
 ## 9. Known limitations
 

@@ -547,7 +547,8 @@ class UnifiedPipeline:
             # them two at a time; groups make the shared incident visible.
             apply = getattr(args, 'missed_merge_apply', False)
             cmd = base + ["adjudicate-candidates", "--recent-days", str(days),
-                          "--min-certainty", str(certainty)]
+                          "--min-certainty", str(certainty),
+                          "--call-budget", str(getattr(args, 'missed_merge_call_budget', 250))]
             if not apply:
                 cmd.append("--dry-run")
             if run_step(dedup_admin.main, cmd) != 0:
@@ -585,6 +586,11 @@ class UnifiedPipeline:
            validated research get the retrieval they lack queued (page
            re-fetch, labelled report, last a replacement search; capped) and
            every incident its ``evidence_status``; re-marked at the end.
+        -0.4 ``refresh-cited-documents`` - cited pages already read are checked
+           again (stored ETag / Last-Modified, else a content fingerprint),
+           the old version of a changed page is kept, and the facts and events
+           it supported are judged again; at most ``--cited-refresh-limit``
+           pages a run, those most depended on first. No model, no paid API.
         0. ``check-sources --apply`` - Google-sourced records count only if
            the page itself reports an incident (calibrated Jev gate; menus,
            help pages and policies do not). Junk records are removed and, where
@@ -737,7 +743,15 @@ class UnifiedPipeline:
         identity = ["check-record-identity"]
         if getattr(args, 'report_event_rejections', False):
             identity.append("--dry-run")
-        steps = [identity, evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
+        # refresh-cited-documents after the re-scrape and before any judgement: pages cited by active
+        # events that were read before are checked again (ETag / Last-Modified, else a content
+        # fingerprint; at most --cited-refresh-limit a run, the ones most depended on first), and the
+        # facts and events a changed page affects are rejudged. No model and no paid API.
+        cited_refresh = ["refresh-cited-documents", "--limit", str(getattr(args, 'cited_refresh_limit', 25))]
+        if getattr(args, 'report_event_rejections', False):
+            cited_refresh.append("--dry-run")
+        steps = [identity, evidence, recovery, ["rescrape-short-pages"], cited_refresh, ["publication-dates"],
+                 ["canonicalise-entities"],
                  ["research-timelines"],
                  # Entity profiles (jurisdiction, sector, what it runs...): evidence for the alias, acronym and
                  # victim judgements below; one lookup per organisation whose evidence changed, 200 a run.
@@ -1279,6 +1293,10 @@ Examples:
     parser.add_argument('--evidence-recovery-limit', type=int, default=100, metavar='N',
                         help='Incidents with no usable evidence given new retrieval work per run '
                              '(re-fetches, labelled reports, replacement searches)')
+    parser.add_argument('--cited-refresh-limit', type=int, default=25, metavar='N',
+                        help='Cited pages already read that are checked again per run (ETag / Last-Modified '
+                             'or content fingerprint; 0 = none). The facts and events a changed page '
+                             'affects are rejudged')
     parser.add_argument('--skip-recurrence-check', action='store_true',
                         help='Skip re-checking repeat attacks on one entity that '
                              'fall within the recurrence window')
@@ -1295,6 +1313,10 @@ Examples:
     parser.add_argument('--skip-missed-merge-check', action='store_true',
                         help='Skip the multi-key search for duplicates the '
                              'incremental pass missed')
+    parser.add_argument('--missed-merge-call-budget', type=int, default=250, metavar='N',
+                        help='Most model calls the missed-duplicate search may make per run (groups too large to '
+                             'show whole are covered by overlapping neighbourhoods; stored answers are free and '
+                             'a spent budget is reported and continues next run; default 250)')
     parser.add_argument('--missed-merge-apply', action='store_true',
                         help='Merge missed-duplicate findings automatically '
                              '(default: write them for review only)')

@@ -526,6 +526,32 @@ and `scripts/evaluate_dedup.py`.
 | QualityMetrics | `blocking` | INTEGER | 1 when a failure blocks publication |
 | QualityMetrics | `detail`, `examples_json` | TEXT | What was found (or why it could not be measured), and up to 10 examples |
 
+#### CitedDocuments / CitedDocumentVersions
+
+The pages a Perplexity answer cites, read so each fact can be checked against what its sources say
+(`cyber_data_collector/processing/cited_documents.py`; created on first use, older tables gain the version columns
+by `ALTER TABLE`). `CitedDocuments` holds the current version of each URL; `CitedDocumentVersions` the superseded
+ones. `refresh-cited-documents` writes both (`processing/cited_refresh.py`).
+
+| Table | Column | Type | Description |
+|-------|--------|------|-------------|
+| CitedDocuments | `url` | TEXT **PK** | The URL as cited |
+| CitedDocuments | `fetched_at` | TEXT | When the current version was fetched |
+| CitedDocuments | `status` | TEXT | `ok`, `http_error`, `fetch_error`, `unsupported_type`, `empty` |
+| CitedDocuments | `http_status`, `content_type`, `final_url`, `error` | | The response, or why it failed |
+| CitedDocuments | `text` | TEXT | Visible text of the page (at most 200,000 characters) |
+| CitedDocuments | `published_date` | TEXT | The page's own publication date from its metadata |
+| CitedDocuments | `etag`, `last_modified` | TEXT | The server's validators, sent back as `If-None-Match` / `If-Modified-Since` |
+| CitedDocuments | `content_hash` | TEXT | SHA-256 of the whitespace-normalised text; backfilled for older rows |
+| CitedDocuments | `version` | INTEGER | Which content version this row holds (1 on first read) |
+| CitedDocuments | `first_fetched_at`, `last_checked_at`, `last_changed_at` | TEXT | First read; last fetch or validation of any kind; when the content last differed |
+| CitedDocuments | `change_count`, `unchanged_streak` | INTEGER | Versions after the first; consecutive checks that found nothing new (lengthens the check interval) |
+| CitedDocuments | `last_check_status`, `last_check_error` | TEXT | Latest check: `changed`, `unchanged`, `not_modified` (HTTP 304) or `failed` (the page already read is kept) |
+| CitedDocumentVersions | `url`, `version` | TEXT, INTEGER **PK** | A superseded version of a URL |
+| CitedDocumentVersions | `fetched_at`, `content_hash`, `etag`, `last_modified` | | When it was fetched and what identified it |
+| CitedDocumentVersions | `http_status`, `content_type`, `final_url`, `text`, `published_date` | | The version as read |
+| CitedDocumentVersions | `superseded_at` | TEXT | When a check found the content had changed |
+
 #### EnrichmentAuditTrail
 
 Complete audit trail for the 5-stage enrichment pipeline. One row per enrichment attempt.
