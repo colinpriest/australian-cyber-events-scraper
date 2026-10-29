@@ -22,7 +22,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, Field
 
@@ -107,6 +107,32 @@ class EscalatedChoice(BaseModel):
                                                         "they must sum to 1.")
 
 
+def _keyed_by_option(answered: Mapping[str, Any], options: Mapping[str, str]) -> Dict[str, Any]:
+    """The answer re-keyed by option name, where each key identifies exactly one option.
+
+    The model is asked for probabilities "by name" but sometimes keys them by the line it was shown
+    (``"org_1: BleepingComputer"``) or by the option's text alone (``"Nemko Digital"``). A key that is
+    the name, ``name: text`` or the text exactly (case and surrounding space ignored) is mapped to
+    that option; any other key, or two keys for one option, is kept as given, so the caller's
+    exact-cover check fails - never a guess.
+    """
+    def norm(text: str) -> str:
+        return " ".join(str(text).split()).casefold()
+
+    lookup: Dict[str, List[str]] = {}
+    for name, text in options.items():
+        for form in {norm(name), norm(f"{name}: {text}"), norm(text)}:
+            lookup.setdefault(form, []).append(name)
+    out: Dict[str, Any] = {}
+    for key, value in answered.items():
+        names = lookup.get(norm(key), [])
+        target = names[0] if len(set(names)) == 1 else key
+        if target in out:
+            return dict(answered)
+        out[target] = value
+    return out
+
+
 def escalate_choice(conn: sqlite3.Connection, subject_type: str, subject_id: str, question_id: str,
                     question_version: str, state: Mapping[str, Any], question: str,
                     options: Mapping[str, str], client=None) -> Optional[Dict[str, float]]:
@@ -141,7 +167,7 @@ def escalate_choice(conn: sqlite3.Connection, subject_type: str, subject_id: str
     except Exception as exc:  # noqa: BLE001 - recorded by the caller; the item stays undecided
         logger.warning("Escalation failed for %s %s: %s", subject_type, subject_id, exc)
         return None
-    probs = judgement.probabilities
+    probs = _keyed_by_option(judgement.probabilities, options)
     total = sum(max(0.0, float(probs.get(name, 0.0))) for name in options)
     if set(probs) != set(options) or total <= 0:
         logger.warning("Escalation for %s %s answered options %s, not %s", subject_type, subject_id,
