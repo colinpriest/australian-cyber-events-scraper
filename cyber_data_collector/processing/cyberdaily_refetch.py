@@ -623,9 +623,9 @@ def queue_state(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     ``CyberDailyRefetches`` row), ``error_type`` (of the last failure; None
     once it fetched), ``failures``, ``fetched_at``, ``gave_up_at``, ``status``.
     Back-off and the 24-hour rule are not applied: this is the queue, not what
-    the next run will take.
+    the next run will take. Reads only (a read-only connection is fine); the
+    ``CyberDailyRefetches`` table must exist.
     """
-    ensure_schema(conn)
     active, anything = enrichment_ids(conn)
     out = []
     for (raw_id, url, content, discovered, processed, error, status, error_type, failures, fetched,

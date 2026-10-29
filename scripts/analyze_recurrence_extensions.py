@@ -2,10 +2,22 @@
 
 The input database is copied using SQLite's online backup API; every analysis
 reads the same consistent snapshot and the source database is never modified.
+The snapshot is *retained* (``instance/snapshots/``, see
+``cyber_data_collector/publication/snapshot.py``) and named in
+``analysis_inputs.json`` beside the outputs, so the exact input of a result can
+be restored: rerun with ``--snapshot-id <id>`` to reproduce it, or with
+``--snapshot-id latest-published`` to analyse what the dashboard shows.
+
+Results live in ONE folder, ``analysis/recurrent_timing_extended/`` (also where
+``analyze_recurrent_timing.py --extended`` writes). It holds the frozen
+prospective cohorts, ``timing_peak_registration.json`` and
+``timing_size_adjusted_registration.json``, which cannot be recreated after the
+registration date: keep them there across reruns.
 
     python scripts/analyze_recurrence_extensions.py --db instance/cyber_events.db
     python scripts/analyze_recurrence_extensions.py --db instance/cyber_events.db \
         --censor-date 2026-10-02 --bootstrap 500 --date-draws 200
+    python scripts/analyze_recurrence_extensions.py --snapshot-id latest-published
 """
 from __future__ import annotations
 
@@ -28,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.analyze_recurrent_timing import (
     UNRESOLVED_ATTRIBUTION_POLICIES, apply_attribution_policy, last_ingest_date, load_victim_events, parse_date,
 )
+from cyber_data_collector.publication.snapshot import AnalysisInput
 from scripts.recurrence_extended import linkage_supplier, sequence_bias, timing_precision
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -129,8 +142,14 @@ def size_reference(events: pd.DataFrame) -> pd.DataFrame:
 
 def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                  bootstrap: int = 200, date_draws: int = 100,
-                 seed: int = 20261027, unresolved_attributions: str = "include") -> dict[str, Any]:
+                 seed: int = 20261027, unresolved_attributions: str = "include",
+                 analysis_input: AnalysisInput | None = None,
+                 snapshot_id: str | None = None) -> dict[str, Any]:
     """Run every extended analysis on one snapshot.
+
+    The snapshot is ``analysis_input`` (shared with the caller's other analyses), else the retained
+    snapshot ``snapshot_id``, else a new snapshot of ``db_path``, which is retained too. Its id and hash
+    are written to ``analysis_inputs.json`` and the summary.
 
     ``unresolved_attributions`` keeps (``include``) or drops (``exclude``)
     victim rows the calibrated attribution check left unresolved; the counts
@@ -139,10 +158,11 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
     if bootstrap < 1 or date_draws < 1:
         raise ValueError("bootstrap and date draws must both be positive")
     out_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="cyber-recurrence-snapshot-") as tmp:
-        snapshot = Path(tmp) / "snapshot.db"
-        snapshot_database(db_path, snapshot)
-        snapshot_sha256 = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    owned = analysis_input is None
+    inputs = analysis_input or AnalysisInput.open(db_path, snapshot_id)
+    try:
+        snapshot = inputs.path
+        snapshot_sha256 = inputs.snapshot.sha256
         end = censor_date or last_ingest_date(snapshot)
         raw_events = add_first_discovery(load_victim_events(snapshot), snapshot)
         events, coverage = observed_by(raw_events, end)
@@ -161,9 +181,16 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                 events.copy(), snapshot, end, out_dir, seed,
                 bootstrap=bootstrap, date_draws=date_draws, draws=date_draws,
             )
+        inputs.record(out_dir, analysis="extended recurrence analyses", censor_date=end.isoformat(),
+                      seed=seed, bootstrap_replicates=bootstrap, date_draws=date_draws,
+                      unresolved_attributions=unresolved_attributions)
+    finally:
+        if owned:
+            inputs.close()
 
     summary = {
         "source_database": str(db_path.resolve()),
+        "snapshot_id": inputs.snapshot.snapshot_id,
         "snapshot_sha256": snapshot_sha256,
         "censor_date": end.isoformat(),
         "seed": seed,
@@ -213,7 +240,9 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         section = result.get("section") or result.get("report_section")
         if section:
             lines.extend([str(section).strip(), ""])
-    lines.extend(["## Reproducibility", "", f"Database snapshot SHA-256: `{snapshot_sha256}`.",
+    lines.extend(["## Reproducibility", "", f"Database snapshot: `{inputs.snapshot.snapshot_id}` "
+                  f"(retained under `instance/snapshots/`; rerun with `--snapshot-id {inputs.snapshot.snapshot_id}`).",
+                  f"Database snapshot SHA-256: `{snapshot_sha256}`.",
                   f"Bootstrap replicates: {bootstrap}; date draws: {date_draws}.", "",
                   "The detailed result tables are saved as CSV files alongside this report.", ""])
     (out_dir / "extended_recurrence_report.md").write_text("\n".join(lines), encoding="utf-8")
@@ -223,6 +252,9 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB, help="Input SQLite database; opened read-only")
+    parser.add_argument("--snapshot-id", default=None,
+                        help="Analyse this retained snapshot (an id, or 'latest-published') instead of "
+                             "snapshotting --db; reproduces an earlier result")
     parser.add_argument("--out-dir", default=DEFAULT_OUT, help="Directory for tables and report")
     parser.add_argument("--censor-date", help="Observation cutoff YYYY-MM-DD; defaults to last ingest")
     parser.add_argument("--bootstrap", type=int, default=200, help="Bootstrap replicates")
@@ -233,7 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     summary = run_analysis(Path(args.db), Path(args.out_dir),
                            parse_date(args.censor_date) if args.censor_date else None,
-                           args.bootstrap, args.date_draws, args.seed, args.unresolved_attributions)
+                           args.bootstrap, args.date_draws, args.seed, args.unresolved_attributions,
+                           snapshot_id=args.snapshot_id)
     print(f"Wrote extended recurrence analyses to {Path(args.out_dir).resolve()}")
     print(f"Observation cutoff: {summary['censor_date']}")
     return 0

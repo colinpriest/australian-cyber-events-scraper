@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS QualityRuns (
     failed              INTEGER NOT NULL,
     warned              INTEGER NOT NULL,
     not_measured        INTEGER NOT NULL,
-    reasons_json        TEXT NOT NULL
+    reasons_json        TEXT NOT NULL,
+    snapshot_id         TEXT,
+    snapshot_sha256     TEXT
 );
 CREATE TABLE IF NOT EXISTS QualityMetrics (
     run_id        TEXT NOT NULL REFERENCES QualityRuns(run_id),
@@ -63,6 +65,9 @@ CREATE TABLE IF NOT EXISTS QualityMetrics (
 );
 CREATE INDEX IF NOT EXISTS idx_quality_metrics_metric ON QualityMetrics(metric);
 """
+
+#: Columns added after the table was first created (the snapshot the run measured; NULL = the live database).
+RUN_COLUMNS = (("snapshot_id", "TEXT"), ("snapshot_sha256", "TEXT"))
 
 ALL_MEASURES = MEASURES + (
     ("integrity", measure_integrity),
@@ -87,6 +92,9 @@ class QualityReport:
     previous: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     #: Recorded runs, newest first, with the TREND_METRICS values: ``[{"created_at", metric: value...}]``.
     history: List[Dict[str, Any]] = field(default_factory=list)
+    #: The retained database snapshot this run measured (``cyber_data_collector.publication.snapshot``).
+    snapshot_id: Optional[str] = None
+    snapshot_sha256: Optional[str] = None
 
     def count(self, status: str) -> int:
         return sum(1 for m in self.metrics if m.status == status)
@@ -94,6 +102,7 @@ class QualityReport:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "run_id": self.run_id, "created_at": self.created_at, "db_path": self.db_path,
+            "snapshot_id": self.snapshot_id, "snapshot_sha256": self.snapshot_sha256,
             "thresholds": {"path": self.thresholds.path, "version": self.thresholds.version,
                            "sha256": self.thresholds.sha256},
             "publication_allowed": self.allowed, "reasons": self.reasons,
@@ -110,8 +119,13 @@ def _db_path(conn: sqlite3.Connection) -> str:
 
 
 def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds] = None,
-                       today: Optional[date] = None, evaluation_dir: Optional[Path] = None) -> QualityReport:
+                       today: Optional[date] = None, evaluation_dir: Optional[Path] = None,
+                       snapshot: Optional[Any] = None, db_path: Optional[str] = None) -> QualityReport:
     """Measure everything and judge it. Reads only; nothing is written.
+
+    ``snapshot`` (a ``publication.snapshot.Snapshot``) says the connection reads a retained copy: the
+    report names its id and hash, and ``db_path`` (the live database it was taken from) is what the
+    report shows as its database.
 
     A measuring function that raises is recorded as ``<group>.error``
     (not measured), and every rule it would have satisfied is reported as
@@ -137,8 +151,11 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
     metrics.extend(unproduced_rules(metrics, thresholds))
     allowed, reasons = gate(metrics)
     report = QualityReport(run_id=f"qr-{datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}",
-                           created_at=datetime.now().isoformat(timespec="seconds"), db_path=_db_path(conn),
-                           thresholds=thresholds, metrics=metrics, allowed=allowed, reasons=reasons)
+                           created_at=datetime.now().isoformat(timespec="seconds"),
+                           db_path=db_path or _db_path(conn), thresholds=thresholds, metrics=metrics,
+                           allowed=allowed, reasons=reasons,
+                           snapshot_id=getattr(snapshot, "snapshot_id", None),
+                           snapshot_sha256=getattr(snapshot, "sha256", None))
     report.previous = previous_values(conn)
     report.history = metric_history(conn, TREND_METRICS + ROUTE_METRICS)
     return report
@@ -221,6 +238,10 @@ def previous_values(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    present = {row[1] for row in conn.execute("PRAGMA table_info(QualityRuns)")}
+    for name, ddl in RUN_COLUMNS:
+        if name not in present:
+            conn.execute(f"ALTER TABLE QualityRuns ADD COLUMN {name} {ddl}")
 
 
 def store_report(conn: sqlite3.Connection, report: QualityReport) -> str:
@@ -229,11 +250,14 @@ def store_report(conn: sqlite3.Connection, report: QualityReport) -> str:
         ensure_schema(conn)
         with conn:
             conn.execute(
-                "INSERT INTO QualityRuns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO QualityRuns (run_id, created_at, db_path, thresholds_version, thresholds_sha256, "
+                "publication_allowed, blocking_failures, failed, warned, not_measured, reasons_json, "
+                "snapshot_id, snapshot_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (report.run_id, report.created_at, report.db_path, report.thresholds.version,
                  report.thresholds.sha256, int(report.allowed),
                  sum(1 for m in report.metrics if m.blocking and m.status in (FAIL, NOT_MEASURED)),
-                 report.count(FAIL), report.count(WARN), report.count(NOT_MEASURED), json.dumps(report.reasons)))
+                 report.count(FAIL), report.count(WARN), report.count(NOT_MEASURED), json.dumps(report.reasons),
+                 report.snapshot_id, report.snapshot_sha256))
             conn.executemany(
                 "INSERT INTO QualityMetrics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(report.run_id, m.name, m.group, m.value, m.threshold, m.status, int(m.blocking), m.detail,
@@ -329,6 +353,9 @@ def render_markdown(report: QualityReport) -> str:
     lines = [f"# Data quality report - publication {verdict}", "",
              f"- Run: `{report.run_id}` at {report.created_at}",
              f"- Database: `{report.db_path}`",
+             f"- Snapshot: `{report.snapshot_id}` (sha-256 {report.snapshot_sha256[:12]}; "
+             f"reproduce with `--snapshot-id {report.snapshot_id}`)" if report.snapshot_id else
+             "- Snapshot: none - measured the live database directly",
              f"- Thresholds: version {report.thresholds.version} (`{report.thresholds.path}`, "
              f"sha256 {report.thresholds.sha256[:12]})",
              "- Metrics: " + ", ".join(f"{report.count(s)} {s}" for s in (FAIL, NOT_MEASURED, WARN, PASS, INFO)),
@@ -372,7 +399,9 @@ def render_html(report: QualityReport) -> str:
              "</style></head><body>",
              f"<h1>Data quality report - publication {e(verdict)}</h1>",
              f"<p>Run <code>{e(report.run_id)}</code> at {e(report.created_at)}<br>Database "
-             f"<code>{e(report.db_path)}</code><br>Thresholds version {e(report.thresholds.version)}</p>"]
+             f"<code>{e(report.db_path)}</code><br>Snapshot "
+             + (f"<code>{e(report.snapshot_id)}</code>" if report.snapshot_id else "none (live database)")
+             + f"<br>Thresholds version {e(report.thresholds.version)}</p>"]
     if report.reasons:
         parts.append("<h2>Why publication is blocked</h2><ul>")
         parts += [f"<li>{e(r)}</li>" for r in report.reasons]

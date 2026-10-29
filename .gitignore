@@ -72,3 +72,7 @@ pdf_analysis_output.txt
 
 # Versioned schema migrations are source, not database dumps
 !cyber_data_collector/storage/migrations/*.sql
+
+# Publication staging and lock (cyber_data_collector/publication/outputs.py)
+.publish-*/
+.publish.lock

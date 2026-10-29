@@ -489,7 +489,8 @@ Written by `scripts/quality_report.py` and `cyber_data_collector.quality.publica
 |-------|--------|------|-------------|
 | QualityRuns | `run_id` | TEXT **PK** | `qr-<timestamp>-<hex>` |
 | QualityRuns | `created_at` | TEXT | ISO timestamp of the run |
-| QualityRuns | `db_path` | TEXT | Database the run measured |
+| QualityRuns | `db_path` | TEXT | The live database the run is about |
+| QualityRuns | `snapshot_id`, `snapshot_sha256` | TEXT | The retained snapshot the run measured (`instance/snapshots/<id>.db.gz`, `publication/snapshot.py`); NULL when the live database was measured directly. Added by `ALTER TABLE` when a run is first stored |
 | QualityRuns | `thresholds_version`, `thresholds_sha256` | TEXT | Which `thresholds.json` judged it |
 | QualityRuns | `publication_allowed` | INTEGER | 1 when no blocking metric failed or went unmeasured |
 | QualityRuns | `blocking_failures`, `failed`, `warned`, `not_measured` | INTEGER | Counts by status |
