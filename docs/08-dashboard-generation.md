@@ -157,7 +157,8 @@ The dashboard can be generated via three entry points:
 |---------|-------------|
 | `python run_full_pipeline.py` | Full pipeline — dashboard is Phase 5 (runs after classification) |
 | `python run_full_pipeline.py --dashboard-only` | Dashboard generation only (skip Phases 1–4) |
-| `python scripts/build_static_dashboard.py` | Standalone dashboard generation script |
+| `python scripts/build_static_dashboard.py` | Standalone dashboard generation script (writes `index.html` directly, from the live database: for development, not publication) |
+| `python scripts/publish_outputs.py` | The publication step alone: snapshot, quality gate, every output, installed together |
 
 ### Pipeline Invocation
 
@@ -169,6 +170,57 @@ When run as part of the unified pipeline (`run_full_pipeline.py`), the dashboard
 
 If any required table is missing, the phase fails with a `RuntimeError`.
 
+### Publication: one snapshot, one gate, all outputs together
+
+The dashboard phase (`run_full_pipeline.py`, `run_full_pipeline.py --dashboard-only`,
+`python scripts/publish_outputs.py`) is `cyber_data_collector/publication/outputs.py:publish`:
+
+1. **Snapshot.** The database is copied with the SQLite backup API (one consistent
+   view, committed WAL data included), checked (`PRAGMA quick_check`), hashed and named
+   `snap-<time>-<12 hex of sha-256>`. A compressed copy and a manifest are retained in
+   `instance/snapshots/` before anything reads it.
+2. **Gate.** The quality gate runs on the snapshot, and the run is recorded in the live
+   database with `QualityRuns.snapshot_id` / `snapshot_sha256`. If it blocks, nothing is
+   built or replaced; the snapshot is kept, marked `blocked`, with the reasons.
+3. **Build** from the snapshot, into a staging folder beside the output folder:
+   `dashboard/index.html` and `ai_incidents.html`, `entities.html`, `timelines.html`,
+   `dedup.html`, `recurrence.html`, and the `risk_matrix/` workbooks. (The risk matrices
+   used to be written by the classification phase, before any gate.)
+4. **Stamp.** Every HTML output carries `<meta name="data-snapshot">` and a visible
+   footer; every workbook carries the id in its document properties. `dashboard/publication.json`
+   lists the snapshot, the quality run, a hash of every output, the hashes of the inputs outside
+   the database (thresholds, labels and calibrations, the published OAIC dataset, the timeline
+   reconciliation findings), the snapshot each recurrence analysis was computed on, and the
+   code version.
+5. **Install.** All outputs are moved into place (`os.replace`, staging on the same volume).
+   Every file replaced is backed up first; if any move fails the earlier ones are put back, and
+   a run that died half-way is rolled back by the next publication (a journal in the staging
+   folder). Only one publication runs at a time (`.publish.lock` beside the output folder).
+   A builder error, a dashboard under 50 KB or truncated, or a failed move publishes nothing.
+
+`--skip-quality-gate` still publishes unchecked, and says so in `publication.json`
+(`quality_gate: skipped`). `recurrence.html` is built from the committed analysis folders,
+which are expensive to compute, so it is rebuilt on every publication but the analyses are
+not rerun: the page lists the snapshot each run used and warns (here and in
+`publication.json`) when they differ from each other or from the published snapshot.
+Rerun them on exactly what was published with `--snapshot-id latest-published`
+(see the README, repeat-event timing analysis).
+
+**Reproduction.** `python scripts/publish_outputs.py --snapshot-id <id>` (or
+`latest-published`) rebuilds every output from the retained snapshot, not from the live
+database, after verifying its hash; `scripts/quality_report.py --snapshot-id <id>` measures
+it; `analyze_recurrent_timing.py` / `analyze_recurrence_extensions.py --snapshot-id <id>`
+analyse it. `python scripts/publish_outputs.py --list` shows what is retained.
+
+**Retention** (`publication/snapshot.py`). A compressed copy is about 23% of the database
+(100 MB for 435 MB; 8 seconds to write). Kept: the last 5 published snapshots, the last 2 of
+each other kind (blocked, failed, analysis), and any snapshot named by an
+`analysis_inputs.json` under `analysis/` (those results are committed; they are
+reproducible only while their input exists). Older copies are deleted, their manifests stay
+(`status: expired`, with the sha-256), so an id in an old output still names its data.
+Disk use is therefore about 0.8 to 1.2 GB; `publish_outputs.py --prune` applies the policy
+on demand, and it runs after every publication.
+
 ### Configuration Parameters
 
 | Parameter | Default | Source | Description |
@@ -177,6 +229,7 @@ If any required table is missing, the phase fails with a `RuntimeError`.
 | `end_date` | System date (`date.today()`) | Runtime | Latest date for dashboard data |
 | `--db-path` | `instance/cyber_events.db` | CLI argument | SQLite database file path |
 | `--out-dir` | `dashboard` | CLI argument | Output directory for generated HTML |
+| `--risk-matrix-dir` | `risk_matrix` | CLI argument (`run_full_pipeline.py`, `publish_outputs.py`) | Output directory for the ASD risk-matrix workbooks, published with the dashboards |
 
 **Source file:** `scripts/build_static_dashboard.py`
 
@@ -1404,7 +1457,7 @@ The ASD risk classification phase (Phase 4) also generates Excel files that pres
 | `risk_matrix.xlsx` | `risk_matrix/risk_matrix.xlsx` | All years aggregate |
 | `risk_matrix_YYYY.xlsx` | `risk_matrix/risk_matrix_2020.xlsx` ... `risk_matrix_2026.xlsx` | Per-year matrices |
 
-These Excel files are generated by `scripts/asd_risk_classifier.py` using openpyxl, not by the dashboard generation stage. They are mentioned here because the dashboard's ASD risk matrix tables display the same data in HTML form.
+These Excel files are compiled by `ASDRiskClassifier.compile_risk_matrix` (openpyxl) from the **publication snapshot** and installed with the dashboards, after the quality gate passes, with the snapshot id in their document properties (the classification phase no longer writes them; `scripts/asd_risk_classifier.py` run on its own still does). The dashboard's ASD risk matrix tables display the same data in HTML form.
 
 ---
 

@@ -278,7 +278,13 @@ With CyberDaily among the sources, every run also does two more things:
   retried by later runs with back-off, and given up after 5. A 404/410 is
   never retried. Given-up months and stories are reported until `release`.
 - **Incomplete stories are re-queued.** A story whose stored text is cut off
-  or under 300 characters is fetched again, at most 200 per run. That
+  or under 300 characters is fetched again, at most 200 per run;
+  `refetch-cyberdaily --until-empty` drains the whole backlog in one command
+  (2 pages at a time, stops when the site throttles, resumable). The stories
+  had no text because the 2026-10-28 backfill fetched hundreds of pages at once
+  and the site answered HTTP 429; the scraper now allows 2 requests per host in
+  flight, and a throttled answer is the site's, not the story's, so it never
+  counts towards giving a story up. That
   includes records filtered out on the feed's standfirst alone; when the full
   text arrives they are reopened and classified again. The first run left
   2,724 such records (the discovery scrape got no text).
@@ -291,6 +297,7 @@ With CyberDaily among the sources, every run also does two more things:
 ```bash
 python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
 python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
+python scripts/discovery_queue.py refetch-cyberdaily --until-empty [--max-minutes N] [--concurrency N]   # drain the backlog
 python scripts/discovery_queue.py status    # failed searches with type and next retry; stories no longer fetched
 python scripts/discovery_queue.py release   # given-up months and stories back in the queue
 python run_full_pipeline.py --cyberdaily-backfill-since none --skip-cyberdaily-refetch   # opt out for a run
@@ -319,6 +326,7 @@ australian-cyber-events-scraper/
 │   ├── pipelines/
 │   │   └── discovery.py           # Discovery and initial processing pipeline
 │   ├── processing/                # LLM classification, deduplication, enrichment
+│   ├── publication/               # Retained database snapshots; all-or-nothing publication of every output
 │   ├── storage/
 │   │   ├── cyber_event_data_v2.py # Thread-safe SQLite database operations
 │   │   ├── database.py
@@ -336,6 +344,7 @@ australian-cyber-events-scraper/
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
 │   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
+│   ├── publish_outputs.py         # Snapshot, gate and publish every output together; list/prune snapshots
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
 │   ├── run_global_deduplication.py    # Standalone deduplication runner
@@ -722,7 +731,20 @@ Details: [docs/11-evidence-recovery.md](docs/11-evidence-recovery.md).
 python scripts/dedup_admin.py recover-evidence --dry-run     # what would be queued
 python scripts/dedup_admin.py recover-evidence               # queue + mark status
 python scripts/dedup_admin.py recover-evidence --status-only # re-mark only
+python scripts/dedup_admin.py recover-evidence --until-empty [--api-budget perplexity=800]   # drain every route
 ```
+
+`--until-empty` repeats queue -> fetch (Cyber Daily stories, queued pages) ->
+research -> mark until nothing more can be retrieved, a paid API's budget is
+spent (`--api-budget`), the site throttles or a round changes nothing; it
+exits 0 only when it ran dry and is resumed by running it again. A route that is
+given up (a story gone from the site, a page that failed three times, research
+that used its attempts) hands the incident to the next route - the record's
+research, then one replacement search whose best citation becomes a record with
+its own URL - never another page's text. The quality report shows each route's
+queued / attempted / succeeded / failing (by failure type) / exhausted counts
+and the age of its oldest queued item, with a trend
+([docs/11-evidence-recovery.md](docs/11-evidence-recovery.md)).
 
 **Calibrating** (`scripts/calibrate_source_gate.py`,
 `calibrate_event_reality.py`, `calibrate_duplicates.py`): samples are
@@ -1551,6 +1573,31 @@ malformed and unclassified incidents are excluded from numerator and
 denominator alike and counted on the chart (OAIC rates are over the semester's
 total notifications).
 
+### Publication: one snapshot, one gate, all outputs together
+
+```bash
+python run_full_pipeline.py --dashboard-only          # or the last phase of a full run
+python scripts/publish_outputs.py                     # the same step on its own
+python scripts/publish_outputs.py --snapshot-id <id>  # rebuild from a retained snapshot (reproduce)
+python scripts/publish_outputs.py --list              # retained snapshots
+```
+
+The dashboards used to be built from the live database, the quality gate to read it
+separately, and the risk matrices to be written before any gate. Now the step takes **one
+consistent snapshot** (SQLite backup API), keeps a compressed copy under
+`instance/snapshots/`, runs the gate on it, builds `dashboard/index.html`,
+`ai_incidents.html`, `entities.html`, `timelines.html`, `dedup.html`, `recurrence.html` and
+the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
+id, writes `dashboard/publication.json` (hashes of every output and of the inputs outside
+the database) and moves them all into place together. A blocked gate, a failing builder or
+a failed move leaves every previous output untouched, and a crash half-way is rolled back
+by the next run. The quality run records the snapshot id (`QualityRuns.snapshot_id`).
+
+Retention: the last 5 published snapshots, the last 2 blocked / failed / analysis ones,
+and any snapshot an analysis result names; about 100 MB each, 0.8 to 1.2 GB in all.
+Expired copies keep their manifest (id and hash). Details:
+[docs/08-dashboard-generation.md](docs/08-dashboard-generation.md).
+
 ### Database
 
 ```bash
@@ -1594,6 +1641,7 @@ cannot run is *not measured*, which blocks like a failure - never a pass.
 
 ```bash
 python scripts/quality_report.py                 # exit 1 when blocked; writes instance/quality_report.{json,md,html}
+python scripts/quality_report.py --snapshot-id latest-published   # measure a retained snapshot (the pipeline always measures a snapshot)
 python scripts/quality_report.py --no-record     # read-only
 ```
 
@@ -1706,11 +1754,30 @@ flagged customer's row). They are kept by default (`--unresolved-attributions in
 from the whole analysis, in both scripts). On the 2026-10-28 copy, 41
 attributions were unresolved and 19 of 150 observed repeats involved one.
 
-The standalone command writes `extended_recurrence_report.md`, a JSON summary,
-and detailed CSVs under `analysis/recurrent_timing_extended/`. With `--extended`,
-they are written to an `extended/` subdirectory of the main report output. Each
-extended run analyses a consistent read-only SQLite snapshot. The original and
-extended analyses take separate snapshots when run together.
+The extended analyses write `extended_recurrence_report.md`, a JSON summary,
+and detailed CSVs to **one folder, `analysis/recurrent_timing_extended/`**, whether
+run standalone or with `--extended` (`--extended-out-dir` overrides it). Until
+2026-10-29 `--extended` wrote a second copy under `analysis/recurrent_timing/extended/`:
+that folder held 29 October results without the frozen cohorts (its prospective
+test read "unavailable: no cohort was frozen") while the standalone one held 28
+October results with them. The second copy is removed and the frozen cohorts stay where
+they are.
+
+**Every analysis names its data.** A run reads one retained snapshot of the database
+(`instance/snapshots/`, see
+[the publication section of docs/08](docs/08-dashboard-generation.md)), shared with its
+`--extended` analyses, and writes `analysis_inputs.json` beside its outputs (snapshot id,
+sha-256, the retained file, censor date, seed, options). The snapshot is kept while that file
+exists under `analysis/`, so any result can be reproduced from its exact input:
+
+```bash
+python scripts/analyze_recurrent_timing.py --extended --bootstrap 500 --date-draws 100   # prints the snapshot id
+python scripts/analyze_recurrent_timing.py --snapshot-id <id> --elapsed-bounds 0,90,180,365,730,1460,inf \
+  --out-dir analysis/recurrent_timing_90_180_peak --bootstrap 500
+python scripts/analyze_recurrent_timing.py --snapshot-id <id> --elapsed-bounds 0,90,365,730,1460,inf \
+  --out-dir analysis/recurrent_timing_90d --bootstrap 500
+python scripts/analyze_recurrent_timing.py --snapshot-id latest-published ...   # exactly what the dashboard shows
+```
 
 The extended report compares timing bands and a smoothed rate, date-precision
 scenarios, alternative recorded merge and victim decisions, first and later
@@ -1745,14 +1812,16 @@ Main outputs are written under `analysis/recurrent_timing/`:
 | `delayed_peak_sensitivity_adjusted_contrasts.csv` | Formal 91-180 day delayed-peak contrasts |
 | `piecewise_hazard.png`, `survival_curve.png`, `parametric_hazards.png` | Diagnostic plots |
 
-Every run also rebuilds **`dashboard/recurrence.html`**: one self-contained
-page with the headline tests for every banding side by side, then each run's
-full report with its plots inline. It reads the run folders on disk, so after
-a data refresh rerun all three bandings (main, `_90_180_peak`, and `_90d` with
-`--elapsed-bounds 0,90,365,730,1460,inf`); the overview's censor-date column
-shows any run left stale. Rebuild the page alone with
-`python scripts/build_recurrence_dashboard.py`, or skip it with
-`--dashboard-out ''`.
+**`dashboard/recurrence.html`** is published with the other dashboards (see
+[Publication](#publication-one-snapshot-one-gate-all-outputs-together)): one
+self-contained page with the headline tests for every banding side by side, then
+each run's full report with its plots inline. It reads the run folders on disk, so
+after a data refresh rerun all three bandings on one snapshot (main,
+`_90_180_peak`, and `_90d` with `--elapsed-bounds 0,90,365,730,1460,inf`); the
+overview lists the censor date and the data snapshot of every run and warns when
+runs used different snapshots or not the published one. The analysis scripts no
+longer write the page themselves (`--dashboard-out PATH` still does, for a one-off
+look; `python scripts/build_recurrence_dashboard.py` builds it alone).
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.

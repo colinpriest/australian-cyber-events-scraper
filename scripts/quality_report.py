@@ -6,6 +6,12 @@ Run from the project root (the OAIC integrity checks read
     python scripts/quality_report.py                       # measure, record, write reports
     python scripts/quality_report.py --no-record           # measure only; the database is opened read-only
     python scripts/quality_report.py --db COPY.db --out-dir some/dir
+    python scripts/quality_report.py --snapshot-id latest-published   # measure a retained snapshot
+
+With --snapshot-id the measured database is a retained snapshot (restored to a temporary
+file; see cyber_data_collector/publication/snapshot.py): the report names its id and the
+run is recorded, with the id, in the live database. Without it the report says it measured
+the live database directly; the pipeline's publication step always measures a snapshot.
 
 Measurement always reads through a read-only connection. Unless ``--no-record``
 is given, the run is then stored in ``QualityRuns`` / ``QualityMetrics`` through
@@ -50,6 +56,8 @@ def main(argv=None) -> int:
     parser.add_argument("--out-dir", default="instance", help="where to write the reports (default: instance)")
     parser.add_argument("--thresholds", default=None, help="thresholds file (default: the committed one)")
     parser.add_argument("--no-record", action="store_true", help="do not store the run in the database")
+    parser.add_argument("--snapshot-id", default=None,
+                        help="measure this retained snapshot (an id, or 'latest-published') instead of the live database")
     parser.add_argument("--quiet", action="store_true", help="print only the verdict and blocking reasons")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
@@ -59,11 +67,29 @@ def main(argv=None) -> int:
         print(f"BLOCKED: database not found: {db_path}")
         return 1
     thresholds = load_thresholds(Path(args.thresholds) if args.thresholds else None)
-    conn = read_only(db_path)
-    try:
-        report = run_quality_checks(conn, thresholds)
-    finally:
-        conn.close()
+    import tempfile
+
+    from cyber_data_collector.publication import snapshot as snapshots
+
+    with tempfile.TemporaryDirectory(prefix="quality-snapshot-") as work:
+        snap = None
+        measured = db_path
+        if args.snapshot_id:
+            store = snapshots.store_for(Path(db_path))
+            try:
+                sid = store.resolve(args.snapshot_id)
+                measured = str(store.restore(sid, Path(work)))
+            except snapshots.SnapshotError as exc:
+                print(f"BLOCKED: {exc}")
+                return 1
+            manifest = store.manifest(sid)
+            snap = snapshots.Snapshot(sid, manifest["sha256"], manifest["taken_at"], manifest["source_database"],
+                                      Path(measured), 0)
+        conn = read_only(measured)
+        try:
+            report = run_quality_checks(conn, thresholds, snapshot=snap, db_path=db_path)
+        finally:
+            conn.close()
 
     paths = write_outputs(report, Path(args.out_dir))
     status = 0 if report.allowed else 1

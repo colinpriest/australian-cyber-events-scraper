@@ -7,7 +7,8 @@ verify their fields. 121 of the 152 such incidents on the evening copy were
 Cyber Daily stories ingested that day with no page text at all (classified
 from the feed's standfirst) and never researched.
 
-This module does three things, every one idempotent:
+This module does four things, every one idempotent (the fourth, :func:`drain`,
+repeats the second with the fetching and research in between):
 
 1. **Diagnose** (:func:`assess_events`) every active incident's records: is the
    page stored (the record's own page, another page, a block page, too short,
@@ -63,8 +64,6 @@ logger = logging.getLogger(__name__)
 MIN_PAGE_CHARS = source_gate.MIN_PAGE_CHARS
 #: Incidents given new retrieval work per run.
 DEFAULT_LIMIT = 100
-#: A Cyber Daily story whose re-fetch failed this often is out of reach.
-CYBERDAILY_MAX_FAILURES = 3
 PURPOSE = "evidence_recovery"
 ORIGIN = "evidence recovery replacement search"
 
@@ -245,7 +244,7 @@ def _page_state(content: Optional[str], metadata: Optional[str]) -> Tuple[str, i
     return PAGE_OWN, len(text), origin, origin_url
 
 
-def _page_route(page: str, url: str, rescrape: Optional[sqlite3.Row], refetch: Optional[sqlite3.Row]) -> Route:
+def _page_route(page: str, url: str, rescrape: Optional[Dict[str, Any]], refetch: Optional[Dict[str, Any]]) -> Route:
     """How far fetching the record's own page again has got."""
     from cyber_data_collector.datasources.cyber_daily import article_id
     from cyber_data_collector.utils.entity_scraper import is_blocked_domain
@@ -258,13 +257,20 @@ def _page_route(page: str, url: str, rescrape: Optional[sqlite3.Row], refetch: O
         return Route(ROUTE_EXHAUSTED, "social, profile or marketplace URL: never fetched")
     if article_id(url) and "cyberdaily.au/" in url.lower():
         failures = int(refetch["failures"] or 0) if refetch is not None else 0
-        if failures >= CYBERDAILY_MAX_FAILURES:
-            return Route(ROUTE_EXHAUSTED, f"Cyber Daily re-fetch failed {failures} times "
-                                          f"({(refetch['last_error'] or '')[:80]})")
+        # Out of reach exactly when the re-fetch has stopped fetching the story: gone from the
+        # site (404/410) or given up at its own cap. The next routes - the record's research,
+        # then a replacement search - take over from there.
+        if refetch is not None and refetch.get("gave_up_at"):
+            why = ("the story is gone from the site (HTTP 404/410)" if refetch.get("error_type") == "missing"
+                   else f"Cyber Daily re-fetch given up after {failures} failure(s) "
+                        f"({(refetch['last_error'] or '')[:80]})")
+            return Route(ROUTE_EXHAUSTED, why)
         if refetch is not None:
             return Route(ROUTE_PENDING, f"Cyber Daily re-fetch {refetch['status']} at {str(refetch['fetched_at'])[:10]}"
-                                        + (f", {failures} failure(s)" if failures else ""))
-        return Route(ROUTE_PENDING, "Cyber Daily re-fetch due (discovery phase, after 24 hours)")
+                                        + (f", {failures} failure(s)" if failures else "")
+                                        + (f", {refetch['error_type']}" if refetch.get("error_type") else ""))
+        return Route(ROUTE_PENDING, "Cyber Daily re-fetch due (discovery phase, or `discovery_queue.py "
+                                    "refetch-cyberdaily --until-empty`)")
     if rescrape is None:
         return Route(ROUTE_NEEDED, "re-fetch not yet asked for")
     status, attempts = rescrape["status"], int(rescrape["attempts"] or 0)
@@ -320,7 +326,8 @@ def _members(conn: sqlite3.Connection, event_ids: Sequence[str]) -> Dict[str, Li
                            COALESCE(e.perplexity_last_error, '') AS last_error, e.is_specific_event,
                            p.status AS p_status, p.attempts AS p_attempts, p.last_error AS p_last_error,
                            c.status AS c_status, c.failures AS c_failures, c.last_error AS c_last_error,
-                           c.fetched_at AS c_fetched_at
+                           c.fetched_at AS c_fetched_at, c.gave_up_at AS c_gave_up_at,
+                           c.error_type AS c_error_type
                     FROM EventDeduplicationMap m
                     JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
                     LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
@@ -333,7 +340,8 @@ def _members(conn: sqlite3.Connection, event_ids: Sequence[str]) -> Dict[str, Li
                 rescrape = ({"status": row["p_status"], "attempts": row["p_attempts"],
                              "last_error": row["p_last_error"]} if row["p_status"] else None)
                 refetch = ({"status": row["c_status"], "failures": row["c_failures"],
-                            "last_error": row["c_last_error"], "fetched_at": row["c_fetched_at"]}
+                            "last_error": row["c_last_error"], "fetched_at": row["c_fetched_at"],
+                            "gave_up_at": row["c_gave_up_at"], "error_type": row["c_error_type"]}
                            if row["c_status"] else None)
                 data = _json_dict(row["perplexity_enrichment_data"])
                 research = _research_state(row["perplexity_validated"], data, row["perplexity_status"],
@@ -696,3 +704,174 @@ def status_counts(assessments: Sequence[EventEvidence]) -> Dict[str, int]:
     for ev in assessments:
         counts[ev.status] += 1
     return counts
+
+
+# --- drain ----------------------------------------------------------------------
+
+#: Rounds of (queue, fetch, research) a drain makes at most.
+DEFAULT_ROUNDS = 20
+DRAINED = "nothing left to retrieve"
+STALLED = "no progress in the last round"
+THROTTLED = "throttled"
+BUDGET = "API budget spent"
+ROUNDS = "round limit"
+BLOCKED = "blocked"
+
+
+@dataclass
+class Steps:
+    """The retrieval work a drain runs between recovery rounds. Each is injectable (tests use fakes).
+
+    ``refetch(conn, raw_ids)``  fetch these Cyber Daily stories again -> :class:`cyberdaily_refetch.DrainReport`
+    ``rescrape(conn)``          fetch the queued non-Cyber Daily pages again -> number of pages attempted
+    ``research(conn, limit)``   Perplexity research for the first ``limit`` waiting records -> number attempted
+    ``search``                  the replacement search function (None: Perplexity)
+    """
+
+    refetch: Callable[[sqlite3.Connection, List[str]], Any]
+    rescrape: Callable[[sqlite3.Connection], int]
+    research: Callable[[sqlite3.Connection, int], int]
+    search: Optional[Search] = None
+
+
+@dataclass
+class DrainRound:
+    number: int
+    queued: int = 0                 # incidents given new retrieval work this round
+    stories: int = 0                # Cyber Daily stories fetched
+    pages: int = 0                  # other pages fetched
+    researched: int = 0             # records sent to Perplexity research
+    searches: int = 0               # replacement searches made
+    unsupported: int = 0            # unsupported incidents at the end of the round
+    by_recovery: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def worked(self) -> bool:
+        return bool(self.queued or self.stories or self.pages or self.researched or self.searches)
+
+
+@dataclass
+class DrainReport:
+    rounds: List[DrainRound] = field(default_factory=list)
+    ended: str = DRAINED
+    detail: str = ""
+    counts: Dict[str, int] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return self.ended == DRAINED
+
+    def summary(self) -> str:
+        lines = [f"Evidence recovery drain: {len(self.rounds)} round(s); ended: {self.ended}"
+                 + (f" ({self.detail})" if self.detail else "")]
+        for r in self.rounds:
+            lines.append(f"  round {r.number}: {r.queued} incident(s) queued, {r.stories} Cyber Daily stor(ies) and "
+                         f"{r.pages} page(s) fetched, {r.researched} record(s) researched, {r.searches} "
+                         f"replacement search(es); {r.unsupported} unsupported "
+                         f"({', '.join(f'{k} {v}' for k, v in sorted(r.by_recovery.items())) or 'none'})")
+        if self.counts:
+            lines.append("Evidence status: " + ", ".join(f"{s} {self.counts.get(s, 0)}" for s in STATUSES))
+        lines += [f"  ERROR {e}" for e in self.errors]
+        return "\n".join(lines)
+
+
+def _is_cyberdaily(member: Member) -> bool:
+    return "cyberdaily.au/" in member.url.lower()
+
+
+def _runnable(assessments: Sequence[EventEvidence]) -> Dict[str, Any]:
+    """What can be fetched or researched now for the unsupported incidents: stories, pages, research records."""
+    stories: List[str] = []
+    pages = 0
+    research = 0
+    for ev in assessments:
+        if ev.status != UNSUPPORTED:
+            continue
+        for m in ev.members:
+            if m.page_route.state == ROUTE_PENDING:
+                if _is_cyberdaily(m):
+                    stories.append(m.raw_event_id)
+                else:
+                    pages += 1
+            if m.research_route.state == ROUTE_PENDING:
+                research += 1
+    return {"stories": stories, "pages": pages, "research": research}
+
+
+def drain(conn: sqlite3.Connection, steps: Steps, limit: int = DEFAULT_LIMIT, max_rounds: int = DEFAULT_ROUNDS,
+          labels_path: Optional[Path] = EVENT_LABELS_PATH) -> DrainReport:
+    """Keep recovering evidence, round after round, until nothing more can be retrieved.
+
+    A round queues new work for up to ``limit`` unsupported incidents
+    (:func:`recover`: page re-fetches, labelled reports, a replacement search
+    for an incident whose own page and research are both out of reach), then
+    runs what is waiting: the Cyber Daily re-fetch for those incidents'
+    stories, the page re-fetch queue, and Perplexity research for their
+    records. When a route is given up (a 404/410 story, a page that failed its
+    last attempt, research that used up its attempts) the incident falls
+    through to the next route on the following round - the record's research,
+    then one replacement search whose best citation becomes a record with its
+    own URL - never to another page's text.
+
+    It stops when nothing is left to retrieve, when a round makes no progress,
+    when the site throttles (the Cyber Daily re-fetch ends instead of asking
+    again), when a paid API's budget (``--api-budget``) is spent, or after
+    ``max_rounds``. Everything is stored as it happens, so running it again
+    resumes; the statuses are written at the end of every round.
+    """
+    from cyber_data_collector.utils.api_budget import budget
+
+    report = DrainReport()
+    previous: Optional[Tuple] = None
+    for number in range(1, max_rounds + 1):
+        recovered = recover(conn, limit=limit, search=steps.search, labels_path=labels_path)
+        rnd = DrainRound(number, queued=len(recovered.acted_on),
+                         searches=sum(1 for s in recovered.searches if "queued" in str(s.get("outcome", ""))
+                                      and "would" not in str(s.get("outcome", ""))))
+        report.rounds.append(rnd)
+        if recovered.errors:
+            report.ended, report.detail, report.errors = BLOCKED, "; ".join(recovered.errors), recovered.errors
+            report.counts = recovered.counts
+            break
+        todo = _runnable(assess_events(conn, labels_path=labels_path))
+        throttled = False
+        if todo["stories"]:
+            fetched = steps.refetch(conn, todo["stories"])
+            rnd.stories = int(getattr(fetched, "fetched", 0))
+            throttled = getattr(fetched, "ended", "") == "throttled"
+        if todo["pages"] and not throttled:
+            rnd.pages = int(steps.rescrape(conn) or 0)
+        if todo["research"] and not budget.exhausted().get("perplexity"):
+            rnd.researched = int(steps.research(conn, todo["research"]) or 0)
+        assessments = assess_events(conn, labels_path=labels_path)
+        report.counts = mark_status(conn, assessments)
+        unsupported = [e for e in assessments if e.status == UNSUPPORTED]
+        rnd.unsupported = len(unsupported)
+        for ev in unsupported:
+            rnd.by_recovery[ev.recovery] = rnd.by_recovery.get(ev.recovery, 0) + 1
+        if throttled:
+            report.ended, report.detail = THROTTLED, "the Cyber Daily site is throttling; run the command again later"
+            break
+        spent = budget.exhausted()
+        if spent:
+            report.ended = BUDGET
+            report.detail = ", ".join(f"{p} refused {n}" for p, n in spent.items())
+            break
+        again = _runnable(assessments)
+        if not unsupported or not (rnd.by_recovery.get(ROUTE_NEEDED) or again["stories"] or again["pages"]
+                                   or again["research"]):
+            report.ended = DRAINED
+            report.detail = (f"{rnd.by_recovery.get(ROUTE_EXHAUSTED, 0)} exhausted, "
+                             f"{rnd.by_recovery.get(ROUTE_PENDING, 0)} waiting on another step" if unsupported else "")
+            break
+        signature = (tuple(sorted(report.counts.items())), tuple(sorted(rnd.by_recovery.items())),
+                     len(again["stories"]), again["pages"], again["research"])
+        if not rnd.worked or signature == previous:
+            report.ended = STALLED
+            report.detail = "what is left needs a later run or another step"
+            break
+        previous = signature
+    else:
+        report.ended = ROUNDS
+    return report
