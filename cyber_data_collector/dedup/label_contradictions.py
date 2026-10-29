@@ -121,6 +121,31 @@ def conflict(conn: sqlite3.Connection, target: str, source: str, path: Optional[
     return None
 
 
+def blocked_pairs(conn: sqlite3.Connection, path: Optional[Path] = None) -> Dict[frozenset, str]:
+    """Pairs of Active events a label forbids joining: ``{frozenset({a, b}): reason}``.
+
+    Every labelled-different pair (duplicate labels, and the AI-event labels when ``path`` is not given) whose two
+    events resolve, through merges already made, to two different Active events. Computed once, for a pass that
+    asks many "may these join" questions; :meth:`DedupLedger.merge_events` still checks each merge against the
+    labels as they stand when it runs (:func:`conflict`).
+    """
+    explicit = path is not None
+    path = Path(path or LABELS_PATH)
+    pairs = [(a, b, path.name) for a, b in labelled_different_pairs(path)]
+    if not explicit:
+        from cyber_data_collector.dedup import ai_duplicates
+        pairs += [(a, b, ai_duplicates.LABELS_PATH.name) for a, b in ai_labelled_different_pairs()]
+    if not pairs:
+        return {}
+    resolver = _resolver(conn)
+    blocked: Dict[frozenset, str] = {}
+    for a, b, name in pairs:
+        (a_now, a_status), (b_now, b_status) = resolver.resolve(a), resolver.resolve(b)
+        if a_status == "Active" and b_status == "Active" and a_now != b_now:
+            blocked.setdefault(frozenset((a_now, b_now)), f"labelled different: {a[:8]} vs {b[:8]} ({name})")
+    return blocked
+
+
 @dataclass
 class Contradiction:
     pair_id: str
