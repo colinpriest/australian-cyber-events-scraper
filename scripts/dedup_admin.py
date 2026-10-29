@@ -2962,6 +2962,34 @@ def _drain_evidence(args) -> int:
     return 0 if report.complete else 2
 
 
+def cmd_check_record_identity(args) -> int:
+    """Check every active record's page and enrichment against the record itself; see record_identity.
+
+    Re-attaches enrichments that belong to another stored record, reopens records left without one, queues the
+    re-fetch of pages that are another article and a replacement search where the record's URL cannot give the
+    right page. No API call except the replacement searches (Perplexity); exit 2 when one was needed and
+    PERPLEXITY_API_KEY is not set (the other routes still run).
+    """
+    from cyber_data_collector.processing import record_identity
+
+    conn = _connect(args.db)
+    try:
+        if args.reverse:
+            record_identity.ensure_schema(conn)
+            back = record_identity.reverse(conn, args.reverse)
+            conn.commit()
+            print(f"Enrichment {args.reverse} " + (f"re-attached to {back}." if back else "was not re-attached by this command."))
+            return 0 if back else 1
+        report = record_identity.repair(conn, dry_run=args.dry_run, limit=args.limit)
+    finally:
+        conn.close()
+    print(("[dry run] " if args.dry_run else "") + report.summary(dry_run=args.dry_run))
+    if report.errors:
+        print("ERROR: " + "; ".join(sorted(set(report.errors))), file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_reconcile_timelines(args) -> int:
     """Reconcile events against organisation timelines and resolve the mismatches; see timeline_reconciliation.
 
@@ -3271,7 +3299,11 @@ def cmd_rescrape_short_pages(args) -> int:
 
 def cmd_publication_dates(args) -> int:
     """Store every record's publication date and each event's first report; see publication_dates."""
-    from cyber_data_collector.processing.incident_dates import repair_webber_dates
+    from cyber_data_collector.processing.incident_dates import (
+        BASIS_STATED_IN_SOURCE,
+        rederive_webber_dates,
+        repair_webber_dates,
+    )
     from cyber_data_collector.processing.publication_dates import (
         backfill,
         clear_listing_dates,
@@ -3279,12 +3311,28 @@ def cmd_publication_dates(args) -> int:
     )
 
     conn = _connect(args.db)
+    webber_failed = False
     try:
         webber = repair_webber_dates(conn, dry_run=args.dry_run)
         if webber.raw:
             print(f"Webber: {webber.raw} record(s) moved off the invented 15th to their heading month "
                   f"({webber.enriched} enriched record(s), {webber.events} event(s); {webber.publication_cleared} "
                   "heading month(s) cleared as publication dates)" + (" - dry run" if args.dry_run else ""))
+        # A day counts as the incident's only where the text ties it to the breach; the first date in an
+        # article is its byline. Records the old parser dated that way need the list heading's month back,
+        # which only the live list gives (fetched only when such records exist).
+        headings = None
+        needs_list = conn.execute("SELECT 1 FROM RawEvents WHERE source_type = 'WebberInsurance' AND "
+                                  "event_date_basis = ? LIMIT 1", (BASIS_STATED_IN_SOURCE,)).fetchone()
+        if needs_list and not args.no_fetch:
+            try:
+                headings = _webber_headings()
+            except Exception as exc:  # noqa: BLE001 - reported, and the records are left unresolved
+                print(f"ERROR: Webber list could not be read ({type(exc).__name__}: {exc}); records dated by the "
+                      "old parser keep their dates", file=sys.stderr)
+                webber_failed = True
+        redated = rederive_webber_dates(conn, dry_run=args.dry_run, headings=headings)
+        print("Webber dates: " + redated.summary() + (" - dry run" if args.dry_run else ""))
         listing = clear_listing_dates(conn, dry_run=args.dry_run)
         if listing:
             print(f"{listing} record(s) carried a listing page's own date (a page cited for several incidents) "
@@ -3303,7 +3351,24 @@ def cmd_publication_dates(args) -> int:
         for how, count in sorted(report.how.items(), key=lambda kv: -kv[1]):
             print(f"  {count:5d}  {how}")
     print(events.summary())
-    return 0
+    return 2 if webber_failed else 0
+
+
+def _webber_headings() -> Dict[str, Any]:
+    """List URL -> first day of its heading's month, from the live Webber data-breaches list."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    from cyber_data_collector.datasources.webber_insurance import WebberInsuranceDataSource
+    from cyber_data_collector.models.config import DataSourceConfig
+    from cyber_data_collector.utils import RateLimiter
+
+    source = WebberInsuranceDataSource(DataSourceConfig(name="WebberInsurance"), RateLimiter(), {})
+    response = requests.get(source.base_url, timeout=60,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+    response.raise_for_status()
+    items = source._extract_all_event_links(BeautifulSoup(response.content, "html.parser"))
+    return {item["url"]: item["section_date"].date() for item in items}
 
 
 def cmd_normalise_enums(args) -> int:
@@ -3683,6 +3748,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Requests allowed per paid API during this run, e.g. perplexity=800 "
                         "(default: API_BUDGET_<PROVIDER> env, else unlimited); a drain stops when it is spent")
     p.set_defaults(func=cmd_recover_evidence)
+
+    p = sub.add_parser("check-record-identity",
+                       help="Check that each active record's page and enrichment describe the record's own "
+                            "article: re-attach enrichments that belong to another stored record, reopen "
+                            "records left without one, queue the re-fetch of pages that are another article "
+                            "and a replacement search where the URL cannot give the right page")
+    p.add_argument("--limit", type=int, default=100,
+                   help="New retrieval work per route per run (re-fetches, searches, records reopened)")
+    p.add_argument("--dry-run", action="store_true", help="Report what would change; write nothing")
+    p.add_argument("--reverse", metavar="ENRICHED_EVENT_ID",
+                   help="Undo the re-attachment of one enrichment (it goes back to the record it came from)")
+    p.set_defaults(func=cmd_check_record_identity)
 
     p = sub.add_parser("reconcile-timelines",
                        help="Match each organisation's events to its researched timeline; report "

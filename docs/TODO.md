@@ -142,19 +142,16 @@ names the evidence that showed the problem. Done items move to the README or
 - **39 events dated "publication date" with no matching report.** Their date basis says
   publication, but no member now carries that publication date (most are 1st-of-month dates from
   the old discovery fallback). Re-derive their dates from the records' stated dates or research.
-- **Recalibrate event reality, duplicates and coherence on the new evidence.** Their cut-offs were
-  measured on evidence that included pages belonging to other articles (39% of stored pages on
-  2026-10-28) and the first 1,200 characters only; the evidence readers now withhold mismatched
-  pages and send whole pages. The calibrations still apply (same model and question versions) but
-  were not measured on this evidence.
-- **Records point at the wrong article at ingest.** Webber list items are paired with another
-  item's link (435 records), Perplexity discovery returns a URL for a different story (334), and
-  Google results a page that does not name the organisation (191). Fix the pairing in
-  `datasources/webber_insurance.py` and validate a Perplexity event's URL names its organisation
-  before storing it.
-- **AI involvement calibration needs re-measuring when the question changes.** The cut-off in
-  `evaluation/ai_involvement_calibration.json` applies only to `ai-involvement-v2` on the recorded Jev
-  model; a new question version falls back to the most probable option until it is re-labelled.
+- **Duplicate enrichments left by the old record pairing.** `check-record-identity` re-attaches
+  enrichments that describe another stored record (most from the 2025-09-28 batch, which paired
+  enrichments to records by position), but leaves: copies inside the event that already holds
+  their record (227 on the 2026-10-29 copy), enrichments with no stored record (66) or an
+  ambiguous one (96), and records holding two active enrichments, one known wrong (122). Taking
+  them out needs the dedup ledger (`split_member` plus rejection), which removes events; review
+  before automating.
+- **The page-identity rule is noisy on title words alone.** At ingest it withholds about 13% of
+  new Google and Perplexity pages (`processing/active_evidence.page_identity`); label a sample
+  and tighten it.
 - **Name-structure entity rules over-propose.** `canonical_groups` proposes folds such as IBM /
   Insurance Business Magazine / Australian Cyber Security Magazine and The Frontier Trust / Frontier
   Software; Perplexity rejects them, but each costs a call. Tighten `distinctive_core` matching.
@@ -176,11 +173,6 @@ names the evidence that showed the problem. Done items move to the README or
   concurrent requests and was throttled (HTTP 429); the scraper now limits
   requests per host, and `discovery_queue.py refetch-cyberdaily --until-empty`
   drains the backlog ([11-evidence-recovery.md](11-evidence-recovery.md)).
-- **Newsletter tokens in stored source URLs.** 24 stored `RawEvents.source_url`
-  values (22 Webber, 2 Google) carry `utm_*` tracking and a `token` that names
-  a subscriber. Re-fetches no longer send or log them, but the stored URLs
-  still hold them: strip the query from Webber's newsletter links at ingest
-  (`datasources/webber_insurance.py`) and from stored rows.
 - Funlab (`1043b84f`): its label cites a report already stored as another
   event's record; `dedup_admin.py merge` them, or let `check-duplicates` decide.
 

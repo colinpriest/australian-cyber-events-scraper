@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from cyber_data_collector.models.events import CyberEventType, EntityType, EventSeverity
 from cyber_data_collector.utils.enum_values import canonical_enum_value, canonical_metadata
+from cyber_data_collector.utils.url_clean import clean_text, clean_url
 
 
 #: Columns added to EnrichedEvents to track Perplexity enrichment attempts.
@@ -163,11 +164,12 @@ class CyberEventDataV2:
                     source_type,
                     raw_data.get('source_event_id'),
                     raw_data.get('title'),
-                    raw_data.get('description'),
+                    clean_text(raw_data.get('description')),
                     raw_data.get('content'),
                     raw_data.get('event_date'),
-                    raw_data.get('source_url'),
-                    json.dumps(canonical_metadata(raw_data.get('metadata', {})), default=self._json_default),
+                    clean_url(raw_data.get('source_url')),
+                    clean_text(json.dumps(canonical_metadata(raw_data.get('metadata', {})),
+                                          default=self._json_default)),
                     datetime.now().isoformat(),
                     False,
                     published,
@@ -204,7 +206,7 @@ class CyberEventDataV2:
                     SELECT raw_event_id FROM RawEvents
                     WHERE source_type = ? AND source_url = ? AND raw_title = ?
                     LIMIT 1
-                """, (source_type, source_url, title))
+                """, (source_type, clean_url(source_url), title))
 
                 result = cursor.fetchone()
                 return result['raw_event_id'] if result else None
@@ -442,6 +444,13 @@ class CyberEventDataV2:
                 # Add entities if provided
                 if enriched_data.get('entities'):
                     self._link_entities_to_enriched_event(enriched_event_id, enriched_data['entities'])
+
+                # Records are paired with their enrichments by id; an enrichment that does not
+                # describe its record (the positional pairing of 2025 shifted 840) is recorded
+                # on it, in RecordIdentityChecks, for check-record-identity.
+                from cyber_data_collector.processing import record_identity
+                record_identity.check_new_enrichment(self._conn, raw_event_id, enriched_event_id,
+                                                     enriched_data.get('title'))
 
                 self._conn.commit()
                 return enriched_event_id
