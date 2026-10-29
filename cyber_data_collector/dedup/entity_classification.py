@@ -31,6 +31,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set
 from pydantic import BaseModel, Field, field_validator
 
 from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.dedup.name_judgement import is_descriptive_name
 from cyber_data_collector.dedup.victim_selection import (
     is_never_victim,
     is_non_organisation,
@@ -155,6 +156,7 @@ class EventEntityRoles(BaseModel):
             if a.role == EntityRole.VICTIM
             and a.kind in (EntityKind.ORGANISATION, EntityKind.GOVERNMENT_BODY)
             and not is_non_organisation(a.name)
+            and not is_descriptive_name(a.name)
             and not is_threat_actor(a.name)
             and not is_never_victim(a.name)
         ]
@@ -190,13 +192,55 @@ class EventEntityRoles(BaseModel):
         return [a.name for a in self.assignments if a.role == role]
 
 
+# Bump when SYSTEM_PROMPT or the detail the classifier is shown changes: an event classified under an
+# older version that has no victim is classified again (role_maintenance). v1 (to 2026-10-29) was shown
+# only the title and ``DeduplicatedEvents.summary`` - empty on 1,063 of 1,090 active events - and told
+# to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
+# website that contained Medicare data" came out with Medicare (and everything else) a bystander.
+# v2 is shown the members' descriptions and states that an incident has a victim.
+ROLES_PROMPT_VERSION = "entity-roles-v2"
+#: Characters of detail the classifier is shown (v1: 700).
+DETAIL_CHARS = 1200
+
+
+def classifier_detail(conn, deduplicated_event_id: str, summary: Optional[str] = None) -> str:
+    """What the role classifier is told about the incident besides its title.
+
+    The event's own summary when it has one; otherwise the distinct descriptions of its active member
+    records (each a short account of the report: who was affected, what happened), in a stable order.
+    Without this the model saw a blank "Detail" for 97% of events and had nothing but the title and
+    the entity names to go on.
+    """
+    if summary and summary.strip():
+        return summary.strip()[:DETAIL_CHARS]
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    rows = conn.execute(
+        f"""SELECT DISTINCT COALESCE(NULLIF(TRIM(e.description), ''), NULLIF(TRIM(e.summary), ''))
+            FROM EventDeduplicationMap m JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+            WHERE m.deduplicated_event_id = ? {member_condition(conn)}
+            ORDER BY e.enriched_event_id""", (deduplicated_event_id,)).fetchall()
+    text, seen = "", set()
+    for (piece,) in rows:
+        if not piece or piece in seen:
+            continue
+        seen.add(piece)
+        text = f"{text}\n{piece}".strip()
+        if len(text) >= DETAIL_CHARS:
+            break
+    return text[:DETAIL_CHARS]
+
 SYSTEM_PROMPT = (
     "You label the organisations, products and people named in a cyber "
     "security incident report.\n\n"
     "Definitions:\n"
     "- victim: the organisation whose own systems or data were compromised. "
     "In a supply-chain breach the victim is the organisation whose data was "
-    "exposed, which may be the supplier itself if the supplier was breached.\n"
+    "exposed, which may be the supplier itself if the supplier was breached. "
+    "The report may name the target only by the service, website or programme "
+    "it runs (\"a government services website holding Medicare data\"): then "
+    "the listed organisation that runs that service or programme is the "
+    "victim.\n"
     "- vendor: a third-party supplier, contractor or software provider whose "
     "compromise caused the victim's exposure.\n"
     "- affected_customer: an organisation harmed because a vendor it uses was "
@@ -206,10 +250,16 @@ SYSTEM_PROMPT = (
     "breached.\n"
     "- product: software or a platform (Canvas, SharePoint, MOVEit). A product "
     "is NEVER the victim - name the company behind it instead.\n"
-    "- threat_actor: the attacker or ransomware group.\n"
+    "- threat_actor: the attacker or ransomware group, or the organisation "
+    "whose own autonomous tool or agent carried out the intrusion (the "
+    "developer of an AI agent that broke in is the actor, not the victim).\n"
     "- bystander: journalists, commentators, news outlets, unrelated mentions.\n\n"
-    "Label every entity given, using its name exactly as supplied. Prefer "
-    "leaving role as bystander over guessing."
+    "Label every entity given, using its name exactly as supplied. The report "
+    "describes an incident, so when any listed organisation is the one whose "
+    "systems or data were affected, label it victim - do not leave an incident "
+    "without a victim because the report calls the target by a service or "
+    "programme name. Do not guess between organisations the report gives no "
+    "reason to choose between: label those bystander."
 )
 
 
@@ -283,7 +333,7 @@ class EntityRoleClassifier:
         listing = "\n".join(f"- {name}" for name in entities)
         prompt = (
             f"Incident title: {title}\n"
-            f"Detail: {(summary or '')[:700]}\n\n"
+            f"Detail: {(summary or '')[:DETAIL_CHARS]}\n\n"
             f"Entities to label:\n{listing}"
         )
         try:
@@ -462,6 +512,8 @@ def stored_victim_is_invalid(
         return "threat actor"
     if is_non_organisation(victim):
         return "names a group of people, not the organisation"
+    if is_descriptive_name(victim):
+        return "describes an organisation instead of naming it"
     return None
 
 
@@ -611,9 +663,10 @@ def classify_event(
         return {"victim": None, "vendor": None, "labelled": 0, "assignments": []}
 
     names = rank_entity_names(links, event["title"], max_entities)
-    result = classifier.classify(event["title"] or "", event["summary"], names)
+    result = classifier.classify(event["title"] or "",
+                                 classifier_detail(conn, deduplicated_event_id, event["summary"]), names)
     if not result.assignments:
-        return {"victim": None, "vendor": None, "labelled": 0, "assignments": []}
+        return {"victim": None, "vendor": None, "labelled": 0, "assignments": [], "unresolved_victim": True}
 
     by_name = {a.name.strip().lower(): a for a in result.assignments}
     labelled = 0
@@ -636,8 +689,14 @@ def classify_event(
     if not dry_run:
         mark_classified(conn, deduplicated_event_id)
 
+    # An incident event with no victim is not a finished classification: it is counted
+    # (role_maintenance.staleness_report "no_victim", roles-status, the quality report) and taken up by
+    # fill-victims, never silently accepted.
+    if not victim:
+        logger.warning("Roles for %s left the incident with no victim (%s)", deduplicated_event_id,
+                       (event["title"] or "")[:60])
     return {"victim": victim, "vendor": vendor, "labelled": labelled,
-            "assignments": result.assignments}
+            "assignments": result.assignments, "unresolved_victim": not victim}
 
 
 

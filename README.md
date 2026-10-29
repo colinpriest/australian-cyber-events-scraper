@@ -1018,6 +1018,66 @@ On the live copy it splits 2 records out of the WSU event and 11 out of the
 youX event; records misattributed to a labelled event travel with it and are
 re-homed by `check-same-organisation` and `check-duplicates`.
 
+### Incidents with no victim: `fill-victims`, proper names, learned aliases, entity profiles
+
+On 2026-10-29, 186 of 1,090 active events had no `victim` role (and 16 only a placeholder). Victim attribution
+judges *recorded* event-victim pairs, so an event with none was never looked at; and role classification was shown
+a blank "detail" for 97% of events (`DeduplicatedEvents.summary` is empty on 1,063 of them), told to "prefer
+bystander over guessing", and labelled every entity of the OpenAI-agent coverage a bystander.
+
+```bash
+python scripts/dedup_admin.py judge-names [--dry-run]       # is a stored name the name of one organisation?
+python scripts/dedup_admin.py fill-victims [--apply] [--dry-run] [--event ID]
+python scripts/dedup_admin.py entity-profile research | show <name> | set <name> <kind> <value> --reason "..."
+python scripts/dedup_admin.py roles-status                  # now also: older role prompt, NO VICTIM
+```
+
+* **Role classification** (`entity_classification.ROLES_PROMPT_VERSION = entity-roles-v2`): the classifier is shown
+  the members' descriptions when the event has no summary, is told an incident has a victim (a target named only by
+  the service or programme it runs is the organisation that runs it) and that the developer of an agent that broke in
+  is the actor. Events classified under an older prompt that still have no victim are classified again
+  (`roles_prompt_version`). An incident left with no victim is **not a finished classification**: it is counted
+  (`roles-status`, `staleness.roles_no_victim` in the quality report) and taken up by `fill-victims`.
+* **`fill-victims`** (`dedup/victim_fill.py`) gives each such event the organisation its evidence names. Candidates:
+  each record's Perplexity victim, every linked organisation whatever its role, a usable scalar victim, the
+  organisations the event's **text** names (`dedup/event_organisations.py`: the fast model lists names, kept only
+  if they occur verbatim in the text it read and are usable; stored by input hash; a failure is an error for that
+  event, never an empty list) and the organisation a linked *product* is named after, folded through the alias
+  tables and without the parties that did the attacking (`threat_actor` role, an attacker field naming the same
+  organisation, or an actor the text names). Jev chooses (`fill_victim`); a leading option under 0.9 is re-judged by
+  the reasoning model. Adoption is `victim_agreement.apply_victim` (ledger snapshot, `VictimFillActions`), only at
+  the cut-off calibrated by `scripts/calibrate_victim_fill.py` on blind labels
+  (`evaluation/victim_fill_labels.csv`: `deduplicated_event_id,label,correct_victim,rationale,labeller`; label
+  `named` + the victim, `none_named` or `unsure`) and only when the records' text names it. Without a calibration
+  only labelled events are filled. It is a separate step from attribution because its cut-off is a different
+  question over a different population; `check-victim-attribution` uses the same candidates (`EVIDENCE_VERSION`
+  `victim-evidence-v2`: its calibration needs `recalibrate`, a cheap re-run), and a recorded victim an attacker field
+  names carries a note to the judgement.
+* **Proper names** (`dedup/name_judgement.py`). Whether "government agency in Australia" or "Australian Government
+  Department" is a description rather than a name is **not** decided by a word list or by capitalisation: Jev gives
+  P(this identifies one specific organisation) for the name and the sentence it came from (`judge-names`, stored,
+  asked once). Names below the cut-off calibrated by `scripts/calibrate_names.py` (labels
+  `evaluation/name_labels.csv`: `name,label,rationale,labeller`; `named` / `descriptive` / `unsure`) are
+  descriptions and can be neither a victim nor a candidate; with no calibration only names labelled `descriptive` are.
+* **Alias learning** (`dedup/alias_learning.py`, in `canonicalise-entities`). Besides name structure, proposals come
+  from evidence: a name that is a *known variant plus a qualifier* ("Australian Medicare" against the stored alias
+  "Medicare", which no longer exists as an entity to compare with), and names two records of one event each give as
+  the victim. Every proposal goes through the same Perplexity verification (`same` / `parent_subsidiary` / `related` /
+  `different` / `unsure`); only `same` folds, stored in `EntityAliases` (`llm`) and asked once per pair. The decision
+  cache now also records the evidence hash (`EntityAliasDecisions.evidence_hash`) and the model: an `unsure` pair is
+  asked again when the incidents or profiles it was shown change, and a decision made by another model is not reused.
+  A product or system named after an organisation is never folded; it offers the organisation as a victim candidate.
+* **Entity profiles** (`dedup/entity_profiles.py`, `EntityProfiles`): jurisdiction, sector, type, administering
+  organisation, services run, data held, other names, website. `human` rows (`entity-profile set ... --reason`) are never
+  replaced by `llm` rows (one Perplexity lookup per organisation, citations kept, asked again only when the
+  organisation's evidence changes). Shown to Jev with the candidates of an acronym, of a victim choice and the two
+  names of an alias question; used to rank which alias pairs to ask about first. Evidence, never a matcher.
+* **Mentions** (`contextual_aliases.locally_named`): an acronym is placed by a full name in the *same sentence* ("Australian
+  Federal Police (AFP)"), not by one elsewhere in the article ("Photograph: AFP"); anything else is for the cached
+  judgement.
+* **Acceptance cases** (`evaluation/review_acceptance_cases.csv`): the quality report measures
+  `acceptance.victim.failures` and `acceptance.same_incident.failures` (a warning, never a gate).
+
 ### Cluster-level adjudication
 
 Pairwise comparison cannot see a cluster. When one breach generates a long tail

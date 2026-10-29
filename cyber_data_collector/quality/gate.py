@@ -31,7 +31,7 @@ from cyber_data_collector.quality.model import (
     FAIL, INFO, NOT_MEASURED, PASS, WARN, Measurement, Metric, Thresholds, evaluate, gate,
     load_thresholds, unproduced_rules,
 )
-from cyber_data_collector.quality.regression import measure_labels, measure_synthetic
+from cyber_data_collector.quality.regression import measure_acceptance, measure_labels, measure_synthetic
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ RUN_COLUMNS = (("snapshot_id", "TEXT"), ("snapshot_sha256", "TEXT"))
 ALL_MEASURES = MEASURES + (
     ("integrity", measure_integrity),
     ("labels", measure_labels),
+    ("acceptance", measure_acceptance),
     ("synthetic", measure_synthetic),
 )
 
@@ -136,8 +137,8 @@ def run_quality_checks(conn: sqlite3.Connection, thresholds: Optional[Thresholds
     metrics: List[Metric] = []
     for group, measure in ALL_MEASURES:
         try:
-            if group == "labels" and evaluation_dir is not None:
-                found = measure_labels(conn, thresholds, today, evaluation_dir=evaluation_dir)
+            if group in ("labels", "acceptance") and evaluation_dir is not None:
+                found = measure(conn, thresholds, today, evaluation_dir=evaluation_dir)
             else:
                 found = measure(conn, thresholds, today)
         except Exception as exc:  # noqa: BLE001 - reported, never passed

@@ -69,6 +69,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 import sqlite3
 from collections import Counter
 from datetime import datetime
@@ -76,7 +77,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.dedup import calibration_guard
-from cyber_data_collector.utils.llm_models import typesafe_model
+from cyber_data_collector.utils.llm_models import openai_fast_model, typesafe_model
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +89,17 @@ ESCALATION_QUESTION_ID = "is_recorded_victim_escalated"
 ESCALATION_VERSION = "victim-attribution-escalation-v1"
 ESCALATE_BAND: Optional[Tuple[float, float]] = (0.1, 0.7)
 REPLACEMENT_QUESTION_ID = "replacement_victim"
-REPLACEMENT_VERSION = "victim-replacement-v1"
+# v2 (2026-10-29): the options include the organisations the event's text names, folded through the
+# alias tables, without descriptive phrases or the attacking party; the choice sees what the text says of
+# each (`candidate_context`) and who attacked (`attacking_parties`).
+REPLACEMENT_VERSION = "victim-replacement-v2"
 REPORT_BELOW = 0.5
 MAX_CANDIDATES = 8
 #: Bump when what the judgement shows beyond event reality's evidence changes (the victim, the other
-#: victims, the victim's timeline, the replacement options).
-EVIDENCE_VERSION = "victim-evidence-v1"
+#: victims, the victim's timeline, the replacement options). v2 (2026-10-29): text-named, alias-folded
+#: candidates without descriptive phrases or the attacker; a recorded victim an attacker field names
+#: carries a note (`note_on_recorded_victim`).
+EVIDENCE_VERSION = "victim-evidence-v2"
 
 ROOT = Path(__file__).resolve().parents[2]
 LABELS_PATH = ROOT / "evaluation" / "victim_attribution_labels.csv"
@@ -164,18 +170,20 @@ def escalation_question() -> str:
 
 def evidence_fingerprint() -> str:
     """A hash of the evidence a victim judgement sees: the event's reality evidence plus its own additions."""
-    from cyber_data_collector.dedup import event_reality
+    from cyber_data_collector.dedup import entity_profiles, event_organisations, event_reality
 
     return calibration_guard.fingerprint(
         "victim-attribution", version=EVIDENCE_VERSION, max_candidates=MAX_CANDIDATES,
+        extraction=event_organisations.EXTRACTION_VERSION, profiles=entity_profiles.PROMPT_VERSION,
         escalate_band=list(ESCALATE_BAND) if ESCALATE_BAND else None, events=event_reality.evidence_fingerprint())
 
 
 def calibration_identity() -> Dict[str, str]:
-    """What a calibration must have been measured on to apply: all three questions, both models, evidence."""
+    """What a calibration must have been measured on to apply: all three questions, the models (the fast
+    one extracts the text-named candidates), evidence."""
     from cyber_data_collector.utils.llm_models import openai_model
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}+{REPLACEMENT_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
+            "model": f"{typesafe_model()}+{openai_model()}+{openai_fast_model()}", "evidence": evidence_fingerprint()}
 
 
 # ---------------------------------------------------------------- population
@@ -211,6 +219,14 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, entity_id: int, victim:
     others = [name for eid, name in _victims(conn, dedup_id) if eid != entity_id]
     if others:
         state["other_recorded_victims"] = others
+    # Only when the stored evidence says so, so every other pair's input (and its stored answer) is unchanged.
+    parties = acting_parties(conn, dedup_id)
+    attacker = is_acting_party(victim, parties) or attacker_field_note(victim, parties)
+    if attacker:
+        state["note_on_recorded_victim"] = (
+            f"The event's own records name the recorded victim in connection with the attacker: {attacker}. "
+            "An attacker, or whoever ran the tool or agent that carried out the access, is not the victim of "
+            "that access unless the evidence shows its own systems or data were affected.")
     timeline = for_judgement(conn, entity_id)
     if timeline:
         state["organisation_timeline"] = {k: v for k, v in timeline.items() if k != "organisation"}
@@ -287,21 +303,146 @@ def _usable(name: str) -> bool:
     return bool(name and name.strip()) and not _is_unusable_victim(name)
 
 
-def replacement_candidates(conn: sqlite3.Connection, dedup_id: str,
-                           exclude: Sequence[str]) -> List[Dict[str, Any]]:
-    """Organisations the event's own evidence names, other than ``exclude``; commonest first.
+def canonical_candidate_name(conn: sqlite3.Connection, name: str, context: Optional[str] = None) -> str:
+    """The organisation's canonical name: stored aliases, then the reviewed ``EXPLICIT_ALIASES``.
 
-    Sources: each record's Perplexity victim, and the organisations linked to
-    its records (not threat actors, products or people). Spellings of one
-    name are counted together.
+    "Australian Medicare" and "Medicare" are Services Australia. Reading the reviewed table directly means
+    a candidate is folded before ``canonicalise-entities`` has written the alias to the database.
     """
+    from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
+    from cyber_data_collector.dedup.entity_resolution import canonical_entity_name
+
+    name = (name or "").strip()
+    hit = canonical_entity_name(conn, name, context=context)
+    if hit and hit.strip().lower() != name.lower():
+        return hit.strip()
+    wanted = name.lower()
+    for raw, canonical in EXPLICIT_ALIASES.items():
+        if raw.lower() == wanted:
+            return canonical
+    return name
+
+
+def acting_parties(conn: sqlite3.Connection, dedup_id: str, extracted: Any = None) -> List[Dict[str, str]]:
+    """What the event's evidence says did the attacking: ``[{"party", "why"}]``.
+
+    * entities linked to the event's records with the ``threat_actor`` role;
+    * the records' attacker fields (``attacking_entity_name``, and the Perplexity ``threat_actor``);
+    * with ``extracted`` (an :class:`event_organisations.EventOrganisations`), the actors the text names.
+
+    A party can be a description ("autonomous OpenAI AI agent"), so matching a candidate against it is
+    :func:`is_acting_party`'s job. Deterministic apart from ``extracted``.
+    """
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    found: List[Dict[str, str]] = []
+    try:
+        for (name,) in conn.execute(
+                """SELECT DISTINCT v.entity_name FROM EventDeduplicationMap m
+                   JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                   JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
+                   WHERE m.deduplicated_event_id = ? AND ee.relationship_type = 'threat_actor'
+                   ORDER BY v.entity_name""", (dedup_id,)):
+            found.append({"party": name, "why": "linked to the event's records as the threat actor"})
+    except sqlite3.OperationalError:
+        pass
+    has_attacker = any(r[1] == "attacking_entity_name" for r in conn.execute("PRAGMA table_info(EnrichedEvents)"))
+    for attacker, research in conn.execute(
+            f"""SELECT {"e.attacking_entity_name" if has_attacker else "NULL"}, e.perplexity_enrichment_data
+                FROM EventDeduplicationMap m
+                JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                WHERE m.deduplicated_event_id = ? {member_condition(conn)} ORDER BY e.enriched_event_id""",
+            (dedup_id,)):
+        try:
+            data = json.loads(research or "{}")
+        except (TypeError, ValueError):
+            data = {}
+        for value in (attacker, data.get("threat_actor") if isinstance(data, dict) else None):
+            if isinstance(value, str) and value.strip() and value.strip().lower() not in ("unknown", "n/a", "none"):
+                found.append({"party": value.strip(), "why": "a record's attacker field names it"})
+    for name in getattr(extracted, "actors", None) or ():
+        found.append({"party": name, "why": "the event's text names it as having carried out the attack"})
+    unique: List[Dict[str, str]] = []
+    for item in found:
+        if not any(item["party"].lower() == u["party"].lower() for u in unique):
+            unique.append(item)
+    return unique
+
+
+def is_acting_party(name: Optional[str], parties: Sequence[Dict[str, str]]) -> Optional[str]:
+    """Why ``name`` is one of the attacking parties (a sentence), else None.
+
+    Only the same organisation counts (an equal name or a spelling of it): the entity role
+    ``threat_actor``, an attacker field naming it, or an actor the event's text names. A description
+    that merely *contains* the name ("autonomous OpenAI AI agent", "insider at Medibank") is not decided
+    here - nothing but a judgement can tell an agent the organisation ran from a person who attacked it -
+    so it is shown to the attribution judgement as a note instead (:func:`attacker_field_note`).
+    """
+    from cyber_data_collector.dedup.org_timeline import _name_tokens
+
+    if not name or not name.strip():
+        return None
+    for party in parties:
+        text = party["party"]
+        # The same words (legal forms and "Australia" aside): not one name merely inside a longer description.
+        if text.lower() == name.lower() or (_name_tokens(name) and _name_tokens(name) == _name_tokens(text)):
+            return f"{text!r}: {party['why']}"
+    return None
+
+
+def attacker_field_note(name: Optional[str], parties: Sequence[Dict[str, str]]) -> Optional[str]:
+    """The attacker description that contains ``name`` as whole words, if any (evidence, not a decision)."""
+    from cyber_data_collector.dedup.event_organisations import _normal, _occurs
+
+    wanted = _normal(name or "")
+    if not wanted:
+        return None
+    for party in parties:
+        if _occurs(_normal(party["party"]), wanted):
+            return f"{party['party']!r} ({party['why']})"
+    return None
+
+
+def _known_non_victim(conn: sqlite3.Connection, name: str) -> bool:
+    """The name is stored as an entity of a kind that cannot be a victim (person, product, threat actor)."""
+    from cyber_data_collector.dedup.entity_classification import NON_VICTIM_KINDS, rule_kind
+
+    row = conn.execute("SELECT entity_kind FROM EntitiesV2 WHERE entity_name = ? COLLATE NOCASE "
+                       "AND entity_kind IS NOT NULL LIMIT 1", (name,)).fetchone()
+    if row and row[0] in NON_VICTIM_KINDS:
+        return True
+    kind = rule_kind(name)
+    return kind is not None and kind.value in NON_VICTIM_KINDS
+
+
+def replacement_candidates(conn: sqlite3.Connection, dedup_id: str, exclude: Sequence[str],
+                           organisations: Any = None, include_scalar: bool = False) -> List[Dict[str, Any]]:
+    """Organisations the event's own evidence names, other than ``exclude``; best supported first.
+
+    Sources (``sources`` on each candidate):
+
+    * ``research`` - each record's Perplexity victim (weight 2);
+    * ``link`` - the organisations linked to its records, whatever role they were given - a bystander
+      link is still a name the evidence carries (not threat actors, products or people);
+    * ``scalar`` (with ``include_scalar``) - the event's own victim name when it is usable, weight 2;
+    * ``text`` - with ``organisations`` (:class:`event_organisations.EventOrganisations`), the names the
+      event's text mentions as possible victims, weight 1.
+
+    Names are folded through the alias tables (:func:`canonical_candidate_name`: Medicare is Services
+    Australia), spellings of one name are counted together, descriptive phrases and the parties that did
+    the attacking (:func:`acting_parties`) are left out, and ``candidate_evidence`` of a text-named
+    candidate is its excerpt.
+    """
+    from cyber_data_collector.dedup.contextual_aliases import event_text
     from cyber_data_collector.dedup.coherence import load_event_members
     from cyber_data_collector.dedup.org_timeline import is_same_name
 
-    counts: Counter = Counter()
+    context = event_text(conn, dedup_id)[1]
+    parties = acting_parties(conn, dedup_id, organisations)
+    weighted: List[Tuple[str, int, str, str, str]] = []     # raw name, weight, source, excerpt, name the text carries
     for m in load_event_members(conn, dedup_id):
         if m["org"]:
-            counts[m["org"].strip()] += 2   # the research's own answer to "who was breached"
+            weighted.append((m["org"].strip(), 2, "research", "", ""))   # the research's own answer to "who was breached"
     for (name,) in conn.execute(
             """SELECT v.entity_name FROM EventDeduplicationMap m
                JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
@@ -309,36 +450,99 @@ def replacement_candidates(conn: sqlite3.Connection, dedup_id: str,
                WHERE m.deduplicated_event_id = ?
                  AND COALESCE(v.entity_kind, 'organisation') IN ('organisation', 'government_body')
                  AND COALESCE(ee.relationship_type, '') NOT IN ('threat_actor', 'product')""", (dedup_id,)):
-        counts[(name or "").strip()] += 1
+        weighted.append(((name or "").strip(), 1, "link", "", ""))
+    if include_scalar:
+        scalar = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
+                              "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
+        if scalar and scalar[0] and scalar[0].strip():
+            weighted.append((scalar[0].strip(), 2, "scalar", "", ""))
+    for item in getattr(organisations, "possible_victims", None) or ():
+        if not _known_non_victim(conn, item["name"]):
+            weighted.append((item["name"], 1, "text", item.get("excerpt", ""), ""))
+    from cyber_data_collector.dedup.alias_learning import product_hosts
+
+    for product, organisation in product_hosts(conn, dedup_id):
+        weighted.append((organisation, 1, "product", f"the records link the product {product!r}, which carries "
+                                                      "this organisation's name", product))
+
+    excluded = [x for x in exclude if x] + [canonical_candidate_name(conn, x, context) for x in exclude if x]
     merged: List[Dict[str, Any]] = []
-    for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        if not _usable(name) or any(is_same_name(name, x) or name.lower() == (x or "").lower() for x in exclude):
+    for raw, weight, source, excerpt, carried_by in weighted:
+        if not _usable(raw):
+            continue
+        name = canonical_candidate_name(conn, raw, context)
+        if not _usable(name) or any(is_same_name(name, x) or name.lower() == x.lower() for x in excluded):
+            continue
+        if is_acting_party(name, parties) or is_acting_party(raw, parties):
             continue
         for c in merged:
             if is_same_name(name, c["name"]) or name.lower() == c["name"].lower():
-                c["support"] += n
+                c["support"] += weight
+                for spelling in (raw, carried_by):
+                    if spelling and spelling not in c["spellings"]:
+                        c["spellings"].append(spelling)
+                if source not in c["sources"]:
+                    c["sources"].append(source)
+                if excerpt and not c.get("excerpt"):
+                    c["excerpt"] = excerpt
                 break
         else:
-            merged.append({"name": name, "support": n})
+            merged.append({"name": name, "support": weight, "spellings": [x for x in (raw, carried_by) if x],
+                           "sources": [source],
+                           **({"excerpt": excerpt} if excerpt else {})})
     merged.sort(key=lambda c: (-c["support"], c["name"]))
     return merged[:MAX_CANDIDATES]
 
 
-def _replacement_question(candidates: Sequence[Dict[str, Any]]):
+def _replacement_question(candidates: Sequence[Dict[str, Any]], instructions: str = REPLACEMENT_INSTRUCTIONS):
     from typesafe_sdk import Choice
     criteria = {f"org_{i}": c["name"] for i, c in enumerate(candidates, 1)}
     criteria["none"] = "None of these is clearly the organisation the incident happened to."
-    return Choice(instructions=REPLACEMENT_INSTRUCTIONS, criteria=criteria)
+    return Choice(instructions=instructions, criteria=criteria)
 
 
-def choose_replacement(conn: sqlite3.Connection, dedup_id: str, wrong: Sequence[str], judge) -> Dict[str, Any]:
-    """Jev's choice of the real victim among the evidence's candidates. ``{"name", "probability", "candidates"}``."""
+def candidate_state(conn: sqlite3.Connection, dedup_id: str, candidates: Sequence[Dict[str, Any]],
+                    parties: Sequence[Dict[str, str]] = ()) -> Dict[str, Any]:
+    """The evidence a choice among ``candidates`` is shown: the event's, plus what the text says of each name.
+
+    ``candidate_context`` holds, for a candidate the text names, the words around its first mention (a
+    candidate the records' research or links named is judged from the records themselves). The attacking
+    parties are listed so the choice does not mistake the attacker for the target.
+    """
     from cyber_data_collector.dedup import event_reality
 
-    candidates = replacement_candidates(conn, dedup_id, wrong)
+    state = event_reality.build_state(conn, dedup_id, corroborated=True)
+    context = {c["name"]: c["excerpt"] for c in candidates if c.get("excerpt")}
+    if context:
+        state["candidate_context"] = context
+    from cyber_data_collector.dedup.entity_profiles import candidate_profiles
+
+    # What each candidate is (jurisdiction, sector, what it runs, the data it holds): evidence to weigh against
+    # the incident's context, never a matcher. Only when profiles exist, so other inputs are unchanged.
+    profiles = candidate_profiles(conn, [c["name"] for c in candidates])
+    if profiles:
+        state["candidate_profiles"] = profiles
+    if parties:
+        state["attacking_parties"] = [p["party"] for p in parties]
+    return state
+
+
+def choose_replacement(conn: sqlite3.Connection, dedup_id: str, wrong: Sequence[str], judge,
+                       extractor=None, use_text: bool = True) -> Dict[str, Any]:
+    """Jev's choice of the real victim among the evidence's candidates.
+
+    ``{"name", "probability", "candidates"}``. The candidates include the organisations the event's text
+    names (:mod:`event_organisations`, one stored extraction per event) unless ``use_text`` is False;
+    a failed extraction raises :class:`event_organisations.ExtractionFailed` rather than offering fewer.
+    """
+    from cyber_data_collector.dedup import event_organisations
+
+    organisations = (event_organisations.named_organisations(conn, dedup_id, extractor=extractor)
+                     if use_text else None)
+    candidates = replacement_candidates(conn, dedup_id, wrong, organisations=organisations)
     if not candidates:
         return {"name": None, "probability": None, "candidates": []}
-    state = event_reality.build_state(conn, dedup_id, corroborated=True)
+    state = candidate_state(conn, dedup_id, candidates, acting_parties(conn, dedup_id, organisations))
     state["recorded_victim"] = "; ".join(wrong)
     answer = judge.ask("event_victim_replacement", dedup_id, REPLACEMENT_VERSION, state,
                        {REPLACEMENT_QUESTION_ID: _replacement_question(candidates)})[REPLACEMENT_QUESTION_ID]
@@ -550,8 +754,15 @@ def _label_allows(label: Optional[Dict[str, str]], name: Optional[str]) -> bool:
 
 
 def plan_actions(conn: sqlite3.Connection, scores: Dict[str, float], cal: Dict[str, Any],
-                 labels: Dict[str, Dict[str, str]], judge) -> List[Dict[str, Any]]:
-    """What --apply would do for every pair below the cut-off. Changes nothing."""
+                 labels: Dict[str, Dict[str, str]], judge, extractor=None,
+                 errors: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, Any]]:
+    """What --apply would do for every pair below the cut-off. Changes nothing.
+
+    An event whose text-named candidates could not be extracted gets no plan (it is retried next run) and is
+    appended to ``errors``; with no ``errors`` list the failure raises.
+    """
+    from cyber_data_collector.dedup.event_organisations import ExtractionFailed
+
     cutoff = cal["cutoff"]
     threshold = cal.get("replacement_threshold")
     by_event: Dict[str, List[Dict[str, Any]]] = {}
@@ -572,7 +783,14 @@ def plan_actions(conn: sqlite3.Connection, scores: Dict[str, float], cal: Dict[s
             plans += [{**w, "action": "demoted", "new_victim": None, "replacement_probability": None,
                        "reason": f"other recorded victim(s) kept: {', '.join(n for _, n in keep)}"} for w in wrong]
             continue
-        choice = choose_replacement(conn, did, [w["victim"] for w in wrong], judge)
+        try:
+            choice = choose_replacement(conn, did, [w["victim"] for w in wrong], judge, extractor=extractor)
+        except ExtractionFailed as exc:
+            if errors is None:
+                raise
+            logger.error("Victim replacement for %s not planned: %s", did, exc)
+            errors.append({"deduplicated_event_id": did, "error": str(exc)})
+            continue
         name, prob = choice["name"], choice["probability"]
         if threshold is None:
             reason = "no calibrated replacement threshold"
@@ -656,7 +874,7 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
 
 def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judge=None,
                              escalation_client=None, calibration_path: Path = CALIBRATION_PATH,
-                             labels_path: Path = LABELS_PATH) -> Dict[str, Any]:
+                             labels_path: Path = LABELS_PATH, extractor=None) -> Dict[str, Any]:
     """Judge every event-victim pair; with a calibration, plan (and with ``apply``, make) re-attributions.
 
     Pairs flagged earlier are settled too (:func:`plan_confirmations`): each
@@ -673,6 +891,7 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
     owned = judge is None
     judge = judge or JevJudge(conn)
     inputs: Dict[str, Dict[str, str]] = {}
+    errors: List[Dict[str, str]] = []
     try:
         pairs = pairs_to_check(conn)
         scores = judge_pairs(conn, pairs, judge=judge, escalation_client=escalation_client, inputs=inputs)
@@ -681,7 +900,7 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
                   if scores.get(p["pair_id"], 1.0) < (cal["cutoff"] if cal else REPORT_BELOW)]
         report.sort(key=lambda f: f["p_recorded_victim"])
         flags = {pid: a for pid, a in latest_actions(conn).items() if a["action"] == "flagged" and pid in scores}
-        plans = (plan_actions(conn, scores, cal, labels, judge)
+        plans = (plan_actions(conn, scores, cal, labels, judge, extractor=extractor, errors=errors)
                  + plan_confirmations(pairs, flags, scores, cal, labels, inputs)) if cal else []
         for plan in plans:
             plan.update(inputs.get(plan["pair_id"], {}))
@@ -701,4 +920,4 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
             "replacement_threshold": cal.get("replacement_threshold") if cal else None,
             "applied": batch is not None, "batch_id": batch, "reported": report,
             "actions": [{k: v for k, v in p.items() if k != "label"} for p in plans],
-            "counts": dict(counts), "flag_review": flag_review}
+            "counts": dict(counts), "flag_review": flag_review, "errors": errors}

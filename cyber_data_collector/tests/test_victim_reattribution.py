@@ -19,6 +19,19 @@ from cyber_data_collector.dedup import victim_judgement as vj  # noqa: E402
 from cyber_data_collector.utils.jev import JevJudge  # noqa: E402
 from cyber_data_collector.utils.llm_models import openai_model, typesafe_model  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _no_text_extraction(monkeypatch):
+    """The victim candidates include organisations the text names (an extraction by the fast model).
+    These tests are about something else: the fake finds none, and bogus keys make a forgotten fake fail."""
+    from cyber_data_collector.dedup import event_organisations
+
+    for var in ("OPENAI_API_KEY", "TYPESAFE_API_KEY", "PERPLEXITY_API_KEY"):
+        monkeypatch.setenv(var, "bogus-not-a-real-key")
+    monkeypatch.setattr(event_organisations, "default_extractor",
+                        lambda: (lambda text: event_organisations.NamedOrganisations()))
+
+
 TIMELINE = "1. 16 October 2025 | Unrelated AFP matter | statement | https://x"
 
 

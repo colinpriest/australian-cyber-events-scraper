@@ -619,7 +619,11 @@ class UnifiedPipeline:
            after the victim check because pairs are formed by victim.
         5. ``check-victim-attribution --apply`` - Jev asks whether each
            event's recorded victim is really the organisation affected;
-           calibrated demotion / re-attribution, otherwise flagged.
+           calibrated demotion / re-attribution, otherwise flagged. Preceded by
+           ``judge-names`` (is a stored name a name or a description?) and
+           followed by ``fill-victims --apply``: an incident with no usable
+           victim gets the organisation its own evidence names (calibrated),
+           which is what lets the duplicate check pair it by organisation.
         6. ``check-coherence``, ``check-duplicates``, ``find-supplier-victims``
            change membership, so ``classify-entities --stale-only`` runs again
            before ``reconcile-timelines``. ``check-same-organisation`` (after
@@ -684,6 +688,14 @@ class UnifiedPipeline:
         attribution = ["check-victim-attribution"]
         if not getattr(args, 'report_event_rejections', False):
             attribution.append("--apply")
+        # judge-names before the victim steps: which stored names are descriptions rather than names
+        # (calibrated Jev verdicts; asked once per name). fill-victims after attribution: an incident
+        # with no usable victim gets the organisation its evidence names (calibrated), so the duplicate
+        # check that follows can pair it by organisation.
+        names = ["judge-names"]
+        fill = ["fill-victims"]
+        if not getattr(args, 'report_event_rejections', False):
+            fill.append("--apply")
         # find-supplier-victims after duplicates: it merges supplier-incident
         # fragments and attaches co-victims (calibrated; report-only otherwise).
         suppliers = ["find-supplier-victims", "--research"]
@@ -722,8 +734,11 @@ class UnifiedPipeline:
             identity.append("--dry-run")
         steps = [identity, evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
                  ["research-timelines"],
+                 # Entity profiles (jurisdiction, sector, what it runs...): evidence for the alias, acronym and
+                 # victim judgements below; one lookup per organisation whose evidence changed, 200 a run.
+                 ["entity-profile", "research", "--limit", "200"],
                  ["classify-pages"], sources, check, scope,
-                 ["classify-entities", "--stale-only"], ["check-victims"], attribution,
+                 ["classify-entities", "--stale-only"], names, ["check-victims"], attribution, fill,
                  coherence, same_org, duplicates, suppliers, label_contradictions,
                  ["classify-entities", "--stale-only"],
                  ["reconcile-timelines", "--queue-gaps"],
@@ -845,7 +860,10 @@ class UnifiedPipeline:
             attribution = ["check-victim-attribution"]
             if not getattr(args, 'report_event_rejections', False):
                 attribution.append("--apply")
-            steps += [["check-victims"], attribution]
+            fill = ["fill-victims"]
+            if not getattr(args, 'report_event_rejections', False):
+                fill.append("--apply")
+            steps += [["check-victims"], attribution, fill]
         for step in steps:
             try:
                 if run_step(dedup_admin.main, base + step) != 0:
