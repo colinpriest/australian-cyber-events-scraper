@@ -602,6 +602,11 @@ class UnifiedPipeline:
            2026-10-27 would have rejected real incidents whose stored page was
            a privacy policy or home page (LUSH, Nexia, Legal Aid ACT).
            ``--report-event-rejections`` keeps it report-only regardless.
+        2a. ``check-scope --apply`` - Jev judges whether each event affects
+           Australia (a US agency's breach is a real incident, but not one this
+           dataset records); events below the **calibrated** cut-off
+           (``evaluation/event_scope_calibration.json``) and events labelled out
+           of scope are rejected, reversibly. Report-only without a calibration.
         2b. ``classify-entities --stale-only`` - re-derive victim and vendor
            roles for events whose members changed since they were classified
            (merges, splits, re-enriched records; see record_fingerprints).
@@ -639,6 +644,9 @@ class UnifiedPipeline:
         check = ["check-events"]
         if not getattr(args, 'report_event_rejections', False):
             check.append("--apply")
+        scope = ["check-scope"]
+        if not getattr(args, 'report_event_rejections', False):
+            scope.append("--apply")
         duplicates = ["check-duplicates"]
         if not getattr(args, 'report_event_rejections', False):
             duplicates.append("--apply")
@@ -714,7 +722,7 @@ class UnifiedPipeline:
             identity.append("--dry-run")
         steps = [identity, evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
                  ["research-timelines"],
-                 ["classify-pages"], sources, check,
+                 ["classify-pages"], sources, check, scope,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
                  coherence, same_org, duplicates, suppliers, label_contradictions,
                  ["classify-entities", "--stale-only"],

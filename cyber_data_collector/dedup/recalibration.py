@@ -78,6 +78,7 @@ class StepSpec:
 SPECS: Dict[str, StepSpec] = {s.name: s for s in (
     StepSpec("source-gate", "cyber_data_collector.dedup.source_gate", escalates=False),
     StepSpec("event-reality", "cyber_data_collector.dedup.event_reality", escalates=True),
+    StepSpec("event-scope", "cyber_data_collector.dedup.event_scope", escalates=True),
     StepSpec("coherence", "cyber_data_collector.dedup.coherence", escalates=True),
     StepSpec("coherence-same-organisation", "cyber_data_collector.dedup.coherence_same_org", escalates=True),
     StepSpec("duplicates", "cyber_data_collector.dedup.duplicate_judgement", escalates=True),
@@ -228,6 +229,31 @@ def _plan_event_reality(conn: sqlite3.Connection) -> Plan:
     return Plan(items, len(wanted), run)
 
 
+def _plan_event_scope(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import event_reality as er
+    from cyber_data_collector.dedup import event_scope as es
+    from scripts import calibrate_event_scope as cal
+
+    known = es.labels(es.LABELS_PATH, er.LABELS_PATH)
+    cases = [c for c in cal.calibration_cases(conn, cal.SAMPLE_PATH, known)
+             if c["label"] in ("in_scope", "out_of_scope")]
+    active = set(er.active_events(conn))
+    items = [c["id"] for c in cases if c["id"] in active]
+
+    def run(conn, judge, client):
+        jev = es.judge_events(conn, items, judge=judge)
+        _require_scored("event", items, jev)
+        failed: List[str] = []
+        escalated = es.escalate_band(conn, jev, client=client, failed=failed)
+        if failed:
+            raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
+                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
+        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        _require_agreement("event", final, es.stored_final_probabilities(conn, items))
+
+    return Plan(items, len(cases), run)
+
+
 def _plan_duplicates(conn: sqlite3.Connection) -> Plan:
     from cyber_data_collector.dedup import duplicate_judgement as dj
 
@@ -319,7 +345,8 @@ def _rows(path: Path) -> List[Dict[str, str]]:
 
 
 PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
-    "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "coherence": _plan_coherence,
+    "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "event-scope": _plan_event_scope,
+    "coherence": _plan_coherence,
     "coherence-same-organisation": _plan_coherence_same_org, "duplicates": _plan_duplicates,
     "victim-attribution": _plan_victim_attribution,
 }
@@ -328,6 +355,7 @@ PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
 CALIBRATE: Dict[str, Tuple[str, List[str]]] = {
     "source-gate": ("scripts.calibrate_source_gate", ["calibrate"]),
     "event-reality": ("scripts.calibrate_event_reality", ["calibrate"]),
+    "event-scope": ("scripts.calibrate_event_scope", ["calibrate"]),
     "coherence": ("scripts.calibrate_coherence", ["calibrate"]),
     "coherence-same-organisation": ("scripts.calibrate_coherence_same_org", ["calibrate"]),
     "duplicates": ("scripts.calibrate_duplicates", []),
