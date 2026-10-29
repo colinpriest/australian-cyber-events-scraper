@@ -3343,9 +3343,13 @@ def cmd_fill_victims(args) -> int:
 
 
 def cmd_check_duplicates(args) -> int:
-    """Judge same-victim event pairs with Jev; merge at the calibrated cut-off.
+    """Judge same-victim event pairs, and AI-involved pairs, with Jev; merge at the calibrated cut-offs.
 
-    See :mod:`cyber_data_collector.dedup.duplicate_judgement`. Findings are
+    See :mod:`cyber_data_collector.dedup.duplicate_judgement` (pairs sharing a
+    victim) and :mod:`cyber_data_collector.dedup.ai_duplicates` (every pair of
+    AI-involved events within a year, whatever the victim, judged with the
+    AI-pair question and merged at its own calibrated cut-off; report only
+    until calibrated). ``--skip-ai-pairs`` leaves the AI route out. Findings are
     written to ``instance/duplicate_findings.json``.
     """
     from cyber_data_collector.dedup.duplicate_judgement import check_duplicates
@@ -3354,19 +3358,40 @@ def cmd_check_duplicates(args) -> int:
     jev.require()   # fails loudly; never skip or switch model
     conn = _connect(args.db)
     try:
-        result = check_duplicates(conn, apply=args.apply)
+        result = check_duplicates(conn, apply=args.apply, include_ai=not args.skip_ai_pairs,
+                                  cap_candidates=not args.no_candidate_cap,
+                                  partners_per_event=args.partners_per_event, long_gap_budget=args.long_gap_budget)
     finally:
         conn.close()
     out = Path(args.db).parent / "duplicate_findings.json"
     out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
                    encoding="utf-8")
-    if not result["calibrated"]:
-        print(f"Judged {result['judged']} of {result['pairs']} pair(s). No calibration for this model "
+    for route, stats in (result.get("candidates") or {}).items():
+        if stats:
+            print(f"Candidates ({route}): {stats['before']} -> {stats['after']} after ranking and the cap "
+                  f"({stats['long_gap_before']} -> {stats['long_gap_after']} more than {stats['parameters']['window_days']} "
+                  f"days apart; partners per event {stats['parameters']['partners_per_event']}, reserved long-gap/undated "
+                  f"budget {stats['parameters']['long_gap_budget']} per group)")
+    for held in result.get("held_conflicts") or []:
+        print(f"  HELD {held['pair_id'][:8]}|...: would join {held['blocked_by'][:8]}|... ({held['reason']})")
+    ai = result.get("ai")
+    if ai:
+        shown = ai["scored"][:10]
+        state = (f"merging at cut-off {ai['cutoff']}" if ai["calibrated"] else
+                 "REPORT ONLY - no calibration for these models, questions and evidence (label pairs and run "
+                 "scripts/calibrate_ai_duplicates.py)")
+        print(f"AI pairs: {ai['judged']} of {ai['pairs']} judged within {ai['window_days']} days, "
+              f"{ai['escalated']} escalated; {state}. Highest scores:")
+        for p in shown:
+            gap = f"{p['gap_days']}d" if isinstance(p['gap_days'], int) else "undated"
+            print(f"  {p['p_same']:.3f}  {gap:8} {p['pair_id'][:8]}|{p['pair_id'].split('|')[1][:8]}")
+    if not result["calibrated"] and not (ai and ai["calibrated"]):
+        print(f"Judged {result['judged']} of {result['pairs']} organisation pair(s). No calibration for this model "
               "and question: nothing merged. Run scripts/calibrate_duplicates.py.")
         return 0
     for p in result["proposals"]:
         gap = f"{p['gap_days']}d" if isinstance(p['gap_days'], int) else "undated"
-        print(f"  {p['p_same']:.3f}  {p['organisation'][:30]:30}  {gap}  {p['pair_id'][:8]}|...")
+        print(f"  {p['p_same']:.3f}  {(p.get('organisation') or '(AI pair)')[:30]:30}  {gap}  {p['pair_id'][:8]}|...")
     print(f"{len(result['merged'])} merge(s) applied of {len(result['proposals'])} proposed pair(s) at "
           f"cut-off {result['cutoff']}; findings in {out}")
     return _escalation_failures(result)
@@ -3869,7 +3894,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                             "whose evidence processing changed (spends Jev/escalation calls)")
     p.add_argument("--step", action="append", default=None,
                    help="Only this step (source-gate, event-reality, event-scope, coherence, "
-                        "coherence-same-organisation, duplicates, victim-attribution, supplier-victims); "
+                        "coherence-same-organisation, duplicates, ai-duplicates, victim-attribution, "
+                        "victim-fill, supplier-victims); "
                         "repeatable. Default: all.")
     p.add_argument("--status", action="store_true", help="Print each calibration's state; spend nothing")
     p.add_argument("--if-stale", action="store_true",
@@ -4060,11 +4086,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_fill_victims)
 
     p = sub.add_parser("check-duplicates",
-                       help="Ask Jev whether each pair of events sharing a victim is one "
-                            "incident and merge pairs at or above the calibrated cut-off")
+                       help="Ask Jev whether each pair of events sharing a victim - and each pair of "
+                            "AI-involved events within a year, whatever the victim - is one "
+                            "incident and merge pairs at or above the calibrated cut-offs")
     p.add_argument("--apply", action="store_true",
                    help="Merge (only with a calibration matching the current model and "
                         "question; otherwise report only)")
+    p.add_argument("--skip-ai-pairs", action="store_true",
+                   help="Leave out the AI-pair route (pairs of AI-involved events with any victim)")
+    p.add_argument("--partners-per-event", type=int, default=None,
+                   help="Best-ranked partners kept per event within a group (default 8; 16 for AI pairs; "
+                        "0 = no limit). See dedup/candidate_ranking.py")
+    p.add_argument("--long-gap-budget", type=int, default=None,
+                   help="Strong long-gap or undated pairs kept per group beyond the partner limit (default 5)")
+    p.add_argument("--no-candidate-cap", action="store_true",
+                   help="Ask every candidate pair (still ranked); the pre-2026-10-29 behaviour")
     p.set_defaults(func=cmd_check_duplicates)
 
     p = sub.add_parser("find-supplier-victims",

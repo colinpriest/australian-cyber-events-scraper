@@ -35,7 +35,8 @@ from typing import Any, Dict, List, Optional
 #: Part of the duplicate calibration's evidence fingerprint (``calibration_guard``): bump it
 #: when this module, or ``processing/incident_dates.py`` whose precision it reports, changes what
 #: a record's or an event's date is said to be. v2: precision and basis from verified intervals.
-EVIDENCE_VERSION = "date-provenance-v2"
+#: v3: active records only, each carrying its id (joined to the evidence by id, never by position).
+EVIDENCE_VERSION = "date-provenance-v3"
 
 
 def _day(value: Any) -> Optional[str]:
@@ -126,8 +127,16 @@ def record_dates(incident: Any, source_date: Any, source_metadata: Optional[str]
 
 
 def event_dates(conn: sqlite3.Connection, dedup_id: str, max_records: int) -> Dict[str, Any]:
-    """Per-record provenance in the same order as ``event_reality._evidence_state``,
-    plus a summary over all of the event's records."""
+    """Per-record provenance for an event's active records, plus a summary over all of them.
+
+    Each record carries its ``enriched_event_id``: callers join this list to any
+    other per-record list **by that id**. The two lists were ordered by separate
+    queries over different sets (this one included inactive records), and were
+    joined by position, so a record could be shown with another record's date
+    and basis (331 of 1,190 displayed records on a 407-event sample, 2026-10-29).
+    """
+    from cyber_data_collector.processing.active_evidence import member_condition
+
     # A database not yet upgraded (or opened read-only) may lack the column.
     has_publication = "publication_date" in {c[1] for c in conn.execute("PRAGMA table_info(RawEvents)")}
     rows = conn.execute(
@@ -137,9 +146,10 @@ def event_dates(conn: sqlite3.Connection, dedup_id: str, max_records: int) -> Di
            FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
-           WHERE m.deduplicated_event_id = ?""", (dedup_id,)).fetchall()
+           WHERE m.deduplicated_event_id = ? {member_condition(conn)}""", (dedup_id,)).fetchall()
     rows = sorted(rows, key=lambda r: (not r[1], r[0]))
-    per_record: List[Dict[str, Any]] = [record_dates(*r[2:7], text=r[1], publication_date=r[7]) for r in rows]
+    per_record: List[Dict[str, Any]] = [
+        {"enriched_event_id": r[0], **record_dates(*r[2:7], text=r[1], publication_date=r[7])} for r in rows]
     stored = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
                           (dedup_id,)).fetchone()
     event_day = _day(stored[0] if stored else None)

@@ -209,3 +209,34 @@ def test_undated_events_are_still_paired_by_victim(conn):
     [pair] = dj.candidate_pairs(conn)
     assert (pair["a"], pair["b"], pair["gap_days"]) == ("e1", "e2", dj.GAP_UNKNOWN)
     assert dj.build_pair_state(conn, pair)["gap_days"] == dj.GAP_UNKNOWN
+
+
+def test_each_record_is_shown_with_its_own_date_provenance(conn):
+    """2026-10-29: the duplicate check joined the evidence's records to the date provenance's by
+    position, two lists ordered by separate queries over different sets (the provenance included
+    inactive records), so 331 of 1,190 displayed records had another record's date and basis."""
+    conn.execute("ALTER TABLE EnrichedEvents ADD COLUMN status TEXT")
+    # An inactive record that sorts FIRST in a by-text-then-id list, and an active one that sorts last.
+    for rid, title, day, text, status in [("a-inactive", "Inactive copy", "2020-01-01", "Long page text", "Inactive"),
+                                          ("z-second", "Second source", "2023-07-01", None, "Active")]:
+        conn.execute("INSERT INTO EnrichedEvents VALUES (?, ?, ?, ?, NULL, NULL, '{}', ?)",
+                     (rid, rid, title, day, status))
+        conn.execute("INSERT INTO RawEvents VALUES (?, 'https://x.example/a', ?, NULL, ?, '{}', '2026-05-03')",
+                     (rid, text, day))
+        conn.execute("INSERT INTO EventDeduplicationMap VALUES (?, 'e1')", (rid,))
+    state = dj.build_pair_state(conn, dj.candidate_pairs(conn)[0])
+    shown = {r["title"]: r for r in state["event_a"]["records"]}
+    assert set(shown) == {"Business - ACT Government", "Second source"}      # the inactive record is not shown
+    assert shown["Business - ACT Government"]["date"]["date"] == "2023-05-24"
+    assert shown["Second source"]["date"]["date"] == "2023-07-01"
+    assert all("enriched_event_id" not in r and "enriched_event_id" not in r["date"]
+               for r in state["event_a"]["records"])                        # the join key is not shown to a model
+    assert state["event_a"]["event"]["records_carrying_event_date"] == "1 of 2"   # active records only
+
+
+def test_a_record_with_no_provenance_is_an_error_not_a_blank(conn, monkeypatch):
+    from cyber_data_collector.dedup import date_provenance
+    real = date_provenance.event_dates
+    monkeypatch.setattr(date_provenance, "event_dates", lambda *a, **k: {**real(*a, **k), "records": []})
+    with pytest.raises(ValueError, match="no date provenance"):
+        dj.build_pair_state(conn, dj.candidate_pairs(conn)[0])

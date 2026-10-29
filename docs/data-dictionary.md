@@ -1176,6 +1176,28 @@ Side-by-side comparison of PDF-scraped vs. Power BI dashboard-scraped data:
 (`event-scope-escalation-v1`, reasoning model), subject type `deduplicated_event`; value is P(in scope).
 Rejections are ledger batches `reject-event-scope-<timestamp>`.
 
+`evaluation/duplicate_calibration.json` and `evaluation/ai_duplicate_calibration.json` also carry `different_cutoff`
+(and `different_at_cutoff`, `different_bootstrap_out_of_sample_precision`): the largest final score below which the labelled
+pairs are, weighted, at least 95% labelled `different` and none is labelled `same`. It is the only way a stored low score
+vetoes a link (`duplicate_judgement.partition_without_conflicts`); a calibration without it vetoes nothing.
+
+### AI duplicate pairs (`evaluation/ai_duplicate_*`)
+
+**Role:** duplicate candidates among AI-involved events whatever their victim, with a cut-off of their own
+**Created by:** `scripts/calibrate_ai_duplicates.py` (`score`, `sample`, `packet`, `calibrate`); labels by blind labellers
+**Consumed by:** `dedup/ai_duplicates.py` (`check-duplicates`), `dedup/label_contradictions.py` (the ledger refuses a merge across a `different` label), `dedup_admin.py recalibrate --step ai-duplicates`
+
+| File | Columns / fields |
+|---|---|
+| `ai_duplicate_sample.csv` | `pair_id` (the two event ids, sorted, joined by `\|`), `stratum` (`low` below 0.30, `census` 0.30-0.90, `high` 0.90 and above, on the stored final score), `weight` (stratum size / number sampled) |
+| `ai_duplicate_labels.csv` | `pair_id,label,rationale,corroboration,labeller`; label `same`, `different` or `unsure` (the definitions of `duplicate_labels.csv`; see `ai_duplicate_labelling_guide.md`) |
+| `ai_duplicate_calibration.json` | the calibration-file fields above, plus `window_days`, `labels_sha256`, `sample_file`, `at_cutoff`, `min_merges`, `organisation_route_cutoff` (the organisation route's, for comparison) |
+
+`ModelJudgements` rows for these pairs: `subject_type = 'event_pair'`, `question_id = 'same_incident_ai'`
+(`same-incident-ai-v1`) and, for scores Jev puts in 0.2-0.8, `same_incident_ai_escalated` (`primitive = 'escalation'`).
+The organisation route's rows use `same_incident` / `same_incident_escalated`. `DedupOverrides` rulings and the label
+files of both routes protect AI pairs the same way.
+
 ### ASD Risk Classification Exports
 
 All files in the `risk_matrix/` directory. Created by `scripts/asd_risk_classifier.py`.

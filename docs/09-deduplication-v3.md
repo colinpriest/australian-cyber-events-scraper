@@ -997,6 +997,67 @@ and a missing snapshot are listed as unresolved. Idempotent.
 
 ---
 
+## 8l. AI-involved events as duplicate candidates of each other (2026-10-29)
+
+**The problem.** `check-duplicates` pairs events by victim organisation. Coverage of one AI incident defeats that: the
+OpenAI agent that reached Services Australia's Medicare statistics portal in June 2026 was spread over about 15 active
+events, most with no victim, a vague one ("Australian health") or a wrong one ("Australian Parliament", "Data USA",
+"OpenAI"), so they never met the main event in a pair. The one fragment that did (it shared the Australian Institute of
+Health and Welfare) scored 0.80 against the 0.81 cut-off. A separate gym incident was spread over four events. AI incidents
+are rare (2-3 a half-year in the recorded data), which makes two AI events a few months apart far likelier to be one
+incident than they would be for ransomware.
+
+**What was built** (`dedup/ai_duplicates.py`; no threshold was lowered by hand):
+
+1. *Candidates.* Every pair of active events with `ai_involvement` in `AI_INVOLVED_LABELS` whose date *intervals* are within
+   `AI_WINDOW_DAYS` (365) - distance 0 when they overlap; a month-precision event spans its month; an undated event is paired
+   with every other - is a candidate, victim or none. A pair of this route is not asked by the organisation route as well;
+   a shared organisation is still shown, with its researched timeline. Why a year: reporting of an AI incident runs for
+   weeks to months and an event is dated by its first report when the incident date is unknown (the 90th percentile of the
+   lag between incident and first report was 257 days on 2026-10-29; the follow-up of the two AI-agent incidents ran 3-5
+   months), while unrelated AI privacy cases are years apart. The window only decides what is asked.
+2. *The question knows the base rate.* The Jev question `same-incident-ai-v1` (and its reasoning-model escalation, band
+   0.2-0.8, fixed before calibration) is shown, computed from the data, the AI incidents and all incidents per completed
+   half-year, plus each event's AI category and stored description. It says one incident is reported many times over and that
+   two AI events a few months apart about the same kind of action are far likelier to be one incident than two, unless the
+   evidence shows a different victim or system, a different AI system, operator or actor, a differing day stated in the
+   records, or a record presenting the second as a new incident; the same AI vendor in both is not enough.
+3. *Its own calibration.* `scripts/calibrate_ai_duplicates.py` (`score` - paid, `sample`, `packet`, `calibrate`) chooses the
+   lowest score at which, weighted by stratum, at least 95% of the pairs it merges are labelled `same` (a census of the
+   0.30-0.90 band, weighted samples of the tails; a stratified bootstrap gives the out-of-sample precision). It is recorded
+   with the models, the two question versions and an evidence fingerprint that includes the window and the ranking
+   parameters, and registered with `recalibrate` as `ai-duplicates`. Without a matching calibration the route reports and
+   merges nothing.
+4. *Acting.* Chosen pairs of both routes go to one grouping step, so a chain across routes merges consistently, through the
+   ledger (snapshotted, reversible, respecting `different` rulings). The ledger also refuses a merge across a pair labelled
+   `different` in `ai_duplicate_labels.csv`.
+
+**Candidate ranking and caps** (`dedup/candidate_ranking.py`). Both routes rank candidates by source relationships (a shared
+non-hub article), supplier clues (the same vendor), incident-specific details (corpus-rare shared words, the same
+records-affected figure, the same attack method) and date proximity, then keep each event's best `PARTNERS_PER_EVENT`
+partners (8; 16 for AI pairs), plus a reserved `LONG_GAP_BUDGET` (5 per group) of strong pairs more than a year apart or
+undated, and nothing else beyond the window. The weights only order candidates; what merges is still the calibrated
+cut-off. On the 2026-10-29 copy the organisation route went from 229 to 69 candidates (170 had been more than a year apart;
+11 kept), the AI route from 476 to 347. `dedup_admin.py check-duplicates --partners-per-event N --long-gap-budget N
+--no-candidate-cap`; the counts before and after are in `duplicate_findings.json` (`candidates`).
+`Adjudicator.candidate_pairs` (find-missed) now subdivides a bucket over `MAX_ENTITY_BUCKET` with the same ranking instead of
+skipping it.
+
+**Conflicts inside a group.** A chain A=B, B=C used to merge A, B and C even when A and C were known to be different
+incidents. Links are now taken strongest first (a labelled-same link before any score) and one is *held* if it would put two
+events with a recorded conflict in one group: a `different` label (either file), an active `different` ruling, or a stored
+score below the route's calibrated `different_cutoff`. Only conflicts between events the links connect are examined; no model
+is called. Held links are listed in `duplicate_findings.json` (`held_conflicts`).
+
+**Date provenance is joined by record id.** The duplicate check attached each record's date provenance by *position* in two
+lists ordered by separate queries over different sets (the provenance included inactive records), so a record could be
+shown another record's date and basis. `date_provenance.event_dates` now returns active records only, each with its id, and
+`duplicate_judgement._event_with_dates` joins by that id (a displayed record with no provenance is an error).
+`EVIDENCE_VERSION` of the duplicate check (v2) and of the date provenance (v3) were bumped, so the duplicate calibration is
+stale until `dedup_admin.py recalibrate --step duplicates`.
+
+---
+
 ## 9. Known limitations
 
 - **HWL Ebsworth remains in 13 active events, Regis Resources in 3.** Not a

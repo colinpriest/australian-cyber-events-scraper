@@ -41,6 +41,7 @@ from cyber_data_collector.utils.llm_models import (  # noqa: E402
     add_model_arguments, apply_model_arguments,
 )
 from scripts.calibrate_event_reality import choose_cutoff  # noqa: E402
+from scripts.calibrate_supplier_victims import different_bound  # noqa: E402
 
 
 def merge_cutoff(rows: List[Dict], precision: float, min_merges: int):
@@ -102,7 +103,12 @@ def main(argv=None) -> int:
 
     chosen, curve = merge_cutoff(rows, args.precision, args.min_merges)
     boot = bootstrap(rows, args.precision, args.min_merges)
-    result = {**dj.calibration_identity(), "escalate_band": list(dj.ESCALATE_BAND),
+    # The largest score below which the labelled pairs are, at least 95%, labelled different and none is
+    # labelled same: a calibrated *negative*, so that a chain A=B, B=C is not merged when A and C score
+    # below it (duplicate_judgement.partition_without_conflicts). Same procedure as the supplier pairs.
+    bound = different_bound([{**r, "positive": r["same"], "weight": 1.0, "stratum": "census"} for r in rows],
+                            args.precision, args.min_merges)
+    result = {**dj.calibration_identity(), **bound, "escalate_band": list(dj.ESCALATE_BAND),
               "calibrated_on_database": Path(args.db).name,
               "cutoff": chosen["cutoff"] if chosen else None, "precision_target": args.precision,
               "min_merges": args.min_merges, "at_cutoff": chosen, "bootstrap_out_of_sample_precision": boot,
@@ -118,6 +124,7 @@ def main(argv=None) -> int:
     else:
         print(f"No cut-off reaches precision {args.precision}: merging stays report-only.")
     print(f"Bootstrap out-of-sample precision: {boot}")
+    print(f"'Different' bound: {bound['different_cutoff']} (a pair scoring below it is, in the labels, different)")
     print(f"Used {len(rows)} labelled pairs ({result['labelled_same']} same; {unsure} unsure excluded, "
           f"{missing} missing). Written {dj.CALIBRATION_PATH}")
     return 0
