@@ -43,7 +43,9 @@ from cyber_data_collector.utils.validation import (
     validate_enrichment_data_for_storage,
 )
 from cyber_data_collector.filtering.page_gate import DiscoveryPageGate, GateDecision, PageGateUnavailable
-from cyber_data_collector.models.events import ConfidenceScore, CyberEvent, CyberEventType, EventSeverity, EventSource
+from cyber_data_collector.models.events import (
+    SOURCE_PRIOR_VERSION, ConfidenceScore, CyberEvent, CyberEventType, EventSeverity, EventSource,
+)
 from cyber_data_collector.processing.enrichment_gate import validate_count, validate_iso_date
 from cyber_data_collector.processing.record_evidence import (
     STAGE_DOMAIN_BLOCKLIST,
@@ -53,12 +55,16 @@ from cyber_data_collector.processing.record_evidence import (
     persist_rejections,
     prepare_records_for_processing,
 )
-from cyber_data_collector.processing.fetch_errors import INCOMPLETE, OTHER, classify_error, error_type_from_text
+from cyber_data_collector.processing.fetch_errors import (
+    INCOMPLETE, OTHER, classify_error, error_type_from_text,
+)
 from cyber_data_collector.processing.retry_queue import (
     KIND_PERMANENT,
     KIND_TEMPORARY,
+    KIND_UNKNOWN,
     MONTH_COMPLETE,
     MONTH_GAVE_UP,
+    MONTH_PARKED,
     MONTH_WAITING,
     STAGE_MARK_PROCESSED,
     STAGE_STORE_ENRICHED,
@@ -260,6 +266,7 @@ class EventDiscoveryEnrichmentPipeline:
             'retry_completed': 0,
             'records_failed_temporary': 0,
             'records_failed_permanent': 0,
+            'records_failed_unknown': 0,
             'records_quarantined': 0,
             'storage_quarantines_released': 0,
             'source_months_failed': 0,
@@ -421,13 +428,19 @@ class EventDiscoveryEnrichmentPipeline:
             result = await self.backfill_source("CyberDaily", months, max_events)
             self.stats['cyberdaily_backfill_months'] = len(result["searched"])
             logger.info("[CYBERDAILY] Backfill since %d-%02d: searched %d month(s), %d already done, %d not "
-                        "processed yet, %d failed, %d waiting for back-off, %d given up", backfill_since[0],
+                        "processed yet, %d failed, %d waiting for back-off, %d given up, %d parked, %d probed, "
+                        "%d reopened", backfill_since[0],
                         backfill_since[1], len(result["searched"]), len(result["already_done"]),
                         len(result["not_processed"]), len(result["failed"]), len(result["waiting"]),
-                        len(result["gave_up"]))
+                        len(result["gave_up"]), len(result["parked"]), len(result["probed"]),
+                        len(result["reopened"]))
             if result["gave_up"]:
-                logger.error("[CYBERDAILY] Backfill months given up (not searched again until released): %s",
-                             ", ".join(f"{y}-{m:02d}" for y, m in result["gave_up"]))
+                logger.error("[CYBERDAILY] Backfill months given up on a permanent failure (not searched again "
+                             "until released): %s", ", ".join(f"{y}-{m:02d}" for y, m in result["gave_up"]))
+            if result["parked"]:
+                logger.error("[CYBERDAILY] Backfill months parked after repeated failures (the source is probed "
+                             "and they reopen on a successful probe or a configuration change): %s",
+                             ", ".join(f"{y}-{m:02d}" for y, m in result["parked"]))
         if refetch_days is False:
             return
         from cyber_data_collector.processing import cyberdaily_refetch
@@ -465,20 +478,45 @@ class EventDiscoveryEnrichmentPipeline:
         after one source would stop the others from ever searching it.
 
         A month whose last search failed is searched again once its back-off
-        has passed (``waiting`` until then), and not at all once it is given
-        up (a 404/410, or ``retry_queue.MAX_SOURCE_MONTH_ATTEMPTS`` failures:
-        ``gave_up``, reported, and searched again only after ``release`` or
-        with ``force=True``).
+        has passed (``waiting`` until then). A month given up on a permanent
+        failure (a 404/410: ``gave_up``) is searched again only after
+        ``release`` or with ``force=True``. A month that failed
+        ``retry_queue.MAX_SOURCE_MONTH_ATTEMPTS`` times for a temporary or
+        unknown reason is ``parked``, not abandoned: months parked under a
+        different configuration (API key, query or client version) reopen first,
+        and when the source's probe is due the most recent parked month is
+        searched; if that works every parked month of the source reopens and is
+        searched in this run. A failed probe schedules the next one
+        (``retry_queue.probe_backoff``).
 
         Returns:
             ``{'searched': [...], 'already_done': [...], 'not_processed': [...],
-            'failed': [...], 'waiting': [...], 'gave_up': [...]}`` of ``(year, month)``.
+            'failed': [...], 'waiting': [...], 'gave_up': [...], 'parked': [...],
+            'probed': [...], 'reopened': [...]}`` of ``(year, month)``.
         """
         self.require_prerequisites()
         await self.drain_retry_queue()
         result: Dict[str, List[Tuple[int, int]]] = {
-            "searched": [], "already_done": [], "not_processed": [], "failed": [], "waiting": [], "gave_up": []}
-        skip = {MONTH_COMPLETE: "already_done", MONTH_WAITING: "waiting", MONTH_GAVE_UP: "gave_up"}
+            "searched": [], "already_done": [], "not_processed": [], "failed": [], "waiting": [], "gave_up": [],
+            "parked": [], "probed": [], "reopened": []}
+        skip = {MONTH_COMPLETE: "already_done", MONTH_WAITING: "waiting", MONTH_GAVE_UP: "gave_up",
+                MONTH_PARKED: "parked"}
+        if not force:
+            changed = self.retry_queue.reopen_changed_config(source_type)
+            result["reopened"].extend((e["year"], e["month"]) for e in changed)
+            probe = self.retry_queue.probe_due(
+                source_type, [(y, m) for y, m in months if self.db.is_month_processed(y, m)])
+            if probe:
+                logger.info("[BACKFILL] %s probe: searching parked month %d-%02d", source_type, *probe)
+                await self._discover_events_for_month(*probe, [source_type], max_events, mark_processed=False)
+                worked = self.retry_queue.discovery_status(source_type, *probe) == "complete"
+                result["probed"].append(probe)
+                error_type = None
+                if not worked:
+                    failed_row = next((r for r in self.retry_queue.failed_discoveries()
+                                       if (r["source_type"], r["year"], r["month"]) == (source_type, *probe)), {})
+                    error_type = failed_row.get("error_type")
+                result["reopened"].extend(self.retry_queue.record_probe(source_type, worked, error_type))
         for year, month in months:
             if not self.db.is_month_processed(year, month):
                 result["not_processed"].append((year, month))
@@ -761,11 +799,11 @@ class EventDiscoveryEnrichmentPipeline:
             parsed = _parse_event_date(value)
             return datetime(parsed.year, parsed.month, parsed.day) if parsed else None
 
+        # A record stored without a score stays unscored; 0.5 here read as a measured, middling confidence.
         try:
-            confidence = float(metadata.get("confidence"))
+            confidence: Optional[float] = min(1.0, max(0.0, float(metadata.get("confidence"))))
         except (TypeError, ValueError):
-            confidence = 0.5
-        confidence = min(1.0, max(0.0, confidence))
+            confidence = None
         source_type = row.get("source_type") or "Unknown"
         description = row.get("raw_description") or ""
         return CyberEvent(
@@ -832,7 +870,8 @@ class EventDiscoveryEnrichmentPipeline:
                 # Never stored as an incident: nothing judged it.
                 event.classification_error = (f"classifier returned the record with status "
                                               f"'{event.classification_status}', not 'classified'")
-                event.classification_error_kind = KIND_PERMANENT
+                # A broken contract of the classifier, not a fact about the record: unknown, retried with a long back-off.
+                event.classification_error_kind = KIND_UNKNOWN
                 event.classification_status = "failed"
         classification_failed = [e for e in processed_events if e.classification_status == "failed"]
         processed_events = [e for e in processed_events if e.classification_status == "classified"]
@@ -844,7 +883,7 @@ class EventDiscoveryEnrichmentPipeline:
             failed_raw_event_ids.add(raw_event_id)
             self._queue_failure(raw_event_id, "classification",
                                 event.classification_error or "classification failed",
-                                event.classification_error_kind or KIND_PERMANENT)
+                                event.classification_error_kind or KIND_UNKNOWN)
         if classification_failed:
             logger.warning(
                 "[WARNING] %d event(s) could not be classified; they stay in the retry queue",
@@ -884,7 +923,7 @@ class EventDiscoveryEnrichmentPipeline:
                 successful_raw_event_ids.add(raw_event_id)
                 await self._log_processing_success(raw_event_id, 'enrichment', {
                     'enriched_event_id': enriched_event_id,
-                    'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
+                    'confidence_score': event.confidence.overall if getattr(event, 'confidence', None) else None,
                     'evidence_basis': event.evidence_basis,
                 })
 
@@ -940,7 +979,8 @@ class EventDiscoveryEnrichmentPipeline:
 
     def _queue_failure(self, raw_event_id: str, stage: str, error: str, kind: str) -> str:
         outcome = self.retry_queue.record_failure(raw_event_id, stage, error, kind)
-        key = 'records_failed_temporary' if kind == KIND_TEMPORARY else 'records_failed_permanent'
+        key = {KIND_TEMPORARY: 'records_failed_temporary',
+               KIND_UNKNOWN: 'records_failed_unknown'}.get(kind, 'records_failed_permanent')
         self.stats[key] += 1
         if outcome == "quarantined":
             self.stats['records_quarantined'] += 1
@@ -1232,9 +1272,11 @@ class EventDiscoveryEnrichmentPipeline:
                         'name': getattr(entity, 'name', 'Unknown Entity'),
                         'type': str(getattr(entity, 'entity_type', 'OTHER')),
                         'is_australian': getattr(entity, 'australian_entity', False),
-                        'confidence_score': getattr(entity, 'confidence_score', 0.8),
+                        'confidence_score': getattr(entity, 'confidence_score', None),   # NULL = not scored
                         'relationship_type': 'affected'  # Default relationship
                     })
+
+            confidence = getattr(event, 'confidence', None)
 
             # Prepare enriched event data with all NOT NULL fields guaranteed
             enriched_data = {
@@ -1249,7 +1291,11 @@ class EventDiscoveryEnrichmentPipeline:
                 ),
                 'is_australian_event': is_australian,  # NOT NULL - guaranteed boolean
                 'is_specific_event': is_specific,  # NOT NULL - guaranteed boolean
-                'confidence_score': event.confidence.overall if hasattr(event, 'confidence') and event.confidence else 0.7,
+                # NULL when no score exists: a default here read downstream as measured model output (0.7 did).
+                'confidence_score': confidence.overall if confidence else None,
+                'confidence_model': confidence.model if confidence and confidence.overall is not None else None,
+                'confidence_version': confidence.score_version if confidence and confidence.overall is not None
+                else None,
                 'australian_relevance_score': float(getattr(event, 'australian_relevance', 0.0)) if isinstance(getattr(event, 'australian_relevance', None), (int, float)) and not isinstance(getattr(event, 'australian_relevance', None), bool) else (1.0 if getattr(event, 'australian_relevance', False) else 0.0),
                 'status': 'Active',
                 'entities': entities  # Pass entities to be created in one transaction
@@ -1349,13 +1395,15 @@ class EventDiscoveryEnrichmentPipeline:
                         field_name='is_australian_event'
                     )
 
-                    confidence_val = 0.7
-                    if hasattr(event, 'confidence') and event.confidence:
+                    # None = not scored (a real 0.0 stays 0.0; neither becomes a default).
+                    confidence_val = None
+                    if getattr(event, 'confidence', None):
                         confidence_val = safe_float(
-                            event.confidence.overall, default=0.7,
+                            event.confidence.overall, default=None,
                             field_name='confidence_score'
                         )
-                    confidence_val = max(0.0, min(1.0, confidence_val or 0.7))
+                    if confidence_val is not None:
+                        confidence_val = max(0.0, min(1.0, confidence_val))
 
                     aus_relevance_raw = getattr(event, 'australian_relevance', None)
                     if isinstance(aus_relevance_raw, (int, float)):
@@ -1482,7 +1530,7 @@ class EventDiscoveryEnrichmentPipeline:
                 entity_name,
                 str(entity.entity_type) if hasattr(entity, 'entity_type') else 'OTHER',
                 getattr(entity, 'australian_entity', False),
-                getattr(entity, 'confidence_score', 0.8),
+                getattr(entity, 'confidence_score', None),     # NULL = not scored
                 getattr(entity, 'industry', None),
                 getattr(entity, 'location', None),
                 datetime.now().isoformat(),
@@ -1658,7 +1706,8 @@ class EventDiscoveryEnrichmentPipeline:
                     # Add required fields with defaults
                     australian_relevance=bool(db_event.get('is_australian_event', True)),
                     confidence=ConfidenceScore(
-                        overall=float(db_event.get('confidence_score', 0.8)),
+                        overall=(float(db_event['confidence_score'])
+                                 if db_event.get('confidence_score') is not None else None),
                         source_reliability=0.8,
                         data_completeness=0.8,
                         temporal_accuracy=0.8,
@@ -1716,7 +1765,7 @@ class EventDiscoveryEnrichmentPipeline:
                                     deduplicated_event_id,
                                     entity_id,
                                     'affected',
-                                    getattr(entity, 'confidence_score', 0.8),
+                                    getattr(entity, 'confidence_score', None),     # NULL = not scored
                                     1  # source_count
                                 ))
 
@@ -2508,7 +2557,9 @@ class EventDiscoveryEnrichmentPipeline:
             'event_date': event_date,
             'is_australian_event': llm_data.is_australian_event,
             'is_specific_event': llm_data.is_specific_event,
-            'confidence_score': source_metadata.get('confidence', 0.7),
+            # The score the source gave the record; NULL when it gave none (it was 0.7, which read as measured).
+            'confidence_score': source_metadata.get('confidence'),
+            'confidence_version': SOURCE_PRIOR_VERSION if source_metadata.get('confidence') is not None else None,
             'australian_relevance_score': 1.0 if llm_data.is_australian_event else 0.0,
             'status': 'Active'
         }
@@ -2521,7 +2572,7 @@ class EventDiscoveryEnrichmentPipeline:
                 'type': 'Organization',
                 'relationship_type': 'primary_target',
                 'is_australian': llm_data.is_australian_event,
-                'confidence_score': 0.8
+                'confidence_score': None     # the model gave the entity no score (this was a constant 0.8)
             })
 
         for entity_name in llm_data.affected_entities:
@@ -2530,7 +2581,7 @@ class EventDiscoveryEnrichmentPipeline:
                 'type': 'Organization',
                 'relationship_type': 'affected',
                 'is_australian': llm_data.is_australian_event,
-                'confidence_score': 0.6
+                'confidence_score': None     # the model gave the entity no score (this was a constant 0.6)
             })
 
         if entities:
@@ -2585,8 +2636,8 @@ class EventDiscoveryEnrichmentPipeline:
         print(f"[RETRY] Records due from the retry queue: {self.stats['retry_due']}, "
               f"finished: {self.stats['retry_completed']}")
         print(f"[RETRY] Failures this run: {self.stats['records_failed_temporary']} temporary, "
-              f"{self.stats['records_failed_permanent']} permanent, "
-              f"{self.stats['records_quarantined']} quarantined")
+              f"{self.stats['records_failed_permanent']} permanent, {self.stats['records_failed_unknown']} unknown "
+              f"(retried with a long back-off, never quarantined), {self.stats['records_quarantined']} quarantined")
         try:
             for row in self.retry_queue.incomplete_months():
                 print(f"[RETRY] Incomplete: {row['source_type']} {row['discovery_year']}-{row['discovery_month']:02d} "

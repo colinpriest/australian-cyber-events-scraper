@@ -829,25 +829,32 @@ not only its message:
 | `network` | timeout, connection error, other 5xx | retried by a later run |
 | `parse` | not the feed: malformed XML, a challenge page, an empty or endless feed | retried by a later run; persistent = the feed changed |
 | `incomplete` | page fetched but cut off or under 300 characters | re-queued for the re-fetch |
-| `other` | anything else (403, unknown) | retried by a later run |
+| `other` | another 4xx (400, 401, 403 ...): a refusal that is not a missing page | *unknown* class: long back-off (6 h doubling to 7 days), parked after 5 |
+| `unknown` | a failure nothing recognised (an unrecognised exception or message) | *unknown* class, as `other` |
 
 The type is stored where the failure is stored:
 
 | Where | Columns | Retry |
 |---|---|---|
-| `SourceMonthDiscovery` (one search of one month) | `error_type` (deciding), `error_types_json` (each failure), `failed_attempts`, `next_attempt_at`, `gave_up_at`, `items_seen` | back-off 30 min doubling to 1 day; given up after 5 consecutive failures or at once on `missing` |
+| `SourceMonthDiscovery` (one search of one month) | `error_type` (deciding), `error_types_json` (each failure), `failed_attempts`, `next_attempt_at`, `gave_up_at`, `give_up_reason`, `give_up_config`, `reopened_at`, `reopen_reason`, `items_seen` | back-off 30 min doubling to 1 day (6 h to 7 days for `other` / `unknown`); **parked** after 5 consecutive failures, **given up** at once on `missing`. Parked months are probed and reopen on a successful probe or a configuration change (see below) |
 | `CyberDailyRefetches` (one stored story) | `error_type`, `failures`, `next_attempt_at`, `gave_up_at` | back-off 1 day doubling to 30 days; given up after 5, or at once on `missing` |
-| `DiscoveryRecordState` (one record in the retry queue) | `last_error_type` | unchanged: temporary failures retried forever, permanent ones quarantined after 3 |
+| `DiscoveryRecordState` (one record in the retry queue) | `last_error_type`, `unknown_failures` | temporary failures retried forever, recognised permanent ones quarantined after 3, unknown ones retried with a long back-off and never quarantined |
 
 Failures recorded before the types existed are typed from their stored
 message when the schema is upgraded. The 2021-03 and 2021-05 searches lost on
 2026-10-28 become `throttled` with one failed attempt, and are searched again
 by the next run. The story that returned 404 becomes `missing`.
 
-A month or story that is given up is not tried again until released:
+A story that is given up, and a month given up on a permanent failure (404/410), are not tried again
+until released. A month that merely kept failing is **parked** and recovers by itself: the source is
+probed (one parked month, a week after the first was parked, then 14 and 28 days while probes fail) and a
+successful probe reopens every parked month; a change of the source's API key, query version or client
+library versions (`processing/source_config.py`, stored as `give_up_config`) reopens them at the next
+backfill too.
 
 ```bash
-python scripts/discovery_queue.py status    # failed searches with type, attempts and next retry; stories no longer fetched
+python scripts/discovery_queue.py status    # failed searches with type, attempts and next retry; parked months, probes and what would reopen them; stories no longer fetched
+python scripts/discovery_queue.py reopen --dry-run   # parked months whose source configuration changed
 python scripts/discovery_queue.py release   # also releases given-up source-months and stories (not 404/410 stories)
 python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 --force   # or search everything again
 ```
@@ -860,7 +867,8 @@ python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 -
 | `coverage.cyberdaily.{seen,stored,judged}.YYYY-MM` | table only. *Seen*: articles the feed listed (last complete search). *Stored*: distinct articles in `RawEvents` under any source, by publication date. *Judged*: of those, articles with a finished record |
 | `coverage.cyberdaily.backfill_months_not_searched` | warns: a month 2020-01 to last month never searched |
 | `coverage.cyberdaily.backfill_months_retrying` | warns: last search failed for a temporary reason; the next run searches it again |
-| `coverage.cyberdaily.backfill_months_failed` | **blocks**: given up (404/410, or 5 failures). Nothing searches it again by itself |
+| `coverage.cyberdaily.backfill_months_parked` | warns: failed repeatedly (temporary or unknown); probed and reopened automatically, but its articles are missing until then |
+| `coverage.cyberdaily.backfill_months_failed` | **blocks**: given up on a permanent failure (404/410). Nothing searches it again by itself |
 | `coverage.cyberdaily.short_months` | warns: a completely searched month under half the median of up to 3 searched months either side (median at least 10) |
 | `coverage.cyberdaily.months_seen_not_stored` | warns: the feed listed more than is stored (beyond max(2, 5%)) |
 | `coverage.cyberdaily.stories_incomplete` | warns: stories still waiting for full text |

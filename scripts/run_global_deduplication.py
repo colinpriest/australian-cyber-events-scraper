@@ -402,7 +402,7 @@ class DeduplicationMigration:
                     victim_organization_industry=victim_org_industry,
                     data_sources=[],
                     urls=[row[10]] if row[10] else [],
-                    confidence=row[7] if row[7] else 0.5,
+                    confidence=row[7],     # NULL stays NULL: an unscored record is not a 0.5 record
                     attack_methods=[attack_method] if attack_method else [],
                     threat_actors=[threat_actor] if threat_actor else [],
                 )
@@ -501,7 +501,7 @@ class DeduplicationMigration:
                     # Every member record's article, method, attacker and count, so
                     # a new record is corroborated against the whole event.
                     urls=sorted(member.get('urls', ())),
-                    confidence=row[8] if row[8] else 0.5,
+                    confidence=row[8],     # NULL stays NULL: an unscored record is not a 0.5 record
                     attack_methods=sorted(member.get('methods', ())),
                     threat_actors=sorted(member.get('actors', ())),
                     record_counts=sorted(member.get('counts', ())),

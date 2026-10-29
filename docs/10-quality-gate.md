@@ -81,7 +81,16 @@ Thresholds live in [`cyber_data_collector/quality/thresholds.json`](../cyber_dat
 | | `coverage.events.<source>.<YYYY-MM>`, `coverage.events.all.<YYYY-MM>` | info | Active events with a record from the source, by event month |
 | | `coverage.records_flagged_months`, `coverage.events_flagged_months` | 0 | Complete months (the current one is not judged) in which a monthly source (`Perplexity`, `GoogleSearch`, `WebberInsurance`, `CyberDaily` from 2026-11 via `source_judge_from`) had zero volume, or under 0.5 x its trailing 6-month median (when that median is at least 5) |
 | | `coverage.cyberdaily.{seen,stored,judged}.<YYYY-MM>` | info | Cyber Daily articles listed by the feed / stored / judged, by publication month since 2020-01 (a table in the report) |
-| | `coverage.cyberdaily.backfill_months_failed` | 0, **blocking** | Months whose search was given up (404/410, or 5 consecutive failures): never searched again without `discovery_queue.py release` |
+| | `coverage.cyberdaily.backfill_months_failed` | 0, **blocking** | Months whose search was given up on a permanent failure (404/410): never searched again without `discovery_queue.py release` |
+| | `coverage.cyberdaily.backfill_months_parked` | 0, warns | Months that failed 5 times for a temporary or unknown reason: parked, probed on a schedule, reopened by a successful probe or a configuration change |
+| | `discovery.source_months_given_up` | 0, warns | Source-months (any source) given up on a permanent failure |
+| | `discovery.source_months_parked` | 0, warns | Source-months (any source) parked; falls by itself as probes succeed |
+| | `discovery.parked_config_changed` | 0, warns | Parked months whose source key / query version / client version has changed since: `discovery_queue.py reopen` or the next backfill searches them |
+| | `discovery.source_probes_overdue` | 0, warns | Sources whose probe has been due for more than `discovery.probe_overdue_days` (3): the backfill that probes has not run |
+| | `discovery.records_unknown_failures` | 0, warns | Unprocessed records whose latest failure was unrecognised (retried with a long back-off, never quarantined; the log has the cause) |
+| | `confidence.defaults_proven` | 0, warns | Stored confidence values whose provenance proves they were defaults (`scripts/repair_confidence_defaults.py`) |
+| | `confidence.defaults_ambiguous` | trend | Other values at exactly 0.7 / 0.8, which a real score can equal; left unchanged |
+| | `confidence.events_unscored` | trend | Enriched events with a NULL confidence score (unknown, not low) |
 | | `coverage.cyberdaily.backfill_months_retrying`, `backfill_months_not_searched`, `short_months`, `months_seen_not_stored`, `stories_incomplete` | 0 | Temporary search failures (retried automatically), months never searched, months under half their searched neighbours, feed items not stored, stories with cut-off or short text. See docs/01-data-sources.md section 5a |
 | evidence | `evidence.events_without_evidence_share` | <= 2% | Active events none of whose records has >= 300 characters of page text or validated Perplexity research - unverifiable, and invisible to the calibrated filters |
 | | `evidence.status.unsupported_share` | <= 2% | The same question as the evidence status asks it (`processing/evidence_recovery.py`): another page's text or a block page is not the record's own page, so this can be slightly higher. `evidence.status.supported` / `partial` / `unsupported` / `partial_share` are recorded for the trend |

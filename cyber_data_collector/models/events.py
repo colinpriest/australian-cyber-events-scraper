@@ -72,10 +72,28 @@ class EntityType(_ValueEnum):
     OTHER = "Other"
 
 
-class ConfidenceScore(BaseModel):
-    """Confidence scoring for data quality."""
+#: ``ConfidenceScore.score_version`` of a score that is a fixed prior of the data source that found the record.
+SOURCE_PRIOR_VERSION = "source-prior-v1"
+#: ``ConfidenceScore.score_version`` of a prior the classification model then adjusted.
+CLASSIFIER_ADJUSTED_VERSION = "classifier-adjusted-v1"
 
-    overall: float = Field(..., ge=0.0, le=1.0, description="Overall confidence score")
+
+class ConfidenceScore(BaseModel):
+    """Confidence scoring for data quality.
+
+    ``overall`` is ``None`` when nothing measured it. It is stored as NULL and
+    every reader treats NULL as unknown - it is never replaced by a default
+    that would read as model output (0.7 and 0.8 were).
+
+    ``model`` is the model that produced or adjusted the score (None for a
+    data source's fixed prior); ``score_version`` names the rule that produced
+    it (:data:`SOURCE_PRIOR_VERSION`, :data:`CLASSIFIER_ADJUSTED_VERSION`).
+    """
+
+    overall: Optional[float] = Field(None, ge=0.0, le=1.0,
+                                     description="Overall confidence score; None = not measured")
+    model: Optional[str] = Field(None, description="Model that produced or adjusted the score; None = a fixed prior")
+    score_version: Optional[str] = Field(SOURCE_PRIOR_VERSION, description="Version of the rule that produced it")
     source_reliability: float = Field(..., ge=0.0, le=1.0, description="Source reliability score")
     data_completeness: float = Field(..., ge=0.0, le=1.0, description="Data completeness score")
     temporal_accuracy: float = Field(..., ge=0.0, le=1.0, description="Temporal accuracy score")
@@ -169,8 +187,9 @@ class CyberEvent(BaseModel):
     classification_error: Optional[str] = Field(None, description="Error text when classification_status is 'failed'")
     classification_error_kind: Optional[str] = Field(
         None,
-        description="'temporary' (provider failure: timeout, 429/5xx, connection, budget) or 'permanent' "
-                    "(the record itself could not be processed) when classification_status is 'failed'",
+        description="'temporary' (provider failure: timeout, 429/5xx, connection, budget), 'permanent' "
+                    "(recognised as the record's own: invalid content, a refused request) or 'unknown' "
+                    "(not recognised either way: retried with a long back-off) when classification_status is 'failed'",
     )
 
     model_config = ConfigDict(json_encoders={datetime: lambda value: value.isoformat()})

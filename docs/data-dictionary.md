@@ -163,7 +163,7 @@ LLM-processed events with extracted metadata, entity names, and confidence score
 | `records_affected` | BIGINT | Yes | NULL | Number of records/individuals affected |
 | `is_australian_event` | BOOLEAN | NOT NULL | — | Whether the event is relevant to Australia |
 | `is_specific_event` | BOOLEAN | NOT NULL | — | Whether this is a specific incident (vs. general news) |
-| `confidence_score` | REAL | Yes | NULL | Overall confidence score (0.0–1.0) |
+| `confidence_score` | REAL | Yes | NULL | Overall confidence score (0.0–1.0); NULL = nothing measured one (never a default; a stored 0.7 / 0.8 that provenance proves was a default is cleared by `scripts/repair_confidence_defaults.py`) |
 | `australian_relevance_score` | REAL | Yes | NULL | Australian relevance score (0.0–1.0) |
 | `status` | VARCHAR(20) | No | `'Active'` | Event status: `Active`, `Merged`, `Deleted` |
 | `created_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | Row creation timestamp |
@@ -185,8 +185,13 @@ LLM-processed events with extracted metadata, entity names, and confidence score
 | `perplexity_last_attempt_at` | TEXT | Yes | NULL | ISO timestamp of the last attempt |
 | `perplexity_last_error` | TEXT | Yes | NULL | Why the last attempt was not accepted; cleared on success |
 | `perplexity_status` | TEXT | Yes | NULL | `retrying`, `validated`, or `quarantined` (3 failed attempts; no longer retried) |
+| `confidence_model` | TEXT | Yes | NULL | The model that adjusted `confidence_score` (the fast OpenAI model); NULL for a data source's fixed prior and whenever the score is NULL |
+| `confidence_version` | TEXT | Yes | NULL | The rule that produced the score: `source-prior-v1` (the source's own prior) or `classifier-adjusted-v1`; NULL when the score is NULL |
 
 `data_source_reliability` is computed from the accepted Perplexity facts and is `NULL` when none carries a confidence.
+
+**Triggers:**
+- `trg_enriched_one_active_per_record` (`storage/enrichment_uniqueness.py`): `BEFORE INSERT` aborts with `record already has an active enrichment` when the new row is `Active` and `raw_event_id` already has an active row. Creation is also one `INSERT ... WHERE NOT EXISTS`, so `create_enriched_event` returns the existing id instead of failing. It is a trigger and not a unique index on `(raw_event_id) WHERE status = 'Active'` because `processing/record_identity.py` moves enrichments with an `UPDATE` of `raw_event_id` and may leave a record holding two (reported in `RecordIdentityChecks`); `scripts/check_data_integrity.py` (`active-enrichment-unique-per-record`) fails for any pair that finding does not explain.
 
 **Indexes:**
 - `idx_enriched_perplexity_validated` on `(perplexity_validated)`
@@ -213,7 +218,7 @@ Organizations, government agencies, and other entities mentioned in cyber events
 | `is_australian` | BOOLEAN | Yes | NULL | Whether the entity is Australian |
 | `headquarters_location` | TEXT | Yes | NULL | Location of headquarters |
 | `website_url` | TEXT | Yes | NULL | Entity's website URL |
-| `confidence_score` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0) |
+| `confidence_score` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0); NULL = not scored (taken from the first link that created the entity) |
 | `created_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | Row creation timestamp |
 | `updated_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | Last update timestamp |
 | `entity_kind` | TEXT | Yes | NULL | What the entity **is**, independent of any event: `organisation`, `government_body`, `product`, `person`, `threat_actor`, `other`. Distinct from the per-event role on `EnrichedEventEntities.relationship_type` |
@@ -266,7 +271,7 @@ Final unique events after entity-based deduplication. The primary table used for
 | `records_affected` | BIGINT | Yes | NULL | Number of records/individuals affected |
 | `is_australian_event` | BOOLEAN | NOT NULL | — | Australian relevance flag |
 | `is_specific_event` | BOOLEAN | NOT NULL | — | Whether this is a specific incident |
-| `confidence_score` | REAL | Yes | NULL | Overall confidence (0.0–1.0) |
+| `confidence_score` | REAL | Yes | NULL | Overall confidence (0.0–1.0), copied from the master enriched event; NULL when the master has none |
 | `australian_relevance_score` | REAL | Yes | NULL | Australian relevance (0.0–1.0) |
 | `total_data_sources` | INTEGER | No | `0` | Count of distinct data sources that reported this event |
 | `contributing_raw_events` | INTEGER | No | `0` | Count of merged raw events |
@@ -482,6 +487,36 @@ Maps variant entity names (subsidiaries, brands, aliases) to canonical names for
 ---
 
 ### Audit and Tracking Tables
+
+#### Discovery retry queue: DiscoveryRecordState, SourceMonthDiscovery, SourceProbes
+
+Written by `processing/retry_queue.py` (`ensure_schema` is idempotent and adds the columns below to an older database; the view `SourceMonthCompletion` is recreated each time). See [02-discovery-collection.md](02-discovery-collection.md) section 7.
+
+| Table | Column | Type | Description |
+|-------|--------|------|-------------|
+| DiscoveryRecordState | `raw_event_id` | TEXT **PK** | The stored record |
+| DiscoveryRecordState | `source_type`, `discovery_year`, `discovery_month` | | Where and when it was found |
+| DiscoveryRecordState | `attempts` | INTEGER | *Recognised* permanent failures; the 3rd quarantines the record |
+| DiscoveryRecordState | `temporary_failures` | INTEGER | Provider failures; never count toward quarantine |
+| DiscoveryRecordState | `unknown_failures` | INTEGER | Failures nothing recognised as the provider's or the record's fault; retried with a 6 h to 7 day back-off, never quarantined |
+| DiscoveryRecordState | `last_stage`, `last_error`, `last_error_kind`, `last_error_type` | TEXT | The latest failure; kind is `temporary` / `permanent` / `unknown`, type is a `fetch_errors` type |
+| DiscoveryRecordState | `next_attempt_at`, `quarantined_at`, `completed_at`, `updated_at` | TEXT | Back-off and outcome |
+| SourceMonthDiscovery | `source_type`, `year`, `month` | **PK** | One source's search of one month |
+| SourceMonthDiscovery | `status` | TEXT | `complete` or `failed` |
+| SourceMonthDiscovery | `error_type`, `error_types_json` | TEXT | The deciding type and the type of each failure (`throttled`, `missing`, `network`, `parse`, `incomplete`, `other`, `unknown`) |
+| SourceMonthDiscovery | `failed_attempts`, `next_attempt_at` | | Consecutive failures and the back-off (30 min doubling to 1 day; 6 h doubling to 7 days for `other` / `unknown`) |
+| SourceMonthDiscovery | `gave_up_at` | TEXT | Set when the month is **given up** (permanent: `missing`, at once) or **parked** (temporary or unknown failures that reached 5 attempts) |
+| SourceMonthDiscovery | `give_up_reason` | TEXT | `permanent`, `temporary` or `unknown`: only `permanent` waits for `discovery_queue.py release` |
+| SourceMonthDiscovery | `give_up_config` | TEXT | JSON of the source configuration it failed under: hashed secrets (`secret:<ENV>`), `query` version, `client:<package>` versions (`processing/source_config.py`). A parked month reopens when this differs from the current configuration |
+| SourceMonthDiscovery | `reopened_at`, `reopen_reason` | TEXT | Last automatic reopening: `probe succeeded` or `configuration changed: <components>` |
+| SourceMonthDiscovery | `items_seen` | INTEGER | Items the source listed for the month (Cyber Daily: feed articles) |
+| SourceProbes | `source_type` | TEXT **PK** | A source with parked months |
+| SourceProbes | `last_probe_at`, `next_probe_at` | TEXT | One parked month is searched when `next_probe_at` passes (a week after the first month was parked; then 14 and 28 days while probes fail) |
+| SourceProbes | `consecutive_failures`, `last_error_type`, `last_success_at` | | Probe history; a successful probe reopens every parked month of the source |
+
+#### ConfidenceRepairs
+
+Written by `scripts/repair_confidence_defaults.py`: one row per confidence value cleared because its provenance proved it a default (`table_name`, `row_key`, `column_name`, `old_value`, `rule`, `repaired_at`; primary key the first three). The old value is kept so the repair can be audited or reversed.
 
 #### QualityRuns / QualityMetrics
 

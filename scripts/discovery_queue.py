@@ -7,10 +7,15 @@ handles the cases a run does not:
     python scripts/discovery_queue.py status            # per source and month: stored/processed/pending/...
     python scripts/discovery_queue.py status --all      # include complete months
     python scripts/discovery_queue.py drain             # process due records now, without discovery
+    python scripts/discovery_queue.py reopen [--dry-run]  # reopen parked source-months whose source's configuration
+                                                        # (API key, query version, client version) has changed
+                                                        # since they were parked; every backfill does this itself
     python scripts/discovery_queue.py release           # put quarantined records, given-up source-months
                                                         # and given-up Cyber Daily stories back in the queue
                                                         # (records quarantined for a temporary storage failure
-                                                        # are released by every discovery run anyway)
+                                                        # are released by every discovery run anyway; parked
+                                                        # months reopen by themselves, 'release' is for the
+                                                        # permanent ones - a 404/410 that has since been fixed)
     python scripts/discovery_queue.py backfill --source CyberDaily --months 12
                                                         # run a source added later over processed months
     python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
@@ -55,6 +60,7 @@ def _status(db_path: str, show_all: bool) -> int:
         temporary_storage = queue.temporary_storage_quarantines()
         unexplained_storage = queue.unexplained_storage_quarantines()
         searches = queue.failed_discoveries()
+        health = queue.health()
         stories = cyberdaily_refetch.unrecoverable(conn)
     finally:
         conn.close()
@@ -80,14 +86,62 @@ def _status(db_path: str, show_all: bool) -> int:
     if searches:
         print(f"\nSource-month searches that lost results ({len(searches)}):")
         for r in searches:
-            state = ("GIVEN UP" if r["gave_up_at"] else
-                     f"retry after {r['next_attempt_at']}" if r["next_attempt_at"] else "retry next run")
+            if r["gave_up_at"]:
+                state = "GIVEN UP (permanent)" if r["give_up_reason"] == "permanent" else "PARKED (probed)"
+            else:
+                state = f"retry after {r['next_attempt_at']}" if r["next_attempt_at"] else "retry next run"
             print(f"  {r['source_type']:<16}{r['year']}-{r['month']:02d}  {r['error_type'] or '?':<11}"
                   f"attempts {r['failed_attempts']}  {state}")
+    _print_health(health)
     if stories:
         print(f"\nCyber Daily stories no longer fetched ({len(stories)}):")
         for r in stories:
             print(f"  {r['error_type'] or '?':<11}{r['url']}  ({r['last_error']})")
+    return 0
+
+
+def _print_health(health: dict) -> None:
+    """Given-up (permanent) months, parked months with their probe schedule, and unknown record failures."""
+    if health["given_up"]:
+        print(f"\nGiven up on a permanent failure - never searched again until 'release' ({len(health['given_up'])}):")
+        for g in health["given_up"]:
+            print(f"  {g['source_type']:<16}{g['year']}-{g['month']:02d}  {g['error_type'] or '?'}  since "
+                  f"{g['parked_since']}")
+    if health["parked"]:
+        print(f"\nParked after repeated temporary/unknown failures - probed, reopened automatically "
+              f"({len(health['parked'])}):")
+        for probe in health["probes"]:
+            overdue = "  (OVERDUE: the next backfill probes it)" if probe["overdue"] else ""
+            print(f"  {probe['source_type']}: {probe['parked']} month(s); next probe {probe['next_probe_at']}"
+                  f"{overdue}; {probe['consecutive_failures']} failed probe(s) in a row"
+                  + (f", last: {probe['last_error_type']}" if probe["last_error_type"] else ""))
+        for g in health["parked"]:
+            reopen = (f"reopens on next backfill: configuration changed ({', '.join(g['would_reopen'])})"
+                      if g["would_reopen"] else "reopens on a successful probe")
+            print(f"    {g['source_type']:<16}{g['year']}-{g['month']:02d}  {g['reason']:<9}{g['error_type'] or '?':<11}"
+                  f"since {g['parked_since']}  {reopen}")
+    unknown = health["unknown_records"]
+    if unknown["count"]:
+        stages = ", ".join(f"{stage} {n}" for stage, n in sorted(unknown["by_stage"].items()))
+        print(f"\n{unknown['count']} unprocessed record(s) last failed in a way nothing recognises as the "
+              f"provider's or the record's fault ({stages}); they are retried with a long back-off, never "
+              "quarantined - find the cause in the log ('Unrecognised failure').")
+
+
+def _reopen(db_path: str, dry_run: bool) -> int:
+    conn = sqlite3.connect(db_path)
+    try:
+        queue = RetryQueue(conn)
+        found = queue.reopen_changed_config(dry_run=dry_run)
+    finally:
+        conn.close()
+    if not found:
+        print("No parked source-month's configuration has changed; nothing to reopen.")
+        return 0
+    verb = "Would reopen" if dry_run else "Reopened"
+    for e in found:
+        print(f"{verb} {e['source_type']} {e['year']}-{e['month']:02d}: changed {', '.join(e['changed'])}")
+    print(f"{verb} {len(found)} parked source-month(s); the next backfill searches them.")
     return 0
 
 
@@ -103,7 +157,7 @@ def _release(db_path: str) -> int:
     finally:
         conn.close()
     print(f"Released {released} quarantined record(s); the next discovery run (or 'drain') retries them.")
-    print(f"Released {months} given-up source-month search(es); the next backfill searches them again.")
+    print(f"Released {months} given-up or parked source-month search(es); the next backfill searches them again.")
     print(f"Released {stories} given-up Cyber Daily stor(ies); the next re-fetch tries them again "
           "(stories gone from the site, 404/410, stay out).")
     return 0
@@ -159,16 +213,20 @@ def _backfill(db_path: str, source: str, months: list[tuple[int, int]], max_even
         result = asyncio.run(pipeline.backfill_source(source, months, max_events, force=force))
     finally:
         pipeline.close()
-    for key in ("searched", "already_done", "not_processed", "failed", "waiting", "gave_up"):
+    for key in ("searched", "already_done", "not_processed", "failed", "waiting", "gave_up", "parked", "probed",
+                "reopened"):
         listed = ", ".join(f"{y}-{m:02d}" for y, m in result[key]) or "-"
         print(f"{key:<14}{len(result[key]):>3}  {listed}")
     if result["searched"]:
         print("\nNew records are enriched, deduplicated and published by the next "
               "'python pipeline.py refresh'.")
     if result["gave_up"]:
-        print("\nGiven-up months are not searched again until "
+        print("\nMonths given up on a permanent failure (404/410) are not searched again until "
               "'python scripts/discovery_queue.py release' (or --force).")
-    return 2 if result["failed"] or result["gave_up"] else 0
+    if result["parked"]:
+        print("\nParked months are not searched on their own: the source is probed on a schedule and they "
+              "reopen when the probe succeeds or its configuration changes ('discovery_queue.py status').")
+    return 2 if result["failed"] or result["gave_up"] or result["parked"] else 0
 
 
 def _drain_refetch(db_path: str, days: int | None, batch_size: int | None, max_minutes: float | None,
@@ -231,7 +289,9 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--all", action="store_true", help="Include complete source-months")
     drain = sub.add_parser("drain", help="Process due records now (needs OpenAI and TypeSafe keys)")
     drain.add_argument("--limit", type=int, default=None)
-    sub.add_parser("release", help="Return quarantined records to the queue")
+    sub.add_parser("release", help="Return quarantined records and permanently given-up months to the queue")
+    reopen = sub.add_parser("reopen", help="Reopen parked source-months whose source configuration has changed")
+    reopen.add_argument("--dry-run", action="store_true", help="Report what would reopen; change nothing")
     backfill = sub.add_parser("backfill", help="Run one source over months processed before it was added "
                                                "(idempotent; needs OpenAI and TypeSafe keys)")
     backfill.add_argument("--source", required=True, choices=["CyberDaily", "WebberInsurance", "OAIC"],
@@ -265,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         return _status(db_path, args.all)
     if args.command == "release":
         return _release(db_path)
+    if args.command == "reopen":
+        return _reopen(db_path, args.dry_run)
     if args.command == "backfill":
         months = months_since(args.since) if args.since else backfill_months(args.months)
         return _backfill(db_path, args.source, months, args.max_events, args.force)

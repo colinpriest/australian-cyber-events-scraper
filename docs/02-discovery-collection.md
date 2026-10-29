@@ -988,13 +988,18 @@ keeps:
 |---|---|
 | `source_type`, `discovery_year`, `discovery_month` | where and when it was found |
 | `temporary_failures` | provider failures: timeouts, 429/5xx, connection errors, API-budget refusals, Jev outages, and a store that failed for a temporary cause (a locked or busy database, a disk I/O error, a full disk) - **never** a reason to give up |
-| `attempts` | permanent failures (the record itself: invalid output for its content, a request refused as invalid, a store that fails an integrity or validation rule) |
+| `attempts` | *recognised* permanent failures (the record itself: invalid output for its content, a request refused as invalid, a store that fails an integrity or validation rule) |
+| `unknown_failures` | failures nothing recognised as the provider's or the record's fault (an unexpected library error, a code bug, a 401/403): retried with a 6 h to 7 day back-off, logged at ERROR each time and **never** quarantined |
 | `last_stage`, `last_error`, `last_error_kind` | the latest failure |
-| `next_attempt_at` | back-off: temporary 15 min doubling to 12 h; permanent 1 h doubling to 7 days |
+| `next_attempt_at` | back-off: temporary 15 min doubling to 12 h; unknown 6 h doubling to 7 days; permanent 1 h doubling to 7 days |
 | `quarantined_at`, `completed_at` | outcome |
 
 After 3 permanent failures the record is quarantined: marked processed with
 `Rejected at retry_quarantine: ...` (so it leaves every queue) and logged as an error.
+`classify_failure` returns *permanent* only for what it recognises as the record's own - a
+`ValueError` / pydantic `ValidationError` / malformed JSON, a `sqlite3.IntegrityError` / `DataError`, a
+value SQLite cannot bind, a 400/404/410/413/414/415/422 answer - and *unknown* for everything else.
+Unknown used to be permanent, so an unexpected library error quarantined good records after three tries.
 
 **A failed store keeps its cause.** Storing a record (`store_raw`, `store_enriched`) or marking
 it processed (`mark_processed`) used to log the exception and return `None`, and the caller
@@ -1006,7 +1011,8 @@ now raise `StorageError` (`processing/retry_queue.py`) carrying the stage, the m
 | Cause | Kind | Effect |
 |---|---|---|
 | `sqlite3.OperationalError` (locked, busy, disk I/O, unable to open), OS errors EIO / EBUSY / ENOSPC / EAGAIN ... | temporary | back-off, never quarantines |
-| `sqlite3.IntegrityError` / `DataError`, any other exception | permanent | counts toward quarantine; the real error is in `last_error` and in the `Rejected at retry_quarantine` reason |
+| `sqlite3.IntegrityError` / `DataError`, a value SQLite cannot bind | permanent | counts toward quarantine; the real error is in `last_error` and in the `Rejected at retry_quarantine` reason |
+| any other exception | unknown | long back-off, logged at ERROR, never quarantines |
 
 A database constraint violation (NOT NULL, FOREIGN KEY, UNIQUE) still stops the pipeline. A raw
 event that cannot be stored is not in the queue, so its source's search of the month is
@@ -1027,10 +1033,31 @@ discovery month, records `stored`, `processed`, `rejected`, `pending`, `failing`
 `SourceMonthDiscovery` says whether each search completed; together they show whether a month
 is complete.
 
+**Searches that keep failing are parked, not abandoned.** `SourceMonthDiscovery` classifies each
+failure (`fetch_errors.failure_class`): *permanent* (`missing`, 404/410) is given up at once and only
+`release` reopens it; *temporary* (`throttled`, `network`, `parse`, `incomplete`) backs off 30 minutes
+doubling to a day; *unknown* (`other`, `unknown`) backs off 6 hours doubling to a week. After 5
+consecutive failures a temporary or unknown month is **parked** (`gave_up_at` set, `give_up_reason`
+`temporary` / `unknown`, the source configuration stored in `give_up_config`). A parked month is not
+searched on its own, and recovers in two ways without anyone running `release`:
+
+1. **Probe.** The next backfill of the source (the Cyber Daily backfill runs with every refresh) searches
+   its most recent parked month once the source's probe is due: a week after the first month was parked,
+   then 14 and 28 days while probes fail (`SourceProbes`). If the probe completes, every parked month of
+   that source reopens and is searched in the same run; if it fails, the next probe is scheduled and the
+   months stay parked.
+2. **Configuration change.** Each backfill first compares every parked month's stored configuration
+   (`processing/source_config.py`: SHA-256 prefixes of the source's secrets, the source's query version,
+   the installed client library versions) with the current one and reopens those that differ
+   (`reopen_reason` says which components). Add the key, fix the request (bump `QUERY_VERSIONS`), upgrade
+   the library, and the month is searched again. A month parked before configurations were recorded is
+   searched once more.
+
 ```bash
-python scripts/discovery_queue.py status [--all]   # incomplete source-months, quarantined records
+python scripts/discovery_queue.py status [--all]   # incomplete source-months, quarantined records, parked months, probes, unknown failures
+python scripts/discovery_queue.py reopen [--dry-run]   # reopen parked months whose configuration has changed
 python scripts/discovery_queue.py drain            # process due records now, without searching
-python scripts/discovery_queue.py release          # return quarantined records to the queue
+python scripts/discovery_queue.py release          # return quarantined records and permanently given-up months to the queue
 ```
 
 If more than 50% of events fail to store as enriched, the pipeline raises a `RuntimeError` and stops to prevent data quality issues.
