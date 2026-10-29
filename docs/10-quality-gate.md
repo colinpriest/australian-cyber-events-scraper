@@ -103,8 +103,8 @@ Thresholds live in [`cyber_data_collector/quality/thresholds.json`](../cyber_dat
 
 ## 4. Label regression
 
-`evaluation/event_reality_labels.csv`, `duplicate_labels.csv` and
-`source_gate_labels.csv` were labelled against the database of their day.
+`evaluation/event_reality_labels.csv`, `event_scope_labels.csv`,
+`duplicate_labels.csv` and `source_gate_labels.csv` were labelled against the database of their day.
 Each item is followed to where it is **now**: a merged event is traced through
 `EventDeduplicationMap` to the event holding its records today.
 
@@ -112,6 +112,8 @@ Each item is followed to where it is **now**: a merged event is traced through
 |---|---|
 | event `real` | the event, or the event it was merged into, is Rejected |
 | event `not_incident` | the event is still Active |
+| event `out_of_scope` (event reality or scope labels) | the event is still Active |
+| scope `in_scope` | the event, or the event it was merged into, is Rejected |
 | pair `same` | still two distinct Active events |
 | pair `different` | both now resolve to one Active event |
 | page `not_incident` | the record is evidence of an Active event (or unmapped and still Active) |
