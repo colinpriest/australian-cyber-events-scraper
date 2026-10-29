@@ -219,11 +219,11 @@ def test_the_question_is_shown_the_base_rate_the_category_and_the_description(co
 
 
 def test_the_decision_code_never_reads_the_acceptance_cases():
-    """The acceptance file is a measure only."""
+    """The acceptance file is a measure only: the quality report reads it, no decision code does."""
     import pathlib
     root = pathlib.Path(ad.__file__).resolve().parents[1]
     offenders = [str(p.relative_to(root)) for p in root.rglob("*.py")
-                 if "tests" not in p.parts and "review_acceptance" in p.read_text(encoding="utf-8")]
+                 if not {"tests", "quality"} & set(p.parts) and "review_acceptance" in p.read_text(encoding="utf-8")]
     assert offenders == []
 
 
