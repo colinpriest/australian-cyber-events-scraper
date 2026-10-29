@@ -995,6 +995,37 @@ dated August 2024) and is re-homed afterwards; records that arrived after
 labelling belong to neither side and stay; a side with no active record left
 and a missing snapshot are listed as unresolved. Idempotent.
 
+## 8l. Corroborated same-day merges, stored work, excerpts and a harness (2026-10-29)
+
+**Same day is a candidate.** The deterministic "same organisation, same exact
+day" rule merged records whose descriptions could concern different attacks. It
+now needs incident-specific corroboration (`dedup/merge_corroboration.py`): a
+shared non-hub article, an agreeing record count (at least 100, within 25%), a
+named attacker that agrees, or an attack method sharing a corpus-distinctive
+word - with no conflict (counts more than a factor of two apart, or attackers
+sharing no word). Anything else is left to `check-duplicates`, which already
+pairs every two events of one organisation. The identical-title rule keeps its
+place for titles that name something; a generic identical title ("Data breach")
+is corroborated like a bare day (1 of 344 identical-title pairs on the 2026-10-29
+copy). On that copy 12,323 of 13,647 same-day record pairs are corroborated, and
+10 of the 46 existing events the deterministic rules alone connect would now need
+the judgement; none is undone. Details and the measured counts: README, "Global
+Deduplication".
+
+**Stored work and better evidence.** `EmbeddingCache` and `AdjudicationCache`
+(`dedup/adjudication_cache.py`) keep embeddings (by text hash, model and
+`EMBED_TEXT_VERSION`) and pair/cluster answers (by the rendered evidence, prompt,
+model and versions); `adjudicate-candidates` scopes embeddings to events linked
+to a recent one before embedding. The adjudicators are shown deterministic,
+versioned excerpts (`dedup/excerpts.py`, `excerpts-v1`) in place of the opening of
+the summary; `pair-adjudication-v2` and `cluster-partition-v2` mark the change.
+
+**Measurement.** `scripts/evaluate_dedup.py` scores the rule, candidate
+generation, the Jev duplicate check and the pair adjudicator on the duplicate
+labels, the review cases and seeded splits and joins, and reports missed
+duplicates, incorrect merges, candidate counts and cached versus new paid calls;
+`--save` / `--compare` give before and after.
+
 ---
 
 ## 9. Known limitations

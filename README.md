@@ -226,7 +226,7 @@ python run_full_pipeline.py --skip-classification
 
 1. **Discovery** — Collects events from Perplexity, OAIC, Google Search, Webber Insurance, Cyber Daily, GDELT. Scrapes full content. Judges each page with the calibrated Jev page gate, then the fast-model classification (see [Discovery filter and retry queue](#discovery-filter-and-retry-queue)).
 2. **Perplexity Enrichment** — Extracts formal entity names, threat actors, attack methods via multi-source verification.
-3. **Global Deduplication** — Merges only what is certain: an identical title on the same date, or the same organisation (by identity) on the same exact day. Everything else is decided by the calibrated Jev duplicate check that follows. See [Global Deduplication](#global-deduplication).
+3. **Global Deduplication** — Merges only what is certain: an identical specific title on the same date, or the same organisation (by identity) on the same exact day *with incident-specific corroboration*. Everything else is decided by the calibrated Jev duplicate check that follows. See [Global Deduplication](#global-deduplication).
 4. **ASD Risk Classification** — Assigns C1–C6 severity categories using the Australian Signals Directorate risk matrix. Incremental (skips already-classified events).
 5. **Dashboard Generation** — Static HTML dashboard with Chart.js visualizations and ASD risk matrices for all years.
 
@@ -344,6 +344,7 @@ australian-cyber-events-scraper/
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
 │   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
+│   ├── evaluate_dedup.py          # Measure the dedup paths on labels and seeded cases (no paid calls by default)
 │   ├── publish_outputs.py         # Snapshot, gate and publish every output together; list/prune snapshots
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
@@ -410,14 +411,50 @@ python scripts/run_global_deduplication.py --verbose    # Enable verbose logging
 **What merges here.** Only two deterministic rules, shared by the full
 rebuild and the incremental matcher (`DeduplicationEngine.merge_decision`):
 
-- an identical title on the same date;
-- the same victim organisation on the same exact day. "Same" means identity -
-  legal-suffix and spelling variants, known aliases, compound names sharing a
-  whole member - never a shared word: the old fallback treated any two titles
-  containing "university", "council", "hospital" or "health" as one
-  organisation. An event with no recorded victim matches nothing. The 1st of a
-  month does not count as an exact day, because it is how a month-only date is
-  stored.
+- an identical title on the same date, when the title names something (a title
+  such as "Data breach" is the same words for any incident and is treated like
+  a bare shared day);
+- the same victim organisation on the same exact day **and incident-specific
+  corroboration** (below). "Same" means identity - legal-suffix and spelling
+  variants, known aliases, compound names sharing a whole member - never a
+  shared word: the old fallback treated any two titles containing
+  "university", "council", "hospital" or "health" as one organisation. An event
+  with no recorded victim matches nothing. The 1st of a month does not count as
+  an exact day, because it is how a month-only date is stored.
+
+**A shared day is a candidate, not a verdict.** Dates are often publication
+dates, so a roundup or the report of a second attack can carry the day of the
+first. The same-day rule merges only when the two sides agree on something
+specific to the incident (`dedup/merge_corroboration.py`, rules
+`merge-corroboration-v1`), with no conflict:
+
+| Agreement (any one) | Definition |
+|---|---|
+| shared article | both cite the same article URL; hub URLs (cited by more than 3 events) and bare domains do not count |
+| record count | both state at least 100 records, within 25% of each other |
+| attacker | both name one, and one name (without its parenthetical qualifiers) appears whole in the other; placeholders such as "Unknown ..." are not names |
+| attack method | both describe it and share two words, one of them *distinctive in the corpus* (at most 2% of events use it, measured by `CorpusStats`, not listed); silent without a corpus |
+
+A conflict - every pairing of record counts differs by more than a factor of
+two, or two named attackers share no word - defers the pair (a shared article
+overrides). Every fact is a set, so an existing event of many records agrees if
+any member does; incremental matching loads each existing event's members' URLs,
+methods, attackers and counts for that (`run_global_deduplication.py`,
+`_load_member_facts`). The thresholds are structural, not fitted to labels: they
+only ever remove automatic merges, and `scripts/evaluate_dedup.py` measures what
+they change. A pair left unmerged is not lost: `check-duplicates` pairs every
+two events of one organisation (dated or not), so it is judged with both events'
+evidence, date provenance and the organisation's timeline, once, and the answer
+is stored. The run logs how many pairs were deferred
+(`deferred_same_day_pairs` in the run statistics).
+
+Measured on the 2026-10-29 live copy: of 13,647 record pairs the old rule
+merged, 12,323 are corroborated (90.3%), 1,156 had no corroborating fact
+(8.5%) and 168 conflicted (1.2%); of the 407 existing events of two or more
+records, 46 are connected by the deterministic rules alone and 10 of those would
+now need the judgement (all 10 look like true duplicates with sparse metadata -
+no count, a generic method - which the judgement should re-join). Past merges
+are not undone.
 
 The fuzzy rules (titles 15% alike, descriptions 20-35% alike) are gone; those
 pairs stay separate and the calibrated `check-duplicates` step decides them
@@ -542,6 +579,81 @@ python scripts/dedup_admin.py find-missed --recent-days 120
 python scripts/dedup_admin.py apply-missed --min-certainty 0.9
 python scripts/dedup_admin.py merge <target_dedup_id> <source_dedup_id> --reason "..."
 ```
+
+### Reusing expensive work, and better evidence for the adjudicators
+
+`find-missed`, `adjudicate-candidates`, `adjudicate-clusters`,
+`reconcile-entities`, `review-legacy`, `resolve-band` and `recheck-splits`
+share three improvements (`dedup/adjudication_cache.py`, `dedup/excerpts.py`):
+
+- **Embeddings are stored.** `EmbeddingCache` is keyed by a hash of the exact
+  text embedded, the embedding model and `EMBED_TEXT_VERSION`; vectors are
+  float32, and a fresh run is rounded the same way, so a cached and a fresh
+  run compare identical numbers. They were kept in memory only, so every
+  `adjudicate-candidates` run embedded every active event again (1,090 on the
+  2026-10-29 copy, whatever had changed).
+- **Scope first.** With `--recent-days`, `adjudicate-candidates` works out which
+  events are connected to a recently changed event through candidate pairs
+  (`candidates.scope_ids`, free) and embeds only those: a group is kept only if
+  it holds a recent event, and every member of such a group is linked to that
+  event, so the groups are the same as when everything is embedded. (On a copy
+  made just after a full pipeline run nearly every event is "recent", so the
+  saving appears on a database whose old events have not been touched.)
+- **Answers are stored against their evidence.** `AdjudicationCache` keys a pair
+  or cluster answer by a hash of everything the model was sent (system prompt
+  and rendered evidence), the model, `PAIR_PROMPT_VERSION` /
+  `CLUSTER_PROMPT_VERSION` and `excerpts.EXCERPT_VERSION`. A pair whose
+  evidence, prompt or model is unchanged is not asked again; swapping the two
+  records is a different prompt, so the order-robustness checks still ask.
+  Only valid answers are stored (a failed call or a partition that does not
+  cover every record is retried), and a hit needs no API client at all. The
+  commands print the cache and call statistics.
+
+**Excerpts instead of an opening.** The adjudicators used to be shown the first
+few hundred characters of a summary, which is a masthead or a standfirst. They
+now see passages chosen deterministically from each member's summary,
+description and stored page (the page only if it belongs to the record, the
+rule in `processing/active_evidence.py`), within a character budget (900 per
+event in a pair prompt, 450 in a cluster prompt): a passage scores for naming
+the organisation (3), the attack - the words of the record's own research
+method and attacker (2) - and then for stating a date (2) or a count (2); a
+passage that names neither the organisation nor the attack scores nothing, so a
+roundup page's dates and counts about other organisations do not crowd out the
+incident; sources are served round-robin, best passage first; a passage that
+repeats one already chosen is skipped; when nothing scores, the opening is used
+as before. The pair prompt is `pair-adjudication-v2` and the cluster prompt
+`cluster-partition-v2`; these (and `excerpts-v1`) change what the model sees, so
+earlier answers are not reused. These adjudicators are not calibrated paths
+(`find-missed` and the candidate clusters report or merge at a stated
+`--min-certainty`), so no calibration is affected; the calibrated
+`check-duplicates` evidence (`dedup/duplicate_judgement.py`) is unchanged.
+
+### Measuring the deduplication paths
+
+```bash
+python scripts/evaluate_dedup.py --db <copy of the database> --save before.json
+# ... change something ...
+python scripts/evaluate_dedup.py --db <copy of the database> --compare before.json
+```
+
+`scripts/evaluate_dedup.py` scores the event-dedup paths with no manual review,
+on the known cases: `evaluation/duplicate_labels.csv` (as the pairs stood in the
+labelling-time snapshot named in `evaluation/calibration_snapshots.json`),
+`evaluation/review_acceptance_cases.csv` (`same_incident_as`), and seeded cases -
+synthetic **splits** of active events that are known single incidents (records of
+one organisation, divided in two by a seeded shuffle) and synthetic **joins** of
+known distinct ones (one organisation's events more than 730 days apart). The
+paths are the deterministic rule (and `rule-before`, the same rule before
+corroboration was required), candidate generation, the calibrated Jev duplicate
+check (read from `ModelJudgements`) and the pair adjudicator (read from
+`AdjudicationCache`). Per path and source it prints the duplicates found and
+**missed**, the **incorrect merges**, the candidate counts and the **paid
+calls, cached versus new**; it also reports the labelled outcomes in the
+database as it stands (`end-state`) and how many existing events were joined
+only by the uncorroborated same-day rule (`rule-impact`; counts, nothing is
+undone). It never calls a paid API unless `--paid-calls` is given and opens the
+database read-only otherwise; a case a path cannot answer from storage is
+counted as one new call and left undecided. Run it on a copy.
 
 ### Cached rulings: splits stay split
 

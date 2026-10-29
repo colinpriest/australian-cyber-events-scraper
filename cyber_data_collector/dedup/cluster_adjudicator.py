@@ -28,6 +28,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
+from cyber_data_collector.dedup import adjudication_cache as stored
+from cyber_data_collector.dedup import excerpts
 from cyber_data_collector.dedup.adjudicator import EventRecord
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.utils.llm_models import chat_params, openai_model
@@ -37,6 +39,8 @@ logger = logging.getLogger(__name__)
 # Above this many members the prompt gets unwieldy and the model starts losing
 # track of indices. Larger clusters are chunked.
 MAX_CLUSTER_SIZE = 20
+#: Bumped when the cluster prompt or what it shows changes (v2: excerpts instead of an opening).
+CLUSTER_PROMPT_VERSION = "cluster-partition-v2"
 
 
 class IncidentGroup(BaseModel):
@@ -138,15 +142,18 @@ class ClusterAdjudicator:
         openai_client=None,
         model: Optional[str] = None,
         max_cluster_size: int = MAX_CLUSTER_SIZE,
+        cache: Optional["stored.AdjudicationCache"] = None,
     ):
         self.resolver = resolver or EntityResolver()
         self._client = openai_client
         self._client_ready = openai_client is not None
         self.model = model or openai_model()
         self.max_cluster_size = max_cluster_size
+        # Persisted answers (None: every cluster is asked, as before).
+        self.cache = cache
         self.stats: Dict[str, int] = {
             "clusters": 0, "llm_calls": 0, "llm_failures": 0,
-            "invalid_partitions": 0, "chunked": 0,
+            "invalid_partitions": 0, "chunked": 0, "llm_cached": 0,
         }
 
     def _get_client(self):
@@ -264,24 +271,35 @@ class ClusterAdjudicator:
             self.stats["chunked"] += 1
             return self._adjudicate_chunked(records)
 
-        client = self._get_client()
-        if client is None:
-            return singleton_partition(size)
+        messages = [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": self._render_cluster(records)},
+        ]
+        key = stored.decision_key("cluster", CLUSTER_PROMPT_VERSION, excerpts.EXCERPT_VERSION, self.model, messages)
+        partition: Optional[ClusterPartition] = None
+        was_cached = False
+        if self.cache is not None:
+            answer = self.cache.decision(key)
+            if answer is not None:
+                partition = ClusterPartition.model_validate(answer)
+                self.stats["llm_cached"] += 1
+                was_cached = True
+        if partition is None:
+            client = self._get_client()
+            if client is None:
+                return singleton_partition(size)
 
-        try:
-            self.stats["llm_calls"] += 1
-            partition: ClusterPartition = client.chat.completions.create(
-                **chat_params(self.model),
-                response_model=ClusterPartition,
-                messages=[
-                    {"role": "system", "content": self._system_prompt()},
-                    {"role": "user", "content": self._render_cluster(records)},
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001 - a failed cluster must not abort a run
-            self.stats["llm_failures"] += 1
-            logger.warning("Cluster adjudication failed (%s); leaving unchanged", exc)
-            return singleton_partition(size)
+            try:
+                self.stats["llm_calls"] += 1
+                partition = client.chat.completions.create(
+                    **chat_params(self.model),
+                    response_model=ClusterPartition,
+                    messages=messages,
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed cluster must not abort a run
+                self.stats["llm_failures"] += 1
+                logger.warning("Cluster adjudication failed (%s); leaving unchanged", exc)
+                return singleton_partition(size)
 
         problems = partition.validate_covers(size)
         if problems:
@@ -290,6 +308,10 @@ class ClusterAdjudicator:
                 "Cluster partition invalid (%s); leaving unchanged", "; ".join(problems)
             )
             return singleton_partition(size)
+        if self.cache is not None and not was_cached:
+            # Only a valid partition is kept: an invalid one is asked again next run.
+            self.cache.store_decision(key, "cluster", CLUSTER_PROMPT_VERSION, excerpts.EXCERPT_VERSION, self.model,
+                                      [r.enriched_event_id for r in records], partition.model_dump())
         return partition
 
     def _adjudicate_chunked(self, records: Sequence[EventRecord]) -> ClusterPartition:
@@ -359,7 +381,7 @@ class ClusterAdjudicator:
         lines = [f"{len(records)} records that may describe one or more shared incidents.",
                  "Partition them into distinct real-world incidents.", ""]
         for index, record in enumerate(records, start=1):
-            body = (record.summary or record.description or "")[:320]
+            body = record.evidence or (record.summary or record.description or "")[:320]
             entities = ", ".join(record.all_entities()[:4]) or "unknown"
             urls = ", ".join(record.all_urls()[:3]) or "unknown"
             lines.append(

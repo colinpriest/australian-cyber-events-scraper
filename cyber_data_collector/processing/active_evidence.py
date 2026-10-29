@@ -21,6 +21,7 @@ page another one would refuse:
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 import json
 import re
 import sqlite3
@@ -70,6 +71,7 @@ _LEGAL_PATTERN = r"\b(pty|ltd|limited|inc|incorporated|llc|plc|corp|corporation|
 _LEGAL = re.compile(_LEGAL_PATTERN, re.I)
 
 
+@lru_cache(maxsize=16384)
 def _normal(text: Optional[str]) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", _LEGAL.sub(" ", (text or "").lower())))
 
@@ -134,3 +136,22 @@ def evidence_page(title: Optional[str], names: Iterable[Optional[str]], page_tex
     if belongs is False:
         return "", f"stored page withheld: it appears to be another article ({reason})"
     return page_text or "", None
+
+
+def distinctive_words(text: Optional[str]) -> set:
+    """The words of ``text`` that say whom or what (not that there was a breach)."""
+    return _tokens(text)
+
+
+def names_any_organisation(names: Iterable[Optional[str]], text: Optional[str]) -> bool:
+    """Does ``text`` name any of the organisations ``names`` (whole name, or first distinctive word)?"""
+    if not text:
+        return False
+    words = set(re.findall(r"[a-z0-9]+", text.lower()))
+    normal = _normal(text)
+    return any(_normal(n) and _names_page(n, words, normal) for n in names if n)
+
+
+def names_organisation(name: Optional[str], text: Optional[str]) -> bool:
+    """Does ``text`` name the organisation ``name`` (its whole name, or its first distinctive word)?"""
+    return names_any_organisation([name], text)

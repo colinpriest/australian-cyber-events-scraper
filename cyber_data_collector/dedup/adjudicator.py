@@ -36,6 +36,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.dedup import candidates as candidate_keys
+from cyber_data_collector.dedup import adjudication_cache as stored
+from cyber_data_collector.dedup import excerpts
 from cyber_data_collector.dedup.entity_resolution import (
     EntityResolver,
     name_similarity,
@@ -51,6 +53,10 @@ from cyber_data_collector.dedup.models import (
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+#: Bumped when ``EventRecord.embed_text`` changes: stored vectors are keyed on it.
+EMBED_TEXT_VERSION = "embed-text-v1"
+#: Bumped when the pair prompt or what it shows changes (v2: excerpts instead of an opening).
+PAIR_PROMPT_VERSION = "pair-adjudication-v2"
 
 # Pairs below this embedding similarity are not worth an LLM call. Tuned to be
 # permissive: a false negative here is a permanently missed merge, whereas a
@@ -84,6 +90,9 @@ class EventRecord(BaseModel):
     # strongest duplicate signal there is, and LIMIT 1 almost never collided.
     source_urls: List[str] = Field(default_factory=list)
     records_affected: Optional[int] = None
+    # Incident-relevant excerpts of the members' sources (dedup/excerpts.py), shown to the
+    # model in place of the opening of the summary when present. Not used for candidates.
+    evidence: Optional[str] = None
 
     def all_urls(self) -> List[str]:
         urls = list(self.source_urls)
@@ -160,6 +169,7 @@ class Adjudicator:
         adjudication_model: Optional[str] = None,
         merge_threshold: float = 0.85,
         require_entity_match: bool = True,
+        cache: Optional["stored.AdjudicationCache"] = None,
     ):
         self.resolver = resolver or EntityResolver()
         self._client = openai_client
@@ -174,6 +184,8 @@ class Adjudicator:
         # a hard entity gate would confidently break correct groups.
         self.require_entity_match = require_entity_match
         self._embeddings: Dict[str, List[float]] = {}
+        # Persisted embeddings and answers (None: in-memory only, as before).
+        self.cache = cache
         # Why each candidate pair was generated, and which URLs are hubs
         # (roundups / list pages) that must not count as shared evidence.
         self.pair_reasons: Dict[frozenset, Set[str]] = {}
@@ -181,6 +193,7 @@ class Adjudicator:
         self.stats: Dict[str, int] = {
             "override_hits": 0, "url_matches": 0, "embed_automerges": 0,
             "llm_calls": 0, "llm_failures": 0, "rejected_early": 0,
+            "embedding_calls": 0, "embeddings_cached": 0, "embeddings_new": 0, "llm_cached": 0,
         }
 
     # ------------------------------------------------------------------
@@ -213,6 +226,17 @@ class Adjudicator:
         pending = [r for r in records if r.enriched_event_id not in self._embeddings]
         if not pending:
             return
+        hashes = {r.enriched_event_id: stored.content_hash(r.embed_text()) for r in pending}
+        if self.cache is not None:
+            known = self.cache.embeddings(hashes.values(), self.embed_model, EMBED_TEXT_VERSION)
+            for record in pending:
+                vector = known.get(hashes[record.enriched_event_id])
+                if vector is not None:
+                    self._embeddings[record.enriched_event_id] = vector
+                    self.stats["embeddings_cached"] += 1
+            pending = [r for r in pending if r.enriched_event_id not in self._embeddings]
+            if not pending:
+                return
         client = self._get_client()
         if client is None:
             return
@@ -222,16 +246,23 @@ class Adjudicator:
         for start in range(0, len(pending), batch_size):
             chunk = pending[start:start + batch_size]
             try:
+                self.stats["embedding_calls"] += 1
                 response = raw.embeddings.create(
                     model=self.embed_model,
                     input=[r.embed_text() for r in chunk],
                 )
-                for record, item in zip(chunk, response.data):
-                    self._embeddings[record.enriched_event_id] = item.embedding
+                fresh = {hashes[r.enriched_event_id]: item.embedding for r, item in zip(chunk, response.data)}
+                if self.cache is not None:
+                    fresh = self.cache.store_embeddings(fresh, self.embed_model, EMBED_TEXT_VERSION)
+                for record in chunk:
+                    vector = fresh.get(hashes[record.enriched_event_id])
+                    if vector is not None:
+                        self._embeddings[record.enriched_event_id] = vector
+                        self.stats["embeddings_new"] += 1
             except Exception as exc:  # noqa: BLE001 - degrade, never crash dedup
                 logger.warning("Embedding batch failed (%s); continuing without", exc)
                 return
-        logger.info("Embedded %d event(s)", len(pending))
+        logger.info("Embedded %d event(s), %d from the cache", len(pending), self.stats["embeddings_cached"])
 
     def similarity(self, left: EventRecord, right: EventRecord) -> Optional[float]:
         """Embedding cosine similarity, or None when embeddings are absent."""
@@ -305,6 +336,38 @@ class Adjudicator:
     # ------------------------------------------------------------------
     # Adjudication
     # ------------------------------------------------------------------
+
+    PAIR_SYSTEM_PROMPT = (
+        "You decide whether two news/notification records "
+        "describe the SAME real-world cyber security "
+        "incident. Two different incidents at the same "
+        "organisation are NOT the same event. Follow-up "
+        "coverage, regulatory action and class actions "
+        "about one incident ARE the same event. A breach "
+        "of ONE supplier's own systems (a SaaS platform, "
+        "software vendor or service provider holding its "
+        "customers' data) reported by or about several of "
+        "its customers is ONE event, even though each "
+        "record names a different victim. That rule is "
+        "narrow: the SAME ransomware gang, threat actor or "
+        "campaign hitting different organisations is NOT "
+        "the same event, and exploitation of the same "
+        "product vulnerability on each organisation's own "
+        "systems is NOT the same event. A roundup, "
+        "newsletter, weekly review, statistics page, scam "
+        "alert page or general guidance page is NEVER the "
+        "same event as a single incident - answer false. "
+        "Organisation fields may hold a description "
+        "('Queensland education sector') instead of a "
+        "name. Dates are often publication dates, so a gap "
+        "of weeks can be reporting lag; a record dated "
+        "years away from otherwise identical reporting is "
+        "usually misdated. A shared source article is "
+        "strong evidence of the same event unless that "
+        "article plainly covers two incidents. Be decisive "
+        "when the evidence is clear and explicitly "
+        "uncertain when it is not."
+    )
 
     def _entities_overlap(self, left: EventRecord, right: EventRecord) -> bool:
         """True when ANY organisation on one side matches any on the other.
@@ -438,76 +501,56 @@ class Adjudicator:
     def _llm_adjudicate(
         self, left: EventRecord, right: EventRecord, evidence: MatchEvidence
     ) -> PairVerdict:
-        client = self._get_client()
-        if client is None:
-            # No LLM available: fall back to conservative lexical judgement.
-            lexical = evidence.title_similarity or 0.0
-            same = lexical >= 0.75 and (evidence.date_delta_days or 999) <= 7
-            return PairVerdict(
-                is_same_event=same,
-                certainty=0.6,
-                reasoning=(
-                    f"No LLM available; fell back to title similarity "
-                    f"{lexical:.2f} and a {evidence.date_delta_days}-day date gap."
-                ),
-                decided_by=DecidedBy.RULE,
-                evidence=evidence,
-            )
-
         prompt = self._render_prompt(left, right, evidence)
-        try:
-            self.stats["llm_calls"] += 1
-            result: LLMPairAdjudication = client.chat.completions.create(
-                **chat_params(self.adjudication_model),
-                response_model=LLMPairAdjudication,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You decide whether two news/notification records "
-                            "describe the SAME real-world cyber security "
-                            "incident. Two different incidents at the same "
-                            "organisation are NOT the same event. Follow-up "
-                            "coverage, regulatory action and class actions "
-                            "about one incident ARE the same event. A breach "
-                            "of ONE supplier's own systems (a SaaS platform, "
-                            "software vendor or service provider holding its "
-                            "customers' data) reported by or about several of "
-                            "its customers is ONE event, even though each "
-                            "record names a different victim. That rule is "
-                            "narrow: the SAME ransomware gang, threat actor or "
-                            "campaign hitting different organisations is NOT "
-                            "the same event, and exploitation of the same "
-                            "product vulnerability on each organisation's own "
-                            "systems is NOT the same event. A roundup, "
-                            "newsletter, weekly review, statistics page, scam "
-                            "alert page or general guidance page is NEVER the "
-                            "same event as a single incident - answer false. "
-                            "Organisation fields may hold a description "
-                            "('Queensland education sector') instead of a "
-                            "name. Dates are often publication dates, so a gap "
-                            "of weeks can be reporting lag; a record dated "
-                            "years away from otherwise identical reporting is "
-                            "usually misdated. A shared source article is "
-                            "strong evidence of the same event unless that "
-                            "article plainly covers two incidents. Be decisive "
-                            "when the evidence is clear and explicitly "
-                            "uncertain when it is not."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-            )
-        except Exception as exc:  # noqa: BLE001 - never let one pair break a run
-            self.stats["llm_failures"] += 1
-            logger.warning("LLM adjudication failed (%s); defaulting to separate", exc)
-            return PairVerdict(
-                is_same_event=False,
-                certainty=0.3,
-                reasoning=f"LLM adjudication failed ({exc}); kept separate for safety.",
-                decided_by=DecidedBy.RULE,
-                evidence=evidence,
-            )
+        messages = [
+            {"role": "system", "content": self.PAIR_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        key = stored.decision_key("pair", PAIR_PROMPT_VERSION, excerpts.EXCERPT_VERSION,
+                                  self.adjudication_model, messages)
+        result: Optional[LLMPairAdjudication] = None
+        if self.cache is not None:
+            answer = self.cache.decision(key)
+            if answer is not None:
+                result = LLMPairAdjudication.model_validate(answer)
+                self.stats["llm_cached"] += 1
+        if result is None:
+            client = self._get_client()
+            if client is None:
+                # No LLM available: fall back to conservative lexical judgement.
+                lexical = evidence.title_similarity or 0.0
+                same = lexical >= 0.75 and (evidence.date_delta_days or 999) <= 7
+                return PairVerdict(
+                    is_same_event=same,
+                    certainty=0.6,
+                    reasoning=(
+                        f"No LLM available; fell back to title similarity "
+                        f"{lexical:.2f} and a {evidence.date_delta_days}-day date gap."
+                    ),
+                    decided_by=DecidedBy.RULE,
+                    evidence=evidence,
+                )
+            try:
+                self.stats["llm_calls"] += 1
+                result = client.chat.completions.create(
+                    **chat_params(self.adjudication_model),
+                    response_model=LLMPairAdjudication,
+                    messages=messages,
+                )
+            except Exception as exc:  # noqa: BLE001 - never let one pair break a run
+                self.stats["llm_failures"] += 1
+                logger.warning("LLM adjudication failed (%s); defaulting to separate", exc)
+                return PairVerdict(
+                    is_same_event=False,
+                    certainty=0.3,
+                    reasoning=f"LLM adjudication failed ({exc}); kept separate for safety.",
+                    decided_by=DecidedBy.RULE,
+                    evidence=evidence,
+                )
+            if self.cache is not None:
+                self.cache.store_decision(key, "pair", PAIR_PROMPT_VERSION, excerpts.EXCERPT_VERSION,
+                                          self.adjudication_model, [left.enriched_event_id, right.enriched_event_id],
+                                          result.model_dump())
 
         evidence.supporting_facts = result.supporting_facts
         evidence.distinguishing_facts = result.distinguishing_facts
@@ -524,7 +567,7 @@ class Adjudicator:
         left: EventRecord, right: EventRecord, evidence: MatchEvidence
     ) -> str:
         def block(tag: str, rec: EventRecord) -> str:
-            body = (rec.summary or rec.description or "")[:700]
+            body = rec.evidence or (rec.summary or rec.description or "")[:700]
             return (
                 f"--- RECORD {tag} ---\n"
                 f"Title: {rec.title}\n"
