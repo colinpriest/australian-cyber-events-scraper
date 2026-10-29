@@ -325,7 +325,22 @@ class TestDeduplicationEngine:
         assert len(result.unique_events) == 2
         assert len(result.merge_groups) == 0
 
-    def test_same_organisation_same_exact_day_merges(self):
+    def test_same_organisation_same_exact_day_merges_when_corroborated(self):
+        engine = DeduplicationEngine()
+        events = [
+            CyberEvent(event_id="1", title="Optus Data Breach", event_date=date(2022, 9, 22),
+                       victim_organization_name="Optus", records_affected=9_800_000),
+            CyberEvent(event_id="2", title="Optus hack exposes customers", event_date=date(2022, 9, 22),
+                       victim_organization_name="Singtel Optus Pty Limited", records_affected=9_700_000),
+        ]
+
+        result = engine.deduplicate(events)
+
+        assert len(result.unique_events) == 1
+        assert engine.deferred == []
+
+    def test_same_organisation_same_day_without_corroboration_is_left_to_the_check(self):
+        """A shared day is a candidate signal, not a verdict: no fact ties the two records together."""
         engine = DeduplicationEngine()
         events = [
             CyberEvent(event_id="1", title="Optus Data Breach", event_date=date(2022, 9, 22),
@@ -336,7 +351,9 @@ class TestDeduplicationEngine:
 
         result = engine.deduplicate(events)
 
-        assert len(result.unique_events) == 1
+        assert len(result.unique_events) == 2
+        assert [(a, b) for a, b, _ in engine.deferred] == [("1", "2")]
+        assert engine.deferred[0][2].startswith("uncorroborated")
 
     def test_first_of_month_is_not_an_exact_day(self):
         """A month-precision date is stored as the 1st; sharing it proves nothing."""
@@ -776,7 +793,8 @@ class TestIntegration:
                 victim_organization_name="Optus",
                 event_type="Data Breach",
                 severity="High",
-                records_affected=1000000
+                records_affected=1000000,
+                urls=["https://example.com/optus-breach"],
             ),
             CyberEvent(
                 event_id="2",
@@ -786,7 +804,8 @@ class TestIntegration:
                 victim_organization_name="Optus",
                 event_type="Security Incident",
                 severity="High",
-                records_affected=2000000
+                records_affected=2000000,
+                urls=["https://example.com/optus-breach"],
             ),
             CyberEvent(
                 event_id="3",
@@ -1097,11 +1116,11 @@ class TestForeignKeyEnforcedStorage:
             CyberEvent(event_id="enr-1", title="Optus Data Breach",
                        summary="Optus breach", event_date=date(2023, 1, 5), victim_organization_name="Optus",
                        event_type="Data Breach", severity="High",
-                       records_affected=1000000),
+                       records_affected=1000000, urls=["https://example.com/optus-breach"]),
             CyberEvent(event_id="enr-2", title="Optus Data Breach Incident",
                        summary="Optus security incident", event_date=date(2023, 1, 5), victim_organization_name="Optus",
                        event_type="Security Incident", severity="High",
-                       records_affected=2000000),
+                       records_affected=2000000, urls=["https://example.com/optus-breach"]),
             CyberEvent(event_id="enr-3", title="Telstra Network Outage",
                        summary="Telstra outage", event_date=date(2023, 1, 3),
                        event_type="Network Outage", severity="Medium",

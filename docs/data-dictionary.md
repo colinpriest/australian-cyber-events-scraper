@@ -500,6 +500,25 @@ Written by `scripts/quality_report.py` and `cyber_data_collector.quality.publica
 | QualityRuns | `blocking_failures`, `failed`, `warned`, `not_measured` | INTEGER | Counts by status |
 | QualityRuns | `reasons_json` | TEXT | JSON list of blocking reasons |
 | QualityMetrics | `run_id`, `metric` | TEXT **PK** | Run and metric name (e.g. `dates.future_active`) |
+
+#### EmbeddingCache / AdjudicationCache
+
+Written by the deduplication adjudicators (`cyber_data_collector/dedup/adjudication_cache.py`),
+created on first use. They let a rerun ask only what changed; nothing reads them but the adjudicators
+and `scripts/evaluate_dedup.py`.
+
+| Table | Column | Type | Description |
+|-------|--------|------|-------------|
+| EmbeddingCache | `content_hash`, `model`, `version` | TEXT **PK** | sha256 of the exact text embedded; the embedding model requested; `EMBED_TEXT_VERSION` (how the text is built) |
+| EmbeddingCache | `dimensions` | INTEGER | Vector length |
+| EmbeddingCache | `vector` | BLOB | Little-endian float32 |
+| EmbeddingCache | `created_at` | TEXT | ISO timestamp |
+| AdjudicationCache | `cache_key` | TEXT **PK** | sha256 of the kind, prompt and evidence versions, the model and the exact messages sent |
+| AdjudicationCache | `kind` | TEXT | `pair` or `cluster` |
+| AdjudicationCache | `prompt_version`, `evidence_version`, `model` | TEXT | What produced the answer (`pair-adjudication-v2` / `cluster-partition-v2`, `excerpts-v1`, the model) |
+| AdjudicationCache | `subject_ids` | TEXT | JSON list of the ids judged, in the order shown |
+| AdjudicationCache | `response_json` | TEXT | The validated answer (`LLMPairAdjudication` or `ClusterPartition`); only valid answers are stored |
+| AdjudicationCache | `created_at` | TEXT | ISO timestamp |
 | QualityMetrics | `metric_group` | TEXT | coverage / evidence / backlog / duplicates / dates / staleness / integrity / labels / synthetic |
 | QualityMetrics | `value` | REAL | NULL when the check has a verdict instead of a value, or was not measured |
 | QualityMetrics | `threshold` | TEXT | e.g. `<= 0.05`, `must pass`; empty for info metrics |

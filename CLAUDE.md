@@ -173,7 +173,7 @@ The pipeline executes five distinct phases:
 - Much higher quality than initial fast-pass
 
 ### Phase 3: Global Deduplication
-- Deterministic merges only (`DeduplicationEngine.merge_decision`): identical title + same date, or same organisation (by identity, never a shared word) + same exact day (not the 1st of a month)
+- Deterministic merges only (`DeduplicationEngine.merge_decision`): identical specific title + same date, or same organisation (by identity, never a shared word) + same exact day (not the 1st of a month) **with incident-specific corroboration** (shared article, record count, attacker or attack method; `dedup/merge_corroboration.py`) and no conflict - a shared day alone is a candidate for the Jev duplicate check
 - Everything uncertain is decided by the calibrated Jev `check-duplicates` step in the hygiene phase
 - Merged events are dated by member consensus; a run fails if a record is in no event or in two
 - Re-enriched records refresh their events with ids kept (`dedup/record_fingerprints.py`)

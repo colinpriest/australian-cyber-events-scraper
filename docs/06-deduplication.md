@@ -138,6 +138,15 @@ This principle drives several design choices:
 
 ## 4. Matching Rules
 
+> **Current status (2026-10-29).** This section describes the original v2
+> rules. Only two deterministic rules still merge: an identical specific title
+> on the same date, and the same organisation on the same exact day with
+> incident-specific corroboration (a shared article, record count, attacker or
+> attack method, and no conflict - `dedup/merge_corroboration.py`); a shared day
+> alone is a candidate that the calibrated `check-duplicates` judgement decides.
+> The fuzzy rules 4.3-4.6 no longer merge. See the README, "Global
+> Deduplication".
+
 Rules are applied in strict priority order during pairwise event comparison. When a rule triggers, the pair is merged immediately and no further rules are evaluated for that pair.
 
 ### 4.1 Rule 1: Same Entity + Same Date
