@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from cyber_data_collector.dedup import bounded_candidates as bounded
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.dedup.event_reality import ROOT, build_state
 from cyber_data_collector.utils.llm_models import typesafe_model
 
@@ -197,10 +197,12 @@ class PairUniverse:
         return sorted(pairs.values(), key=lambda p: p["pair_id"])
 
     def ranked(self, corpus, skip: Skip = None, cap: bool = True, partners_per_event: Optional[int] = None,
-               long_gap_budget: Optional[int] = None, exhaustive_max: Optional[int] = None
-               ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-        """The pairs that are asked: ranked and capped by :mod:`candidate_ranking`, without building the pairs of
-        a large group (``(pairs, stats)``). ``skip`` removes the pairs another route owns."""
+               long_gap_budget: Optional[int] = None, exhaustive_max: Optional[int] = None,
+               uncapped_max: Optional[int] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """The pairs that are asked: ranked by :mod:`candidate_ranking` and, in a group of more than
+        ``uncapped_max`` (``bounded.UNCAPPED_GROUP_MAX``, 60) events, capped - without building the pairs of a
+        large group (``(pairs, stats)``). Every pair of a smaller group is a candidate. ``skip`` removes the pairs
+        another route owns."""
         from cyber_data_collector.dedup import candidate_ranking as ranking
 
         return bounded.rank_groups(
@@ -208,7 +210,8 @@ class PairUniverse:
             partners_per_event=ranking.PARTNERS_PER_EVENT if partners_per_event is None else partners_per_event,
             long_gap_budget=ranking.LONG_GAP_BUDGET if long_gap_budget is None else long_gap_budget,
             exclude=_skip_predicate(skip),
-            exhaustive_max=bounded.EXHAUSTIVE_GROUP_MAX if exhaustive_max is None else exhaustive_max)
+            exhaustive_max=bounded.EXHAUSTIVE_GROUP_MAX if exhaustive_max is None else exhaustive_max,
+            uncapped_max=bounded.UNCAPPED_GROUP_MAX if uncapped_max is None else uncapped_max)
 
 
 def candidate_pairs(conn: sqlite3.Connection, skip: Skip = None) -> List[Dict[str, Any]]:
@@ -315,40 +318,18 @@ def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], pro
     return out
 
 
-DECISIONS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS PairDecisions (
-    route                 TEXT NOT NULL,   -- organisation / ai: which question decided the pair
-    pair_id               TEXT NOT NULL,   -- the two event ids joined by '|', sorted
-    evidence_hash         TEXT NOT NULL,   -- sha256 of the pair state exactly as both models were shown it
-    question_version      TEXT NOT NULL,   -- the Jev question version + the escalation question version
-    jev_model             TEXT NOT NULL,
-    escalation_model      TEXT NOT NULL,
-    final_score           REAL NOT NULL,   -- P(same incident) the pipeline acts on
-    basis                 TEXT NOT NULL,   -- jev: Jev's answer; escalated: the reasoning model's, Jev's being mid-band
-    jev_input_hash        TEXT NOT NULL,   -- the ModelJudgements rows this rests on (question_id + input_hash)
-    escalation_input_hash TEXT,
-    decided_at            TEXT NOT NULL,
-    PRIMARY KEY (route, pair_id, evidence_hash, question_version, jev_model, escalation_model)
-);
-CREATE INDEX IF NOT EXISTS idx_pairdecisions_pair ON PairDecisions (route, pair_id);
-"""
-
-
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(DECISIONS_SCHEMA)
+    final_decisions.ensure_schema(conn)
 
 
-def state_hash(state: Mapping[str, Any]) -> str:
-    """A fingerprint of the evidence a pair judgement was shown (the state sent to Jev and to the escalation)."""
-    blob = json.dumps(state, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+state_hash = final_decisions.state_hash
 
 
 @dataclass(frozen=True)
 class Route:
     """One duplicate question as the pipeline asks it: its Jev question, the escalation of its middle band,
     and how a pair's evidence is built. The organisation route and the AI route (:mod:`ai_duplicates`) each
-    have one; ``name`` keys the stored decisions."""
+    have one; ``name`` keys the stored decisions (``FinalDecisions.step`` is ``duplicates-<name>``)."""
 
     name: str
     question_id: str
@@ -361,12 +342,18 @@ class Route:
     band: Tuple[float, float]
 
     @property
+    def step(self) -> final_decisions.Step:
+        return final_decisions.Step(
+            name=f"duplicates-{self.name}", question_id=self.question_id, version=self.version,
+            make_question=self.make_question, escalation_id=self.escalation_id,
+            escalation_version=self.escalation_version, escalation_text=self.escalation_text, band=self.band)
+
+    @property
     def question_version(self) -> str:
-        return f"{self.version}+{self.escalation_version}"
+        return self.step.question_version
 
     def models(self) -> Tuple[str, str]:
-        from cyber_data_collector.utils.llm_models import openai_model
-        return typesafe_model(), openai_model()
+        return self.step.models()
 
 
 def _memoised(builder: Callable[[sqlite3.Connection, Dict[str, Any]], Dict[str, Any]],
@@ -391,17 +378,6 @@ class ScoredPairs:
     evidence: Dict[str, str] = field(default_factory=dict)  # pair id -> the evidence hash it was decided on
 
 
-def record_decision(conn: sqlite3.Connection, route: Route, pid: str, evidence: str, final: float, basis: str,
-                    jev_hash: str, escalation_hash: Optional[str]) -> None:
-    jev_model, escalation_model = route.models()
-    conn.execute(
-        "INSERT OR REPLACE INTO PairDecisions (route, pair_id, evidence_hash, question_version, jev_model, "
-        "escalation_model, final_score, basis, jev_input_hash, escalation_input_hash, decided_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (route.name, pid, evidence, route.question_version, jev_model, escalation_model, final, basis, jev_hash,
-         escalation_hash, datetime.now().isoformat(timespec="seconds")))
-
-
 def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], route: "Route", judge=None,
                 escalation_client=None, refresh: bool = False,
                 states: Optional[Dict[str, Dict[str, Any]]] = None) -> ScoredPairs:
@@ -409,14 +385,11 @@ def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], route
     the evidence it was made on.
 
     A pair's evidence is built once and both models are shown that same state, so the final score is
-    Jev's or the escalation's **on one evidence**; the decision is stored in ``PairDecisions`` with the hash of
+    Jev's or the escalation's **on one evidence**; the decision is stored in ``FinalDecisions`` with the hash of
     that evidence, the models and the question versions. A pair whose escalation failed has no decision (it
     is retried next run, never merged on Jev's mid-band score). Stored model answers are reused whenever their
     own input hash matches, so a run with unchanged evidence buys nothing.
     """
-    from cyber_data_collector.utils import escalation as esc
-    from cyber_data_collector.utils import jev as jev_module
-
     ensure_schema(conn)
     states = {} if states is None else states
     build = _memoised(route.state_builder, states)
@@ -426,21 +399,10 @@ def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], route
     out.escalated = escalate_band(conn, pairs, out.jev, client=escalation_client, failed=out.failed,
                                   question_id=route.escalation_id, version=route.escalation_version,
                                   state_builder=build, question_text=route.escalation_text, band=route.band)
-    question = route.make_question()
-    text = route.escalation_text()
-    jev_model, escalation_model = route.models()
-    for pid, p in out.jev.items():
-        if pid in out.failed:
-            continue
-        state = states[pid]
-        evidence = state_hash(state)
-        final = out.escalated.get(pid, p)
-        record_decision(conn, route, pid, evidence, final, "escalated" if pid in out.escalated else "jev",
-                        jev_module.input_hash(state, question, jev_model),
-                        esc.input_hash(state, text, escalation_model) if pid in out.escalated else None)
-        out.final[pid] = final
-        out.evidence[pid] = evidence
-    conn.commit()
+    out.final = final_decisions.record_scores(
+        conn, route.step, [(p["pair_id"], lambda p=p: states[p["pair_id"]]) for p in pairs],
+        out.jev, out.escalated, out.failed)
+    out.evidence = {pid: state_hash(states[pid]) for pid in out.final}
     return out
 
 
@@ -452,20 +414,10 @@ def current_decisions(conn: sqlite3.Connection, route: "Route", pairs: Sequence[
     current question versions is read. A decision made on other evidence is not a score for this pair - it is
     :func:`stale_decisions`. Nothing is asked.
     """
-    ensure_schema(conn)
     states = {} if states is None else states
     build = _memoised(route.state_builder, states)
-    jev_model, escalation_model = route.models()
-    out: Dict[str, float] = {}
-    for pair in pairs:
-        row = conn.execute(
-            "SELECT final_score FROM PairDecisions WHERE route = ? AND pair_id = ? AND evidence_hash = ? "
-            "AND question_version = ? AND jev_model = ? AND escalation_model = ?",
-            (route.name, pair["pair_id"], state_hash(build(conn, pair)), route.question_version, jev_model,
-             escalation_model)).fetchone()
-        if row is not None:
-            out[pair["pair_id"]] = float(row[0])
-    return out
+    return final_decisions.read_current(
+        conn, route.step, [(p["pair_id"], lambda p=p: build(conn, p)) for p in pairs])
 
 
 def stale_decisions(conn: sqlite3.Connection, route: "Route", pair_ids: Optional[Iterable[str]] = None
@@ -473,17 +425,7 @@ def stale_decisions(conn: sqlite3.Connection, route: "Route", pair_ids: Optional
     """``{pair_id: (final score, evidence hash)}``: the newest decision per pair under the current models and
     question versions, whatever evidence it was made on. A score here is **not** a verdict on the pair as it is
     now; it says only what it was once judged to be, and whether it needs revisiting is the caller's question."""
-    ensure_schema(conn)
-    jev_model, escalation_model = route.models()
-    wanted = None if pair_ids is None else set(pair_ids)
-    out: Dict[str, Tuple[float, str]] = {}
-    for pid, score, evidence in conn.execute(
-            "SELECT pair_id, final_score, evidence_hash FROM PairDecisions WHERE route = ? AND question_version = ? "
-            "AND jev_model = ? AND escalation_model = ? ORDER BY decided_at, rowid",
-            (route.name, route.question_version, jev_model, escalation_model)):
-        if wanted is None or pid in wanted:
-            out[pid] = (float(score), evidence)
-    return out
+    return final_decisions.latest(conn, route.step, pair_ids)
 
 
 def stored_final_probabilities(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]],
@@ -823,18 +765,23 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     ai_pairs, ai_stats = ai_universe.ranked(corpus, **options) if include_ai else ([], None)
     # Pairs are retrieved and ranked per group (bounded_candidates): the pairs that are not asked are never built.
     pairs, org_stats = universe.ranked(corpus, skip=ai_universe.owns if include_ai else None, **org_options)
-    scored = score_pairs(conn, pairs, ORGANISATION, judge=judge, escalation_client=escalation_client)
+    labels = labelled_pairs(labels_path)
+    # Labels decide first: a pair labelled same is merged and one labelled different never is, whatever the model
+    # says, so neither is (re-)asked about.
+    scored = score_pairs(conn, [p for p in pairs if labels.get(p["pair_id"]) not in ("same", "different")],
+                         ORGANISATION, judge=judge, escalation_client=escalation_client)
     escalated = scored.escalated
     escalation_failed: List[str] = list(scored.failed)
     probabilities = scored.final
-    labels = labelled_pairs(labels_path)
     different = {p for p, label in labels.items() if label == "different"}
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     by_id = {p["pair_id"]: p for p in pairs}
+    # A labelled-same pair is merged without a score; any other pair needs its score at the cut-off.
     chosen = [] if cutoff is None else [
-        pid for pid, p in probabilities.items()
-        if (p >= cutoff and pid not in different) or labels.get(pid) == "same"]
+        pid for pid in sorted({q["pair_id"] for q in pairs} | set(probabilities))
+        if labels.get(pid) == "same"
+        or (pid in probabilities and probabilities[pid] >= cutoff and pid not in different)]
     proposals = [{**by_id[pid], "p_same": probabilities.get(pid), "label": labels.get(pid), "route": "organisation"}
                  for pid in sorted(chosen, key=lambda x: -(probabilities.get(x) or 0))]
     # Links carry their strength; a labelled-same link outranks any score.

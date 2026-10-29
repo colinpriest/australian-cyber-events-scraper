@@ -37,7 +37,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.dedup import event_reality
 from cyber_data_collector.utils.llm_models import typesafe_model
 
@@ -205,22 +205,24 @@ def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], cli
     return out
 
 
+STEP = final_decisions.Step(
+    name="event-scope", question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND)
+
+
+def record_final(conn: sqlite3.Connection, jev: Dict[str, float], escalated: Dict[str, float],
+                 failed: Optional[Sequence[str]] = None) -> Dict[str, float]:
+    """Store each scored event's final decision against the evidence both answers were given; returns the final
+    scores (an event whose escalation failed has none)."""
+    return final_decisions.record_scores(conn, STEP, [(d, lambda d=d: build_state(conn, d)) for d in jev],
+                                         jev, escalated, failed or ())
+
+
 def stored_final_probabilities(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, float]:
-    """The final score per event from storage: the escalation's where there is one, else Jev's."""
-    from cyber_data_collector.utils.llm_models import openai_model
-
-    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
-        out: Dict[str, float] = {}
-        for sid, value in conn.execute(
-                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
-            out[sid] = float(value)
-        return out
-
-    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
-    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
-    lo, hi = ESCALATE_BAND
-    return {d: (escalated[d] if d in escalated and lo <= jev[d] < hi else jev[d]) for d in ids if d in jev}
+    """The final score per event from its decision on the evidence it has **now** (:mod:`final_decisions`); an
+    event with no decision on its current evidence has no score here."""
+    return final_decisions.read_current(conn, STEP, [(d, lambda d=d: build_state(conn, d)) for d in ids])
 
 
 def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
@@ -334,13 +336,21 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     escalation failed on is in ``judgement_failed`` / ``escalation_failed`` and is left alone.
     """
     events = _select(conn, only)
-    judgement_failed: List[str] = []
-    jev_scores = judge_events(conn, events, judge=judge, failed=judgement_failed)
-    escalation_failed: List[str] = []
-    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
-    probabilities = {d: escalated.get(d, p) for d, p in jev_scores.items() if d not in escalation_failed}
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
+    # The labels are needed (and must be readable) only when this run could act on them - and, being read first,
+    # they decide first: an event labelled in scope is never rejected and one labelled out of scope is rejected,
+    # whatever the model says, so neither is (re-)asked about.
+    known = labels(labels_path, reality_labels_path) if apply and cal else {}
+    protected = {d for d, label in known.items() if label == "in_scope"}
+    in_run = set(events)
+    labelled_out = sorted(d for d, label in known.items() if label == "out_of_scope" and d in in_run)
+    judged_events = [d for d in events if d not in protected and d not in set(labelled_out)]
+    judgement_failed: List[str] = []
+    jev_scores = judge_events(conn, judged_events, judge=judge, failed=judgement_failed)
+    escalation_failed: List[str] = []
+    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
+    probabilities = record_final(conn, jev_scores, escalated, escalation_failed)
     meta = {r[0]: r[1:] for r in conn.execute(
         "SELECT deduplicated_event_id, title, victim_organization_name, event_date FROM DeduplicatedEvents")}
 
@@ -349,11 +359,6 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
         return {"deduplicated_event_id": did, "title": title, "victim": victim, "event_date": date,
                 "p_in_scope": probabilities.get(did), **extra}
 
-    # The labels are needed (and must be readable) only when this run could act on them.
-    known = labels(labels_path, reality_labels_path) if apply and cal else {}
-    protected = {d for d, label in known.items() if label == "in_scope"}
-    in_run = set(events)
-    labelled_out = sorted(d for d, label in known.items() if label == "out_of_scope" and d in in_run)
     below = [] if cutoff is None else [
         entry(did) for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
         if p < cutoff and did not in protected and did not in labelled_out]
@@ -364,7 +369,7 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
         reject_events(conn, rejections)
     restored = restore_protected(conn, protected) if apply and cal else []
     lowest = [entry(did) for did, _ in sorted(probabilities.items(), key=lambda kv: kv[1])[:REPORT_LOWEST]]
-    return {"events": len(events), "judged": len(probabilities), "escalated": len(escalated),
+    return {"events": len(events), "judged": len(probabilities), "settled_by_label": len(events) - len(judged_events), "escalated": len(escalated),
             "judgement_failed": judgement_failed, "escalation_failed": escalation_failed, "cutoff": cutoff,
             "calibrated": cal is not None, "applied": applied, "rejections": rejections,
             "labelled_rejections": labelled_rejections, "restored_protected": restored,

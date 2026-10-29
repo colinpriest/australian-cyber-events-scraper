@@ -76,7 +76,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.utils.llm_models import openai_fast_model, typesafe_model
 
 logger = logging.getLogger(__name__)
@@ -258,42 +258,41 @@ def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
                     "input_hash": input_hash(state, q[QUESTION_ID], typesafe_model()),
                     "member_signature": member_signature(conn, pair["deduplicated_event_id"])}
             p = float(judge.ask("event_victim", pair["pair_id"], QUESTION_VERSION, state, q)[QUESTION_ID].value)
-            if ESCALATE_BAND and ESCALATE_BAND[0] <= p < ESCALATE_BAND[1]:
+            escalated = bool(ESCALATE_BAND and ESCALATE_BAND[0] <= p < ESCALATE_BAND[1])
+            if escalated:
                 value = escalate(conn, "event_victim", pair["pair_id"], ESCALATION_QUESTION_ID,
                                  ESCALATION_VERSION, state, escalation_question(), client=escalation_client)
                 if value is None:
                     raise RuntimeError(f"Escalation of victim judgement {pair['pair_id']} failed; see the log")
                 p = float(value)
             out[pair["pair_id"]] = p
+            # The final score, tied to the evidence both answers were given (see final_decisions).
+            final_decisions.record(conn, STEP, pair["pair_id"], state, p, escalated)
             if i % 100 == 0:
                 logger.info("Judged %d/%d event-victim pairs", i, len(pairs))
     finally:
+        conn.commit()
         if owned:
             judge.close()
     return out
 
 
-def stored_final_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
-    """The final score per pair from storage (latest answers): the escalation's in the band, else Jev's."""
-    from cyber_data_collector.utils.llm_models import openai_model
+STEP = final_decisions.Step(
+    name="victim-attribution", question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND or None)
 
-    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
-        found: Dict[str, float] = {}
-        for sid, value in conn.execute(
-                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
-            found[sid] = float(value)
-        return found
 
-    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
-    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
-    out = {}
-    for sid, p in jev.items():
-        in_band = ESCALATE_BAND and ESCALATE_BAND[0] <= p < ESCALATE_BAND[1]
-        if in_band and sid not in escalated:
-            continue    # never escalated: no final score
-        out[sid] = escalated[sid] if in_band else p
-    return out
+def stored_final_probabilities(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]]) -> Dict[str, float]:
+    """Final score per event-victim pair from its decision on the evidence it has **now** (:mod:`final_decisions`).
+
+    It used to be the newest Jev answer and the newest escalation, each chosen alone. A pair with no decision on
+    its current evidence (its records, timeline or co-victims changed since it was judged) has no score here;
+    ``check-victim-attribution`` judges it again. ``pairs`` carry ``pair_id``, ``deduplicated_event_id``,
+    ``entity_id`` and ``victim`` (see :func:`pairs_to_check`)."""
+    return final_decisions.read_current(
+        conn, STEP, [(p["pair_id"], lambda p=p: build_state(conn, p["deduplicated_event_id"], p["entity_id"], p["victim"]))
+                     for p in pairs])
 
 
 # ---------------------------------------------------------------- replacement

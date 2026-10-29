@@ -89,7 +89,8 @@ CANDIDATE_STRATA = ("A", "B", "C")
 def cmd_sample(args) -> int:
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     events = _events(conn)
-    probs = so.stored_final_probabilities(conn)
+    probs = so.stored_final_probabilities(
+        conn, [(e, m["id"]) for e in events.values() for m in e["members"] if m["id"] in e["candidates"]])
     bands: Dict[str, List[tuple]] = {"A": [], "B": [], "C": [], "N": []}
     unjudged = 0
     for did, e in sorted(events.items()):
@@ -171,7 +172,11 @@ def cmd_calibrate(args) -> int:
     sample = {co.member_subject_id(r["deduplicated_event_id"], r["enriched_event_id"]): r for r in _sample()}
     labels = co.load_labels(so.LABELS_PATH)
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    probs = so.stored_final_probabilities(conn)
+    events = _events(conn)
+    probs = so.stored_final_probabilities(
+        conn, [(events[r["deduplicated_event_id"]], r["enriched_event_id"]) for r in sample.values()
+               if r["deduplicated_event_id"] in events and r["enriched_event_id"] in
+               {m["id"] for m in events[r["deduplicated_event_id"]]["members"]}])
 
     rows, other = [], []
     unsure = missing = 0
@@ -250,7 +255,7 @@ def plan(conn: sqlite3.Connection, module) -> "object":
         if undecided:
             raise RecalibrationError(f"{len(undecided)} member(s) could not be escalated (first: {undecided[0]}); "
                                      "see the log. Nothing was calibrated.")
-        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, module.stored_final_probabilities(conn))
+        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, module.stored_final_probabilities(conn, items))
 
     return Plan(items, len(sample), run)
 

@@ -58,6 +58,12 @@ from cyber_data_collector.dedup.candidate_ranking import (
 #: A group of at most this many events is ranked exhaustively (at most 1,770 pairs built); a larger one by
 #: bounded retrieval.
 EXHAUSTIVE_GROUP_MAX = 60
+#: A group of at most this many events has no cap at all on the organisation route: every pair of it is a
+#: candidate (still ranked). The cap exists to bound a large group's cost; for a small one it only lost
+#: recall - on the labelling-time snapshot it dropped 6 of the 17 labelled-same organisation pairs (misdated
+#: copies 707 to 4,603 days apart), which the route used to judge. The AI route, one big group by construction,
+#: keeps its cap. Documented in README.md; the findings report ``uncapped_groups``.
+UNCAPPED_GROUP_MAX = EXHAUSTIVE_GROUP_MAX
 #: Events followed per key shared by many events (a vendor, a records-affected figure): the nearest in date.
 PER_KEY_LIMIT = 24
 
@@ -224,7 +230,8 @@ def rank_groups(corpus: Corpus, groups: Dict[Any, Sequence[Span]], make_pair: Ma
                 window_days: int = WINDOW_DAYS, partners_per_event: int = PARTNERS_PER_EVENT,
                 long_gap_budget: int = LONG_GAP_BUDGET, cap: bool = True,
                 exclude: Optional[Callable[[str, str], bool]] = None,
-                exhaustive_max: int = EXHAUSTIVE_GROUP_MAX) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                exhaustive_max: int = EXHAUSTIVE_GROUP_MAX,
+                uncapped_max: int = 0) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Rank and cap the candidate pairs of every group: :func:`candidate_ranking.select` for a small group,
     :func:`select_bounded` for a large one (and for none of them when ``cap`` is False: every pair is then
     built, as asked).
@@ -233,28 +240,46 @@ def rank_groups(corpus: Corpus, groups: Dict[Any, Sequence[Span]], make_pair: Ma
     first group. ``make_pair(a, b, gap, group)`` builds the pair dict (``pair_id``, ``a``, ``b``, ``gap_days``
     and whatever the route's judgement needs), ``a`` being the earlier event, undated last.
     ``exclude(a_id, b_id)`` removes the pairs another route owns. Returns ``(kept, stats)`` with the keys
-    :func:`candidate_ranking.select` returns, plus ``bounded_groups``. ``before`` for a large group counts every
-    pair of it, including excluded ones.
+    :func:`candidate_ranking.select` returns, plus ``bounded_groups`` and ``uncapped_groups``. ``before`` for a
+    large group counts every pair of it, including excluded ones.
+
+    A group of at most ``uncapped_max`` events keeps **every** pair: the cap bounds a large group's cost, and for a
+    small one it only lost recall. Its pairs are still scored and ranked (``rank_score``, ``rank_reasons``), so a
+    report shows the likeliest first; they count as ``kept_as_partner``.
     """
     exhaustive = not cap or partners_per_event <= 0
     small: Dict[str, Tuple[Dict[str, Any], Any]] = {}
+    uncapped: Dict[str, Tuple[Dict[str, Any], Any]] = {}
     big: List[Tuple[Any, List[Span]]] = []
+    uncapped_groups = 0
     for gid, members in groups.items():
         ordered = sorted({s.event_id: s for s in members}.values(), key=span_order)
-        if exhaustive or len(ordered) <= exhaustive_max:
+        if exhaustive or len(ordered) <= max(exhaustive_max, uncapped_max):
+            keep_all = len(ordered) <= uncapped_max
+            uncapped_groups += keep_all
             for i, a in enumerate(ordered):
                 for b in ordered[i + 1:]:
                     pid = pair_id(a.event_id, b.event_id)
-                    if pid in small or (exclude is not None and exclude(a.event_id, b.event_id)):
+                    if pid in small or pid in uncapped or (exclude is not None and exclude(a.event_id, b.event_id)):
                         continue
-                    small[pid] = (make_pair(a, b, span_gap(a, b), gid), gid)
+                    (uncapped if keep_all else small)[pid] = (make_pair(a, b, span_gap(a, b), gid), gid)
         else:
             big.append((gid, ordered))
     kept_small, stats = select(corpus, [p for p, _ in small.values()],
                                group_of=lambda p: small[p["pair_id"]][1], window_days=window_days,
                                partners_per_event=partners_per_event, long_gap_budget=long_gap_budget, cap=cap)
     merged = {p["pair_id"]: p for p in kept_small}
+    if uncapped:
+        kept_all, extra = select(corpus, [p for p, _ in uncapped.values()],
+                                 group_of=lambda p: uncapped[p["pair_id"]][1], window_days=window_days,
+                                 partners_per_event=partners_per_event, long_gap_budget=long_gap_budget, cap=False)
+        merged.update({p["pair_id"]: p for p in kept_all})
+        for key in ("before", "groups", "long_gap_before", "unknown_gap_before"):
+            stats[key] += extra[key]
+        stats["largest_group_pairs"] = max(stats["largest_group_pairs"], extra["largest_group_pairs"])
     stats["bounded_groups"] = len(big)
+    stats["uncapped_groups"] = uncapped_groups
+    stats["parameters"]["uncapped_group_max"] = uncapped_max
     for gid, ordered in big:
         kept, counts = select_bounded(corpus, ordered, make_pair, gid, window_days, partners_per_event,
                                       long_gap_budget, exclude=exclude)

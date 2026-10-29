@@ -190,3 +190,17 @@ def test_subdivide_ranks_a_large_bucket_of_records_by_retrieval():
 def test_bounded_retrieval_needs_a_positive_cap(ppe):
     with pytest.raises(ValueError):
         bc.select_bounded(_corpus(_spans(5)), _spans(5), _make, partners_per_event=ppe)
+
+
+def test_a_group_up_to_the_uncapped_threshold_keeps_every_pair_and_a_larger_one_is_capped():
+    spans = _spans(30, seed=21)                                  # no evidence at all: only the date ranks them
+    corpus = _corpus(spans)
+    capped, c_stats = bc.rank_groups(corpus, {0: spans}, _make)
+    everything, e_stats = bc.rank_groups(corpus, {0: spans}, _make, uncapped_max=30)
+    assert len(everything) == 30 * 29 // 2 and e_stats["uncapped_groups"] == 1
+    assert len(capped) < len(everything) and c_stats["uncapped_groups"] == 0
+    assert {p["pair_id"] for p in capped} <= {p["pair_id"] for p in everything}
+    assert all(p["rank_kept_as"] == "partner" and "rank_score" in p for p in everything)
+    # One event over the threshold and the cap applies again.
+    assert bc.rank_groups(corpus, {0: spans}, _make, uncapped_max=29)[1]["uncapped_groups"] == 0
+    assert e_stats["before"] == c_stats["before"] == 435 and e_stats["after"] == 435

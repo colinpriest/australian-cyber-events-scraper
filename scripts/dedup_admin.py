@@ -4209,7 +4209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--skip-ai-pairs", action="store_true",
                    help="Leave out the AI-pair route (pairs of AI-involved events with any victim)")
     p.add_argument("--partners-per-event", type=int, default=None,
-                   help="Best-ranked partners kept per event within a group (default 8; 16 for AI pairs; "
+                   help="Best-ranked partners kept per event, in an organisation group of more than 60 events and always for AI pairs (default 8; 16 for AI pairs; "
                         "0 = no limit). See dedup/candidate_ranking.py")
     p.add_argument("--long-gap-budget", type=int, default=None,
                    help="Strong long-gap or undated pairs kept per group beyond the partner limit (default 5)")

@@ -89,7 +89,7 @@ def initialize_database(db_path: str) -> InitReport:
 def _module_schema_steps(conn: sqlite3.Connection) -> None:
     """The schema steps each module runs for itself, run once here up front."""
     from cyber_data_collector.dedup import (
-        contextual_aliases, corroboration, duplicate_judgement, entity_alias_verification, event_facts, org_timeline,
+        contextual_aliases, corroboration, entity_alias_verification, event_facts, final_decisions, org_timeline,
         page_classifier, record_fingerprints,
     )
     from cyber_data_collector.dedup.schema import migrate as migrate_dedup
@@ -102,7 +102,7 @@ def _module_schema_steps(conn: sqlite3.Connection) -> None:
 
     migrate_dedup(conn)
     asd_schema.ensure_schema(conn)
-    for module in (jev, org_timeline, corroboration, entity_alias_verification, duplicate_judgement,
+    for module in (jev, org_timeline, corroboration, entity_alias_verification, final_decisions,
                    contextual_aliases, page_classifier,
                    record_fingerprints, event_facts, retry_queue, ai_involvement, publication_dates,
                    evidence_recovery, cyberdaily_refetch, incident_dates, record_identity):

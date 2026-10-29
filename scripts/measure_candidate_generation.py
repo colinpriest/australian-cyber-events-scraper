@@ -3,9 +3,9 @@
 ``check-duplicates`` only asks a ranked, capped subset of the pairs of events that share an organisation (or, for
 the AI route, are AI-involved and near in time). It used to build every pair of a group before the cap threw most
 away, so CPU and memory grew with the square of the largest group. This script runs both the way it was
-(``enumerate``: every pair built, then :func:`candidate_ranking.select`) and the way it is
-(``retrieve``: :mod:`bounded_candidates`; ``retrieve-forced`` also sends small groups through retrieval), on a
-database copy, and reports for each route
+(``enumerate``: every pair built, then :func:`candidate_ranking.select` with the cap on every group) and the way
+it is (``retrieve``: :mod:`bounded_candidates` - no cap on an organisation group of up to 60 events, retrieval for a
+larger one; ``retrieve-forced``: retrieval and the cap on every group), on a database copy, and reports for each route
 
 * groups, the largest group, and the pairs that exist (arithmetically);
 * pairs built, pairs kept, wall time, peak Python memory (``tracemalloc``);
@@ -100,7 +100,8 @@ def _route_runner(conn: sqlite3.Connection, route: str, corpus) -> Dict[str, Cal
                 counter = Counter(universe._make)
                 setattr(universe, make_attr, counter)
                 try:
-                    kept, stats = universe.ranked(corpus, exhaustive_max=exhaustive_max)
+                    kept, stats = universe.ranked(corpus, exhaustive_max=exhaustive_max,
+                                                  uncapped_max=0 if exhaustive_max == 0 else None)
                 finally:
                     delattr(universe, make_attr)
                 return kept, stats, counter.built

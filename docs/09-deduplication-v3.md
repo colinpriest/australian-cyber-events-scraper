@@ -1074,6 +1074,13 @@ cut-off. On the 2026-10-29 copy the organisation route went from 229 to 69 candi
 `Adjudicator.candidate_pairs` (find-missed) now subdivides a bucket over `MAX_ENTITY_BUCKET` with the same ranking instead of
 skipping it.
 
+**No cap on a small group** (`UNCAPPED_GROUP_MAX` = 60). The partner cap and the "no pair beyond a year without strong evidence"
+rule bound a large group's cost; on a small one they only lost recall. On the labelling-time snapshot they dropped 6 of the
+17 labelled-`same` organisation pairs (gaps 707 to 4,603 days: misdated copies; Qantas, Optus, Swinburne, Telstra, UWA, Elina).
+Every pair of an organisation group of up to 60 events is now a candidate and is still scored and ranked; recall on the labels
+is 17/17 `same` and 138/138 `different` (49 -> 157 candidate pairs on the snapshot, 75 -> 236 on the 2026-10-29 copy). The AI
+route, one group, keeps its cap.
+
 **Retrieval instead of enumeration** (`dedup/bounded_candidates.py`, 2026-10-29). Ranking took the pairs as input, so every
 pair of a group was built (a dict each) before the cap discarded nearly all of them: CPU and memory grew with the square of the
 largest group (a 2,000-event group: 1,999,000 pairs, 30 s, 1.24 GB at peak, measured), though paid calls stayed bounded. Groups
@@ -1097,9 +1104,17 @@ here and pair id there. `scripts/measure_candidate_generation.py` reports pairs 
 labelled pairs for `enumerate`, `retrieve` and `retrieve-forced` (retrieval for every group). Nothing in the evidence
 fingerprints changed.
 
-**Decisions tied to their evidence.** `PairDecisions` (`route`, `pair_id`, `evidence_hash`, `question_version`, `jev_model`,
-`escalation_model`, `final_score`, `basis`, `jev_input_hash`, `escalation_input_hash`, `decided_at`) holds the score the
-pipeline acts on, with the SHA-256 of the pair state that Jev **and** the escalation were shown. It is written by
+**Decisions tied to their evidence.** `FinalDecisions` (`step`, `subject_id`, `evidence_hash`, `question_version`, `jev_model`,
+`escalation_model`, `final_score`, `basis`, `jev_input_hash`, `escalation_input_hash`, `decided_at`; module
+`dedup/final_decisions.py`) holds the score a judging step acts on, with the SHA-256 of the state that Jev **and** the escalation
+were shown. Steps: `duplicates-organisation`, `duplicates-ai` (subject = pair), `event-reality`, `event-scope` (subject = event),
+`coherence`, `coherence-same-organisation` (subject = `event|record`) and `victim-attribution` (subject = `event|entity`). Each
+step records the decision where it scores (`record_final` / `judge_members` / `judge_pairs` / `duplicate_judgement.score_pairs`),
+and its `stored_final_probabilities` reads only a decision whose hash is the subject's evidence now. **Labels decide first**:
+`check-events --apply` does not ask about events labelled real, `check-scope --apply` about events labelled in or out of
+scope, `check-coherence` / `check-same-organisation` about members labelled same or different, and `check-duplicates` about
+pairs labelled same or different; victim attribution still judges labelled pairs, because flag review confirms a flagged pair
+labelled correct only with its score. The duplicate paragraph that follows applies to the pair steps. It is written by
 `duplicate_judgement.score_pairs` (both routes), read by `current_decisions` / `stored_final_probabilities(conn, pairs)` only
 when `evidence_hash` equals the hash of the pair's state now (and the models and question versions match), and `stale_decisions`
 returns the newest decision whatever its evidence. The old reader chose the newest Jev answer and the newest escalation
@@ -1108,9 +1123,9 @@ independently (kept for snapshots as `unvalidated_final_probabilities`, used onl
 group involves: a decision on the current evidence vetoes at its score; one on other evidence **and below the calibrated
 `different_cutoff`** is asked again on the current evidence (Jev, then the reasoning model for the middle band) and the new
 answer decides; a stale high one, one outside the proposed events, one for a pair no longer a candidate, or one whose
-escalation fails vetoes nothing. `check_duplicates` reports `veto_rejudged`. A first run after the change fills `PairDecisions`
+escalation fails vetoes nothing. `check_duplicates` reports `veto_rejudged`. A first run after the change fills `FinalDecisions`
 from the stored answers (their input hashes still match) without a paid call; `recalibrate` and the calibration scripts read
-`PairDecisions` for the labelled pairs (the recalibration copies are re-scored first).
+`FinalDecisions` for the labelled cases (the recalibration plans record as they re-score the copies).
 
 **Alias decisions.** `EntityAliasDecisions` rows are asked again when `evidence_hash` changed *and* the pair matters now
 (proposed for a fold, or a stored `different` / `related` / `parent_subsidiary` barring a name from a proposed fold); `human`
