@@ -91,15 +91,17 @@ def _pair(a: str, b: str) -> Tuple[str, str]:
 
 
 def stored_verdicts(conn: sqlite3.Connection) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """The reusable decisions: this prompt version and this Perplexity model.
+    """The reusable decisions: this prompt version and this Perplexity model, or a person's.
 
     A decision made by another model is not reused (it is asked again), so changing ``PERPLEXITY_MODEL``
-    cannot leave old verdicts standing as if the new model had given them. Each entry carries the
+    cannot leave old verdicts standing as if the new model had given them. A ``human`` decision (an
+    ``unmerge-entity``) is always reused and outranks a model's for the same pair. Each entry carries the
     ``evidence_hash`` it was made on; :func:`verify_pair` re-asks an ``unsure`` one when that changed.
     """
     ensure_schema(conn)
-    rows = conn.execute("SELECT name, other_name, verdict, canonical_name, reason, evidence_hash "
-                        "FROM EntityAliasDecisions WHERE prompt_version = ? AND model = ?",
+    rows = conn.execute("SELECT name, other_name, verdict, canonical_name, reason, evidence_hash, model "
+                        "FROM EntityAliasDecisions WHERE prompt_version = ? AND model IN (?, 'human') "
+                        "ORDER BY model = 'human'",
                         (PROMPT_VERSION, perplexity_model())).fetchall()
     return {(r[0], r[1]): {"verdict": r[2], "canonical_name": r[3], "reason": r[4], "evidence_hash": r[5]}
             for r in rows}

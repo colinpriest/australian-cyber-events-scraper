@@ -39,7 +39,7 @@ def _db(verdicts):
     eav.ensure_schema(conn)
     for (a, b), verdict in verdicts.items():
         a, b = sorted((a, b))
-        conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, ?, NULL, 'stored', '[]', 'sonar-pro', ?, 'x')",
+        conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, ?, NULL, 'stored', '[]', 'sonar-pro', ?, 'x', NULL)",
                      (a, b, verdict, eav.PROMPT_VERSION))
     conn.commit()
     return conn

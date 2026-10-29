@@ -69,7 +69,7 @@ def conn(tmp_path, template):
     c.execute("INSERT INTO EntityNotes VALUES (1, 2, 'sized from the annual report')")
     eav.ensure_schema(c)
     c.execute("INSERT INTO EntityAliasDecisions VALUES ('ACME HEALTH PTY LTD', 'Acme Health', 'same', 'Acme Health', "
-              "'one company', '[]', 'sonar-pro', ?, '2026-10-29')", (eav.PROMPT_VERSION,))
+              "'one company', '[]', 'sonar-pro', ?, '2026-10-29', NULL)", (eav.PROMPT_VERSION,))
     c.commit()
     return c
 
@@ -217,7 +217,7 @@ def test_role_strength_orders_roles():
 def _set_verdict(conn, verdict):
     conn.execute("DELETE FROM EntityAliasDecisions")
     conn.execute("INSERT INTO EntityAliasDecisions VALUES ('ACME HEALTH PTY LTD', 'Acme Health', ?, NULL, 'now different', "
-                 "'[]', 'sonar-pro', ?, '2026-10-30')", (verdict, eav.PROMPT_VERSION))
+                 "'[]', 'sonar-pro', ?, '2026-10-30', NULL)", (verdict, eav.PROMPT_VERSION))
 
 
 def test_a_model_fold_is_undone_when_its_verdict_changes(conn):

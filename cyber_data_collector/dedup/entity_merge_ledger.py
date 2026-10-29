@@ -434,16 +434,16 @@ def _record_not_same(conn: sqlite3.Connection, a: str, b: str, reason: str) -> N
     Replaces a stored ``same`` (the verdict being overturned); a stored verdict that is already
     not-same (``parent_subsidiary``, ``related``, ``unsure``, ``different``) is kept.
     """
-    try:
-        from cyber_data_collector.dedup.entity_alias_verification import PROMPT_VERSION
+    # Without this verdict a later canonicalise-entities could fold the pair straight back, so a failure
+    # raises. The table exists already (_ensure_decisions_table, before the savepoint opened).
+    from cyber_data_collector.dedup.entity_alias_verification import PROMPT_VERSION
 
-        key = (a, b) if a <= b else (b, a)
-        conn.execute("DELETE FROM EntityAliasDecisions WHERE name = ? AND other_name = ? AND prompt_version = ? "
-                     "AND verdict = 'same'", (key[0], key[1], PROMPT_VERSION))
-        conn.execute("INSERT OR IGNORE INTO EntityAliasDecisions VALUES (?, ?, 'different', NULL, ?, '[]', 'human', ?, ?)",
-                     (key[0], key[1], reason[:500], PROMPT_VERSION, datetime.now().isoformat(timespec="seconds")))
-    except sqlite3.Error as exc:       # the verdict table is a convenience; the unmerge stands without it
-        logger.warning("could not record the pair %r / %r as different: %s", a, b, exc)
+    key = (a, b) if a <= b else (b, a)
+    conn.execute("DELETE FROM EntityAliasDecisions WHERE name = ? AND other_name = ? AND prompt_version = ? "
+                 "AND verdict = 'same'", (key[0], key[1], PROMPT_VERSION))
+    conn.execute("INSERT OR IGNORE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
+                 "citations_json, model, prompt_version, decided_at) VALUES (?, ?, 'different', NULL, ?, '[]', 'human', ?, ?)",
+                 (key[0], key[1], reason[:500], PROMPT_VERSION, datetime.now().isoformat(timespec="seconds")))
 
 
 def list_merges(conn: sqlite3.Connection, status: Optional[str] = None) -> List[Dict[str, Any]]:
