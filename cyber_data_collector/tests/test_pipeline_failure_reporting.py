@@ -55,20 +55,50 @@ def test_clean_run_is_ok(pipeline, monkeypatch):
     assert asyncio.run(pipeline.run_pipeline(_args())) == "ok"
 
 
+def _publication(monkeypatch, builder, allowed=True, reasons=()):
+    """Run the real publication step with one fake builder and a fake gate verdict."""
+    import cyber_data_collector.publication.outputs as outputs
+    import cyber_data_collector.quality.gate as gate
+
+    monkeypatch.setattr(outputs, "DEFAULT_BUILDERS", {"dashboard": builder})
+
+    def fake_checks(conn, thresholds=None, today=None, evaluation_dir=None, snapshot=None, db_path=None):
+        from cyber_data_collector.quality.model import load_thresholds
+        return gate.QualityReport(run_id="qr-test", created_at="2026-10-29T00:00:00", db_path=str(db_path),
+                                  thresholds=load_thresholds(), metrics=[], allowed=allowed,
+                                  reasons=list(reasons), snapshot_id=snapshot.snapshot_id,
+                                  snapshot_sha256=snapshot.sha256)
+
+    monkeypatch.setattr(gate, "run_quality_checks", fake_checks)
+    monkeypatch.setattr(gate, "store_report", lambda conn, report: report.run_id)
+
+
+def _live_db(tmp_path):
+    import sqlite3
+    path = tmp_path / "db.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE t (x)")
+    return path
+
+
 def test_invalid_dashboard_is_not_published(pipeline, monkeypatch, tmp_path):
     out = tmp_path / "dashboard"
     out.mkdir()
     (out / "index.html").write_text("<html>last good</html>", encoding="utf-8")
-    (tmp_path / "db.sqlite").write_bytes(b"")
+    _live_db(tmp_path)
 
-    def tiny(db_path, out_dir):
-        path = Path(out_dir) / "index.html"
+    def tiny(ctx):
+        path = ctx.dashboard_dir / "index.html"
         path.write_text("<html>stub</html>", encoding="utf-8")   # far under 50 KB
-        return str(path)
+        from cyber_data_collector.publication.outputs import PublicationError, validate_dashboard
+        problems = validate_dashboard(str(path))
+        if problems:
+            raise PublicationError("; ".join(problems))
+        return [path]
 
-    monkeypatch.setattr(rfp, "build_dashboard_file", tiny)
+    _publication(monkeypatch, tiny)
     monkeypatch.setattr(rfp, "get_connection", _fake_connection)
-    assert pipeline.run_dashboard_phase(_args(out_dir=str(out))) is False
+    assert pipeline.run_dashboard_phase(_args(out_dir=str(out), risk_matrix_dir=str(tmp_path / "risk"))) is False
     assert (out / "index.html").read_text(encoding="utf-8") == "<html>last good</html>"
 
 
@@ -76,36 +106,34 @@ def test_quality_gate_blocks_publication(pipeline, monkeypatch, tmp_path):
     out = tmp_path / "dashboard"
     out.mkdir()
     (out / "index.html").write_text("<html>last good</html>", encoding="utf-8")
-    (tmp_path / "db.sqlite").write_bytes(b"")
+    _live_db(tmp_path)
 
-    def full(db_path, out_dir):
-        path = Path(out_dir) / "index.html"
+    def full(ctx):
+        path = ctx.dashboard_dir / "index.html"
         path.write_text("<html>" + "x" * 60_000 + "</html>", encoding="utf-8")
-        return str(path)
+        return [path]
 
-    import cyber_data_collector.quality as quality
-    monkeypatch.setattr(rfp, "build_dashboard_file", full)
+    _publication(monkeypatch, full, allowed=False, reasons=["labels.contradictions_total"])
     monkeypatch.setattr(rfp, "get_connection", _fake_connection)
-    monkeypatch.setattr(quality, "publication_allowed", lambda conn, **kw: (False, ["labels.contradictions_total"]))
-    assert pipeline.run_dashboard_phase(_args(out_dir=str(out))) is False
+    assert pipeline.run_dashboard_phase(_args(out_dir=str(out), risk_matrix_dir=str(tmp_path / "risk"))) is False
     assert (out / "index.html").read_text(encoding="utf-8") == "<html>last good</html>"
 
 
 def test_valid_dashboard_is_published(pipeline, monkeypatch, tmp_path):
     out = tmp_path / "dashboard"
-    (tmp_path / "db.sqlite").write_bytes(b"")
+    _live_db(tmp_path)
 
-    def full(db_path, out_dir):
-        path = Path(out_dir) / "index.html"
+    def full(ctx):
+        path = ctx.dashboard_dir / "index.html"
         path.write_text("<html>" + "x" * 60_000 + "</html>", encoding="utf-8")
-        return str(path)
+        return [path]
 
-    import cyber_data_collector.quality as quality
-    monkeypatch.setattr(rfp, "build_dashboard_file", full)
+    _publication(monkeypatch, full)
     monkeypatch.setattr(rfp, "get_connection", _fake_connection)
-    monkeypatch.setattr(quality, "publication_allowed", lambda conn, **kw: (True, []))
-    assert pipeline.run_dashboard_phase(_args(out_dir=str(out))) is True
+    assert pipeline.run_dashboard_phase(_args(out_dir=str(out), risk_matrix_dir=str(tmp_path / "risk"))) is True
     assert (out / "index.html").stat().st_size > 50_000
+    assert "data-snapshot" in (out / "index.html").read_text(encoding="utf-8")
+    assert (out / "publication.json").is_file()
 
 
 class _fake_connection:

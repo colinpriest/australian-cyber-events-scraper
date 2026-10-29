@@ -2092,6 +2092,10 @@ def write_report(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB, help="SQLite database path.")
+    parser.add_argument("--snapshot-id", default=None,
+                        help="Analyse this retained database snapshot (an id, or 'latest-published') instead of "
+                             "snapshotting --db. Run the other bandings with the id this run prints so every run "
+                             "(and the extended analyses) uses exactly the same data.")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="Directory for analysis outputs.")
     parser.add_argument(
         "--censor-date",
@@ -2107,7 +2111,12 @@ def main() -> int:
     parser.add_argument("--bootstrap", type=int, default=500, help="Entity bootstrap replicates for piecewise hazard CI.")
     parser.add_argument("--seed", type=int, default=20260805, help="Bootstrap random seed.")
     parser.add_argument("--extended", action="store_true",
-                        help="Also run the extended recurrence analyses in OUT_DIR/extended.")
+                        help="Also run the extended recurrence analyses (on the same snapshot) in "
+                             "--extended-out-dir.")
+    parser.add_argument("--extended-out-dir", default=None,
+                        help="Where --extended writes: the single extended-results folder "
+                             "(default: analysis/recurrent_timing_extended, which also holds the frozen "
+                             "prospective cohorts).")
     parser.add_argument("--date-draws", type=int, default=100,
                         help="Date-uncertainty draws for --extended (default: 100).")
     parser.add_argument(
@@ -2119,14 +2128,32 @@ def main() -> int:
     )
     parser.add_argument(
         "--dashboard-out",
-        default=DEFAULT_DASHBOARD_OUT,
-        help="HTML page combining every run under the output's parent folder ('' to skip).",
+        default="",
+        help="Write the HTML page combining every run under the output's parent folder to this path "
+             f"(default: none - the publication step builds {DEFAULT_DASHBOARD_OUT} with the other "
+             "dashboards, from the published snapshot, and moves them into place together).",
     )
     args = parser.parse_args()
 
-    db_path = Path(args.db)
+    from cyber_data_collector.publication.snapshot import AnalysisInput
+
+    source_db = Path(args.db)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # One retained snapshot for this whole run (and its extended analyses): the live database may
+    # change while the analysis runs, and the exact input must be restorable afterwards.
+    analysis_input = AnalysisInput.open(source_db, args.snapshot_id)
+    try:
+        return _run(args, source_db, out_dir, analysis_input)
+    finally:
+        analysis_input.close()
+
+
+def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_input) -> int:
+    db_path = analysis_input.path
+    print(f"Data snapshot {analysis_input.snapshot.snapshot_id} "
+          f"({'restored' if analysis_input.reused else 'taken from ' + str(source_db)}); "
+          f"rerun other bandings with --snapshot-id {analysis_input.snapshot.snapshot_id}")
     censor_date = parse_date(args.censor_date) if args.censor_date else last_ingest_date(db_path)
     elapsed_bounds = args.elapsed_bounds
 
@@ -2244,6 +2271,8 @@ def main() -> int:
     }
 
     summary = {
+        "snapshot_id": analysis_input.snapshot.snapshot_id,
+        "snapshot_sha256": analysis_input.snapshot.sha256,
         "data_quality": data_quality,
         "elapsed_bounds": ["inf" if math.isinf(v) else int(v) for v in elapsed_bounds],
         "unadjusted_piecewise_lrt": unadjusted_lrt,
@@ -2292,16 +2321,20 @@ def main() -> int:
     summary["conclusions"] = conclusions
     (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
+    analysis_input.record(out_dir, analysis="repeat-event timing", censor_date=censor_date.isoformat(),
+                          elapsed_bounds=str(elapsed_bounds), bootstrap_replicates=args.bootstrap, seed=args.seed,
+                          unresolved_attributions=args.unresolved_attributions)
     print(f"Wrote recurrent timing analysis to {out_dir}")
     print(f"Adjusted elapsed-time LRT p-value: {adjusted_lrt['p_value']:.4g}")
     print(f"Best parametric AIC model: {model_table.iloc[0]['model']}")
 
     if args.extended:
-        from scripts.analyze_recurrence_extensions import run_analysis
-        run_analysis(db_path, out_dir / "extended", censor_date,
+        from scripts.analyze_recurrence_extensions import DEFAULT_OUT as EXTENDED_OUT, run_analysis
+        extended_out = Path(args.extended_out_dir or EXTENDED_OUT)
+        run_analysis(source_db, extended_out, censor_date,
                      bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed,
-                     unresolved_attributions=args.unresolved_attributions)
-        print(f"Wrote extended recurrence analyses to {out_dir / 'extended'}")
+                     unresolved_attributions=args.unresolved_attributions, analysis_input=analysis_input)
+        print(f"Wrote extended recurrence analyses to {extended_out}")
 
     if args.dashboard_out:
         dashboard_path = Path(args.dashboard_out)

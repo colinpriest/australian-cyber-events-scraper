@@ -141,6 +141,15 @@ agreement.
 Each case is its own metric (`synthetic.merge.first_of_month_is_not_a_day`),
 so a regression names itself.
 
+## 5a. What is measured: a snapshot
+
+The pipeline's publication step measures a **snapshot** of the database, not the live
+file, and builds every output from the same snapshot (`publication/outputs.py`, see
+[08-dashboard-generation.md](08-dashboard-generation.md)). The report names it
+(`Snapshot: snap-...`), `QualityRuns.snapshot_id` / `snapshot_sha256` record it, and
+`quality_report.py --snapshot-id <id>` measures a retained one. A run on the live database
+(`quality_report.py` without the option) says so.
+
 ## 6. History
 
 ```sql
