@@ -76,6 +76,9 @@ QUESTION_VERSION = "ai-involvement-v4"
 QUESTION_ID = "ai_involvement"
 ESCALATION_QUESTION_ID = "ai_involvement_escalated"
 ESCALATION_VERSION = "ai-involvement-escalation-v2"
+#: Bump when what the question is shown changes (``breach_source.event_state``);
+#: its parameters are in :func:`evidence_fingerprint` and need no bump.
+EVIDENCE_VERSION = "ai-involvement-evidence-v1"
 #: Jev's answer is settled when its top option reaches DOMINANT or leads the
 #: next by MARGIN; otherwise the reasoning model is asked (Vercel, 2026-10-28:
 #: attacker 0.48 / vulnerability 0.42 had been published as "AI-attacker").
@@ -246,12 +249,26 @@ def question() -> Any:
     return Choice(instructions=INSTRUCTIONS, criteria=CRITERIA)
 
 
+def evidence_fingerprint() -> str:
+    """A hash of everything that shapes the evidence the question sees (``breach_source.event_state``)."""
+    from cyber_data_collector.dedup import calibration_guard
+    from cyber_data_collector.processing import active_evidence
+    from cyber_data_collector.processing import breach_source as bs
+    from cyber_data_collector.utils import escalation
+
+    return calibration_guard.fingerprint(
+        "ai-involvement", version=EVIDENCE_VERSION, max_records=bs.MAX_RECORDS, page_chars=bs.PAGE_CHARS,
+        event_page_chars=bs.EVENT_PAGE_CHARS, other_titles=bs.OTHER_TITLES, snippet_chars=bs.SNIPPET_CHARS,
+        reasoning_chars=bs.REASONING_CHARS, active_evidence=active_evidence.rules_fingerprint(),
+        escalation_effort=escalation.REASONING_EFFORT)
+
+
 def calibration_identity() -> Dict[str, str]:
-    """What a calibration must have been measured on to apply: question, escalation and both models."""
+    """What a calibration must have been measured on to apply: question, escalation, both models, evidence."""
     from cyber_data_collector.utils.llm_models import openai_model, typesafe_model
 
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
 
 
 def active_calibration(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
@@ -266,11 +283,12 @@ def active_calibration(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         logger.error("AI involvement calibration unreadable (%s): %s - labels are the most probable option",
                      path, exc)
         return None
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        logger.warning("AI involvement calibration is for %s / %s, not %s / %s: labels are the most "
-                       "probable option", cal.get("model"), cal.get("question_version"), want["model"],
-                       want["question_version"])
+    from cyber_data_collector.dedup import calibration_guard
+
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning("AI involvement calibration does not apply (%s): labels are the most probable "
+                       "option until scripts/calibrate_ai_involvement.py calibrate is rerun", reason)
         return None
     return cal if cal.get("cutoff") is not None else None
 

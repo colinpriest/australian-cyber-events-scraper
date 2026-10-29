@@ -1,6 +1,7 @@
 {
   "question_version": "ai-involvement-v4+ai-involvement-escalation-v2",
   "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+  "evidence": "ai-involvement:c085fe96e999f24e",
   "calibrated_on_database": "cyber_events.db",
   "cutoff": 0.69,
   "precision_target": 0.95,
@@ -22,7 +23,7 @@
   "missing": 0,
   "labels_file": "evaluation\\ai_involvement_labels.csv",
   "sample_file": "evaluation\\ai_involvement_sample.csv",
-  "generated": "2026-10-29T17:23:20.685485",
+  "generated": "2026-10-29T18:34:59.537022",
   "bootstrap_out_of_sample_precision": {
     "replicates": 1000,
     "median": 1.0,
