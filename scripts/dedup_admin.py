@@ -106,7 +106,6 @@ from cyber_data_collector.dedup.recurrence_check import (
 from cyber_data_collector.dedup.entity_merge import (
     OrganisationResolver,
     canonical_groups,
-    inherit_attributes,
     merge_entities,
 )
 from cyber_data_collector.dedup.ledger import DedupLedger, pair_key
@@ -2258,6 +2257,9 @@ def cmd_canonicalise_entities(args) -> int:
     a contextual alias and each link is placed by its own record's text
     (:mod:`contextual_aliases`), which also puts back links an earlier
     entity-wide fold moved without that context.
+    Every fold is recorded in ``EntityMerges`` and can be undone
+    (``unmerge-entity``); a fold a model decided is undone automatically when
+    its pair's verdict later changes to anything but ``same``.
     Exit 2 without Perplexity or Jev, 1 when a pair or a mention could not be
     decided (left as it was).
     """
@@ -2270,11 +2272,23 @@ def cmd_canonicalise_entities(args) -> int:
     from cyber_data_collector.utils.jev import JevUnavailable
 
     from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
+    from cyber_data_collector.dedup.entity_merge_ledger import reverse_overturned_merges
 
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
         resolver = EntityResolver()
+
+        def reverse_overturned() -> None:
+            reports, refused = reverse_overturned_merges(conn, dry_run=args.dry_run)
+            for entry_report in reports:
+                print(f"  {'would unmerge' if args.dry_run else 'unmerged'} {entry_report.merge_id}: "
+                      f"{entry_report.summary()} (verdict changed)")
+            for entry, why in refused:
+                print(f"  cannot unmerge {entry['merge_id']} ({entry['dropped_name']!r} -> {entry['kept_name']!r}): "
+                      f"{why}", file=sys.stderr)
+
+        reverse_overturned()
         # Acronym aliases leave the global table before anything folds on them.
         scoped_now = [] if args.dry_run else migrate_contextual_aliases(conn)
         conn.commit()
@@ -2294,15 +2308,14 @@ def cmd_canonicalise_entities(args) -> int:
                     print(f"      <- {name!r} (acronym: only where the record's text says so)")
                 if args.dry_run:
                     continue
+                # Only EXPLICIT_ALIASES pairs are "human": a stored model-confirmed alias
+                # folded here keeps the source it had. The fold records who decided.
+                learned_by = {n: "human" if n in reviewed else sources.get(n, source) for n in drop}
                 if drop:
-                    folded += merge_entities(conn, keep, drop)
-                    inherit_attributes(conn, keep)
+                    folded += merge_entities(conn, keep, drop, source=source, sources=learned_by)
                 for name in drop:
                     # Remembered, so a future ingest resolves the variant instead of recreating it.
-                    # Only EXPLICIT_ALIASES pairs are "human": a stored model-confirmed alias
-                    # folded here keeps the source it had.
-                    learned = "human" if name in reviewed else sources.get(name, source)
-                    resolver.learn_alias(conn, name, keep, source=learned)
+                    resolver.learn_alias(conn, name, keep, source=learned_by[name])
                 for name in scoped:
                     add_contextual_alias(conn, name, keep, source)
             conn.commit()
@@ -2334,7 +2347,8 @@ def cmd_canonicalise_entities(args) -> int:
                     print(f"Stored rule-made aliases: {stored.checked} checked, {stored.spelling_only} spelling "
                           f"variants kept, {len(stored.confirmed)} confirmed, {len(stored.removed)} removed")
                     for raw, canonical, verdict in stored.removed:
-                        print(f"  removed alias {raw!r} -> {canonical!r} ({verdict}); its earlier fold needs review")
+                        print(f"  removed alias {raw!r} -> {canonical!r} ({verdict}); a fold recorded in EntityMerges "
+                              "is undone below, an older one needs review")
                     confirmed = verified_groups(conn, proposed, report=report)
                     # Evidence, not name shape: variants of folded-away aliases and names that co-refer in
                     # one event (dedup/alias_learning.py); verified the same way, asked once per pair.
@@ -2343,6 +2357,7 @@ def cmd_canonicalise_entities(args) -> int:
                     print(f"ERROR: proposed folds cannot be verified: {exc}; none applied", file=sys.stderr)
                     return 2
                 merged += fold(confirmed, "llm")
+                reverse_overturned()       # an alias verification just removed leaves its earlier fold behind
                 for name, other, verdict in report.rejected:
                     print(f"  not folded: {name!r} / {other!r} ({verdict})")
                 print(f"Perplexity: {report.asked} pair(s) asked, {report.reused} from stored verdicts; "
@@ -2375,6 +2390,51 @@ def cmd_canonicalise_entities(args) -> int:
         print(f"ERROR: {len(links.failed)} acronym mention(s) could not be decided (escalation failed) "
               "and were left where they were; rerun to retry", file=sys.stderr)
     return 1 if report.failed or links.failed else 0
+
+
+def cmd_unmerge_entity(args) -> int:
+    """Undo one recorded entity fold (``entity-merges`` lists them): the entity comes back with its id,
+    links, roles and attributes; the alias that would fold it again is removed. Exit 1 when it cannot."""
+    from cyber_data_collector.dedup.entity_merge_ledger import UnmergeError, unmerge_entity
+
+    conn = _connect(args.db)
+    try:
+        try:
+            report = unmerge_entity(conn, args.merge_id, reason=args.reason or "", keep_alias=args.keep_alias,
+                                    dry_run=args.dry_run)
+        except UnmergeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        if not args.dry_run:
+            conn.commit()
+        print(("DRY RUN: " if args.dry_run else "") + report.summary())
+        for table, subject, why in report.links_skipped:
+            print(f"  skipped {table} {subject[:8]}: {why}")
+        for column in report.attributes_kept:
+            print(f"  kept {column}: changed since the fold")
+        if report.still_aliased_by:
+            print(f"WARNING: {report.still_aliased_by} names this pair, so canonicalise-entities folds it again; "
+                  "it cannot be overridden by a verdict", file=sys.stderr)
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_entity_merges(args) -> int:
+    """List recorded entity folds, oldest first."""
+    from cyber_data_collector.dedup.entity_merge_ledger import list_merges
+
+    conn = _connect(args.db)
+    try:
+        rows = list_merges(conn, args.status)
+    finally:
+        conn.close()
+    for r in rows:
+        print(f"{r['merge_id']}  {r['status']:<8} {r['source']:<9} {r['dropped_name']!r} -> {r['kept_name']!r}  "
+              f"({r['merged_at']}" + (f", reversed {r['reversed_at']}: {r['reversed_reason']}" if r["reversed_at"] else "")
+              + ")")
+    print(f"{len(rows)} merge(s)")
+    return 0
 
 
 def cmd_redate(args) -> int:
@@ -3802,6 +3862,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Apply only the folds EXPLICIT_ALIASES names (no structural matching)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_canonicalise_entities)
+
+    p = sub.add_parser("unmerge-entity",
+                       help="Undo a recorded entity fold (see entity-merges) and restore it exactly")
+    p.add_argument("merge_id")
+    p.add_argument("--reason", help="Why the fold was wrong")
+    p.add_argument("--keep-alias", action="store_true",
+                   help="Keep the alias that resolves the name to the kept entity (the fold would be redone)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_unmerge_entity)
+
+    p = sub.add_parser("entity-merges", help="List recorded entity folds")
+    p.add_argument("--status", choices=("applied", "reversed"))
+    p.set_defaults(func=cmd_entity_merges)
 
     p = sub.add_parser("redate",
                        help="Repair event dates from member consensus and text")
