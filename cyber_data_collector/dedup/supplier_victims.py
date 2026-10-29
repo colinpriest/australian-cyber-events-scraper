@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.dedup.entity_resolution import EntityResolver, canonical_key
-from cyber_data_collector.dedup.victim_counting import same_organisation as same_org
+from cyber_data_collector.dedup.victim_counting import same_organisation as same_org, with_acronym_policy
 from cyber_data_collector.utils.llm_models import typesafe_model
 
 logger = logging.getLogger(__name__)
@@ -252,7 +252,7 @@ def _records_text(conn: sqlite3.Connection, dedup_id: str) -> List[str]:
 def supplier_incidents(conn: sqlite3.Connection,
                        resolver: Optional[EntityResolver] = None) -> List[SupplierIncident]:
     """Active events with a vendor, or whose text or records describe a supplier compromise."""
-    resolver = resolver or EntityResolver(conn)
+    resolver = with_acronym_policy(conn, resolver or EntityResolver(conn))
     out: List[SupplierIncident] = []
     for did, title, edate, desc, summ, vendor in conn.execute(
             """SELECT deduplicated_event_id, title, event_date, description, summary,
@@ -1190,7 +1190,7 @@ class Gathered:
 
 def gather(conn: sqlite3.Connection, limit: Optional[int] = None) -> Gathered:
     """Supplier incidents and their current candidates, from stored evidence (and stored searches)."""
-    resolver = EntityResolver(conn)
+    resolver = with_acronym_policy(conn, EntityResolver(conn))
     resolver.fit(r[0] for r in conn.execute("SELECT entity_name FROM EntitiesV2"))
     incidents = supplier_incidents(conn, resolver)
     if limit:
@@ -1219,7 +1219,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
 
     search_failures: List[Dict[str, str]] = []
     if research:
-        resolver = EntityResolver(conn)
+        resolver = with_acronym_policy(conn, EntityResolver(conn))
         resolver.fit(r[0] for r in conn.execute("SELECT entity_name FROM EntitiesV2"))
         found = supplier_incidents(conn, resolver)
         for inc in (found[:limit] if limit else found):

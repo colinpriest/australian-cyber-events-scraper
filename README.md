@@ -923,7 +923,16 @@ without readable labels and a matching calibration.
 
 The analysis and the by-entity dashboard count a multi-victim incident once per
 victim organisation and never twice for one organisation stored under two
-names (`dedup/victim_counting.py`). Detail:
+names (`dedup/victim_counting.py`). Distinct affected organisations stay
+distinct - no shared word ("university", "sydney") and no shared acronym joins
+them - while two reports of the incident under different spellings of one
+customer link. An acronym is a candidate, not proof: "AP" fits both Advance
+Press and Associated Press, so it is the same organisation as either only
+through a confirmed global alias or this event's own stored resolution
+(`EntityMentionResolutions`); otherwise it stays unresolved and distinct. An
+acronym that fits exactly one organisation and conflicts with no alias still
+resolves without a model. On the 2026-10-29 copy no count changed (893
+organisations, 69 with a repeat, 123 repeats). Detail:
 [docs/10-supplier-incidents.md](docs/10-supplier-incidents.md).
 
 ### Stray records: event coherence
@@ -1398,6 +1407,52 @@ a future ingest resolves the variant instead of recreating it. The step runs in
 every refresh; a pair Perplexity could not decide stays unfolded and the step
 exits 1. Medicare is folded into Services Australia, which administers it:
 coverage of the 2026 OpenAI-agent incident filed it under both.
+
+**A group is checked against every recorded verdict, not just its head.** Names
+were checked one by one against the group's chosen name, so A=B and A=C could
+both be confirmed while B and C were recorded as different organisations, and
+the three still folded. `verified_groups` now refuses to put two names in one
+fold when a `different`, `parent_subsidiary` or `related` verdict is stored
+between *any* two of them (the name with fewer recorded conflicts joins, the
+other is left out and reported as not folded). It asks Perplexity only about a
+pair that has no verdict and could change the fold: a name a recorded conflict
+already bars is not asked about. `unsure` is not a conflict.
+
+**Folds are lossless, recorded and reversible** (`dedup/entity_merge_ledger.py`).
+A fold used to delete the dropped entity before inheriting its attributes
+(so none were), drop a link both spellings held on one record or event without
+a trace, and leave nothing to undo it with. Each fold is now one atomic step:
+attributes the dropped row carries are inherited first (blanks only; the size
+estimate as a unit); its links move onto the kept entity; where a record or
+event already links both spellings the surviving link keeps the **stronger
+role** (victim > vendor > affected customer > ... > bystander), the higher
+confidence and the summed source count; and an `EntityMerges` row records the
+original entity rows, every link and what became of it (`moved` / `collided`,
+with both original rows), roles, record and event ids, renamed events, mentions,
+the alias and the verdict the fold rested on. Measured against the 2026-05-03
+backup, 345 aliased variants had disappeared since, and 143 records had named
+both spellings of one organisation; those second links were dropped with nothing
+kept (all carried the same role then).
+
+```bash
+python scripts/dedup_admin.py entity-merges [--status applied|reversed]
+python scripts/dedup_admin.py unmerge-entity <merge_id> [--reason "..."] [--keep-alias] [--dry-run]
+```
+
+`unmerge-entity` restores the dropped entity with its original id (so rows
+still keyed by that id point at it again), moves its links back, splits the
+collided links, restores the inherited attributes unless they changed since and
+renames the events back; it removes the alias that would fold the pair again and
+records the pair as `different`. It refuses, changing nothing, when the dropped
+name is in use again or the kept entity was itself folded away later (undo that
+fold first). A pair in `EXPLICIT_ALIASES` is folded again on the next run; a
+verdict cannot override a reviewed alias. It is **automatic** where a later
+decision overturns a fold: `canonicalise-entities` first undoes every applied
+fold decided by a model (`llm`, `structure`) whose pair now has a `different`,
+`parent_subsidiary`, `related` or `unsure` verdict, and again after verifying
+stored aliases; folds a person reviewed (`human`) are never reversed by a model.
+Folds made before the ledger existed have no record and still need review by
+hand.
 
 **Acronym aliases hold only in context** (`dedup/contextual_aliases.py`). A
 confirmed alias used to apply everywhere: the variant's entity was folded and
