@@ -214,9 +214,13 @@ def test_a_snapshot_missing_the_labelled_cases_is_refused(world):
                             verify_keys=False)
 
 
-def test_supplier_victims_are_reported_but_not_recalibrated_here(world):
-    with pytest.raises(rc.RecalibrationError, match="calibrate_supplier_victims"):
-        rc.recalibrate_step("supplier-victims", world.live, world.snapshot)
+def test_supplier_victims_are_a_registered_automatic_step():
+    """Its recalibration is tested with the step's own fixtures in test_supplier_victims.py."""
+    spec = rc.SPECS["supplier-victims"]
+    assert spec.automatic and spec.carries == ("SupplierIncidentSearches",)
+    assert "supplier-victims" in rc.PLANS and "supplier-victims" in rc.CALIBRATE
+    registry = json.loads(rc.SNAPSHOT_REGISTRY.read_text(encoding="utf-8"))["snapshots"]
+    assert registry["supplier-victims"] == "calibration_supplier_victims.db"
 
 
 def test_status_lists_every_step_and_spends_nothing(world, capsys):

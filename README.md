@@ -894,23 +894,32 @@ is not evidence of "different": the calibration records a separate
 `different_cutoff` (the largest score below which at least 95% of labelled
 pairs, weighted, are labelled different and none is labelled the same), and a
 pair scoring between the two, or any model-only pair when a calibration has no
-such bound, is held with the band named. On 2026-10-29 it is 0.78 against a
-0.87 merge cut-off (`calibrate_supplier_victims.py calibrate --different-only`
-adds it to an existing calibration from the stored judgements, no API calls).
+such bound, is held with the band named. On the 2026-10-29 recalibration it is
+0.09 against a 0.89 merge cut-off (`calibrate_supplier_victims.py calibrate
+--different-only` adds it to an existing calibration from the stored judgements,
+no API calls).
 
 ```bash
 python scripts/dedup_admin.py find-supplier-victims --research            # report
 python scripts/dedup_admin.py find-supplier-victims --research --apply    # act (calibrated)
 python scripts/calibrate_supplier_victims.py sample | packet --out DIR | calibrate
+python scripts/dedup_admin.py recalibrate --step supplier-victims         # after an evidence change
 ```
 
 Calibrated 2026-10-27 on 187 blind-labelled items
-(`evaluation/supplier_victim_labels.csv`): same-incident merges at **0.87**
-(30/31 labelled merges right, recall 0.79, bootstrap out-of-sample 0.94);
-co-victims only at **0.96** (7/7, recall 0.11, bootstrap 0.90 - weak: brands
-and units of a recorded victim score high), so most attached victims come from
-the labels. `--apply` refuses (exit 2) without readable labels and a matching
-calibration.
+(`evaluation/supplier_victim_labels.csv`), and **recalibrated 2026-10-29 on
+current evidence** (the evidence fingerprints of `dedup/calibration_guard.py`
+made the first calibration inapplicable): same-incident merges at **0.89**
+(27/27 labelled merges right, recall 0.75, bootstrap mean 0.95 / p05 0.79),
+co-victims at **0.87** (25/26, weighted precision 0.96, recall 0.58, bootstrap
+mean 0.94 / p05 0.76 - the first calibration reached only 0.96 with recall 0.11),
+and "different" below **0.09**. The recalibration scored 70 of the 103 labelled
+victim candidates and 69 of the 71 labelled pairs: the other 33 victims were
+named by a Perplexity search made on 2026-10-27 that was never stored and cannot
+be replayed. `recalibrate` re-scores them on `instance/calibration_supplier_victims.db`
+(a backup taken before the labelled events changed) with the live database's
+stored searches, and refuses below 65% coverage. `--apply` refuses (exit 2)
+without readable labels and a matching calibration.
 
 The analysis and the by-entity dashboard count a multi-victim incident once per
 victim organisation and never twice for one organisation stored under two
