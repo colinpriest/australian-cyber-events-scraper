@@ -15,14 +15,14 @@
       0.8546659090672868,
       0.9949386386341466
     ],
-    "category_agreement": 0.9705882352941176
+    "category_agreement": 1.0
   },
   "labelled_used": 122,
   "unsure_excluded": 0,
   "missing": 0,
   "labels_file": "evaluation\\ai_involvement_labels.csv",
   "sample_file": "evaluation\\ai_involvement_sample.csv",
-  "generated": "2026-10-29T10:56:41.017177",
+  "generated": "2026-10-29T17:23:20.685485",
   "bootstrap_out_of_sample_precision": {
     "replicates": 1000,
     "median": 1.0,
@@ -40,7 +40,7 @@
         0.2214059197562548,
         0.38126918926969533
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.01,
@@ -52,7 +52,7 @@
         0.5225365801066263,
         0.7663746663584595
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.02,
@@ -64,7 +64,7 @@
         0.5700066466848335,
         0.8129143475968796
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.03,
@@ -76,7 +76,7 @@
         0.5973744384734165,
         0.8378886875485057
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.04,
@@ -88,7 +88,7 @@
         0.6121535625207293,
         0.8507951119028996
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.05,
@@ -100,7 +100,7 @@
         0.6277546774315923,
         0.8639686357607541
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.1,
@@ -112,7 +112,7 @@
         0.6617674868607056,
         0.8910399559749099
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.17,
@@ -124,7 +124,7 @@
         0.6617674868607056,
         0.8910399559749099
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.18,
@@ -136,7 +136,7 @@
         0.6803916324485767,
         0.9048730744174144
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.19,
@@ -148,7 +148,7 @@
         0.7215861764782122,
         0.9328412431581007
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.28,
@@ -160,7 +160,7 @@
         0.7215861764782122,
         0.9328412431581007
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.36,
@@ -172,7 +172,7 @@
         0.7155624473141073,
         0.9311584547054459
       ],
-      "category_agreement": 0.9714285714285714
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.41,
@@ -184,7 +184,7 @@
         0.7388757932976187,
         0.9454058022645873
       ],
-      "category_agreement": 0.9714285714285714
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.59,
@@ -196,7 +196,7 @@
         0.7642084129775517,
         0.9593873444171301
       ],
-      "category_agreement": 0.9714285714285714
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.6,
@@ -208,7 +208,7 @@
         0.792003210797347,
         0.972785898605735
       ],
-      "category_agreement": 0.9714285714285714
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.62,
@@ -220,7 +220,7 @@
         0.822950349364601,
         0.9850493372294601
       ],
-      "category_agreement": 0.9714285714285714
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.63,
@@ -232,7 +232,7 @@
         0.8185502589238878,
         0.9846303362329332
       ],
-      "category_agreement": 0.9705882352941176
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.69,
@@ -244,7 +244,7 @@
         0.8546659090672868,
         0.9949386386341466
       ],
-      "category_agreement": 0.9705882352941176
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.8,
@@ -256,7 +256,7 @@
         0.8508409778365519,
         0.9947892280744034
       ],
-      "category_agreement": 0.9696969696969697
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.83,
@@ -268,7 +268,7 @@
         0.8928172849426366,
         1.0
       ],
-      "category_agreement": 0.96875
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.89,
@@ -280,7 +280,7 @@
         0.889740999265246,
         0.9999999999999999
       ],
-      "category_agreement": 0.967741935483871
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.92,
@@ -292,7 +292,7 @@
         0.8864829086095221,
         1.0
       ],
-      "category_agreement": 0.9666666666666667
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.93,
@@ -304,7 +304,7 @@
         0.8793527963418923,
         1.0
       ],
-      "category_agreement": 0.9642857142857143
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.95,
@@ -316,7 +316,7 @@
         0.8793527963418923,
         1.0
       ],
-      "category_agreement": 0.9642857142857143
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.98,
@@ -328,7 +328,7 @@
         0.8754409628553641,
         1.0
       ],
-      "category_agreement": 0.9629629629629629
+      "category_agreement": 1.0
     },
     {
       "cutoff": 0.99,
@@ -340,7 +340,7 @@
         0.8712669561953784,
         1.0
       ],
-      "category_agreement": 0.9615384615384616
+      "category_agreement": 1.0
     },
     {
       "cutoff": 1.0,
@@ -352,7 +352,7 @@
         0.8668035060468213,
         1.0
       ],
-      "category_agreement": 0.96
+      "category_agreement": 1.0
     }
   ]
 }

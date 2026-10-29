@@ -61,7 +61,7 @@ probabilities.
 | The Privacy Commissioner found a retailer's in-store facial recognition unlawful (Kmart, Bunnings) | `ai_misuse` |
 | A company scraped Australians' photos into its own face-recognition tool (Clearview AI) | `ai_misuse` |
 | A contractor uploaded applicants' personal data to ChatGPT (NSW Reconstruction Authority) | `ai_misuse` |
-| Users prompted a platform's image generator to make deepfakes of real people (Grok) | `ai_attacker` (the users' instrument) |
+| Users prompted a platform's own image generator to make sexual deepfakes of real people (Grok); no system was attacked | `ai_misuse` (the platform's AI made them on request) |
 | An AI company suffered an ordinary credential-stuffing breach of its customer database | `no_ai` |
 | Article speculates attackers "may have used AI" with no statement from the victim or investigators | `no_ai` |
 | The victim's breach notice says the phishing email was "likely AI-generated" | `ai_attacker` |
