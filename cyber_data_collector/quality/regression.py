@@ -126,8 +126,12 @@ def _result(prefix: str, checked: int, contradictions: List[str], unchecked: Dic
 
 
 def _check_event_labels(prefix: str, resolver: EventResolver, path: Path, kept: str,
-                        rejected: Tuple[str, ...], note: str) -> Dict[str, Measurement]:
-    """Labels that an event must survive (``kept``, followed through merges) or must not (``rejected``, not Active)."""
+                        rejected: Tuple[str, ...], note: str,
+                        excused: Optional[Set[str]] = None) -> Dict[str, Measurement]:
+    """Labels that an event must survive (``kept``, followed through merges) or must not (``rejected``, not Active).
+
+    ``excused``: events whose rejection does not contradict ``kept`` (counted, not reported).
+    """
     rows = read_labels(path, "deduplicated_event_id")
     contradictions, unchecked, checked = [], defaultdict(int), 0
     for row in rows:
@@ -149,15 +153,32 @@ def _check_event_labels(prefix: str, resolver: EventResolver, path: Path, kept: 
             unchecked[f"merge {status}"] += 1
             continue
         checked += 1
+        if status == "Rejected" and now in (excused or ()):
+            unchecked["rejected for another reason"] += 1
+            continue
         if status == "Rejected":
             via = "" if now == event_id else f" (merged into {now})"
             contradictions.append(f"{event_id}: labelled {kept}, Rejected{via} - {row.get('rationale', '')[:90]}")
     return _result(prefix, checked, contradictions, unchecked, len(rows), note)
 
 
+def _rejected_out_of_scope(conn) -> Set[str]:
+    """Events rejected by the calibrated scope check (its ledger batches): real incidents, but not Australian."""
+    from cyber_data_collector.dedup.event_scope import BATCH_PREFIX
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'DedupSnapshots'").fetchone():
+        return set()
+    return {r[0] for r in conn.execute(
+        """SELECT DISTINCT s.deduplicated_event_id FROM DedupSnapshots s
+           JOIN DeduplicatedEvents d ON d.deduplicated_event_id = s.deduplicated_event_id
+           WHERE d.status = 'Rejected' AND s.batch_id LIKE ?""", (f"{BATCH_PREFIX}-%",))}
+
+
 def check_event_reality(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
+    # ``real`` says the incident happened, not that it is Australian: a scope rejection does not contradict it.
     return _check_event_labels("event_reality", resolver, path, "real", ("not_incident", "out_of_scope"),
-                               "real must be Active or merged into an Active event; not_incident must not be Active")
+                               "real must be Active or merged into an Active event (unless rejected as out of "
+                               "scope); not_incident must not be Active", excused=_rejected_out_of_scope(conn))
 
 
 def check_event_scope(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:

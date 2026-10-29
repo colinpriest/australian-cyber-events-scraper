@@ -226,9 +226,10 @@ def test_an_event_labelled_in_scope_is_never_rejected(conn, tmp_path):
     assert _status(conn)["us"] == "Active"
 
 
-def test_an_event_labelled_real_in_the_reality_labels_is_never_rejected(conn, tmp_path):
-    result = _check(conn, tmp_path, cutoff=0.3, apply=True, rows=[], reality=[("us", "real")])
-    assert [r["deduplicated_event_id"] for r in result["rejections"]] == ["uk"]
+def test_a_real_label_says_nothing_about_scope(conn, tmp_path):
+    """``real`` is a real incident, not an Australian one: a real foreign incident is still rejected."""
+    result = _check(conn, tmp_path, cutoff=0.3, apply=True, rows=[("au", "in_scope")], reality=[("us", "real")])
+    assert {r["deduplicated_event_id"] for r in result["rejections"]} == {"us", "uk"}
 
 
 def test_an_explicit_scope_label_overrides_the_reality_label(conn, tmp_path):
@@ -264,8 +265,8 @@ def test_acting_without_readable_scope_labels_refuses(conn, tmp_path):
 
 
 def test_an_empty_scope_file_is_enough_when_the_reality_labels_imply_scope(tmp_path):
-    scope, real = _labels(tmp_path, reality=[("a", "real")])
-    assert es.labels(scope, real) == {"a": "in_scope"}
+    scope, real = _labels(tmp_path, reality=[("a", "out_of_scope")])
+    assert es.labels(scope, real) == {"a": "out_of_scope"}
 
 
 def test_reporting_does_not_need_the_labels(conn, tmp_path):
@@ -284,7 +285,7 @@ def test_an_unknown_label_is_an_error(tmp_path):
 
 def test_reality_labels_map_to_scope(tmp_path):
     _, real = _labels(tmp_path, reality=[("a", "real"), ("b", "out_of_scope"), ("c", "not_incident"), ("d", "unsure")])
-    assert es.reality_scope_labels(real) == {"a": "in_scope", "b": "out_of_scope"}
+    assert es.reality_scope_labels(real) == {"b": "out_of_scope"}
 
 
 def test_the_middle_band_is_escalated_and_the_escalation_decides(conn, tmp_path):
@@ -477,8 +478,9 @@ def test_calibrate_chooses_the_largest_cutoff_meeting_the_precision(world, capsy
     # Rejecting also the lowest-scoring Australian event (0.80) would drop the precision to 11/13.5.
     assert 0.055 < result["cutoff"] < 0.06 and result["at_cutoff"]["weighted_precision"] == 1.0
     assert result["labelled_out_of_scope"] == 11 and result["unsure_excluded"] == 1
-    assert result["extra_labelled_outside_sample"] == 1            # x1: 'real' in the reality labels, not sampled
-    assert result["labelled_used"] == 11 + 8 + 1
+    # x1 is labelled 'real' in the reality labels: a real incident says nothing about scope, so it is not used.
+    assert result["extra_labelled_outside_sample"] == 0
+    assert result["labelled_used"] == 11 + 8
     assert result["evidence"] == es.evidence_fingerprint() and result["calibrated_on_database"] == "labelling.db"
     assert es.active_calibration(world.calibration)["cutoff"] == result["cutoff"]
 
@@ -571,9 +573,9 @@ def test_recalibrating_rescores_the_labelled_cases_and_writes_a_matching_calibra
                                  escalation_client=NO_ESCALATION, verify_keys=False,
                                  calibrate_args=["--min-rejections", "1"])
     new = json.loads(world.calibration.read_text(encoding="utf-8"))
-    assert new["evidence"] == es.evidence_fingerprint() and new["labelled_used"] == 20
+    assert new["evidence"] == es.evidence_fingerprint() and new["labelled_used"] == 19   # the reality label x1 (real) says nothing about scope
     assert new["recalibration"]["previous"]["evidence"] == "event-scope:0000"
-    assert result["after"]["state"] == "current" and result["cases_scored"] == 20
+    assert result["after"]["state"] == "current" and result["cases_scored"] == 19
 
 
 def _copy(snapshot, live_db):
@@ -585,3 +587,25 @@ def _copy(snapshot, live_db):
 def test_the_snapshot_registry_names_the_event_scope_snapshot():
     registered = json.loads(rc.SNAPSHOT_REGISTRY.read_text(encoding="utf-8"))["snapshots"]
     assert "event-scope" in registered
+
+
+def test_a_real_event_rejected_as_out_of_scope_is_not_a_reality_label_contradiction(tmp_path):
+    """``real`` says the incident happened; the quality gate excuses a scope rejection, not any other."""
+    from cyber_data_collector.quality import regression as rg
+
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT, status TEXT, master_enriched_event_id TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        CREATE TABLE DedupSnapshots (snapshot_id TEXT, batch_id TEXT, deduplicated_event_id TEXT, payload_json TEXT);
+        INSERT INTO DeduplicatedEvents VALUES ('mazda', 'Rejected', 'e1'), ('junk', 'Rejected', 'e2');
+        INSERT INTO DedupSnapshots VALUES ('s1', 'reject-event-scope-20261029', 'mazda', '{}'),
+                                          ('s2', 'reject-event-reality-20261029', 'junk', '{}');
+    """)
+    labels = tmp_path / "reality.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "mazda,real,Mazda breach,,t\njunk,real,a real one wrongly rejected,,t\n", encoding="utf-8")
+    result = rg.check_event_reality(c, rg.EventResolver(c), labels)
+    contradictions = [m for k, m in result.items() if k.endswith("contradictions")][0]
+    assert contradictions.value == 1
+    assert any("junk" in e for e in contradictions.examples) and not any("mazda" in e for e in contradictions.examples)

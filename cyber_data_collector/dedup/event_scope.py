@@ -17,8 +17,8 @@ The middle band goes to the reasoning model (:mod:`utils.escalation`); the
 
 Rejection (``dedup_admin.py check-scope --apply``) uses a **calibrated**
 cut-off, never a default: blind labels of this database's events
-(``evaluation/event_scope_labels.csv``, folded with the ``real`` and
-``out_of_scope`` labels of ``event_reality_labels.csv``) fix the largest
+(``evaluation/event_scope_labels.csv``, folded with the ``out_of_scope``
+labels of ``event_reality_labels.csv``) fix the largest
 cut-off whose rejections are at least 95% labelled out of scope, and
 ``evaluation/event_scope_calibration.json`` records it with the models, the
 question versions and the evidence fingerprint it was measured on.
@@ -276,12 +276,14 @@ def scope_labels(path: Path = LABELS_PATH, required: bool = True) -> Dict[str, s
 
 
 def reality_scope_labels(path: Path = event_reality.LABELS_PATH) -> Dict[str, str]:
-    """The scope the event-reality labels imply: ``real`` is in scope, ``out_of_scope`` is not.
+    """The scope the event-reality labels imply: only ``out_of_scope`` says anything about it.
 
-    ``not_incident`` and ``unsure`` say nothing about scope and are left out. A ``real`` label made
-    before scope was asked can be wrong, so it yields to an explicit scope label (see :func:`labels`).
+    ``real`` means a real incident, not an Australian one - Mazda's and Tesla's breaches are labelled
+    ``real`` - so it implies nothing about scope; folding it in as ``in_scope`` (until 2026-10-29) put
+    real foreign incidents among the in-scope labels and held the calibrated cut-off at 0.03.
+    ``not_incident`` and ``unsure`` say nothing either. An explicit scope label wins (see :func:`labels`).
     """
-    mapping = {"real": "in_scope", "out_of_scope": "out_of_scope"}
+    mapping = {"out_of_scope": "out_of_scope"}
     return {r["deduplicated_event_id"].strip(): mapping[r["label"].strip()]
             for r in _read_rows(path) if (r.get("label") or "").strip() in mapping}
 
