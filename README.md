@@ -1190,8 +1190,10 @@ python scripts/dedup_admin.py roles-status                  # now also: older ro
   "Medicare", which no longer exists as an entity to compare with), and names two records of one event each give as
   the victim. Every proposal goes through the same Perplexity verification (`same` / `parent_subsidiary` / `related` /
   `different` / `unsure`); only `same` folds, stored in `EntityAliases` (`llm`) and asked once per pair. The decision
-  cache now also records the evidence hash (`EntityAliasDecisions.evidence_hash`) and the model: an `unsure` pair is
-  asked again when the incidents or profiles it was shown change, and a decision made by another model is not reused.
+  cache now also records the evidence hash (`EntityAliasDecisions.evidence_hash`) and the model: a model's decision
+  is asked again when the incidents or profiles it was shown change **and the pair matters now** (it is proposed for a
+  fold, or it vetoes one); a decision made by another model is not reused, and a person's (`human`) is never asked
+  again. See "Alias decisions are tied to their evidence" below.
   A product or system named after an organisation is never folded; it offers the organisation as a victim candidate.
 * **Entity profiles** (`dedup/entity_profiles.py`, `EntityProfiles`): jurisdiction, sector, type, administering
   organisation, services run, data held, other names, website. `human` rows (`entity-profile set ... --reason`) are never
@@ -1578,12 +1580,29 @@ safe: on 2026-10-28 it would have folded Marks & Spencer, Media Super and
 Moody's into Mackay Sugar ("MS"), IBM into Australian Cyber Security Magazine
 and a list of the four major banks into Westpac (an acronym now joins names only
 when they are already one organisation, and a list of organisations is never
-folded). Every verdict is stored in `EntityAliasDecisions` and never asked
-again; every fold is remembered in `EntityAliases` (source `human` or `llm`) so
+folded). Every verdict is stored in `EntityAliasDecisions` with the evidence it
+was made on; every fold is remembered in `EntityAliases` (source `human` or `llm`) so
 a future ingest resolves the variant instead of recreating it. The step runs in
 every refresh; a pair Perplexity could not decide stays unfolded and the step
 exits 1. Medicare is folded into Services Australia, which administers it:
 coverage of the 2026 OpenAI-agent incident filed it under both.
+
+**Alias decisions are tied to their evidence.** A settled verdict used to be
+reused for ever, even after the incidents or profile it was judged on had
+changed. The question shows the incident each name appeared in and any stored
+profile of either organisation; `EntityAliasDecisions.evidence_hash` is a hash of
+that. A model's decision is now **asked again when that hash has changed and the
+pair matters now**: it is proposed for folding (by name structure, alias
+learning or the stored-alias check), or it is a stored `different` /
+`related` / `parent_subsidiary` that bars a name from a proposed fold. A decision
+no proposal touches is left alone however old. A person's decision
+(`model = 'human'`) is never asked again and outranks every model's. A decision
+with no recorded hash (made before it was kept: 1,080 of 1,345 on the
+2026-10-29 copy) cannot be shown unchanged, so it is asked again the first time
+it matters (about 230 pairs were proposed that way on that copy; later runs ask
+only what changed). The decision it replaces is kept in
+`EntityAliasDecisionHistory`; a failed re-ask leaves a veto in force and the pair
+in `report.failed` (the fold is the risky direction).
 
 **A group is checked against every recorded verdict, not just its head.** Names
 were checked one by one against the group's chosen name, so A=B and A=C could
@@ -1806,6 +1825,54 @@ each event keeps its best 8 partners (16 for AI pairs), and a small reserved
 budget (5 per group) keeps strong long-gap or undated pairs; the rest are not
 asked. The cap is a parameter (`--partners-per-event`, `--long-gap-budget`,
 `--no-candidate-cap`) and the findings file reports the counts before and after.
+
+**Candidates are retrieved, not enumerated.** Ranking needed every pair of a group
+built first, so CPU and memory grew with the square of the largest group even
+though paid calls stayed bounded. A group of up to 60 events is still ranked
+exactly as before; a larger one (`dedup/bounded_candidates.py`) retrieves a
+limited set per event through indexes - the events citing the same non-hub
+source, naming the same vendor, sharing a corpus-rare word or the same
+records-affected figure, the nearest by date interval (sorted lists and
+`bisect`), and the smallest pair ids among undated partners - and keeps the same
+best partners and the same reserved route for strong long-gap or undated pairs.
+Pairs it does not keep are never built; the counts before the cap are computed
+arithmetically. `scripts/measure_candidate_generation.py` measures it against
+the enumerated ranking and the labelled pairs. On one synthetic group of 2,000
+events the enumerated path built 1,999,000 pairs in 30 s and 1.24 GB at peak; the
+retrieved path built 31,721 in 1.1 s and 19 MB, and kept the identical 9,235
+pairs (20,000 events: 317,920 pairs built of 199,990,000, 12 s, 189 MB). On the
+2026-10-29 database the largest organisation group is 7 events and the AI group
+36, so nothing there is large enough to need it yet: the paths agree exactly and
+recall on the labelled pairs is unchanged: on the labelling-time snapshots the
+cap keeps 11 of the 17 labelled-`same` organisation pairs and 70 of 70 AI pairs,
+by every path. The 6 the cap does not ask are more than a year apart (707 to
+4,603 days) with no strong evidence - a limit of the existing ranking, not of
+retrieval, and still open.
+
+**A duplicate decision is tied to the evidence that produced it.** The final
+score of a pair was rebuilt from the newest Jev answer and the newest escalation,
+each picked on its own, with no check that they saw the same evidence: an
+escalation made before an event's date was corrected could be combined with a
+fresh Jev answer, and a stale low score could veto a merge
+(`partition_without_conflicts` held links on stored scores below
+`different_cutoff`). Now Jev and the escalation are shown one evidence state, and
+the final decision is stored in `PairDecisions` against the hash of that state,
+the Jev and escalation models and the question versions (both routes; `route` =
+`organisation` / `ai`). A score is read only from a decision made on the pair's
+**current** evidence (`dedup.duplicate_judgement.stored_final_probabilities` now
+takes the pairs). A stale low decision is asked again **only where it could
+affect a merge now**: the pair is a candidate this run (scored on its current
+state anyway), or it lies between events a proposed group joins and its old
+score was below the calibrated `different_cutoff` - then it is re-judged
+(`veto_rejudged` in the findings) and the new answer decides; a stale decision
+outside the proposed events, or a stale high one, is left alone, and a
+pair whose escalation fails vetoes nothing. Stored Jev and escalation answers are
+still keyed on their own input hashes, so a run on unchanged evidence buys
+nothing, and a first run after this change fills `PairDecisions` from the stored
+answers without a paid call (on the 2026-10-29 copy 20 of the 73 organisation
+pairs; the other 53 and the 347 AI pairs have no stored answer on their current
+evidence and need asking, exactly as before this change). Nothing in the
+evidence fingerprints changed, so no calibration goes stale.
 
 **Contradictory links do not join a group.** If A=B and B=C but A and C are
 labelled different, ruled different, or scored below the calibration's

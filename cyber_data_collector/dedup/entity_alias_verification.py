@@ -15,8 +15,15 @@ Every verdict is stored in ``EntityAliasDecisions`` (with its reason,
 citations, model and prompt version) and never asked again while the prompt is
 unchanged: an accepted pair becomes a known alias (``EntityAliases``, source
 ``llm``) that future ingests resolve; a rejected pair is never proposed again.
-A failed or unreadable answer leaves the pair undecided (retried next run),
-never folded. Without ``PERPLEXITY_API_KEY`` nothing is verified and the
+A decision is tied to the evidence it was made on (``evidence_hash``: the incident each name
+appeared in and any stored profile of either organisation). When that evidence changes the model's
+decision is **asked again, but only if the pair matters now**: it is proposed for folding, or it
+vetoes a proposed fold. A decision no proposal touches is left as it is, however old; one a person
+made (``model = 'human'``) is never asked again and outranks every model's. A decision with no
+recorded evidence (made before the hash was kept) cannot be shown unchanged, so it is treated as
+changed the first time it matters. Each decision replaced this way is kept in
+``EntityAliasDecisionHistory``. A failed or unreadable answer leaves the pair undecided (retried
+next run), never folded. Without ``PERPLEXITY_API_KEY`` nothing is verified and the
 command fails - structural folds are not applied unverified.
 """
 
@@ -51,6 +58,20 @@ CREATE TABLE IF NOT EXISTS EntityAliasDecisions (
     decided_at     TEXT NOT NULL,
     evidence_hash  TEXT,               -- the incidents (and profiles) the question showed; see pair_evidence
     PRIMARY KEY (name, other_name, prompt_version)
+);
+CREATE TABLE IF NOT EXISTS EntityAliasDecisionHistory (
+    name           TEXT NOT NULL,
+    other_name     TEXT NOT NULL,
+    verdict        TEXT NOT NULL,
+    canonical_name TEXT,
+    reason         TEXT,
+    citations_json TEXT,
+    model          TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    decided_at     TEXT NOT NULL,
+    evidence_hash  TEXT,
+    superseded_at  TEXT NOT NULL,      -- when a newer decision on changed evidence replaced it
+    superseded_by  TEXT                -- the new verdict
 );
 """
 
@@ -96,15 +117,25 @@ def stored_verdicts(conn: sqlite3.Connection) -> Dict[Tuple[str, str], Dict[str,
     A decision made by another model is not reused (it is asked again), so changing ``PERPLEXITY_MODEL``
     cannot leave old verdicts standing as if the new model had given them. A ``human`` decision (an
     ``unmerge-entity``) is always reused and outranks a model's for the same pair. Each entry carries the
-    ``evidence_hash`` it was made on; :func:`verify_pair` re-asks an ``unsure`` one when that changed.
+    ``model`` and the ``evidence_hash`` it was made on; :func:`verify_pair` re-asks a model's decision when
+    that evidence changed and the pair matters (see :func:`is_current`).
     """
     ensure_schema(conn)
     rows = conn.execute("SELECT name, other_name, verdict, canonical_name, reason, evidence_hash, model "
                         "FROM EntityAliasDecisions WHERE prompt_version = ? AND model IN (?, 'human') "
                         "ORDER BY model = 'human'",
                         (PROMPT_VERSION, perplexity_model())).fetchall()
-    return {(r[0], r[1]): {"verdict": r[2], "canonical_name": r[3], "reason": r[4], "evidence_hash": r[5]}
+    return {(r[0], r[1]): {"verdict": r[2], "canonical_name": r[3], "reason": r[4], "evidence_hash": r[5],
+                           "model": r[6]}
             for r in rows}
+
+
+def is_current(stored: Dict[str, Any], evidence: str) -> bool:
+    """Whether a stored decision still stands: a person's always does, a model's only on the evidence it was made on.
+
+    A model's decision with no recorded evidence (made before the hash was kept) is not shown to stand.
+    """
+    return stored.get("model") == "human" or stored.get("evidence_hash") == evidence
 
 
 def incident_context(conn: sqlite3.Connection, name: str) -> str:
@@ -182,6 +213,7 @@ def parse_verdict(text: Optional[str]) -> Optional[Dict[str, Any]]:
 class VerificationReport:
     asked: int = 0
     reused: int = 0
+    revisited: List[Tuple[str, str]] = field(default_factory=list)   # stored decisions asked again: evidence changed
     failed: List[Tuple[str, str]] = field(default_factory=list)
     accepted: List[Tuple[str, str]] = field(default_factory=list)
     rejected: List[Tuple[str, str, str]] = field(default_factory=list)
@@ -189,15 +221,19 @@ class VerificationReport:
 
 def verify_pair(conn: sqlite3.Connection, a: str, b: str, search: Search,
                 known: Dict[Tuple[str, str], Dict[str, Any]], report: VerificationReport) -> Optional[str]:
-    """The verdict for one pair (stored, else asked and stored); None when undecided."""
+    """The verdict for one pair (stored, else asked and stored); None when undecided.
+
+    Callers ask about a pair only when it matters now (proposed for a fold, or vetoing one). A stored decision
+    stands while the evidence it was made on is the evidence now (a person's always stands); otherwise the pair
+    is asked again and the new decision replaces it, the old one being kept in ``EntityAliasDecisionHistory``.
+    """
     key = _pair(a, b)
     evidence = pair_evidence(conn, key[0], key[1])
     if key in known:
-        # A settled verdict stands. An `unsure` one was the evidence's fault: it is asked again when the
-        # evidence (the incidents or profiles shown) is not what it was asked on.
-        if known[key]["verdict"] != "unsure" or known[key].get("evidence_hash") == evidence:
+        if is_current(known[key], evidence):
             report.reused += 1
             return known[key]["verdict"]
+        report.revisited.append(key)
     prompt = PROMPT.format(a=key[0], b=key[1], a_context=_context(conn, key[0]), b_context=_context(conn, key[1]))
     report.asked += 1
     answer = search(prompt)
@@ -205,6 +241,15 @@ def verify_pair(conn: sqlite3.Connection, a: str, b: str, search: Search,
     if verdict is None:
         report.failed.append(key)
         return None
+    # Whatever model's decision this replaces (the current model's, or an older model's) is kept.
+    conn.execute(
+        "INSERT INTO EntityAliasDecisionHistory SELECT name, other_name, verdict, canonical_name, reason, "
+        "citations_json, model, prompt_version, decided_at, evidence_hash, ?, ? FROM EntityAliasDecisions "
+        "WHERE name = ? AND other_name = ? AND prompt_version = ? AND model != 'human'",
+        (datetime.now().isoformat(timespec="seconds"), verdict["verdict"], key[0], key[1], PROMPT_VERSION))
+    if key in known:
+        logger.info("Alias decision for %r / %r re-asked on changed evidence: %s -> %s", key[0], key[1],
+                    known[key]["verdict"], verdict["verdict"])
     conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
                  "citations_json, model, prompt_version, decided_at, evidence_hash) "
                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -212,7 +257,7 @@ def verify_pair(conn: sqlite3.Connection, a: str, b: str, search: Search,
                   json.dumps(answer.get("citations") or []), perplexity_model(), PROMPT_VERSION,
                   datetime.now().isoformat(timespec="seconds"), evidence))
     conn.commit()
-    known[key] = {**verdict, "evidence_hash": evidence}
+    known[key] = {**verdict, "evidence_hash": evidence, "model": perplexity_model()}
     return verdict["verdict"]
 
 
@@ -273,6 +318,24 @@ def _recorded_conflict(known: Dict[Tuple[str, str], Dict[str, Any]], name: str,
     return None
 
 
+def _revisit_stale_vetoes(conn: sqlite3.Connection, known: Dict[Tuple[str, str], Dict[str, Any]], name: str,
+                         members: Sequence[str], search: Search, report: VerificationReport) -> None:
+    """Ask again each stored conflict verdict between ``name`` and a member that was made on other evidence.
+
+    ``name`` is proposed to join the fold, so a stored "different" / "related" / "parent_subsidiary" that would
+    bar it matters now - and a veto the evidence has outgrown must not stand. A person's verdict is not asked
+    again. If the new question fails the old verdict keeps barring the name (the fold is the risky direction)
+    and the pair is in ``report.failed``.
+    """
+    for member in members:
+        key = _pair(name, member)
+        stored = known.get(key)
+        if stored is None or stored["verdict"] not in CONFLICT_VERDICTS:
+            continue
+        if not is_current(stored, pair_evidence(conn, key[0], key[1])):
+            verify_pair(conn, key[0], key[1], search, known, report)
+
+
 def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[str]]],
                     search: Optional[Search] = None,
                     report: Optional[VerificationReport] = None) -> List[Tuple[str, List[str]]]:
@@ -309,6 +372,7 @@ def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[s
             joined: List[str] = []
             barred: Dict[str, Tuple[str, str]] = {}
             for name in order:
+                _revisit_stale_vetoes(conn, known, name, [head, *joined], search, report)
                 conflict = _recorded_conflict(known, name, [head, *joined])
                 if conflict is not None:
                     barred[name] = conflict

@@ -26,7 +26,7 @@ def _bogus_keys(monkeypatch):
     monkeypatch.setenv("TYPESAFE_API_KEY", "not-a-real-key")
 
 
-def _db(verdicts):
+def _db(verdicts, model="sonar-pro", evidence=None):
     """Entities A-D and the stored alias verdicts ``{(name, other): verdict}``."""
     conn = sqlite3.connect(":memory:")
     conn.executescript("""
@@ -39,8 +39,9 @@ def _db(verdicts):
     eav.ensure_schema(conn)
     for (a, b), verdict in verdicts.items():
         a, b = sorted((a, b))
-        conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, ?, NULL, 'stored', '[]', 'sonar-pro', ?, 'x', NULL)",
-                     (a, b, verdict, eav.PROMPT_VERSION))
+        # Decided on the evidence as it is now, so each stored verdict stands.
+        conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, ?, NULL, 'stored', '[]', ?, ?, 'x', ?)",
+                     (a, b, verdict, model, eav.PROMPT_VERSION, evidence if evidence is not None else eav.pair_evidence(conn, a, b)))
     conn.commit()
     return conn
 
@@ -93,3 +94,61 @@ def test_without_a_recorded_conflict_the_group_is_asked_about_and_folds_as_befor
 
     assert eav.verified_groups(conn, [(A, [B, C])], search=search) == [(A, [B, C])]
     assert len(asked) == 2
+
+
+def _answering(verdict, asked):
+    def search(prompt):
+        asked.append(prompt)
+        return {"text": json.dumps({"verdict": verdict, "canonical_name": None, "reason": "r"}), "citations": []}
+    return search
+
+
+def test_a_conflict_verdict_made_on_other_evidence_is_asked_again_when_it_bars_a_proposed_fold():
+    """B-C 'different' was decided on evidence that has since changed; it bars C from A's fold, so it is re-asked."""
+    conn = _db({(A, B): "same", (A, C): "same"})
+    conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, 'different', NULL, 'old', '[]', 'sonar-pro', ?, 'x', 'stale')",
+                 (*sorted((B, C)), eav.PROMPT_VERSION))
+    asked = []
+    report = eav.VerificationReport()
+    groups = eav.verified_groups(conn, [(A, [B, C])], search=_answering("same", asked), report=report)
+    assert len(asked) == 1 and report.revisited == [tuple(sorted((B, C)))]
+    assert groups == [(A, [B, C])]                                  # the outgrown veto no longer bars C
+    old = conn.execute("SELECT verdict, evidence_hash, superseded_by FROM EntityAliasDecisionHistory").fetchall()
+    assert old == [("different", "stale", "same")]                    # the replaced decision is kept
+
+
+def test_a_veto_that_is_still_current_is_not_asked_again():
+    conn = _db({(A, B): "same", (A, C): "same", (B, C): "different"})
+    assert eav.verified_groups(conn, [(A, [B, C])], search=_never_asked) == [(A, [B])]
+
+
+def test_a_failed_reask_leaves_the_old_veto_in_force_and_is_reported():
+    conn = _db({(A, B): "same", (A, C): "same"})
+    conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, 'different', NULL, 'old', '[]', 'sonar-pro', ?, 'x', 'stale')",
+                 (*sorted((B, C)), eav.PROMPT_VERSION))
+    report = eav.VerificationReport()
+    groups = eav.verified_groups(conn, [(A, [B, C])], search=lambda prompt: None, report=report)
+    assert groups == [(A, [B])] and tuple(sorted((B, C))) in report.failed        # C stays out: the fold is the risky direction
+
+
+def test_a_stale_decision_no_proposal_touches_is_left_alone():
+    conn = _db({(A, B): "same"})
+    conn.execute("INSERT INTO EntityAliasDecisions VALUES (?, ?, 'different', NULL, 'old', '[]', 'sonar-pro', ?, 'x', 'stale')",
+                 (*sorted((C, D)), eav.PROMPT_VERSION))
+    assert eav.verified_groups(conn, [(A, [B])], search=_never_asked) == [(A, [B])]
+
+
+def test_a_human_decision_is_never_asked_again_whatever_its_evidence():
+    conn = _db({(A, B): "different"}, model="human", evidence="whatever was true then")
+    report = eav.VerificationReport()
+    assert eav.verified_groups(conn, [(A, [B])], search=_never_asked, report=report) == []
+    assert report.revisited == [] and report.asked == 0
+
+
+def test_a_decision_with_no_recorded_evidence_is_asked_again_the_first_time_it_matters():
+    conn = _db({(A, B): "different"})
+    conn.execute("UPDATE EntityAliasDecisions SET evidence_hash = NULL")
+    asked = []
+    groups = eav.verified_groups(conn, [(A, [B])], search=_answering("same", asked))
+    assert len(asked) == 1 and groups == [(A, [B])]
+    assert conn.execute("SELECT evidence_hash IS NOT NULL FROM EntityAliasDecisions").fetchone()[0] == 1

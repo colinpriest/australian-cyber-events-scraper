@@ -48,6 +48,15 @@ def _hash(state: Mapping[str, Any], question: str, model: str) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def input_hash(state: Mapping[str, Any], question: str, model: Optional[str] = None) -> str:
+    """The key an escalation of ``state`` and ``question`` is stored and reused under.
+
+    Exposed so a caller can record which stored escalation a decision rests on (the duplicate checks'
+    ``PairDecisions``) without re-deriving the hash.
+    """
+    return _hash(state, question, model or openai_model())
+
+
 def _client():
     import instructor
     from openai import OpenAI

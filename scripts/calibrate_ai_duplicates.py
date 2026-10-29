@@ -139,12 +139,13 @@ def cmd_score(args) -> int:
 def cmd_sample(args) -> int:
     conn = sqlite3.connect(args.db)
     rng = random.Random(args.seed)
-    current = {p["pair_id"] for p in ad.ranked_candidates(conn)[0]}
-    final = ad.stored_final_probabilities(conn)
+    ranked = ad.ranked_candidates(conn)[0]
+    current = {p["pair_id"] for p in ranked}
+    final = ad.stored_final_probabilities(conn, ranked)     # decisions on the pairs' current evidence
     probs = {pid: p for pid, p in final.items() if pid in current}
     unscored = len(current - set(probs))
     if unscored:
-        print(f"{unscored} candidate pair(s) have no stored final score (not judged, or escalation failed): "
+        print(f"{unscored} candidate pair(s) have no final score on their current evidence (not judged, evidence changed, or escalation failed): "
               "run the score step first; they are left out")
     bands: Dict[str, List[str]] = {name: [] for name in STRATA}
     for pid, p in probs.items():
@@ -248,7 +249,7 @@ def cmd_calibrate(args) -> int:
         print(f"Cannot calibrate: {exc}")
         return 2
     conn = sqlite3.connect(args.db)
-    probs = ad.stored_final_probabilities(conn)
+    probs = ad.stored_final_probabilities(conn, [p for p in ad.candidate_pairs(conn) if p["pair_id"] in sample])
     rows, unsure, missing = labelled_rows(sample, labels, probs)
     chosen, curve, mirrored = merge_cutoff(rows, args.precision, args.min_merges)
     boot = bootstrap(mirrored, args.precision, args.min_merges)

@@ -42,6 +42,12 @@ group):
    date term would otherwise rank last.
 3. A pair more than ``WINDOW_DAYS`` apart with no such evidence is not asked.
 
+:func:`select` ranks pairs it is given, so a caller has to build every pair of a
+group first. :mod:`bounded_candidates` does the same ranking for a large group
+without building the pairs it does not keep (retrieval through source, supplier,
+rare-word, figure and date-interval indexes), so CPU and memory no longer grow
+with the square of the largest group.
+
 Every parameter is an argument of :func:`select`, of
 ``duplicate_judgement.check_duplicates`` and of ``dedup_admin.py check-duplicates``
 (``--partners-per-event``, ``--long-gap-budget``, ``--no-candidate-cap``), and
@@ -161,13 +167,29 @@ def corpus_from_records(records: Sequence[Any]) -> Corpus:
 
 def subdivide(corpus: Corpus, members: Sequence[Any], gap_of: Callable[[Any, Any], Optional[int]],
               window_days: int = WINDOW_DAYS, partners_per_event: int = PARTNERS_PER_EVENT,
-              long_gap_budget: int = LONG_GAP_BUDGET) -> List[Tuple[str, str]]:
+              long_gap_budget: int = LONG_GAP_BUDGET, day_of: Optional[Callable[[Any], Any]] = None,
+              ) -> List[Tuple[str, str]]:
     """Pairs worth asking inside one oversized bucket of records: each member's best partners, plus the
     reserved budget of strong long-gap / undated pairs (:func:`select` with the bucket as one group).
 
     Replaces skipping a bucket larger than ``Adjudicator.MAX_ENTITY_BUCKET``, which lost every duplicate
     inside it. ``members`` are records with ``enriched_event_id``; ``gap_of(left, right)`` is the gap in days.
+    With ``day_of`` (a member's date) a bucket of more than ``EXHAUSTIVE_GROUP_MAX`` records is ranked by
+    bounded retrieval (:mod:`bounded_candidates`) instead of building every pair of it; the gap is then the
+    days between those dates and ``gap_of`` is not used.
     """
+    if day_of is not None:
+        from cyber_data_collector.dedup import bounded_candidates as bounded
+
+        spans = [bounded.Span(m.enriched_event_id, day_of(m), day_of(m)) for m in members]
+
+        def make(a, b, gap, _group):
+            return {"pair_id": bounded.pair_id(a.event_id, b.event_id), "a": a.event_id, "b": b.event_id,
+                    "gap_days": gap if gap is not None else "unknown"}
+
+        kept, _ = bounded.rank_groups(corpus, {0: spans}, make, window_days=window_days,
+                                      partners_per_event=partners_per_event, long_gap_budget=long_gap_budget)
+        return [(p["a"], p["b"]) for p in kept]
     pairs = []
     ordered = sorted(members, key=lambda r: r.enriched_event_id)
     for i, left in enumerate(ordered):

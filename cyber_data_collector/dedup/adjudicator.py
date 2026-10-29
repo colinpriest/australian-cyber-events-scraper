@@ -316,7 +316,8 @@ class Adjudicator:
 
                 corpus = corpus or ranking.corpus_from_records(records)
                 for left_id, right_id in ranking.subdivide(
-                        corpus, [by_id[m] for m in members], lambda l, r: date_gap_days(l, r)):
+                        corpus, [by_id[m] for m in members], lambda l, r: date_gap_days(l, r),
+                        day_of=lambda r: r.parsed_date()):
                     reasons.setdefault(frozenset((left_id, right_id)), set()).add(
                         f"entity '{key}' (large bucket, ranked)")
                 continue
