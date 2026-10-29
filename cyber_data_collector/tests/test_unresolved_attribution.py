@@ -26,6 +26,19 @@ from cyber_data_collector.dedup.victim_counting import (  # noqa: E402
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _no_text_extraction(monkeypatch):
+    """The victim candidates include organisations the text names (an extraction by the fast model).
+    These tests are about something else: the fake finds none, and bogus keys make a forgotten fake fail."""
+    from cyber_data_collector.dedup import event_organisations
+
+    for var in ("OPENAI_API_KEY", "TYPESAFE_API_KEY", "PERPLEXITY_API_KEY"):
+        monkeypatch.setenv(var, "bogus-not-a-real-key")
+    monkeypatch.setattr(event_organisations, "default_extractor",
+                        lambda: (lambda text: event_organisations.NamedOrganisations()))
+
+
 def _db(path: Path) -> None:
     """ProctorU (two co-equal victims), Medibank under two names, and a later Medibank event."""
     c = sqlite3.connect(path)
@@ -254,7 +267,7 @@ def test_role_refresh_runs_its_steps_and_fails_loudly_on_outdated_roles(tmp_path
     pipeline = SimpleNamespace(db_path=str(path), results={"deduplication": {"errors": []}})
     rfp.UnifiedPipeline.run_role_refresh(pipeline, SimpleNamespace())
     assert calls == [["classify-entities", "--stale-only"], ["check-victims"],
-                     ["check-victim-attribution", "--apply"]]
+                     ["check-victim-attribution", "--apply"], ["fill-victims", "--apply"]]
     errors = pipeline.results["deduplication"]["errors"]
     assert (any(e.startswith("roles:") for e in errors)) is outdated
     assert pipeline.results["deduplication"]["roles"]["outdated"] == int(outdated)
@@ -272,4 +285,4 @@ def test_role_refresh_skips_attribution_with_hygiene_and_reports_only_when_asked
     assert calls == [["classify-entities", "--stale-only"]]
     calls.clear()
     rfp.UnifiedPipeline.run_role_refresh(pipeline, SimpleNamespace(report_event_rejections=True))
-    assert calls[-1] == ["check-victim-attribution"]
+    assert calls[-2:] == [["check-victim-attribution"], ["fill-victims"]]

@@ -182,7 +182,7 @@ def test_the_registry_resolves_beside_the_live_database(world, tmp_path):
 def test_the_committed_registry_names_a_snapshot_for_every_calibrated_step():
     registered = json.loads(rc.SNAPSHOT_REGISTRY.read_text(encoding="utf-8"))["snapshots"]
     for step, spec in rc.SPECS.items():
-        if spec.automatic and step != "coherence-same-organisation":      # not labelled yet
+        if spec.automatic and step not in ("coherence-same-organisation", "victim-fill"):      # not labelled yet
             assert step in registered, step
 
 

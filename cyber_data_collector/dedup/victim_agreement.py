@@ -132,10 +132,10 @@ def _may_be(resolver: EntityResolver, org: str, victim: str) -> bool:
 
 def _is_unusable_victim(name: str) -> bool:
     from cyber_data_collector.dedup.entity_classification import (
-        _is_collective_phrase, is_never_victim, is_non_organisation, is_threat_actor,
+        _is_collective_phrase, is_descriptive_name, is_never_victim, is_non_organisation, is_threat_actor,
     )
     return (is_non_organisation(name) or is_never_victim(name) or is_threat_actor(name)
-            or _is_collective_phrase(name))
+            or _is_collective_phrase(name) or is_descriptive_name(name))
 
 
 def _victims(conn: sqlite3.Connection, dedup_id: str) -> List[str]:
