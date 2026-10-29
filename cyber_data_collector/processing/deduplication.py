@@ -757,7 +757,9 @@ class DeduplicationEngine:
             return max(0.4, 1.0 - (date_diff / 1000.0))  # Gradual decline, minimum 0.4
 
     def _merge_event_group(self, events: List[CyberEvent]) -> CyberEvent:
-        base_event = max(events, key=lambda event: event.confidence.overall)
+        # The most confident record leads; one with no score ranks below any that has one.
+        base_event = max(events, key=lambda event: (event.confidence.overall is not None,
+                                                    event.confidence.overall or 0.0))
         merged_event = base_event.model_copy(deep=True)
 
         # Track how many events were merged
@@ -871,7 +873,8 @@ class DeduplicationEngine:
         
         source_count = len(all_sources)
         confidence_boost = min(source_count * 0.1, 0.3)
-        merged_event.confidence.overall = min(merged_event.confidence.overall + confidence_boost, 1.0)
+        if merged_event.confidence.overall is not None:       # more sources raise a score; they do not invent one
+            merged_event.confidence.overall = min(merged_event.confidence.overall + confidence_boost, 1.0)
 
         self.logger.debug(f"Merged {len(events)} events into: {merged_event.title[:50]}... with date: {merged_event.event_date}")
 

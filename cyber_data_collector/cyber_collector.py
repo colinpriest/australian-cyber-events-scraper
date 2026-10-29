@@ -136,11 +136,16 @@ class CyberDataCollector:
             processed_events = await self.deduplication_engine.deduplicate_events(processed_events)
             self.logger.info("Deduplicated to %s unique events", len(processed_events))
 
+        # An event with no score is not below the threshold: nothing measured it, so nothing can drop it
+        # (an uncalibrated cut-off may not remove records). It is kept and counted.
+        unscored = [event for event in processed_events if event.confidence.overall is None]
         high_confidence_events = [
-            event for event in processed_events if event.confidence.overall >= self.config.confidence_threshold
+            event for event in processed_events
+            if event.confidence.overall is None or event.confidence.overall >= self.config.confidence_threshold
         ]
 
-        self.logger.info("Retained %s high-confidence events", len(high_confidence_events))
+        self.logger.info("Retained %s high-confidence events (%s of them have no confidence score)",
+                         len(high_confidence_events), len(unscored))
 
         self.collected_events = high_confidence_events
         return high_confidence_events
@@ -269,11 +274,13 @@ class CyberDataCollector:
             "events_by_severity": {},
             "events_by_source": {},
             "australian_events": 0,
-            "average_confidence": 0.0,
+            "average_confidence": None,       # over the events that have a score; None if none does
+            "events_without_confidence": 0,
             "date_range": {"earliest": None, "latest": None},
         }
 
         total_confidence = 0.0
+        scored_events = 0
         earliest_date: Optional[str] = None
         latest_date: Optional[str] = None
 
@@ -291,7 +298,9 @@ class CyberDataCollector:
             if event.australian_relevance:
                 stats["australian_events"] += 1
 
-            total_confidence += event.confidence.overall
+            if event.confidence.overall is not None:
+                total_confidence += event.confidence.overall
+                scored_events += 1
 
             if event.event_date:
                 event_date_iso = event.event_date.isoformat()
@@ -300,7 +309,8 @@ class CyberDataCollector:
                 if not latest_date or event_date_iso > latest_date:
                     latest_date = event_date_iso
 
-        stats["average_confidence"] = total_confidence / len(self.collected_events)
+        stats["average_confidence"] = total_confidence / scored_events if scored_events else None
+        stats["events_without_confidence"] = len(self.collected_events) - scored_events
         stats["date_range"]["earliest"] = earliest_date
         stats["date_range"]["latest"] = latest_date
 

@@ -136,11 +136,12 @@ def collect(conn: sqlite3.Connection, limit: Optional[int] = None) -> Dict[str, 
         # notified. Showing it as the organisation implies it was breached.
         if not name or _not_org(name) or _is_actor(name) or _reporter(name):
             continue
+        # Within a role the most confident link comes first; a link with no score (NULL) ranks after any that has one.
         member_entities.setdefault(row["eid"], []).append(
-            (ROLE_ORDER.get(row["role"], 3), -(row["conf"] or 0.0), name))
+            (ROLE_ORDER.get(row["role"], 3), row["conf"] is None, -(row["conf"] or 0.0), name))
 
     best_entity = {
-        eid: sorted(cands)[0][2] for eid, cands in member_entities.items() if cands
+        eid: sorted(cands)[0][3] for eid, cands in member_entities.items() if cands
     }
 
     members_by_event: Dict[str, List[Dict]] = {}

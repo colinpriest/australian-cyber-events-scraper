@@ -13,7 +13,7 @@ import sqlite3
 import statistics
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from cyber_data_collector.quality.model import Measurement, Thresholds
@@ -575,8 +575,8 @@ def measure_staleness(conn: sqlite3.Connection, thresholds: Thresholds, today: d
 CYBERDAILY_SOURCE = "CyberDaily"
 CYBERDAILY_SUMMARY = (
     "coverage.cyberdaily.backfill_months_complete", "coverage.cyberdaily.backfill_months_not_searched",
-    "coverage.cyberdaily.backfill_months_retrying", "coverage.cyberdaily.backfill_months_failed",
-    "coverage.cyberdaily.short_months", "coverage.cyberdaily.months_seen_not_stored",
+    "coverage.cyberdaily.backfill_months_retrying", "coverage.cyberdaily.backfill_months_parked",
+    "coverage.cyberdaily.backfill_months_failed", "coverage.cyberdaily.short_months", "coverage.cyberdaily.months_seen_not_stored",
     "coverage.cyberdaily.stored_not_judged", "coverage.cyberdaily.stories_incomplete",
     "coverage.cyberdaily.stories_unrecoverable",
 )
@@ -609,7 +609,9 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
     searched.
     """
     from cyber_data_collector.processing.cyberdaily_refetch import enrichment_ids, is_eligible, is_incomplete
-    from cyber_data_collector.processing.fetch_errors import error_type_from_text, is_permanent
+    from cyber_data_collector.processing.fetch_errors import (
+        CLASS_PERMANENT, error_type_from_text, failure_class, is_permanent,
+    )
 
     since = str(thresholds.setting("cyberdaily", "backfill_since"))
     k = int(thresholds.setting("cyberdaily", "neighbour_months"))
@@ -631,8 +633,8 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
     searches: Dict[str, Dict[str, object]] = {}
     if has_table(conn, "SourceMonthDiscovery"):
         smd_cols = columns(conn, "SourceMonthDiscovery")
-        extra = [c for c in ("error_type", "gave_up_at", "items_seen", "failed_attempts", "next_attempt_at")
-                 if c in smd_cols]
+        extra = [c for c in ("error_type", "gave_up_at", "items_seen", "failed_attempts", "next_attempt_at",
+                             "give_up_reason") if c in smd_cols]
         cur = conn.execute(
             f"SELECT year, month, status, failures_json{''.join(', ' + c for c in extra)} "
             "FROM SourceMonthDiscovery WHERE source_type = ?", (CYBERDAILY_SOURCE,))
@@ -645,7 +647,7 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
         processed_months = {f"{y:04d}-{m:02d}" for y, m in conn.execute(
             "SELECT year, month FROM MonthProcessed WHERE is_processed")}
 
-    complete, retrying, failed, not_searched = [], [], [], []
+    complete, retrying, parked, failed, not_searched = [], [], [], [], []
     for month in judged_months:
         record = searches.get(month)
         if record is None:
@@ -662,8 +664,12 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
                 messages = [record.get("failures_json")]
             error_type = error_type_from_text(" ".join(str(m) for m in messages))
         label = f"{month}: {error_type}, {record.get('failed_attempts') or 1} failed search(es)"
-        if record.get("gave_up_at") or is_permanent(error_type):
-            failed.append(label + " - given up")
+        reason = record.get("give_up_reason") or failure_class(error_type)
+        if is_permanent(error_type) or (record.get("gave_up_at") and reason == CLASS_PERMANENT):
+            failed.append(label + " - given up (permanent: it will not be searched again)")
+        elif record.get("gave_up_at"):
+            parked.append(label + f" - parked ({reason}); the source is probed and the month reopens on a "
+                                  "successful probe or a configuration change")
         else:
             retrying.append(label + (f", next after {record['next_attempt_at']}" if record.get("next_attempt_at")
                                      else ", searched again next run"))
@@ -719,9 +725,14 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
         value=len(retrying), examples=retrying[:EXAMPLES],
         detail="last search lost results for a temporary reason (throttled, network, parse, other); searched "
                "again automatically by the next run after its back-off")
+    out["coverage.cyberdaily.backfill_months_parked"] = Measurement(
+        value=len(parked), examples=parked[:EXAMPLES],
+        detail="failed repeatedly for a temporary or unknown reason: not searched on their own, but the source is "
+               "probed on a schedule and they reopen on a successful probe or a configuration change "
+               "(`python scripts/discovery_queue.py status`)")
     out["coverage.cyberdaily.backfill_months_failed"] = Measurement(
         value=len(failed), examples=failed[:EXAMPLES],
-        detail="feed gone (404/410) or given up after repeated failures: not searched again until "
+        detail="feed gone (404/410): a permanent failure, never searched again until "
                "`python scripts/discovery_queue.py release` (or backfill --force)")
 
     # Short months: a completely searched month well below its completely searched neighbours.
@@ -779,9 +790,112 @@ def measure_cyberdaily(conn: sqlite3.Connection, thresholds: Thresholds, today: 
     return out
 
 
+def measure_discovery_recovery(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Searches that failed for good, searches parked for later, probes, and failures nothing recognised.
+
+    Permanent give-ups (404/410) need a person. Parked months (temporary or
+    unknown failures that reached the cap) recover by themselves: a probe of the
+    source reopens them, as does a change of the source's key, query or client
+    version. They are measured so a month does not sit parked unseen: how many,
+    how many a configuration change would reopen now, and how many sources' probes are
+    overdue (the backfill that probes runs with every refresh). Unprocessed records
+    whose latest failure was unrecognised (not assumed permanent) are counted too.
+    """
+    from cyber_data_collector.processing import retry_queue
+
+    needed = {"give_up_reason", "give_up_config", "gave_up_at", "error_type"}
+    if not (has_table(conn, "SourceMonthDiscovery") and has_table(conn, "SourceProbes")
+            and needed <= columns(conn, "SourceMonthDiscovery")):
+        reason = ("SourceMonthDiscovery / SourceProbes predate parked-month recovery "
+                  "(run `python pipeline.py init`)")
+        return {name: Measurement.unavailable(reason) for name in DISCOVERY_RECOVERY_METRICS}
+    if not (has_table(conn, "DiscoveryRecordState") and "unknown_failures" in columns(conn, "DiscoveryRecordState")):
+        reason = "DiscoveryRecordState predates unknown failures (run `python pipeline.py init`)"
+        return {name: Measurement.unavailable(reason) for name in DISCOVERY_RECOVERY_METRICS}
+    overdue_days = int(thresholds.setting("discovery", "probe_overdue_days"))
+    now = datetime.combine(today, datetime.min.time())
+    health = retry_queue.discovery_health(conn, now)
+
+    def label(g: Dict) -> str:
+        return f"{g['source_type']} {g['year']}-{g['month']:02d}: {g['error_type'] or '?'} since {g['parked_since'][:10]}"
+
+    parked = health["parked"]
+    changed = [g for g in parked if g["would_reopen"]]
+    stale = [p for p in health["probes"]
+             if datetime.fromisoformat(p["next_probe_at"]) < now - timedelta(days=overdue_days)]
+    unknown = health["unknown_records"]
+    out: Measurements = {}
+    out["discovery.source_months_given_up"] = Measurement(
+        value=len(health["given_up"]), examples=[label(g) for g in health["given_up"]][:EXAMPLES],
+        detail="source-months given up on a permanent failure (404/410): never searched again until "
+               "`python scripts/discovery_queue.py release`")
+    out["discovery.source_months_parked"] = Measurement(
+        value=len(parked), examples=[label(g) + f" ({g['reason']})" for g in parked][:EXAMPLES],
+        detail="source-months parked after repeated temporary or unknown failures; each source is probed on "
+               "a schedule and they reopen on a successful probe or a configuration change")
+    out["discovery.parked_config_changed"] = Measurement(
+        value=len(changed),
+        examples=[label(g) + f": {', '.join(g['would_reopen'])} changed" for g in changed][:EXAMPLES],
+        detail="parked months whose source configuration (key, query version, client version) is no longer the "
+               "one they failed under: the next backfill (or `discovery_queue.py reopen`) searches them again")
+    out["discovery.source_probes_overdue"] = Measurement(
+        value=len(stale),
+        examples=[f"{p['source_type']}: probe was due {p['next_probe_at'][:10]}, {p['parked']} month(s) parked"
+                  for p in stale][:EXAMPLES],
+        detail=f"sources whose probe has been due for more than {overdue_days} days: the refresh that probes "
+               "(the backfill, which runs with every refresh that includes the source) did not run")
+    out["discovery.records_unknown_failures"] = Measurement(
+        value=unknown["count"], examples=[f"{stage}: {n}" for stage, n in sorted(unknown["by_stage"].items())],
+        detail="unprocessed records whose latest failure was in a class nothing recognised: retried with a long "
+               "back-off, never quarantined; the log has the cause ('Unrecognised failure')")
+    return out
+
+
+DISCOVERY_RECOVERY_METRICS = (
+    "discovery.source_months_given_up", "discovery.source_months_parked", "discovery.parked_config_changed",
+    "discovery.source_probes_overdue", "discovery.records_unknown_failures",
+)
+CONFIDENCE_METRICS = ("confidence.defaults_proven", "confidence.defaults_ambiguous", "confidence.events_unscored")
+
+
+def measure_confidence(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Stored confidence values that were defaults, and events with no score.
+
+    A missing score is NULL, never a default (0.7 and 0.8 were, and read as model
+    output). ``defaults_proven`` counts old values whose provenance proves they were
+    defaulted (cleared by `python scripts/repair_confidence_defaults.py`);
+    ``defaults_ambiguous`` counts other values at exactly 0.7 / 0.8, which a real score can
+    also equal, so they are only reported; ``events_unscored`` is the NULLs.
+    """
+    from cyber_data_collector.processing import confidence_defaults
+
+    if not has_table(conn, "EnrichedEvents") or "confidence_score" not in columns(conn, "EnrichedEvents"):
+        reason = "EnrichedEvents.confidence_score missing"
+        return {name: Measurement.unavailable(reason) for name in CONFIDENCE_METRICS}
+    report = confidence_defaults.find_defaults(conn)
+    ambiguous = sum(report.ambiguous.values())
+    return {
+        "confidence.defaults_proven": Measurement(
+            value=len(report.proven), examples=[f"{n} x {rule}" for rule, n in sorted(report.proven_by_rule.items())],
+            detail="stored 0.7 / 0.8 / 0.6 whose provenance proves they were defaults, not scores; "
+                   "`python scripts/repair_confidence_defaults.py --dry-run`"),
+        "confidence.defaults_ambiguous": Measurement(
+            value=ambiguous,
+            examples=[f"{n} x {table} = {value}" for (table, value), n in sorted(report.ambiguous.items())][:EXAMPLES],
+            detail="rows at exactly 0.7 / 0.8 that could be a real score or a default and have no provenance to "
+                   "say; left unchanged"),
+        "confidence.events_unscored": Measurement(
+            value=report.unscored_events,
+            detail="enriched events with no confidence score (NULL = nothing measured one); readers treat them "
+                   "as unknown, not as low or as a default"),
+    }
+
+
 MEASURES = (
     ("coverage", measure_coverage),
     ("coverage", measure_cyberdaily),
+    ("backlog", measure_discovery_recovery),
+    ("evidence", measure_confidence),
     ("evidence", measure_evidence),
     ("evidence", measure_evidence_status),
     ("evidence", measure_recovery_routes),

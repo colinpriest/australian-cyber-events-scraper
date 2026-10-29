@@ -398,6 +398,35 @@ def check_entity_size_bands_valid(conn: sqlite3.Connection) -> CheckResult:
                        f"All {n} entity size bands valid and self-consistent")
 
 
+def check_active_enrichment_unique_per_record(conn: sqlite3.Connection) -> CheckResult:
+    """A stored record has at most one active enrichment, unless a record-identity finding says why.
+
+    Ingest cannot create a second one (``storage/enrichment_uniqueness.py``). The
+    identity repair may leave two on purpose - a record keeps an enrichment known
+    to be about another article while the right one is attached - and records
+    that in ``RecordIdentityChecks``. Two that nothing explains are a failure.
+    """
+    import importlib.util
+
+    # Standard-library only, so loaded by path like the population module (no package import).
+    path = PROJECT_ROOT / "cyber_data_collector" / "storage" / "enrichment_uniqueness.py"
+    spec = importlib.util.spec_from_file_location("_integrity_enrichment_uniqueness", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    duplicates = module.duplicate_active_enrichments(conn)
+    unexplained = [d for d in duplicates if not d["explained"]]
+    if unexplained:
+        return CheckResult(
+            "active-enrichment-unique-per-record", False,
+            f"{len(unexplained)} record(s) hold more than one active enrichment that no record-identity "
+            f"finding explains ({len(duplicates) - len(unexplained)} more are explained)",
+            [f"{d['raw_event_id']}: {', '.join(d['enriched_event_ids'])}" for d in unexplained[:20]])
+    return CheckResult("active-enrichment-unique-per-record", True,
+                       "Every record has at most one active enrichment" +
+                       (f" ({len(duplicates)} left on purpose by the record-identity repair)" if duplicates else ""))
+
+
 def check_dedup_master_links_exist(conn: sqlite3.Connection) -> CheckResult:
     """Every DeduplicatedEvents.master_enriched_event_id must point to an
     existing EnrichedEvents row.
@@ -734,6 +763,7 @@ DB_CHECKS: List[Callable[[sqlite3.Connection], CheckResult]] = [
     check_asd_categories_valid,
     check_entity_size_bands_valid,
     check_dedup_master_links_exist,
+    check_active_enrichment_unique_per_record,
     check_industry_known_vendors_correct,
     check_no_records_affected_outliers,
     check_no_dedup_status_drift,
