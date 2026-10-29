@@ -104,3 +104,78 @@ def test_webber_detail_page_prefers_the_day_tied_to_the_breach_and_keeps_the_lin
     event = source._scrape_detail_page(url, section_date=datetime(2025, 6, 1))
     assert event.event_date.date().isoformat() == "2025-06-01" and event.event_date_precision == "month"
     assert source._parse_section_header_date("Vertel – June 2025") == datetime(2025, 6, 1)
+
+
+# ---------------------------------------------------------------------------
+# Compatible month and day evidence reconcile to the narrower interval
+# ---------------------------------------------------------------------------
+
+from datetime import date
+
+
+def _ev(precision, value):
+    start, end = idt.interval(value, precision)
+    return (precision, start, end)
+
+
+def test_a_month_and_a_day_inside_it_reconcile_to_the_day():
+    evidence = [_ev("month", "2025-06-01"), _ev("day", "2025-06-12"), _ev("year", "2025-01-01")]
+    assert idt.reconcile_precision(date(2025, 6, 12), evidence) == ("day", "verified")
+
+
+def test_order_of_the_sources_does_not_matter():
+    evidence = [_ev("day", "2025-06-12"), _ev("month", "2025-06-01")]
+    assert idt.reconcile_precision(date(2025, 6, 12), evidence) == ("day", "verified")
+    assert idt.reconcile_precision(date(2025, 6, 12), list(reversed(evidence))) == ("day", "verified")
+
+
+def test_a_more_exact_day_elsewhere_in_the_month_does_not_move_the_stored_date():
+    """The stored 1st sits in the month; a compatible day elsewhere in it keeps the month interval."""
+    evidence = [_ev("month", "2022-05-01"), _ev("day", "2022-05-15")]
+    assert idt.reconcile_precision(date(2022, 5, 1), evidence) == ("month", "verified")
+
+
+def test_evidence_for_another_month_is_a_conflict():
+    evidence = [_ev("month", "2025-06-01"), _ev("day", "2025-07-02")]
+    assert idt.reconcile_precision(date(2025, 6, 1), evidence) == (None, "conflicting")
+    assert idt.reconcile_precision(date(2025, 7, 2), evidence) == (None, "conflicting")
+
+
+def test_verified_evidence_that_excludes_the_event_date_leaves_no_precision():
+    assert idt.reconcile_precision(date(2012, 1, 1), [_ev("month", "2021-12-01")]) == (None, "conflicting")
+
+
+def test_no_evidence_is_unverified_not_conflicting():
+    assert idt.reconcile_precision(date(2025, 6, 1), []) == (None, "unverified")
+
+
+def test_refresh_reconciles_a_month_record_and_a_day_record_of_one_event(conn):
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, event_date, event_date_precision, source_url, "
+                 "discovered_at) VALUES ('m2', 'WebberInsurance', '2024-03-01', 'month', 'https://x', '2026-10-28')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, event_date, status, "
+                 "is_australian_event, is_specific_event, perplexity_enrichment_data) "
+                 "VALUES ('em2', 'm2', 't', '2024-03-12', 'Active', 1, 1, NULL)")
+    conn.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                 "VALUES ('mm2', 'm2', 'em2', 'dc')")
+    conn.commit()
+    report = idt.refresh_event_precision(conn)
+    row = conn.execute("SELECT event_date_precision, event_date_earliest, event_date_latest FROM DeduplicatedEvents "
+                       "WHERE deduplicated_event_id = 'dc'").fetchone()
+    assert tuple(row) == ("day", "2024-03-12", "2024-03-12")      # the month record did not make it a conflict
+    assert "dc" not in report.conflicting and report.reconciled == 1
+
+
+def test_refresh_reports_incompatible_sources_as_conflicting_with_no_interval(conn):
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, event_date, event_date_precision, source_url, "
+                 "discovered_at) VALUES ('m3', 'WebberInsurance', '2024-07-01', 'month', 'https://x', '2026-10-28')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, event_date, status, "
+                 "is_australian_event, is_specific_event, perplexity_enrichment_data) "
+                 "VALUES ('em3', 'm3', 't', '2024-07-01', 'Active', 1, 1, NULL)")
+    conn.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id) "
+                 "VALUES ('mm3', 'm3', 'em3', 'dc')")
+    conn.commit()
+    report = idt.refresh_event_precision(conn)
+    row = conn.execute("SELECT event_date_precision, event_date_earliest, event_date_latest FROM DeduplicatedEvents "
+                       "WHERE deduplicated_event_id = 'dc'").fetchone()
+    assert tuple(row) == (None, None, None)
+    assert "dc" in report.conflicting

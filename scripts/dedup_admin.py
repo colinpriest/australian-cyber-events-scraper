@@ -98,6 +98,7 @@ from cyber_data_collector.dedup.entity_size import (
 )
 from cyber_data_collector.dedup.recurrence_check import (
     DEFAULT_WINDOW_DAYS,
+    UNVERIFIED_DATE_POLICIES,
     RecurrenceAuditor,
     attach_source_urls,
     build_runs,
@@ -1190,7 +1191,7 @@ def cmd_check_recurrences(args) -> int:
                                     max_run_size=args.max_run_size)
 
         events = load_recurrence_events(conn)
-        runs = build_runs(events, window_days=args.window_days)
+        runs = build_runs(events, window_days=args.window_days, unverified_dates=args.unverified_dates)
         if args.entity:
             needle = args.entity.lower()
             runs = [r for r in runs if needle in (r[0].entity_name or "").lower()]
@@ -3828,6 +3829,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--min-certainty", type=float, default=0.85,
                    help="Merge only at or above this certainty.")
     p.add_argument("--max-run-size", type=int, default=12)
+    p.add_argument("--unverified-dates", choices=UNVERIFIED_DATE_POLICIES, default="stored",
+                   help="Events whose date precision is unverified have no interval: 'stored' (default) "
+                        "lets their stored date stand in as the date held for them (reported as "
+                        "unverified); 'exclude' leaves them out of the check.")
     p.add_argument("--entity", default=None, help="Only runs matching this name.")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--verbose", action="store_true")

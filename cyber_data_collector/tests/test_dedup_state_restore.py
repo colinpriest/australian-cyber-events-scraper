@@ -151,7 +151,7 @@ def test_pipeline_refresh_args_cover_every_dedup_phase_option():
         out_dir="dashboard", skip_classification=False,
     )
     assert args.force_dedup is False
-    for name in ("skip_recurrence_check", "recurrence_window",
+    for name in ("skip_recurrence_check", "recurrence_window", "recurrence_unverified_dates",
                  "recurrence_min_certainty", "skip_entity_sizing",
                  "entity_size_limit", "skip_missed_merge_check", "missed_merge_apply",
                  "missed_merge_days", "missed_merge_min_certainty"):

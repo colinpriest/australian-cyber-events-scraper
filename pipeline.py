@@ -66,6 +66,7 @@ def _build_pipeline_args(
         evidence_recovery_limit=100,
         skip_recurrence_check=False,
         recurrence_window=90,
+        recurrence_unverified_dates="stored",
         recurrence_min_certainty=0.85,
         skip_entity_sizing=False,
         entity_size_limit=None,
