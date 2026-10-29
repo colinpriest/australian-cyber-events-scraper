@@ -293,6 +293,8 @@ Final unique events after entity-based deduplication. The primary table used for
 | `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, manipulated or leaked data through a flaw |
 | `ai_misuse_probability` | REAL | Yes | NULL | Jev's probability that there was no attack and the organisation's own use of AI was the breach (facial recognition, scraping into its own model, staff entering data into an AI tool). Added with question `ai-involvement-v4` |
 | `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the four sum to 1) |
+| `ai_involvement_input_hash` | TEXT | Yes | NULL | sha256 of what the label was decided on: the evidence, question and escalation versions, both models, the cut-off and any label. A label whose current hash differs is stale (`ai_involvement.stale_judgements`; the AI report and dashboard count and mark it). NULL = judged before hashes were kept (stale until the step runs again) |
+| `ai_involvement_error` | TEXT | Yes | NULL | Why the last re-judgement failed; the previous label is kept and reported stale. Cleared by the next successful judgement |
 | `first_reported_date` | TEXT | Yes | NULL | Earliest `RawEvents.publication_date` among the event's records |
 | `event_date_precision` | TEXT | Yes | NULL | Verified precision of `event_date` (`day` / `month` / `year`), set only when the records carrying it agree; NULL = unverified |
 | `event_date_earliest` | TEXT | Yes | NULL | First day of the incident-date interval (NULL when unverified) |

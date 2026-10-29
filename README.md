@@ -1382,6 +1382,17 @@ a 2-4 sentence description from the fast OpenAI model, stored in
 in every refresh after the breach-source step; it requires `TYPESAFE_API_KEY`
 (exit 2 without it) and exits 1 if any event could not be judged or described.
 
+**Stale labels and descriptions are marked, never shown as current.** Each
+label stores a hash of what it was decided on (evidence, question, models,
+cut-off, label; `ai_involvement_input_hash`), and a failed re-judgement keeps
+the old label with the error (`ai_involvement_error`). The report and the
+dashboard re-derive the hash from the current evidence and mark and count any
+label that no longer matches, including No-AI labels the report does not list
+(which may now involve AI). A description is shown as current only for the
+evidence it was written from; an older one is shown marked "written from older
+evidence". The report's headline counts only incidents with a settled category;
+AI-uncertain incidents are listed and counted separately.
+
 The main dashboard shows AI incidents per half-year (stacked: attacker /
 vulnerability / misuse / unsettled, with the count not yet judged), reconciled against the
 database, and links to `dashboard/ai_incidents.html`, written and published
