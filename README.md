@@ -936,6 +936,7 @@ breaches; youX's March 2025 S3 exposure and February 2026 MongoDB theft).
 ```bash
 python scripts/dedup_admin.py check-same-organisation              # report
 python scripts/dedup_admin.py check-same-organisation --apply      # split (only once calibrated; labelled always)
+# on the labelling snapshot: run check-same-organisation first (it stores each candidate's score), then
 python scripts/calibrate_coherence_same_org.py --db <snapshot> sample | packet --out DIR | judge | calibrate
 ```
 
