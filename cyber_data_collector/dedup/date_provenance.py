@@ -32,6 +32,11 @@ import sqlite3
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
+#: Part of the duplicate calibration's evidence fingerprint (``calibration_guard``): bump it
+#: when this module, or ``processing/incident_dates.py`` whose precision it reports, changes what
+#: a record's or an event's date is said to be. v2: precision and basis from verified intervals.
+EVIDENCE_VERSION = "date-provenance-v2"
+
 
 def _day(value: Any) -> Optional[str]:
     text = str(value or "").strip()[:10]

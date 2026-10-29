@@ -570,6 +570,13 @@ class UnifiedPipeline:
         article mentions Optus. Run before the recurrence check, which groups
         events by victim.
 
+        -2. ``recalibrate --if-stale`` - a calibrated cut-off holds only for the
+           model, question and evidence processing it was measured on; any
+           calibration that no longer matches is recomputed by re-scoring its
+           labelled cases on current evidence (Jev/escalation calls, only for
+           evidence not already judged), else its step stays report-only. First, so the
+           steps below act on a calibration that matches. Skipped with
+           ``--skip-recalibration``; ``--report-event-rejections`` only lists.
         -1. ``label-evidence`` - labelled-real events with no active record
            get the report their label cites queued for the next refresh;
            processed reports are merged into their labelled event and its
@@ -610,7 +617,11 @@ class UnifiedPipeline:
            calibrated demotion / re-attribution, otherwise flagged.
         6. ``check-coherence``, ``check-duplicates``, ``find-supplier-victims``
            change membership, so ``classify-entities --stale-only`` runs again
-           before ``reconcile-timelines``. After the recurrence check (which
+           before ``reconcile-timelines``. ``check-same-organisation`` (after
+           ``check-coherence``) judges members that may be a different incident
+           at the same organisation - report-only until calibrated - and
+           ``resolve-label-contradictions`` (after the merging steps) splits
+           apart any pair labelled different that has been merged. After the recurrence check (which
            merges too) :meth:`run_role_refresh` settles roles and attributions
            a last time.
 
@@ -639,6 +650,17 @@ class UnifiedPipeline:
         sources = ["check-sources"]
         if not getattr(args, 'report_event_rejections', False):
             sources.append("--apply")
+        # Members that may be a separate incident at the same organisation: report-only until
+        # their own labels and calibration exist (coherence_same_org). Resolving label
+        # contradictions needs no model: pairs labelled different that were merged are split.
+        same_org = ["check-same-organisation"]
+        label_contradictions = ["resolve-label-contradictions"]
+        recalibration = ["recalibrate", "--if-stale"]
+        if not getattr(args, 'report_event_rejections', False):
+            same_org.append("--apply")
+        else:
+            label_contradictions.append("--dry-run")
+            recalibration.append("--dry-run")
         # Every step always runs. A step whose model or key is unavailable
         # fails loudly (jev.require and friends) and is recorded below, so the
         # run ends degraded - it is never skipped or switched to another model.
@@ -688,9 +710,12 @@ class UnifiedPipeline:
                  ["research-timelines"],
                  ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,
-                 coherence, duplicates, suppliers, ["classify-entities", "--stale-only"],
+                 coherence, same_org, duplicates, suppliers, label_contradictions,
+                 ["classify-entities", "--stale-only"],
                  ["reconcile-timelines", "--queue-gaps"],
                  ["publication-dates", "--no-fetch"], ["recover-evidence", "--status-only"]]
+        if not getattr(args, 'skip_recalibration', False):
+            steps.insert(0, recalibration)
         for step in steps:
             try:
                 if run_step(dedup_admin.main, base + step) != 0:
@@ -1242,6 +1267,9 @@ Examples:
     parser.add_argument('--skip-data-hygiene', action='store_true',
                         help='Skip rejecting non-incident pages and correcting victims '
                              'that the event\'s own records contradict')
+    parser.add_argument('--skip-recalibration', action='store_true',
+                        help='Do not recompute calibrated cut-offs whose evidence processing changed '
+                             '(those steps then only report; recalibrate spends Jev/escalation calls)')
     parser.add_argument('--report-event-rejections', action='store_true',
                         help='Report Jev\'s rejections (non-incidents) and merges (duplicates) '
                              'without applying them, even when calibrated cut-offs exist')

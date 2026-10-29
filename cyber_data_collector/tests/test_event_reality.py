@@ -71,11 +71,12 @@ def conn(monkeypatch):
     return c
 
 
-def _calibration(tmp_path, cutoff, model=None, version=None):
+def _calibration(tmp_path, cutoff, model=None, version=None, evidence=None):
     identity = er.calibration_identity()
     path = tmp_path / "cal.json"
     path.write_text(json.dumps({"cutoff": cutoff, "model": model or identity["model"],
-                                "question_version": version or identity["question_version"]}))
+                                "question_version": version or identity["question_version"],
+                                "evidence": evidence or identity["evidence"]}))
     return path
 
 

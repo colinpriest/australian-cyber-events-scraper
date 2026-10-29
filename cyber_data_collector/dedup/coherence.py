@@ -13,10 +13,11 @@ Three stages, cheapest first:
 1. **Suspects (free).** A member is suspect when the organisation Perplexity
    identified for it shares no distinctive name key with the event's victim,
    vendor or the organisation most of its members name. Only suspects can be
-   split out by the model: same-organisation members are usually misdated
+   split out by the model here: same-organisation members are usually misdated
    copies or follow-ups (Partnered Health, Latitude, OpenAI in the 2026-10-02
-   review), and a different incident at the same organisation is a question
-   for the duplicate and recurrence checks, not this one.
+   review). A different incident at the same organisation is
+   :mod:`coherence_same_org`'s question - its candidates need evidence of
+   another incident, and splitting needs its own calibration.
 2. **Judgement (Jev, stored).** For each suspect, Jev answers one question
    over the record's own page text and Perplexity research, the event's victim,
    title and other records, and the victim's researched incident timeline:
@@ -70,6 +71,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.dedup.event_reality import PAGE_CHARS, ROOT, _perplexity
 from cyber_data_collector.utils.llm_models import typesafe_model
@@ -95,6 +97,8 @@ HOME_WINDOW_DAYS = 90       # model-judged strays of one organisation further ap
 MAX_OTHER_RECORDS = 15
 OTHER_SUMMARY_CHARS = 200
 RECORD_SUMMARY_CHARS = 600
+#: Bump when what a member judgement shows a model changes (which records, what of each).
+EVIDENCE_VERSION = "coherence-evidence-v1"
 
 LABELS_PATH = ROOT / "evaluation" / "coherence_labels.csv"
 CALIBRATION_PATH = ROOT / "evaluation" / "coherence_calibration.json"
@@ -293,11 +297,23 @@ def escalation_question() -> str:
             " Does `record` report the same real-world cyber incident as the event?")
 
 
+def evidence_fingerprint() -> str:
+    """A hash of the evidence a member judgement sees (shared by the same-organisation variant)."""
+    from cyber_data_collector.dedup import event_reality
+
+    return calibration_guard.fingerprint(
+        "coherence", version=EVIDENCE_VERSION, max_other_records=MAX_OTHER_RECORDS,
+        other_summary_chars=OTHER_SUMMARY_CHARS, record_summary_chars=RECORD_SUMMARY_CHARS,
+        page_chars=PAGE_CHARS, research_fields=list(event_reality.RESEARCH_FIELDS),
+        reasoning_chars=event_reality.REASONING_CHARS, escalate_band=list(ESCALATE_BAND),
+        **calibration_guard.shared_parts())
+
+
 def calibration_identity() -> Dict[str, str]:
-    """What a calibration must have been measured on to apply: question, escalation and both models."""
+    """What a calibration must have been measured on to apply: question, escalation, both models, evidence."""
     from cyber_data_collector.utils.llm_models import openai_model
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
 
 
 # ----------------------------------------------------------------------
@@ -441,11 +457,10 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     :class:`CoherenceConfigError`.
     """
     cal = load_calibration(path)
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        logger.warning("REPORT ONLY: coherence calibration is for %s / %s, not %s / %s; nothing will be "
-                       "split except labelled strays until it is recalibrated.",
-                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning("%s Nothing will be split except labelled strays.",
+                       calibration_guard.report_only_message("coherence", cal, reason))
         return None
     if cal.get("cutoff") is None:
         logger.warning("REPORT ONLY: the coherence calibration found no cut-off meeting its precision "

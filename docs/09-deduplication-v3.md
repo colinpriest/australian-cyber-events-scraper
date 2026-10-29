@@ -916,13 +916,84 @@ After `check-victims` (suspects are found against the corrected victim) and
 before `check-duplicates` (which re-homes the split-off records):
 
 ```
-check-sources --apply, check-events --apply, classify-entities --stale-only,
-check-victims, check-coherence --apply, check-duplicates --apply,
-check-victim-attribution
+recalibrate --if-stale, check-sources --apply, check-events --apply,
+classify-entities --stale-only, check-victims, check-victim-attribution --apply,
+check-coherence --apply, check-same-organisation --apply, check-duplicates --apply,
+find-supplier-victims --apply, resolve-label-contradictions
 ```
 
 Split-off events get their entity roles from the ledger's automatic refresh,
 and their reality judgement from the next refresh's `check-events`.
+
+---
+
+## 8k. Separate incidents under one organisation (2026-10-29)
+
+`check-coherence` deliberately never splits a same-organisation member on a
+score (section 8j: that guard exists because misdated copies of one incident
+were once split apart). The labels showed the cost: 7 of 28 far-dated
+non-suspects were different incidents, and on 2026-10-28 the recurrence check
+merged two labelled-different pairs at certainty 0.90 / 0.98 - Western Sydney
+University's August 2024 and January 2025 breaches, youX's March 2025 S3
+exposure and February 2026 MongoDB theft - which the quality gate counted as
+`labels.duplicates.contradictions` for a day without anything acting on them.
+
+`check-same-organisation` (`dedup/coherence_same_org.py`) closes that without
+reopening the old wound.
+
+**Candidates (free)** - a non-suspect member, only on evidence of a different
+incident:
+
+| Evidence | Definition |
+|---|---|
+| verified far date | the member's incident date was stated in the record, researched by Perplexity, or established by its source (`RawEvents.event_date_precision`) - not a publication date, a discovery date, or unsupported - and its interval lies more than 90 days from the event's date interval (`processing/incident_dates.py` intervals; the heuristic month/year shape of the stored date otherwise) |
+| timeline | the organisation's researched timeline lists two or more dated incidents and the member's date falls within tolerance of a different one than the event's does (`timeline_reconciliation.incident_date`, `TOLERANCE_DAYS`) |
+
+A date gap on its own - an unverified date, a publication date - never makes a
+candidate; neither signal ever splits anything by itself.
+
+**Judgement** - Jev answers `member_same_incident_same_org`
+(`member-coherence-sameorg-v1`, `subject_type='event_member_same_org'`) over the
+stray question's evidence plus the member's and the event's date provenance and
+`flagged_because`. The question says the flags are hints, that a record's date
+is often wrong, and that follow-ups and misdated copies are the same incident.
+0.1-0.7 goes to the reasoning model (`member-coherence-sameorg-escalation-v1`).
+Failures behave as in 8j: a Jev error raises, a failed escalation leaves the
+member undecided.
+
+**Repair - only with its own calibration.** `scripts/calibrate_coherence_same_org.py`
+`sample` (stratum C: every candidate; N: a seeded sample of the other
+same-organisation members, which measures what candidate selection misses),
+`packet` (blind: no score, stratum or flag), `judge`, `calibrate` (largest
+cut-off with >= 95% of the candidates it splits labelled `different`, bootstrap,
+evidence fingerprint). Until `evaluation/coherence_same_org_calibration.json`
+matches the current models, questions and evidence, the step reports and splits
+only members labelled `different`; `same` never leaves. Guards: the departing
+records must be fewer than those that stay; a split goes through
+`DedupLedger.split_members` (snapshot, `different` rulings cached).
+
+On the 2026-10-29 live copy the candidates are 196 members of 82 events (103
+timeline-only, 75 date-only, 18 both). Both contradicted pairs' mixed records
+are among them (WSU: the January 2025 SSO record, "167 days from the event's date
+interval" and matching timeline incident 5, not 3; youX: five March 2025
+records, 321 days away).
+
+### Labelled-different pairs and the ledger
+
+`DedupLedger.merge_events` refuses, as for a cached ruling, to join two events
+when a pair labelled `different` in `evaluation/duplicate_labels.csv` resolves
+(through merges already made) to one on each side. `merge --force` overrules.
+`resolve-label-contradictions` (`dedup/label_contradictions.py`, no API calls)
+undoes the merges that predate this: for each labelled-different pair that
+resolves to one Active event it reads the members of each labelled event from
+the labelling-time snapshot (`duplicates` in `evaluation/calibration_snapshots.json`),
+intersects with the event's active records, and splits the smaller side out
+together (ties: the pair's second event), with `different` rulings cached
+between the sides. Limits: a labelled event may itself have held a stray or
+misdated copy, which travels with its side (WSU's second event held a record
+dated August 2024) and is re-homed afterwards; records that arrived after
+labelling belong to neither side and stay; a side with no active record left
+and a missing snapshot are listed as unresolved. Idempotent.
 
 ---
 

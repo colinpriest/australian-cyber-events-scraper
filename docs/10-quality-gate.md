@@ -67,7 +67,7 @@ Thresholds live in [`cyber_data_collector/quality/thresholds.json`](../cyber_dat
 | Metric | Threshold | Why it blocks |
 |---|---|---|
 | `integrity.*` - every check in `scripts/check_data_integrity.py`, keyed by its function name, plus `integrity.oaic-files-readable` | must pass | The existing CI gate. Includes the reporting-population reconciliation (`integrity.reporting-population`, `integrity.dashboard-totals-reconcile`) and `no-future-dated-incidents`. A wrong published total is worse than no page. |
-| `labels.contradictions_total` | <= 2 | Labelled outcomes the database contradicts (section 4). Two are tolerated for a disputed label awaiting review; more means a cleaning step regressed or was not run. |
+| `labels.contradictions_total` | <= 2 | Labelled outcomes the database contradicts (section 4). Two are tolerated for a disputed label awaiting review; more means a cleaning step regressed or was not run. A labelled-different pair merged into one event is repaired by the refresh (`resolve-label-contradictions`) and can no longer be created by a ruling-respecting merge (`DedupLedger.merge_events`); see docs/09 section 8k. |
 | `synthetic.*` | must pass | Fixed cases for the deterministic functions published numbers depend on (section 5). |
 | `dates.future_active` | 0 | A future-dated incident belongs to no reporting period and disappears from every chart. |
 | `dates.malformed_active` | 0 | A date that is not `YYYY-MM-DD` falls outside every half-open period query. |

@@ -1079,6 +1079,26 @@ Side-by-side comparison of PDF-scraped vs. Power BI dashboard-scraped data:
 
 ---
 
+### Calibration Files (`evaluation/*_calibration.json`)
+
+**Role:** the measured cut-off a data-quality step acts at, and what it was measured on
+**Created by:** `scripts/calibrate_*.py`, `scripts/dedup_admin.py recalibrate`
+**Consumed by:** each step's `active_calibration()`; a step acts only when the file matches the current identity
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `question_version` | string | Question and escalation versions the cases were scored with |
+| `model` | string | `<Jev model>+<escalation model>` (the Jev model alone for the source gate) |
+| `evidence` | string | **Evidence fingerprint** (`<reader>:<16 hex>`, `dedup/calibration_guard.py`): a hash of the reader's `EVIDENCE_VERSION` and the parameters that shape what a model is shown. Absent in calibrations measured before 2026-10-29, which therefore do not apply |
+| `evidence_attestation` | string | Only where the evidence was attested unchanged instead of re-measured (the source gate) |
+| `cutoff` | number or null | Null: no cut-off met the precision target, the step reports only |
+| `calibrated_on_database` | string | The labelling-time snapshot (or recalibration copy) scored |
+| `recalibration` | object | Present when `dedup_admin.py recalibrate` wrote the file: reason, labelling snapshot, the previous evidence, cut-off and `labelled_used`, cases scored |
+| `labelled_used`, `curve`, `bootstrap_out_of_sample_precision`, ... | | The measurement (see the calibration script's docstring) |
+
+`evaluation/calibration_snapshots.json` maps each step to the labelling-time backup it is recalibrated on.
+`ModelJudgements.subject_type` also takes `event_member_same_org` (`check-same-organisation`).
+
 ### ASD Risk Classification Exports
 
 All files in the `risk_matrix/` directory. Created by `scripts/asd_risk_classifier.py`.
