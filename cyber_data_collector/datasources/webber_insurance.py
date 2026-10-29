@@ -6,11 +6,10 @@ import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from dateutil.parser import parse as dateutil_parse
 
 from cyber_data_collector.datasources.base import DataSource
 from cyber_data_collector.models.config import DataSourceConfig, DateRange
@@ -23,8 +22,15 @@ from cyber_data_collector.models.events import (
     EventSeverity,
     EventSource,
 )
+from cyber_data_collector.processing.active_evidence import shares_distinctive_words
+from cyber_data_collector.processing.incident_dates import (
+    BASIS_STATED_IN_SOURCE,
+    BASIS_WEBBER_HEADING,
+    incident_date_from_text,
+)
 from cyber_data_collector.utils import RateLimiter
 from cyber_data_collector.utils.llm_models import perplexity_model
+from cyber_data_collector.utils.url_clean import clean_url
 
 
 class WebberInsuranceDataSource(DataSource):
@@ -75,7 +81,7 @@ class WebberInsuranceDataSource(DataSource):
 
                 # Section is within range, scrape the event details
                 await self.rate_limiter.wait("webber_detail")
-                event = self._scrape_detail_page(link_info['url'], section_date)
+                event = self._scrape_detail_page(link_info['url'], section_date, item=link_info)
                 if event:
                     self.logger.info(f"Found event in {link_info.get('section_header', '')}: {event.title[:50]}... with date: {event.event_date}")
                     all_events.append(event)
@@ -92,64 +98,96 @@ class WebberInsuranceDataSource(DataSource):
             self.note_failure("Webber Insurance scraping failed", exc)
             return []
 
-    def _extract_all_event_links(self, soup: BeautifulSoup) -> List[Dict[str, str]]:
-        """Extracts events organized by section headers with dates."""
-        events = []
+    def _extract_all_event_links(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Extracts the list's items: each dated heading with the link of *its own* entries.
 
-        # Find all h3 headers that contain date information
-        section_headers = soup.find_all('h3')
+        An item is a heading ("Vertel - June 2025") and the ``<li>`` entries
+        that follow it up to the next ``<h3>``; the link belongs to the entry
+        that holds it, and the entry's text and the heading's organisation
+        travel with it so the page that link leads to can be checked against
+        what the list says it is. (The old filter kept only links whose text
+        contained "breach", "cyber", "hack", "attack", "ransomware" or
+        "incident": 203 of 1,282 entries on 2026-10-29, such as "Almost 2m
+        impacted, almost 50k credit cards compromised", were never stored.)
+        """
+        events: List[Dict[str, Any]] = []
+        sections = 0
 
-        for header in section_headers:
+        for header in soup.find_all('h3'):
             header_text = header.get_text(strip=True)
 
             # Parse date from section header (e.g., "Vertel – June 2025")
             section_date = self._parse_section_header_date(header_text)
             if not section_date:
                 continue
-
+            sections += 1
+            organisation = self._organisation_from_heading(header_text)
             self.logger.debug(f"Processing section: {header_text} -> {section_date}")
 
-            # Find events after this header until the next header
+            seen: set = set()
             current = header.next_sibling
-            events_in_section = []
-
             while current:
-                # Stop if we hit another h3 header
                 if current.name == 'h3':
                     break
-
-                # Look for links in this section
                 if hasattr(current, 'find_all'):
-                    links = current.find_all('a', href=True)
-                    for link in links:
+                    for entry in self._entries(current):
+                        link = next((a for a in entry.find_all('a', href=True) if self._is_article_link(a)), None)
+                        if link is None:
+                            continue
+                        # A newsletter link carries utm_* tags and, for some, a subscriber token: the record's
+                        # URL is the article's address without them. The newsletter date in the tag is kept.
+                        linked = urljoin(self.base_url, link.get('href', ''))
+                        full_url = clean_url(linked)
+                        if full_url in seen:
+                            continue
+                        seen.add(full_url)
                         link_text = link.get_text(strip=True)
-                        href = link.get('href', '')
-
-                        # Filter for actual breach event links
-                        if (len(link_text) > 20 and
-                            any(keyword in link_text.lower() for keyword in ['breach', 'cyber', 'hack', 'attack', 'ransomware', 'incident']) and
-                            not any(exclude in link_text.lower() for exclude in ['guide', 'ultimate', 'notification laws', 'essentials'])):
-
-                            # Use absolute URL if it starts with http, otherwise join with base
-                            if href.startswith(('http://', 'https://')):
-                                full_url = href
-                            else:
-                                full_url = urljoin(self.base_url, href)
-
-                            events_in_section.append({
-                                "url": full_url,
-                                "text": link_text,
-                                "section_date": section_date,
-                                "section_header": header_text
-                            })
-                            self.logger.debug(f"Found event in {header_text}: {link_text[:50]}...")
-
+                        events.append({
+                            "url": full_url,
+                            "url_date": self._parse_url_date(linked),
+                            "text": link_text,
+                            "summary": entry.get_text(" ", strip=True),
+                            "organisation": organisation,
+                            "section_date": section_date,
+                            "section_header": header_text,
+                        })
+                        self.logger.debug(f"Found event in {header_text}: {link_text[:50]}...")
                 current = current.next_sibling
 
-            events.extend(events_in_section)
-
-        self.logger.info(f"Extracted {len(events)} events from {len([h for h in section_headers if self._parse_section_header_date(h.get_text(strip=True))])} dated sections")
+        self.logger.info(f"Extracted {len(events)} events from {sections} dated sections")
         return events
+
+    @staticmethod
+    def _entries(block: Any) -> List[Any]:
+        """The list entries (``<li>``) in a block of the page; the block itself when it is an entry or a bare link."""
+        if block.name == 'li':
+            return [block]
+        entries = block.find_all('li')
+        if entries:
+            return entries
+        # A link outside any list: kept only when its own text reads as a breach report, as before.
+        text = block.get_text(" ", strip=True).lower()
+        looks_like_report = len(text) > 20 and any(
+            word in text for word in ('breach', 'cyber', 'hack', 'attack', 'ransomware', 'incident'))
+        return [block] if looks_like_report and block.find('a', href=True) else []
+
+    def _is_article_link(self, anchor: Any) -> bool:
+        """An outside article, not Webber's own guides or an in-page anchor."""
+        href = (anchor.get('href') or '').strip()
+        if not href or href.startswith(('#', 'mailto:', 'tel:', 'javascript:')):
+            return False
+        text = anchor.get_text(strip=True).lower()
+        if any(exclude in text for exclude in ('guide', 'ultimate', 'notification laws', 'essentials')):
+            return False
+        host = urlparse(urljoin(self.base_url, href)).netloc.lower()
+        return bool(text) and not host.endswith('webberinsurance.com.au')
+
+    @staticmethod
+    def _organisation_from_heading(header_text: str) -> str:
+        """The organisation a heading names: "Vertel – June 2025" -> "Vertel"."""
+        name = re.sub(r'\s*[-–—�]*\s*(?:January|February|March|April|May|June|July|August|'
+                      r'September|October|November|December)\s+\d{4}\b.*$', '', header_text, flags=re.I)
+        return name.strip(' -–—� ')
 
     def _parse_section_header_date(self, header_text: str) -> Optional[datetime]:
         """Parse date from section header like 'Vertel – June 2025' or 'BMW – September 2025'."""
@@ -179,57 +217,29 @@ class WebberInsuranceDataSource(DataSource):
             self.logger.debug("Failed to parse section header date from '%s': %s", header_text, exc)
             return None
 
-    def _parse_date(self, text: str, url: str = "") -> Optional[datetime]:
-        """A day stated in the page's text, else the newsletter date in its URL (see the callers)."""
+    @staticmethod
+    def _parse_url_date(url: str) -> Optional[datetime]:
+        """The newsletter date in a link ("campaign=20_06_2025"): a publication date, never the incident's."""
+        match = re.search(r'(\d{2})_(\d{2})_(\d{4})', url or "")
+        if not match:
+            return None
+        day, month, year = match.groups()
         try:
-            # First try to extract specific date patterns from text
-            date_patterns = [
-                r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b',  # "19 Jun 2025"
-                r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b',  # "June 19, 2025"
-                r'\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b',  # "2025-06-19"
-                r'\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b'   # "19/06/2025"
-            ]
-
-            # Search for date patterns in text
-            for pattern in date_patterns:
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                if matches:
-                    for match in matches:
-                        try:
-                            # Remove ordinal suffixes
-                            cleaned = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', match)
-                            return dateutil_parse(cleaned)
-                        except Exception as exc:
-                            self.logger.debug("Failed to parse date candidate '%s': %s", cleaned, exc)
-                            continue
-
-            # Try extracting date from URL if text parsing fails
-            if url:
-                # Look for patterns like "20_06_2025" in URL
-                url_date_match = re.search(r'(\d{2})_(\d{2})_(\d{4})', url)
-                if url_date_match:
-                    day, month, year = url_date_match.groups()
-                    try:
-                        return datetime(int(year), int(month), int(day))
-                    except Exception as exc:
-                        self.logger.debug("Failed to parse URL date from %s: %s", url, exc)
-
-                # Look for "campaign=20_06_2025" style patterns
-                campaign_match = re.search(r'campaign=(\d{2}_\d{2}_\d{4})', url)
-                if campaign_match:
-                    date_str = campaign_match.group(1).replace('_', '-')
-                    try:
-                        return dateutil_parse(date_str)
-                    except Exception as exc:
-                        self.logger.debug("Failed to parse campaign date from %s: %s", url, exc)
-
-            return None
-        except (ValueError, TypeError, OverflowError) as exc:
-            self.logger.debug("Failed to parse Webber date from text '%s': %s", text, exc)
+            return datetime(int(year), int(month), int(day))
+        except ValueError:
             return None
 
-    def _scrape_detail_page(self, url: str, section_date: Optional[datetime] = None) -> Optional[CyberEvent]:
-        """Scrapes a single event detail page for structured information."""
+    def _scrape_detail_page(self, url: str, section_date: Optional[datetime] = None,
+                            item: Optional[Dict[str, Any]] = None) -> Optional[CyberEvent]:
+        """Scrapes a single event detail page for structured information.
+
+        Args:
+            item: The list entry that led here (``text``, ``organisation``). What the
+                list says the link is travels with the record: when the page's own
+                heading is about something else (a site name, a disclaimer, another
+                article), the record keeps the list's title, so the identity check
+                after scraping sees the mismatch instead of a title copied from the page.
+        """
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             response = requests.get(url, headers=headers, timeout=self.config.timeout)
@@ -238,24 +248,35 @@ class WebberInsuranceDataSource(DataSource):
 
             title_tag = soup.find('h1')
             title = title_tag.get_text(strip=True) if title_tag else ""
+            item = item or {}
+            claimed = str(item.get("text") or "").strip()
+            organisation = str(item.get("organisation") or "").strip()
+            if claimed and not (title and shares_distinctive_words(title, claimed, organisation)):
+                title = claimed
 
             content_block = soup.find('article') or soup.find('div', class_="content") or soup
             description = content_block.get_text(strip=True, separator="\n")
 
-            # A day the article states wins; the list heading gives only a month.
-            # The date in the link is the newsletter's (a publication date), never
-            # the incident's.
-            stated = self._parse_date(content_block.get_text())
-            published = self._parse_date("", url)
+            # A day counts as the incident's only when the wording ties it to the
+            # breach ("occurred on", "discovered", "between X and Y"). The first date
+            # in an article is its byline or publication date. The list heading gives
+            # the month; the date in the link is the newsletter's (a publication date).
+            near = section_date.date() if section_date else None
+            stated = incident_date_from_text(content_block.get_text(" "), near=near)
+            published = self._parse_url_date(url) or (item or {}).get("url_date")
             if stated:
-                event_date, precision, basis = stated, "day", "stated in the source page"
+                event_date = datetime(stated.day.year, stated.day.month, stated.day.day)
+                precision, basis = "day", BASIS_STATED_IN_SOURCE
             elif section_date:
-                event_date, precision, basis = section_date, "month", "Webber list heading (month)"
+                event_date, precision, basis = section_date, "month", BASIS_WEBBER_HEADING
             else:
                 event_date, precision, basis = None, None, None
 
-            entity_name_match = re.match(r'([^-–]+)', title)
-            entity_name = entity_name_match.group(1).strip() if entity_name_match else title
+            if organisation:
+                entity_name = organisation
+            else:
+                entity_name_match = re.match(r'([^-–]+)', title)
+                entity_name = entity_name_match.group(1).strip() if entity_name_match else title
 
             event = self._convert_details_to_event(url, title, description, event_date, entity_name,
                                                    published=published)

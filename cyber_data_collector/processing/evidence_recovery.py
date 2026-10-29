@@ -78,6 +78,9 @@ PAGE_ALTERNATE = "another page"
 PAGE_BLOCKED = "block page"
 PAGE_SHORT = "short"
 PAGE_MISSING = "missing"
+#: The stored page is another article (an open ``page_other_article`` finding of
+#: ``record_identity``): not the record's own page, so it is fetched again.
+PAGE_OTHER_ARTICLE = "another article"
 
 # Where a record's research stands.
 RESEARCH_VALIDATED = "validated"
@@ -174,7 +177,8 @@ class Member:
                 PAGE_ALTERNATE: f"text from another page ({self.origin_url or 'URL not recorded'})",
                 PAGE_BLOCKED: "stored text is a block page",
                 PAGE_SHORT: f"page text {self.chars} chars",
-                PAGE_MISSING: "no page text"}[self.page]
+                PAGE_MISSING: "no page text",
+                PAGE_OTHER_ARTICLE: f"stored page ({self.chars} chars) is another article"}[self.page]
         parts = [f"{self.source_type or 'unknown source'}: {page}"]
         if self.page_route.note:
             parts.append(self.page_route.note)
@@ -310,8 +314,19 @@ def _research_route(state: str, attempts: int, error: str) -> Route:
     return Route(ROUTE_EXHAUSTED, f"{state} after {attempts} attempt(s): {error[:80]}")
 
 
+def _other_article_pages(conn: sqlite3.Connection) -> set:
+    """Records whose stored page ``record_identity`` found to be another article, still open."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'RecordIdentityChecks'"
+                        ).fetchone():
+        return set()
+    return {r[0] for r in conn.execute(
+        "SELECT DISTINCT raw_event_id FROM RecordIdentityChecks WHERE verdict = 'mismatch' "
+        "AND kind = 'page_other_article' AND resolved_at IS NULL")}
+
+
 def _members(conn: sqlite3.Connection, event_ids: Sequence[str]) -> Dict[str, List[Member]]:
     out: Dict[str, List[Member]] = {e: [] for e in event_ids}
+    other_article = _other_article_pages(conn)
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
@@ -337,6 +352,8 @@ def _members(conn: sqlite3.Connection, event_ids: Sequence[str]) -> Dict[str, Li
                     ORDER BY m.deduplicated_event_id, e.enriched_event_id""", ids).fetchall()
             for row in rows:
                 page, chars, origin, origin_url = _page_state(row["raw_content"], row["source_metadata"])
+                if page == PAGE_OWN and row["raw_event_id"] in other_article:
+                    page = PAGE_OTHER_ARTICLE
                 rescrape = ({"status": row["p_status"], "attempts": row["p_attempts"],
                              "last_error": row["p_last_error"]} if row["p_status"] else None)
                 refetch = ({"status": row["c_status"], "failures": row["c_failures"],

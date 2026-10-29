@@ -8,6 +8,7 @@ import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 try:  # pragma: no cover - optional dependency
     import instructor
@@ -580,10 +581,23 @@ class PerplexityDataSource(DataSource):
 
         return None
 
+    @staticmethod
+    def _is_article_url(url: str) -> bool:
+        """An http(s) URL with a path. The model writes ``source_urls`` itself, and a bare site address
+        ("https://cybertrackerau.com/") is a home page: scraped, it became the record's "article" and its
+        text was judged as the incident (26 live records). Such a URL is not a source for one incident."""
+        parsed = urlparse((url or "").strip())
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc) and any(
+            segment for segment in parsed.path.split("/"))
+
     def _convert_results_to_events(self, results: PerplexitySearchResults) -> List[CyberEvent]:
         events: List[CyberEvent] = []
         for item in results.events:
             try:
+                skipped = [url for url in item.source_urls if not self._is_article_url(url)]
+                if skipped:
+                    self.logger.info("Perplexity event %r: %d source URL(s) are not article addresses and are not "
+                                     "stored as its source: %s", item.title[:60], len(skipped), ", ".join(skipped[:3]))
                 data_sources = [
                     EventSource(
                         source_id=f"perplexity_{hashlib.md5(url.encode()).hexdigest()[:16]}",
@@ -592,7 +606,7 @@ class PerplexityDataSource(DataSource):
                         credibility_score=0.6,
                         relevance_score=0.7,
                     )
-                    for url in item.source_urls
+                    for url in item.source_urls if self._is_article_url(url)
                 ]
 
                 confidence = ConfidenceScore(

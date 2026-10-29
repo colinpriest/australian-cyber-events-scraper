@@ -111,6 +111,14 @@ Waiting work is not counted. Every route is an existing queue:
 No route passes one page off as another: re-fetches store only the record's
 own page, and alternatives arrive as records of their own.
 
+A page that is not the record's article (`processing/record_identity.py`,
+`RecordIdentityChecks`) uses the same two routes: `check-record-identity` queues
+the re-fetch of the record's own URL when it is an article (such a page is a
+`rescrape-short-pages` candidate whatever its length) and the replacement search
+when the URL is a site root or a hub page, when the re-fetch still gives another
+article, or for an enrichment that cannot be re-attached to its record. See
+[README: records linked to the wrong article](../README.md#records-linked-to-the-wrong-article).
+
 A needed search without `PERPLEXITY_API_KEY` is an error (exit 2); the other
 routes and the statuses are still written.
 

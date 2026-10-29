@@ -102,6 +102,20 @@ def test_diagnosis_and_status(populated):
     assert events["ev-supported"].uncertain_fields == [] and events["ev-page-only"].uncertain_fields == []
 
 
+def test_a_page_found_to_be_another_article_is_not_the_records_own(populated):
+    from cyber_data_collector.processing import record_identity
+
+    record_identity.ensure_schema(populated)
+    populated.execute("INSERT INTO RecordIdentityChecks (raw_event_id, enriched_event_id, stage, verdict, kind, "
+                      "checked_at) VALUES ('page', '', 'audit', 'mismatch', 'page_other_article', '2026-10-29')")
+    member = _by_id(populated)["ev-page-only"].members[0]
+    assert member.page == er.PAGE_OTHER_ARTICLE and member.page_route.state != er.ROUTE_DONE
+    assert "another article" in member.describe()
+    # Resolved (the right page was fetched) counts as its own page again.
+    populated.execute("UPDATE RecordIdentityChecks SET resolved_at = '2026-10-30'")
+    assert _by_id(populated)["ev-page-only"].members[0].page == er.PAGE_OWN
+
+
 def test_recover_queues_through_existing_mechanisms_and_is_idempotent(populated):
     calls = []
 
