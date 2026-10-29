@@ -18,6 +18,12 @@ registration date: keep them there across reruns.
     python scripts/analyze_recurrence_extensions.py --db instance/cyber_events.db \
         --censor-date 2026-10-02 --bootstrap 500 --date-draws 200
     python scripts/analyze_recurrence_extensions.py --snapshot-id latest-published
+    python scripts/analyze_recurrence_extensions.py --as-known-at 2026-06-30   # inputs as known on that date
+
+``--as-known-at DATE`` reconstructs the incident links, victims, dates, size bands and record membership from the
+recorded history of when each became known (``cyber_data_collector/dedup/input_history.py``) instead of reading
+today's. Inputs the history does not reach back to are the earliest recorded state and are listed in the report.
+The observation cutoff then defaults to DATE, and may not be later than it.
 """
 from __future__ import annotations
 
@@ -41,10 +47,16 @@ from scripts.analyze_recurrent_timing import (
     UNRESOLVED_ATTRIBUTION_POLICIES, apply_attribution_policy, last_ingest_date, load_victim_events, parse_date,
 )
 from cyber_data_collector.publication.snapshot import AnalysisInput
-from scripts.recurrence_extended import linkage_supplier, sequence_bias, timing_precision
+from scripts.recurrence_extended import history_reconstruction, linkage_supplier, sequence_bias, timing_precision
 
 DEFAULT_DB = "instance/cyber_events.db"
 DEFAULT_OUT = "analysis/recurrent_timing_extended"
+
+
+def history_input_cutoff(as_known_at: str | date) -> str:
+    """The UTC stamp ``as_known_at`` means (see ``input_history.parse_as_known_at``)."""
+    from cyber_data_collector.dedup.input_history import parse_as_known_at
+    return parse_as_known_at(as_known_at)[0]
 
 
 def snapshot_database(source: Path, destination: Path) -> None:
@@ -144,12 +156,17 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                  bootstrap: int = 200, date_draws: int = 100,
                  seed: int = 20261027, unresolved_attributions: str = "include",
                  analysis_input: AnalysisInput | None = None,
-                 snapshot_id: str | None = None) -> dict[str, Any]:
+                 snapshot_id: str | None = None, as_known_at: str | date | None = None) -> dict[str, Any]:
     """Run every extended analysis on one snapshot.
 
     The snapshot is ``analysis_input`` (shared with the caller's other analyses), else the retained
     snapshot ``snapshot_id``, else a new snapshot of ``db_path``, which is retained too. Its id and hash
     are written to ``analysis_inputs.json`` and the summary.
+
+    ``as_known_at`` (a date or datetime, UTC) rewinds the working copy of the snapshot to what the recorded history
+    says was known then, before anything is read (see :mod:`cyber_data_collector.dedup.input_history`); the snapshot
+    id plus this date reproduce the inputs. A shared ``analysis_input`` that the caller already reconstructed is
+    used as it is, and a different ``as_known_at`` is an error.
 
     ``unresolved_attributions`` keeps (``include``) or drops (``exclude``)
     victim rows the calibrated attribution check left unresolved; the counts
@@ -161,15 +178,28 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
     owned = analysis_input is None
     inputs = analysis_input or AnalysisInput.open(db_path, snapshot_id)
     try:
+        if as_known_at is not None:
+            if inputs.reconstruction is None:
+                inputs.reconstruct(as_known_at)
+            elif inputs.reconstruction.cutoff != history_input_cutoff(as_known_at):
+                raise ValueError(f"the shared analysis input was reconstructed to {inputs.reconstruction.as_known_at}, "
+                                 f"not {as_known_at}")
+        reconstruction = inputs.reconstruction
         snapshot = inputs.path
         snapshot_sha256 = inputs.snapshot.sha256
-        end = censor_date or last_ingest_date(snapshot)
+        if censor_date is not None and reconstruction is not None and censor_date > reconstruction.cutoff_date:
+            raise ValueError(f"the observation cutoff {censor_date} is later than --as-known-at "
+                             f"{reconstruction.as_known_at}: nothing after it was known")
+        end = censor_date or (reconstruction.cutoff_date if reconstruction else last_ingest_date(snapshot))
         raw_events = add_first_discovery(load_victim_events(snapshot), snapshot)
         events, coverage = observed_by(raw_events, end)
         events, unresolved = apply_attribution_policy(events, unresolved_attributions)
         if events.empty:
             raise RuntimeError("No victim events were available by the analysis cutoff")
         reference = size_reference(events)
+        registration = (history_reconstruction.registration_check(
+            [out_dir, Path(__file__).resolve().parent.parent / DEFAULT_OUT], events, reconstruction.cutoff_date)
+                        if reconstruction is not None else {})
         reference.to_csv(out_dir / "organisation_size_reference.csv", index=False)
         results = {}
         for name, module in (
@@ -183,7 +213,8 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
             )
         inputs.record(out_dir, analysis="extended recurrence analyses", censor_date=end.isoformat(),
                       seed=seed, bootstrap_replicates=bootstrap, date_draws=date_draws,
-                      unresolved_attributions=unresolved_attributions)
+                      unresolved_attributions=unresolved_attributions,
+                      **({"frozen_cohort_check": registration} if registration else {}))
     finally:
         if owned:
             inputs.close()
@@ -197,6 +228,9 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         "bootstrap_replicates": bootstrap,
         "date_draws": date_draws,
         "observation_coverage": coverage,
+        "as_known_at": reconstruction.as_known_at if reconstruction else None,
+        "history_reconstruction": reconstruction.to_dict() if reconstruction else None,
+        "frozen_cohort_check": registration or None,
         "unresolved_attributions": unresolved,
         "organisation_size_reference": reference.to_dict(orient="records"),
         "analyses": results,
@@ -231,11 +265,11 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         f"{unresolved['events with an unresolved attribution']} incident(s), "
         f"{'included' if unresolved['policy'] == 'include' else 'excluded'} here "
         f"(--unresolved-attributions).", "",
-        "Historical cutoffs filter known discovery dates, but the snapshot contains "
-        "present-day incident links, fields, and classifications. It is not a complete "
-        "historical database snapshot; retrospective and prospective interpretations "
-        "must account for that limitation.", "",
+        history_reconstruction.LIMITATION_WITH_RECONSTRUCTION if reconstruction
+        else history_reconstruction.LIMITATION_WITHOUT_RECONSTRUCTION, "",
     ]
+    if reconstruction is not None:
+        lines.extend([reconstruction.markdown(), history_reconstruction.registration_markdown(registration)])
     for result in results.values():
         section = result.get("section") or result.get("report_section")
         if section:
@@ -256,7 +290,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Analyse this retained snapshot (an id, or 'latest-published') instead of "
                              "snapshotting --db; reproduces an earlier result")
     parser.add_argument("--out-dir", default=DEFAULT_OUT, help="Directory for tables and report")
-    parser.add_argument("--censor-date", help="Observation cutoff YYYY-MM-DD; defaults to last ingest")
+    parser.add_argument("--censor-date", help="Observation cutoff YYYY-MM-DD; defaults to last ingest "
+                                              "(or --as-known-at, when given)")
+    parser.add_argument("--as-known-at", default=None,
+                        help="Reconstruct the incident links, victims, dates, size bands and record membership as "
+                             "recorded by this date (YYYY-MM-DD, end of that UTC day, or YYYY-MM-DD HH:MM[:SS]) "
+                             "instead of reading today's; inputs the history does not reach are listed in the report")
     parser.add_argument("--bootstrap", type=int, default=200, help="Bootstrap replicates")
     parser.add_argument("--date-draws", type=int, default=100, help="Date-uncertainty draws")
     parser.add_argument("--seed", type=int, default=20261027, help="Random seed")
@@ -266,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = run_analysis(Path(args.db), Path(args.out_dir),
                            parse_date(args.censor_date) if args.censor_date else None,
                            args.bootstrap, args.date_draws, args.seed, args.unresolved_attributions,
-                           snapshot_id=args.snapshot_id)
+                           snapshot_id=args.snapshot_id, as_known_at=args.as_known_at)
     print(f"Wrote extended recurrence analyses to {Path(args.out_dir).resolve()}")
     print(f"Observation cutoff: {summary['censor_date']}")
     return 0
