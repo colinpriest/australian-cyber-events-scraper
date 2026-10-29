@@ -1049,16 +1049,17 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
 
     Reads ``DeduplicatedEvents.ai_involvement`` (scripts/classify_ai_involvement.py,
     Jev). Every half-year in the window is listed, with zeros, so the axis is
-    continuous. ``unjudged`` counts incidents with no label yet; a database
-    without the columns gives ``available = False`` (the chart says so).
+    continuous. ``unjudged`` counts incidents with no label yet and ``stale``
+    labelled ones whose label is out of date (``ai_involvement.stale_judgements``);
+    a database without the columns gives ``available = False`` (the chart says so).
     """
     from cyber_data_collector.processing import ai_involvement
 
     period = ReportingPeriod.from_iso(start_date, end_date)
     periods = [p.label for p in half_years_between(period.start.year, period.end)]
     empty = {'periods': periods, 'attacker': [0] * len(periods), 'vulnerability': [0] * len(periods),
-             'misuse': [0] * len(periods), 'uncertain': [0] * len(periods), 'unjudged': 0, 'available': False,
-             'report': AI_REPORT_FILE}
+             'misuse': [0] * len(periods), 'uncertain': [0] * len(periods), 'unjudged': 0, 'stale': 0,
+             'available': False, 'report': AI_REPORT_FILE}
     if not ai_involvement.has_schema(conn):
         logger.warning("AI involvement not classified (no ai_involvement column): "
                        "run scripts/classify_ai_involvement.py")
@@ -1092,9 +1093,12 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
             uncertain[half] = uncertain.get(half, 0) + n
     if unjudged:
         logger.warning("AI involvement chart: %d incident(s) not judged yet", unjudged)
+    stale = len(ai_involvement.stale_judgements(conn, period))
+    if stale:
+        logger.warning("AI involvement chart: %d label(s) stale - rerun scripts/classify_ai_involvement.py", stale)
     return {'periods': periods, 'attacker': [attacker[p] for p in periods],
             'vulnerability': [vulnerability[p] for p in periods], 'misuse': [misuse[p] for p in periods],
-            'uncertain': [uncertain[p] for p in periods], 'unjudged': unjudged,
+            'uncertain': [uncertain[p] for p in periods], 'unjudged': unjudged, 'stale': stale,
             'available': True, 'report': AI_REPORT_FILE}
 
 
@@ -4748,8 +4752,11 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       if (!d.available) {
         parts.push('Not classified yet: run scripts/classify_ai_involvement.py');
       } else {
-        parts.push(`${total.toLocaleString()} incident(s)`);
+        parts.push(`${total.toLocaleString()} incident(s) involved AI`);
+        const unsettled = sum(d.uncertain);
+        if (unsettled) parts.push(`${unsettled.toLocaleString()} more unsettled (grey; not counted)`);
         if (d.unjudged) parts.push(`${d.unjudged.toLocaleString()} not judged yet`);
+        if (d.stale) parts.push(`${d.stale.toLocaleString()} label(s) stale: rerun scripts/classify_ai_involvement.py`);
       }
       sub.innerHTML = parts.join('; ') + ` &middot; <a href="${d.report}">List of AI incidents</a>`;
       new Chart(document.getElementById('aiInvolvementChart').getContext('2d'), {

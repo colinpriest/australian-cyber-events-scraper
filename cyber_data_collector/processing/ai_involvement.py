@@ -38,7 +38,15 @@ the report. Evidence is whole pages within a budget (:func:`breach_source.event_
 Events with AI involvement also get a 2-4 sentence description, written by the
 fast OpenAI model from the same evidence for the AI incident report and stored
 in ``EventDescriptions`` (reused while the evidence, prompt and model are
-unchanged). Jev is required: if it is unavailable nothing runs, and if any
+unchanged).
+
+Freshness: each label stores ``ai_involvement_input_hash`` - a hash of the
+evidence, question, models, cut-off and any label it was decided on - and
+``ai_involvement_error`` when its last re-judgement failed (the old label is
+kept). :func:`stale_judgements` re-derives the hash from the current evidence,
+so a label whose inputs changed since it was judged is reported stale until the
+step runs again; a description is used only for the evidence it was written
+from, and an older one is shown marked as such. Jev is required: if it is unavailable nothing runs, and if any
 event cannot be judged or described the step raises after storing the rest.
 """
 
@@ -203,8 +211,13 @@ class AIInvolvementReport:
     escalated: int = 0             # events whose Jev answer was unsettled and went to the reasoning model
 
 
+#: Why a stored label is stale (:func:`stale_judgements`).
+STALE_CHANGED = "evidence, question, model or calibration changed since it was judged"
+STALE_FAILED = "last re-judgement failed"
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """Add the four columns and the description table (idempotent)."""
+    """Add the label, basis, escalation, freshness and probability columns and the description table (idempotent)."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
     if cols and "ai_involvement" not in cols:
         conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN ai_involvement VARCHAR(20)")
@@ -212,6 +225,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN ai_involvement_basis TEXT")
     if cols and "ai_involvement_escalated" not in cols:
         conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN ai_involvement_escalated INTEGER")
+    for column in ("ai_involvement_input_hash", "ai_involvement_error"):
+        if cols and column not in cols:
+            conn.execute(f"ALTER TABLE DeduplicatedEvents ADD COLUMN {column} TEXT")
     for column in PROBABILITY_COLUMNS.values():
         if cols and column not in cols:
             conn.execute(f"ALTER TABLE DeduplicatedEvents ADD COLUMN {column} REAL")
@@ -355,7 +371,8 @@ def stored_probabilities(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
 
 def _active_events(conn: sqlite3.Connection, limit: Optional[int]) -> List[Dict[str, Any]]:
     columns = ", ".join(["deduplicated_event_id", "ai_involvement", "ai_involvement_basis",
-                         "ai_involvement_escalated", *PROBABILITY_COLUMNS.values()])
+                         "ai_involvement_escalated", "ai_involvement_input_hash", "ai_involvement_error",
+                         *PROBABILITY_COLUMNS.values()])
     sql = (f"SELECT {columns} FROM DeduplicatedEvents WHERE status = 'Active' "
            "ORDER BY event_date DESC, deduplicated_event_id")
     if limit:
@@ -366,6 +383,52 @@ def _active_events(conn: sqlite3.Connection, limit: Optional[int]) -> List[Dict[
         return [dict(r) for r in conn.execute(sql)]
     finally:
         conn.row_factory = previous
+
+
+def judgement_hash(state: Mapping[str, Any], cutoff: Optional[float], label: Optional[str]) -> str:
+    """What a stored label was decided on: evidence, question, both models, cut-off and any label."""
+    blob = json.dumps({"state": state, "question": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
+                       "model": calibration_identity()["model"], "cutoff": cutoff, "label": label},
+                      sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _stale_reason(stored_hash: Optional[str], error: Optional[str], state: Mapping[str, Any],
+                  cutoff: Optional[float], label: Optional[str]) -> Optional[str]:
+    if error:
+        return f"{STALE_FAILED}: {error}"
+    if stored_hash != judgement_hash(state, cutoff, label):
+        return STALE_CHANGED
+    return None
+
+
+def stale_judgements(conn: sqlite3.Connection, period: Any = None) -> Dict[str, str]:
+    """``{event: reason}`` for labelled active incidents (in ``period``) whose label is out of date.
+
+    Out of date: the last re-judgement failed, or the current evidence,
+    question, models, cut-off or label differ from what the label was decided
+    on (a label stored before input hashes were kept counts as changed).
+    Unjudged incidents are not listed - they have no label to be stale.
+    """
+    from cyber_data_collector.reporting.population import incident_filter
+
+    if not has_schema(conn):
+        return {}
+    present = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    optional = ", ".join(f"de.{c}" if c in present else "NULL"
+                         for c in ("ai_involvement_input_hash", "ai_involvement_error"))
+    where, params = incident_filter(period, "de")
+    calibration = active_calibration()
+    cutoff = calibration["cutoff"] if calibration else None
+    labels = labelled_events()
+    out: Dict[str, str] = {}
+    for event_id, stored_hash, error in conn.execute(
+            f"SELECT de.deduplicated_event_id, {optional} FROM DeduplicatedEvents de "
+            f"WHERE {where} AND de.ai_involvement IS NOT NULL", params).fetchall():
+        reason = _stale_reason(stored_hash, error, event_state(conn, event_id), cutoff, labels.get(event_id))
+        if reason:
+            out[event_id] = reason
+    return out
 
 
 def description_hash(state: Mapping[str, Any], model: str) -> str:
@@ -477,9 +540,15 @@ def classify_events(conn: sqlite3.Connection, dry_run: bool = False, limit: Opti
                     probs, escalated = better, True
                     report.escalated += 1
                 values = column_values(probs, escalated, report.cutoff, labels.get(event_id))
+                values["ai_involvement_input_hash"] = judgement_hash(state, report.cutoff, labels.get(event_id))
+                values["ai_involvement_error"] = None
             except Exception as exc:  # noqa: BLE001 - recorded and raised at the end
                 report.failed[event_id] = f"{type(exc).__name__}: {exc}"
                 logger.error("AI-involvement judgement failed for %s: %s", event_id, exc)
+                if not dry_run:
+                    # The old label stays, marked: readers report it stale, not current.
+                    conn.execute("UPDATE DeduplicatedEvents SET ai_involvement_error = ? "
+                                 "WHERE deduplicated_event_id = ?", (report.failed[event_id][:500], event_id))
                 if is_budget_refusal(exc):
                     break   # every later request would be refused too
                 continue
@@ -528,8 +597,12 @@ def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str,
     ``period`` is a :class:`ReportingPeriod`; ``None`` lists every active
     incident, dated or not. Victims are the ``victim`` roles (an incident with
     several co-equal victims lists each), else ``victim_organization_name``.
+    ``stale`` is why the label is out of date (:func:`stale_judgements`), else
+    None. ``description`` is the one written from the current evidence; when
+    there is none, the latest older one, with ``description_stale`` True.
     """
     from cyber_data_collector.reporting.population import incident_filter
+    from cyber_data_collector.utils.llm_models import openai_fast_model
 
     if not has_schema(conn):
         return []
@@ -538,8 +611,13 @@ def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str,
     conn.row_factory = sqlite3.Row
     present = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
     optional = ", ".join(f"de.{c} AS {c}" if c in present else f"NULL AS {c}"
-                         for c in ("ai_involvement_basis", "ai_misuse_probability"))
+                         for c in ("ai_involvement_basis", "ai_misuse_probability",
+                                   "ai_involvement_input_hash", "ai_involvement_error"))
     marks = ", ".join("?" for _ in AI_INVOLVED_LABELS)
+    calibration = active_calibration()
+    cutoff = calibration["cutoff"] if calibration else None
+    labels = labelled_events()
+    describer_model = openai_fast_model()
     try:
         rows = [dict(r) for r in conn.execute(
             f"""SELECT de.deduplicated_event_id, de.event_date, de.title, de.victim_organization_name,
@@ -557,7 +635,13 @@ def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str,
                    ORDER BY e.entity_name""", (row["deduplicated_event_id"],)) if r[0]]
             row["victims"] = victims or ([row["victim_organization_name"]] if row["victim_organization_name"]
                                          else [])
-            row["description"] = stored_description(conn, row["deduplicated_event_id"])
+            state = event_state(conn, row["deduplicated_event_id"])
+            row["stale"] = _stale_reason(row["ai_involvement_input_hash"], row["ai_involvement_error"], state,
+                                         cutoff, labels.get(row["deduplicated_event_id"]))
+            current = stored_description(conn, row["deduplicated_event_id"],
+                                         description_hash(state, describer_model))
+            row["description"] = current or stored_description(conn, row["deduplicated_event_id"])
+            row["description_stale"] = current is None and row["description"] is not None
             option = next((o for o in AI_OPTIONS if LABELS[o] == row["ai_involvement"]), None)
             row["probability"] = row[PROBABILITY_COLUMNS[option]] if option else None
             row["p_ai"] = 1.0 - row["no_ai_probability"] if row["no_ai_probability"] is not None else None

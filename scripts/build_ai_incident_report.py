@@ -7,6 +7,13 @@ and descriptions are written by ``scripts/classify_ai_involvement.py`` (a
 pipeline step); this page only reads them, so it makes no model calls. An
 incident with no stored description says so on the page and in the log.
 
+The headline counts only incidents with a settled category; AI-uncertain ones
+are listed and counted separately. A label whose evidence, question, models or
+cut-off changed since it was judged, or whose last re-judgement failed, is
+marked stale (``ai_involvement.stale_judgements``), as is a description written
+from older evidence; the summary counts both, including stale No-AI labels that
+are not listed.
+
 The main dashboard build writes this page next to index.html, so both are
 published together. To build it alone, from the project root:
     python scripts/build_ai_incident_report.py [--db-path PATH] [--out-dir DIR]
@@ -57,6 +64,17 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
     total = count_incidents(conn, period)
     unjudged = _unjudged(conn, period)
     counts = {label: sum(1 for i in incidents if i["ai_involvement"] == label) for label in ai.AI_INVOLVED_LABELS}
+    settled = sum(counts[label] for label in ai.AI_LABELS)
+    listed = {i["deduplicated_event_id"] for i in incidents}
+    stale_listed = [i for i in incidents if i.get("stale")]
+    stale_unlisted = sum(1 for event_id in ai.stale_judgements(conn, period) if event_id not in listed)
+    stale_descriptions = [i for i in incidents if i.get("description_stale")]
+    if stale_listed or stale_unlisted:
+        logger.warning("AI incident report: %d listed and %d unlisted label(s) are stale - rerun "
+                       "scripts/classify_ai_involvement.py", len(stale_listed), stale_unlisted)
+    if stale_descriptions:
+        logger.warning("AI incident report: %d description(s) were written from older evidence",
+                       len(stale_descriptions))
     missing = [i["deduplicated_event_id"] for i in incidents if not i["description"]]
     if missing:
         logger.warning("AI incident report: %d incident(s) have no description yet: %s",
@@ -79,8 +97,12 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
         badge = BADGE[item["ai_involvement"]]
         if item.get("ai_involvement_basis") and item["ai_involvement"] == ai.AI_UNCERTAIN:
             prob_text += f'<div class="muted">{html_escape(item["ai_involvement_basis"])}</div>'
+        if item.get("stale"):
+            prob_text += f'<div class="stale">Stale: {html_escape(item["stale"])}</div>'
         if item["description"]:
             description = html_escape(item["description"])
+            if item.get("description_stale"):
+                description += '<div class="stale">Written from older evidence; not yet rewritten.</div>'
         else:
             description = f'<span class="missing">{html_escape(NO_DESCRIPTION)}</span>'
         rows.append(
@@ -89,12 +111,23 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
             f'<td><div class="title">{html_escape(item["title"] or "")}</div>{description}</td></tr>')
     body = "\n".join(rows) or '<tr><td colspan="4" class="muted">No incidents with AI involvement.</td></tr>'
 
-    notes = [f"{len(incidents)} of {total} incidents dated {period.start_iso} to {period.end_iso} involved AI: "
+    notes = [f"{settled} of {total} incidents dated {period.start_iso} to {period.end_iso} involved AI: "
              f"{counts[ai.AI_ATTACKER]} with AI as the attacker, "
              f"{counts[ai.AI_VULNERABILITY]} with the victim's AI attacked, "
-             f"{counts[ai.AI_MISUSE]} where the organisation's own use of AI was the breach, "
-             f"{counts[ai.AI_UNCERTAIN]} where the evidence does not settle whether or how AI was involved "
-             "(listed, not counted as either)."]
+             f"{counts[ai.AI_MISUSE]} where the organisation's own use of AI was the breach."]
+    if counts[ai.AI_UNCERTAIN]:
+        notes.append(f"A further {counts[ai.AI_UNCERTAIN]} are listed where the evidence does not settle whether "
+                     f"or how AI was involved; they are not counted in the {settled}.")
+    if stale_listed:
+        notes.append(f'<span class="stale">{len(stale_listed)} listed incident(s) have a stale label (marked).</span>')
+    if stale_unlisted:
+        notes.append(f'<span class="stale">{stale_unlisted} incident(s) not listed have a stale label and may '
+                     "now involve AI.</span>")
+    if stale_listed or stale_unlisted:
+        notes.append('<span class="stale">Rerun scripts/classify_ai_involvement.py to re-judge them.</span>')
+    if stale_descriptions:
+        notes.append(f'<span class="stale">{len(stale_descriptions)} description(s) were written from older '
+                     "evidence (marked).</span>")
     if unjudged:
         notes.append(f'<span class="missing">{unjudged} incident(s) have not been judged yet and are not '
                      "listed.</span>")
@@ -157,6 +190,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
   .badge.uncertain {{ color: var(--muted); background: var(--line); }}
   .muted {{ color: var(--muted); font-size: .85rem; }}
   .missing {{ color: var(--warn); }}
+  .stale {{ color: var(--warn); font-size: .85rem; }}
 </style>
 </head>
 <body>

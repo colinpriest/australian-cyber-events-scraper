@@ -213,6 +213,60 @@ def test_report_lists_only_ai_incidents_oldest_first_with_descriptions(conn):
     assert "2 of 3 incidents" in page
 
 
+def test_uncertain_incidents_are_listed_but_not_in_the_headline_total(conn):
+    from scripts.build_ai_incident_report import build_report_html
+
+    _run(conn)
+    conn.execute("UPDATE DeduplicatedEvents SET ai_involvement = 'AI-uncertain' WHERE deduplicated_event_id = 'd1'")
+    page = build_report_html(conn, PERIOD)
+    assert "1 of 3 incidents" in page and "A further 1 are listed" in page and "not counted in the 1" in page
+    assert 'data-category="uncertain"' in page
+
+
+def test_labels_and_descriptions_go_stale_when_evidence_changes(conn):
+    import scripts.build_static_dashboard as sd
+    from scripts.build_ai_incident_report import build_report_html
+
+    client, describer = FakeClient(SCRIPT), FakeDescriber()
+    _run(conn, client, describer)
+    assert ai.stale_judgements(conn, PERIOD) == {}
+    assert "Stale:" not in build_report_html(conn, PERIOD)
+    # New evidence for a listed AI incident and for an unlisted No-AI one, not yet re-judged.
+    conn.execute("UPDATE RawEvents SET raw_content = 'Services Australia: new text' WHERE raw_event_id = 'r0'")
+    conn.execute("UPDATE RawEvents SET raw_content = 'Acme: new text' WHERE raw_event_id = 'r2'")
+    assert ai.stale_judgements(conn, PERIOD) == {"d0": ai.STALE_CHANGED, "d2": ai.STALE_CHANGED}
+    page = build_report_html(conn, PERIOD)
+    assert f"Stale: {ai.STALE_CHANGED}" in page and "Written from older evidence" in page
+    assert "1 listed incident(s) have a stale label" in page
+    assert "1 incident(s) not listed have a stale label" in page
+    assert ai.ai_incidents(conn, PERIOD)[1]["description_stale"]
+    assert sd.get_ai_involvement_by_half_year(conn, PERIOD.start_iso, PERIOD.end_iso)["stale"] == 2
+    # Re-judging brings both back up to date and rewrites the description.
+    _run(conn, client, describer)
+    assert ai.stale_judgements(conn, PERIOD) == {}
+    assert not any(i["description_stale"] for i in ai.ai_incidents(conn, PERIOD))
+    # A changed cut-off makes every label stale too.
+    monkey_cal = {"question_version": ai.calibration_identity()["question_version"],
+                  "model": ai.calibration_identity()["model"], "cutoff": 0.5}
+    Path(ai.CALIBRATION_PATH).write_text(json.dumps(monkey_cal), encoding="utf-8")
+    assert set(ai.stale_judgements(conn, PERIOD)) == {"d0", "d1", "d2"}
+
+
+def test_a_failed_rejudgement_keeps_the_label_but_marks_it_stale(conn):
+    from scripts.build_ai_incident_report import build_report_html
+
+    _run(conn)
+    conn.execute("UPDATE RawEvents SET raw_content = 'Services Australia: new text' WHERE raw_event_id = 'r0'")
+    with pytest.raises(ai.AIInvolvementIncomplete):
+        _run(conn, FakeClient(dict(SCRIPT, **{MEDICARE: RuntimeError("Jev down")})))
+    assert _values(conn)["d0"][0] == "AI-attacker"                      # kept, not defaulted
+    reason = ai.stale_judgements(conn, PERIOD)["d0"]
+    assert reason.startswith(ai.STALE_FAILED) and "Jev down" in reason
+    assert "Stale: last re-judgement failed" in build_report_html(conn, PERIOD)
+    _run(conn)
+    assert ai.stale_judgements(conn, PERIOD) == {}
+
+
 def test_dashboard_chart_counts_ai_incidents_per_half_year(conn):
     import scripts.build_static_dashboard as sd
 
