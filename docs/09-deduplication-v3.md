@@ -962,7 +962,7 @@ Failures behave as in 8j: a Jev error raises, a failed escalation leaves the
 member undecided.
 
 **Repair - only with its own calibration.** `scripts/calibrate_coherence_same_org.py`
-`sample` (stratum C: every candidate; N: a seeded sample of the other
+`sample` (candidates stratified on their stored final score: A below 0.5 a census, B 0.5-0.8 and C above 0.8 seeded samples; N a seeded sample of the other
 same-organisation members, which measures what candidate selection misses),
 `packet` (blind: no score, stratum or flag), `judge`, `calibrate` (largest
 cut-off with >= 95% of the candidates it splits labelled `different`, bootstrap,
