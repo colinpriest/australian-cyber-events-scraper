@@ -2210,8 +2210,60 @@ it contains the frozen cohort needed for future validation and cannot be
 recreated retrospectively after the registration date. Also preserve
 `timing_size_adjusted_registration.json`, the separately frozen cohort and
 size groups for the new size-adjusted prospective test.
-Results describe recorded incidents, and historical cutoffs cannot reconstruct
-the database's earlier linkage and classification state.
+Results describe recorded incidents. A historical cutoff on its own filters by discovery date but
+reads today's links; `--as-known-at` reconstructs them instead (next section).
+
+#### Inputs as known at a date (`--as-known-at`)
+
+The analyses used to take a cutoff by discovery date but read today's incident links, event dates, victims
+and size bands. `dedup/input_history.py` now records **when each of those became known**, and both analysis
+scripts can reconstruct their inputs from it:
+
+```bash
+python scripts/dedup_admin.py input-history              # start/report recording; idempotent (also run by `pipeline.py init`)
+python scripts/dedup_admin.py input-history --status     # report only
+python scripts/analyze_recurrence_extensions.py --as-known-at 2026-06-30 --bootstrap 500
+python scripts/analyze_recurrent_timing.py --as-known-at 2026-06-30 --extended --bootstrap 500
+python scripts/analyze_recurrence_extensions.py --snapshot-id <id> --as-known-at 2026-10-27   # a follow-up at the registration date
+```
+
+| Decision | Watched table | History table |
+|---|---|---|
+| incident dates, status, fields | `DeduplicatedEvents` | `EventStateHistory` |
+| event membership | `EventDeduplicationMap` | `EventMembershipHistory` |
+| victim attribution (roles) | `DeduplicatedEventEntities` | `EventEntityLinkHistory` |
+| organisation size band | `EntitiesV2` | `EntityStateHistory` |
+
+* **One mechanism for every writer.** SQLite triggers (installed by `init`, every `dedup` schema step and
+  every pipeline connection; refreshed if a tracked column appears) append a row - the full tracked state, with
+  `known_at` in UTC from the database clock - whenever a tracked column of a watched row changes. A merge,
+  split, role refresh, entity fold, redate or re-sizing is therefore recorded whichever code path made it, and
+  code added later is covered with no hook. Untracked columns write nothing.
+* **Existing ledgers are reused, not copied.** `VictimAttributionActions`, `VictimFillActions`,
+  `EntityAliases`, `ContextualEntityAliases`, `EntityMentionResolutions`, `DedupOverrides` and `ModelJudgements`
+  carry their own timestamps; the reconstruction drops rows dated after the cutoff. `EntityMerges` and
+  `DedupSnapshots` hold the state *before* one change, not since when it held and not for every change, so they
+  cannot date a state; their effects are in the history tables from when tracking began.
+* **History before tracking cannot be invented.** The first time a table is tracked its current state is
+  written as `baseline` rows (`backfilled = 1`) and `InputHistoryStatus.tracking_since` records when. A cutoff
+  earlier than that is **reconstructed from current state**: each row takes the state recorded when tracking
+  began (later changes are undone), and a row whose first record is a genuine insert did not exist before it.
+  A ledger is trusted from its first row only; a cutoff before that leaves the table as it is. The report
+  (`## Inputs as known at DATE`) and `analysis_inputs.json` (`history_reconstruction`) list, per input, whether
+  it came from history or from the baseline, with counts of rows removed (not yet known), restored (since
+  deleted) and changed, and which columns were tracked only later.
+* **Dates are UTC.** `--as-known-at 2026-06-30` is the end of that UTC day; `"2026-06-30 08:30"` is exact.
+  The observation cutoff defaults to it and may not be later. Other inputs (attack type, records-affected
+  band, source text) are the present-day values unless listed in the report.
+* **Reproducible.** The retained snapshot is the live database as it was; the reconstruction runs on a
+  working copy, so `--snapshot-id <id> --as-known-at <date>` (recorded as `reproduce` in
+  `analysis_inputs.json`) reproduces it exactly.
+* **The registered protocol is unchanged.** `timing_peak_registration.json` and
+  `timing_size_adjusted_registration.json` are read, never written. When `--as-known-at` equals a
+  registration's `snapshot_cutoff`, the report also compares the frozen cohort with the cohort the reconstructed
+  inputs give (organisations in both, with the same anchor date and events), so a follow-up can show how far the
+  database has drifted from what was frozen. Tracking began after the 2026-10-27 registration, so that date is
+  reconstructed from the baseline and says so.
 
 Main outputs are written under `analysis/recurrent_timing/`:
 

@@ -2717,6 +2717,32 @@ def cmd_refresh_facts(args) -> int:
     return 0
 
 
+def cmd_input_history(args) -> int:
+    """Start (or report) the history of what was known when, which `--as-known-at` reconstructs from."""
+    from cyber_data_collector.dedup import input_history
+
+    conn = _connect(args.db)
+    try:
+        done = {} if args.status else input_history.ensure_schema(conn)
+        for source, what in done.items():
+            if what:
+                print(f"{source:<11}: {what}")
+        rows = input_history.status(conn)
+        if not rows:
+            print("no input history is recorded; run this command without --status")
+            return 1
+        for row in rows:
+            counts = ", ".join(f"{k} {v}" for k, v in sorted(row["rows_by_change"].items()))
+            print(f"{row['table']:<26} tracked since {row['tracking_since']} UTC "
+                  f"({len(row['tracked_columns'])} columns); history rows: {counts}")
+        print("\nA cutoff earlier than 'tracked since' is reconstructed from current state (the earliest recorded "
+              "state); later cutoffs are reconstructed from history. Used by `analyze_recurrent_timing.py` and "
+              "`analyze_recurrence_extensions.py` --as-known-at.")
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_roles_status(args) -> int:
     """Report which events have entity roles matching their current members."""
     conn = _connect(args.db)
@@ -3944,6 +3970,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("refresh-facts", help="Recompute facts of events whose membership changed")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_refresh_facts)
+
+    p = sub.add_parser("input-history",
+                       help="Record what was known when (event dates, membership, victim links, size bands) so "
+                            "an analysis can run --as-known-at a past date; idempotent")
+    p.add_argument("--status", action="store_true", help="Only report; install and baseline nothing.")
+    p.set_defaults(func=cmd_input_history)
 
     p = sub.add_parser("roles-status",
                        help="Report whether entity roles match current membership")
