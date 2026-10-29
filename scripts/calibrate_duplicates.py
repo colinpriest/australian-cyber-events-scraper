@@ -94,8 +94,10 @@ def main(argv=None) -> int:
     apply_model_arguments(args)
 
     labels = dj.labelled_pairs()
-    # The final score the pipeline acts on: the escalation's in the middle band, else Jev's.
-    probs = dj.stored_final_probabilities(sqlite3.connect(args.db))
+    # The final score the pipeline acts on (the escalation's in the middle band, else Jev's), as decided on each
+    # pair's current evidence: a pair whose evidence changed since it was scored has none (score it again first).
+    conn = sqlite3.connect(args.db)
+    probs = dj.stored_final_probabilities(conn, [p for p in dj.candidate_pairs(conn) if p["pair_id"] in labels])
     rows = [{"pair_id": pid, "p": probs[pid], "same": label == "same"}
             for pid, label in labels.items() if label in ("same", "different") and pid in probs]
     unsure = sum(1 for label in labels.values() if label == "unsure")

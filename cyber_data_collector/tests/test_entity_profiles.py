@@ -121,7 +121,7 @@ def test_an_unsure_decision_is_asked_again_only_when_its_evidence_or_model_chang
     assert ask() == "same" and len(asked) == 3
 
 
-def test_a_settled_verdict_survives_changed_evidence(conn):
+def test_a_settled_model_decision_is_asked_again_when_its_evidence_changes_and_the_pair_matters(conn):
     a, b = _entity(conn, "Acme Health"), _entity(conn, "Acme")
     asked = []
 
@@ -129,10 +129,31 @@ def test_a_settled_verdict_survives_changed_evidence(conn):
         asked.append(prompt)
         return {"text": json.dumps({"verdict": "different", "reason": "r"}), "citations": []}
 
-    for _ in range(2):
-        eav.verify_pair(conn, "Acme", "Acme Health", search, eav.stored_verdicts(conn), eav.VerificationReport())
-        ep.store_researched(conn, a, {"sector": ["health"]}, [])
-    assert len(asked) == 1
+    def ask():
+        report = eav.VerificationReport()
+        verdict = eav.verify_pair(conn, "Acme", "Acme Health", search, eav.stored_verdicts(conn), report)
+        return verdict, report
+
+    assert ask()[0] == "different" and len(asked) == 1
+    assert ask()[1].reused == 1 and len(asked) == 1                    # same evidence: the stored decision stands
+    ep.store_researched(conn, a, {"sector": ["health"]}, [])           # the evidence changed
+    verdict, report = ask()
+    assert verdict == "different" and len(asked) == 2 and report.revisited == [("Acme", "Acme Health")]
+    assert "profile:" in asked[1]
+    assert conn.execute("SELECT COUNT(*) FROM EntityAliasDecisionHistory").fetchone()[0] == 1
+
+
+def test_a_humans_decision_survives_changed_evidence(conn):
+    a, b = _entity(conn, "Acme Health"), _entity(conn, "Acme")
+    eav.ensure_schema(conn)
+    conn.execute("INSERT INTO EntityAliasDecisions VALUES ('Acme', 'Acme Health', 'different', NULL, 'a person', '[]', "
+                 "'human', ?, 'x', 'old evidence')", (eav.PROMPT_VERSION,))
+    ep.store_researched(conn, a, {"sector": ["health"]}, [])
+
+    def search(prompt):
+        raise AssertionError("a person's decision is never asked again")
+
+    assert eav.verify_pair(conn, "Acme", "Acme Health", search, eav.stored_verdicts(conn), eav.VerificationReport())         == "different"
 
 
 def test_pairs_are_ranked_by_shared_distinctive_tokens_and_reliable_profile_evidence(conn):
