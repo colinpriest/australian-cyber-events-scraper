@@ -1518,7 +1518,8 @@ cut-off** on P(AI) = 1 - P(No-AI) when `evaluation/ai_involvement_calibration.js
 matches the current model and question (`scripts/calibrate_ai_involvement.py`
 `sample` / `packet` / `calibrate`, from blind labels in
 `evaluation/ai_involvement_labels.csv`); labelled events take their label.
-Without a matching calibration the label is the most probable option, and
+The calibration records the evidence fingerprint (`ai_involvement.evidence_fingerprint`) as well as the model and question;
+any of them changed and it does not apply until `calibrate` is rerun. Without a matching calibration the label is the most probable option, and
 `ai_involvement_basis`, the report and the dashboard say so. Each AI incident also gets
 a 2-4 sentence description from the fast OpenAI model, stored in
 `EventDescriptions` and rewritten only when its evidence changes. The step runs

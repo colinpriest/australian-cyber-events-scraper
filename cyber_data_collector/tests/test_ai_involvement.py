@@ -246,10 +246,21 @@ def test_labels_and_descriptions_go_stale_when_evidence_changes(conn):
     assert ai.stale_judgements(conn, PERIOD) == {}
     assert not any(i["description_stale"] for i in ai.ai_incidents(conn, PERIOD))
     # A changed cut-off makes every label stale too.
-    monkey_cal = {"question_version": ai.calibration_identity()["question_version"],
-                  "model": ai.calibration_identity()["model"], "cutoff": 0.5}
-    Path(ai.CALIBRATION_PATH).write_text(json.dumps(monkey_cal), encoding="utf-8")
+    Path(ai.CALIBRATION_PATH).write_text(json.dumps({**ai.calibration_identity(), "cutoff": 0.5}),
+                                         encoding="utf-8")
     assert set(ai.stale_judgements(conn, PERIOD)) == {"d0", "d1", "d2"}
+
+
+def test_a_calibration_measured_on_other_evidence_processing_is_not_applied(tmp_path, monkeypatch):
+    path = tmp_path / "cal.json"
+    monkeypatch.setattr(ai, "CALIBRATION_PATH", path)
+    path.write_text(json.dumps({**ai.calibration_identity(), "cutoff": 0.7}))
+    assert ai.active_calibration()["cutoff"] == 0.7
+    path.write_text(json.dumps({**ai.calibration_identity(), "evidence": "ai-involvement:old", "cutoff": 0.7}))
+    assert ai.active_calibration() is None
+    unstamped = {k: v for k, v in ai.calibration_identity().items() if k != "evidence"}
+    path.write_text(json.dumps({**unstamped, "cutoff": 0.7}))
+    assert ai.active_calibration() is None
 
 
 def test_a_failed_rejudgement_keeps_the_label_but_marks_it_stale(conn):
