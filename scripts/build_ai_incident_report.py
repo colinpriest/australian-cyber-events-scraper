@@ -1,7 +1,7 @@
 """Write dashboard/ai_incidents.html: every incident that involved AI, oldest first.
 
 Lists the active incidents in the dashboard window (2020 to date) whose
-``ai_involvement`` is AI-attacker or AI-vulnerability, with date, victim(s),
+``ai_involvement`` is AI-attacker, AI-vulnerability, AI-misuse or AI-uncertain, with date, victim(s),
 category (with Jev's P(AI), or "labelled") and a 2-4 sentence description. Labels
 and descriptions are written by ``scripts/classify_ai_involvement.py`` (a
 pipeline step); this page only reads them, so it makes no model calls. An
@@ -32,8 +32,9 @@ logger = logging.getLogger(__name__)
 
 REPORT_FILE = "ai_incidents.html"
 CATEGORY_TEXT = {ai.AI_ATTACKER: "AI attacker", ai.AI_VULNERABILITY: "AI vulnerability",
-                 ai.AI_UNCERTAIN: "AI - unsettled"}
-BADGE = {ai.AI_ATTACKER: "attacker", ai.AI_VULNERABILITY: "vulnerability", ai.AI_UNCERTAIN: "uncertain"}
+                 ai.AI_MISUSE: "AI misuse", ai.AI_UNCERTAIN: "AI - unsettled"}
+BADGE = {ai.AI_ATTACKER: "attacker", ai.AI_VULNERABILITY: "vulnerability", ai.AI_MISUSE: "misuse",
+         ai.AI_UNCERTAIN: "uncertain"}
 NO_DESCRIPTION = "Description not generated yet (run scripts/classify_ai_involvement.py)."
 
 
@@ -91,6 +92,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
     notes = [f"{len(incidents)} of {total} incidents dated {period.start_iso} to {period.end_iso} involved AI: "
              f"{counts[ai.AI_ATTACKER]} with AI as the attacker, "
              f"{counts[ai.AI_VULNERABILITY]} with the victim's AI attacked, "
+             f"{counts[ai.AI_MISUSE]} where the organisation's own use of AI was the breach, "
              f"{counts[ai.AI_UNCERTAIN]} where the evidence does not settle whether or how AI was involved "
              "(listed, not counted as either)."]
     if unjudged:
@@ -108,10 +110,11 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
             f"text, reaches {calibration['cutoff']:.2f} - the cut-off at which "
             f"{at.get('correct_labelled')} of {at.get('flagged_labelled')} blind-labelled events were "
             f"really AI incidents (weighted precision {at.get('weighted_precision', 0):.2f}). The category is "
-            "the more probable of attacker and vulnerability; labelled events show their label.")
+            "the most probable of attacker, vulnerability and misuse when it holds three quarters of P(AI) "
+            "(otherwise unsettled); labelled events show their label.")
     else:
         method_html = html_escape(
-            "Category is Jev's most probable of three (AI attacker, AI vulnerability, no AI) from the news "
+            "Category is Jev's most probable of four (AI attacker, AI vulnerability, AI misuse, no AI) from the news "
             "sources' full text; P(AI) is 1 minus the probability of no AI. NOT CALIBRATED: no labelled cut-off "
             "matches the current model and question.")
 
@@ -123,10 +126,12 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
 <title>AI Cyber Incidents</title>
 <style>
   :root {{ --bg: #f8f9fa; --card: #ffffff; --text: #1f2937; --muted: #6b7280; --line: #e5e7eb;
-          --attacker: #b91c1c; --attacker-bg: #fee2e2; --vuln: #1d4ed8; --vuln-bg: #dbeafe; --warn: #b45309; }}
+          --attacker: #b91c1c; --attacker-bg: #fee2e2; --vuln: #1d4ed8; --vuln-bg: #dbeafe;
+          --misuse: #92400e; --misuse-bg: #fef3c7; --warn: #b45309; }}
   @media (prefers-color-scheme: dark) {{
     :root {{ --bg: #111827; --card: #1f2937; --text: #e5e7eb; --muted: #9ca3af; --line: #374151;
-            --attacker: #fca5a5; --attacker-bg: #450a0a; --vuln: #93c5fd; --vuln-bg: #172554; --warn: #fbbf24; }}
+            --attacker: #fca5a5; --attacker-bg: #450a0a; --vuln: #93c5fd; --vuln-bg: #172554;
+            --misuse: #fcd34d; --misuse-bg: #451a03; --warn: #fbbf24; }}
   }}
   body {{ margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
@@ -148,6 +153,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
             white-space: nowrap; }}
   .badge.attacker {{ color: var(--attacker); background: var(--attacker-bg); }}
   .badge.vulnerability {{ color: var(--vuln); background: var(--vuln-bg); }}
+  .badge.misuse {{ color: var(--misuse); background: var(--misuse-bg); }}
   .badge.uncertain {{ color: var(--muted); background: var(--line); }}
   .muted {{ color: var(--muted); font-size: .85rem; }}
   .missing {{ color: var(--warn); }}
@@ -156,7 +162,8 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
 <body>
 <header>
   <h1>AI Cyber Incidents</h1>
-  <p>Australian cyber incidents in which AI was the attacker, or the victim's AI was attacked.
+  <p>Australian cyber incidents in which AI was the attacker, the victim's AI was attacked, or an
+     organisation's own use of AI was the breach.
      Built {html_escape(built)}. <a href="index.html">Main dashboard</a></p>
 </header>
 <main>
@@ -166,6 +173,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
     <div class="filters">
       <label><input type="checkbox" data-filter="attacker" checked> AI attacker</label>
       <label><input type="checkbox" data-filter="vulnerability" checked> AI vulnerability</label>
+      <label><input type="checkbox" data-filter="misuse" checked> AI misuse</label>
       <label><input type="checkbox" data-filter="uncertain" checked> Unsettled</label>
     </div>
   </div>

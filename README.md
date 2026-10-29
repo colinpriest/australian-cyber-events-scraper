@@ -1358,16 +1358,18 @@ Every active event carries `DeduplicatedEvents.ai_involvement`, one of:
 | Value | Meaning |
 |---|---|
 | `AI-attacker` | an AI system was the attacker or the attacker's instrument (the OpenAI agent that reached Services Australia's Medicare statistics portal in 2026; deepfakes or AI-written phishing the reporting says were used) |
-| `AI-vulnerability` | the victim's own AI was attacked, misused or leaked data (prompt injection, a jailbroken chatbot, exposed model or training data) |
+| `AI-vulnerability` | the victim's own AI was attacked, manipulated or leaked data through a flaw (prompt injection, a jailbroken chatbot, exposed model or training data, a compromised AI integration) |
+| `AI-misuse` | no attack: the organisation's own use of AI was the breach (Kmart's in-store facial recognition, Clearview AI scraping faces into its tool, a contractor uploading applicants' data to ChatGPT). Added 2026-10-29; those three were labelled attacker or vulnerability before |
+| `AI-uncertain` | AI involvement likely, but no category holds three quarters of P(AI); listed, not counted as any category |
 | `No-AI` | no AI involvement reported (speculation, commentary or AI as the victim's business does not count) |
 
 Jev answers one Choice per event over the members' evidence (the same
 evidence as the breach-source question: each record's **whole page** up to
 12,000 characters, 60,000 per event, any cut stated - until 2026-10-28 it was
 the first 1,200 characters, mostly site menus, and 80% of pages mentioning AI
-first did so after that point). All three probabilities are stored in
-`ai_attacker_probability`, `ai_vulnerability_probability` and
-`no_ai_probability` (the full answer in `ModelJudgements`, reused until the
+first did so after that point). All four probabilities are stored in
+`ai_attacker_probability`, `ai_vulnerability_probability`,
+`ai_misuse_probability` and `no_ai_probability` (the full answer in `ModelJudgements`, reused until the
 evidence, question or model changes). The label is decided by a **calibrated
 cut-off** on P(AI) = 1 - P(No-AI) when `evaluation/ai_involvement_calibration.json`
 matches the current model and question (`scripts/calibrate_ai_involvement.py`
@@ -1381,7 +1383,7 @@ in every refresh after the breach-source step; it requires `TYPESAFE_API_KEY`
 (exit 2 without it) and exits 1 if any event could not be judged or described.
 
 The main dashboard shows AI incidents per half-year (stacked: attacker /
-vulnerability, with the count not yet judged), reconciled against the
+vulnerability / misuse / unsettled, with the count not yet judged), reconciled against the
 database, and links to `dashboard/ai_incidents.html`, written and published
 with it: every AI incident in the dashboard window, oldest first, with date,
 victim(s), category (and its probability) and the description.

@@ -1045,7 +1045,7 @@ def get_half_yearly_database_counts(conn: sqlite3.Connection, start_date: str, e
 
 
 def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
-    """Incidents per half-year in which AI was the attacker, or the victim's AI was attacked.
+    """Incidents per half-year in which AI was the attacker, the victim's AI was attacked, or AI was misused.
 
     Reads ``DeduplicatedEvents.ai_involvement`` (scripts/classify_ai_involvement.py,
     Jev). Every half-year in the window is listed, with zeros, so the axis is
@@ -1057,7 +1057,8 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
     period = ReportingPeriod.from_iso(start_date, end_date)
     periods = [p.label for p in half_years_between(period.start.year, period.end)]
     empty = {'periods': periods, 'attacker': [0] * len(periods), 'vulnerability': [0] * len(periods),
-             'uncertain': [0] * len(periods), 'unjudged': 0, 'available': False, 'report': AI_REPORT_FILE}
+             'misuse': [0] * len(periods), 'uncertain': [0] * len(periods), 'unjudged': 0, 'available': False,
+             'report': AI_REPORT_FILE}
     if not ai_involvement.has_schema(conn):
         logger.warning("AI involvement not classified (no ai_involvement column): "
                        "run scripts/classify_ai_involvement.py")
@@ -1069,11 +1070,13 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
                                                   THEN ' H1' ELSE ' H2' END AS half,
                ai_involvement, COUNT(*) AS n
         FROM DeduplicatedEvents
-        WHERE {where} AND (ai_involvement IN (?, ?, ?) OR ai_involvement IS NULL)
+        WHERE {where} AND (ai_involvement IN ({', '.join('?' for _ in ai_involvement.AI_INVOLVED_LABELS)})
+                           OR ai_involvement IS NULL)
         GROUP BY half, ai_involvement
     """, [*params, *ai_involvement.AI_INVOLVED_LABELS]).fetchall()
     attacker = dict.fromkeys(periods, 0)
     vulnerability = dict.fromkeys(periods, 0)
+    misuse = dict.fromkeys(periods, 0)
     uncertain = dict.fromkeys(periods, 0)
     unjudged = 0
     for half, label, n in rows:
@@ -1083,12 +1086,14 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
             attacker[half] = attacker.get(half, 0) + n
         elif label == ai_involvement.AI_VULNERABILITY:
             vulnerability[half] = vulnerability.get(half, 0) + n
+        elif label == ai_involvement.AI_MISUSE:
+            misuse[half] = misuse.get(half, 0) + n
         else:
             uncertain[half] = uncertain.get(half, 0) + n
     if unjudged:
         logger.warning("AI involvement chart: %d incident(s) not judged yet", unjudged)
     return {'periods': periods, 'attacker': [attacker[p] for p in periods],
-            'vulnerability': [vulnerability[p] for p in periods],
+            'vulnerability': [vulnerability[p] for p in periods], 'misuse': [misuse[p] for p in periods],
             'uncertain': [uncertain[p] for p in periods], 'unjudged': unjudged,
             'available': True, 'report': AI_REPORT_FILE}
 
@@ -2789,7 +2794,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     sbat = script_json(data['severity_by_attack_type'])
     rbat = script_json(data['records_by_attack_type'])
     ai_inv = script_json(data.get('ai_involvement') or {'periods': [], 'attacker': [], 'vulnerability': [],
-                                                        'unjudged': 0, 'available': False,
+                                                        'misuse': [], 'unjudged': 0, 'available': False,
                                                         'report': AI_REPORT_FILE})
     mcs = script_json(data['monthly_counts_stats'])
     etc = script_json(data['event_type_correlation'])
@@ -4733,11 +4738,12 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       });
     })();
 
-    // 14) Incidents involving AI per half-year (Jev: AI attacker / AI vulnerability)
+    // 14) Incidents involving AI per half-year (Jev: AI attacker / AI vulnerability / AI misuse)
     (function() {
       const d = aiInvolvement;
       const sub = document.getElementById('aiInvolvementSubtitle');
-      const total = d.attacker.reduce((a, b) => a + b, 0) + d.vulnerability.reduce((a, b) => a + b, 0);
+      const sum = xs => (xs || []).reduce((a, b) => a + b, 0);
+      const total = sum(d.attacker) + sum(d.vulnerability) + sum(d.misuse);
       const parts = [];
       if (!d.available) {
         parts.push('Not classified yet: run scripts/classify_ai_involvement.py');
@@ -4753,6 +4759,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           datasets: [
             { label: 'AI attacker', data: d.attacker, backgroundColor: '#dc2626' },
             { label: "AI vulnerability (victim's AI attacked)", data: d.vulnerability, backgroundColor: '#2563eb' },
+            { label: "AI misuse (organisation's own use of AI)", data: d.misuse || [], backgroundColor: '#d97706' },
             { label: 'AI involvement unsettled', data: d.uncertain || [], backgroundColor: '#9ca3af' }
           ]
         },
@@ -4993,13 +5000,13 @@ def build_reconciliation_checks(
         from cyber_data_collector.processing.ai_involvement import AI_INVOLVED_LABELS
         where_ai, params_ai = incident_filter(period)
         ai_incidents = int(conn.execute(
-            f"SELECT COUNT(*) FROM DeduplicatedEvents WHERE {where_ai} AND ai_involvement IN (?, ?, ?)",
+            f"SELECT COUNT(*) FROM DeduplicatedEvents WHERE {where_ai} AND ai_involvement IN "
+            f"({', '.join('?' for _ in AI_INVOLVED_LABELS)})",
             [*params_ai, *AI_INVOLVED_LABELS]).fetchone()[0])
         checks.append(ReconciliationCheck(
             "AI involvement per half-year", ai_incidents,
-            sum_counts(ai_chart.get('attacker', [])) + sum_counts(ai_chart.get('vulnerability', []))
-            + sum_counts(ai_chart.get('uncertain', [])),
-            "incidents labelled AI-attacker, AI-vulnerability or AI-uncertain"))
+            sum(sum_counts(ai_chart.get(k, [])) for k in ('attacker', 'vulnerability', 'misuse', 'uncertain')),
+            "incidents labelled AI-attacker, AI-vulnerability, AI-misuse or AI-uncertain"))
     return checks
 
 

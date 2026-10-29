@@ -1,6 +1,6 @@
-"""Fill DeduplicatedEvents.ai_involvement and its three probabilities, and describe the AI events.
+"""Fill DeduplicatedEvents.ai_involvement and its four probabilities, and describe the AI events.
 
-Each active event is judged by Jev (AI-attacker / AI-vulnerability / No-AI) and
+Each active event is judged by Jev (AI-attacker / AI-vulnerability / AI-misuse / No-AI) and
 every answer is stored in ModelJudgements, so a rerun asks only about events
 that are new or whose text changed. Events with AI involvement get a 2-4
 sentence description (fast OpenAI model, stored in EventDescriptions) for the

@@ -1146,8 +1146,8 @@ class UnifiedPipeline:
                 logger.error(message)
                 self.results['classification'].setdefault('errors', []).append(message)
 
-            # AI involvement (Jev: AI-attacker / AI-vulnerability / No-AI, with all
-            # three probabilities), and a description of each AI incident for the
+            # AI involvement (Jev: AI-attacker / AI-vulnerability / AI-misuse / No-AI,
+            # with all four probabilities), and a description of each AI incident for the
             # AI incident report. Stored, so only new or changed events are asked.
             from scripts import classify_ai_involvement
             try:
