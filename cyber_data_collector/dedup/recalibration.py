@@ -82,6 +82,8 @@ SPECS: Dict[str, StepSpec] = {s.name: s for s in (
     StepSpec("coherence-same-organisation", "cyber_data_collector.dedup.coherence_same_org", escalates=True),
     StepSpec("duplicates", "cyber_data_collector.dedup.duplicate_judgement", escalates=True),
     StepSpec("victim-attribution", "cyber_data_collector.dedup.victim_judgement", escalates=True),
+    # Needs its labelling-time snapshot named in the registry (or --snapshot victim-fill=PATH) once labels exist.
+    StepSpec("victim-fill", "cyber_data_collector.dedup.victim_fill", escalates=True),
     # Its scoring is the find-supplier-victims candidate generation; recalibrate it with
     # scripts/calibrate_supplier_victims.py on a snapshot. Staleness is still reported.
     StepSpec("supplier-victims", "cyber_data_collector.dedup.supplier_victims", escalates=True, automatic=False),
@@ -306,6 +308,23 @@ def _plan_victim_attribution(conn: sqlite3.Connection) -> Plan:
     return Plan(items, len(wanted), run)
 
 
+def _plan_victim_fill(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import victim_fill as vf
+    from scripts import calibrate_victim_fill as cal
+
+    labels = vf.load_labels(required=True)
+    wanted = [d for d in _csv_column(cal.SAMPLE_PATH, "deduplicated_event_id")
+              if (labels.get(d) or {}).get("label") in ("named", "none_named")]
+    present = {e["deduplicated_event_id"] for e in vf.victimless_events(conn)}
+    items = [d for d in wanted if d in present]
+
+    def run(conn, judge, client):
+        for dedup_id in items:      # raises on any failure (extraction, escalation); stored answers are reused
+            vf.choose_victim(conn, dedup_id, judge, escalation_client=client)
+
+    return Plan(items, len(wanted), run)
+
+
 def _plan_coherence_same_org(conn: sqlite3.Connection) -> Plan:
     from cyber_data_collector.dedup import coherence_same_org as so
     from scripts import calibrate_coherence_same_org as cal
@@ -321,7 +340,7 @@ def _rows(path: Path) -> List[Dict[str, str]]:
 PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
     "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "coherence": _plan_coherence,
     "coherence-same-organisation": _plan_coherence_same_org, "duplicates": _plan_duplicates,
-    "victim-attribution": _plan_victim_attribution,
+    "victim-attribution": _plan_victim_attribution, "victim-fill": _plan_victim_fill,
 }
 
 #: argv for each step's calibration script (``--db`` and the model arguments are added by the caller).
@@ -332,6 +351,7 @@ CALIBRATE: Dict[str, Tuple[str, List[str]]] = {
     "coherence-same-organisation": ("scripts.calibrate_coherence_same_org", ["calibrate"]),
     "duplicates": ("scripts.calibrate_duplicates", []),
     "victim-attribution": ("scripts.calibrate_victim_attribution", ["calibrate"]),
+    "victim-fill": ("scripts.calibrate_victim_fill", ["calibrate"]),
 }
 
 

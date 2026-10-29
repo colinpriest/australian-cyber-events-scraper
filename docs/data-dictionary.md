@@ -684,6 +684,39 @@ Tracks which year/month combinations have been processed by the pipeline.
 
 ---
 
+### Victim Filling, Proper Names and Entity Profiles
+
+#### VictimFillActions (`dedup/victim_fill.py`)
+
+One row per event given a victim by `fill-victims --apply`. Columns: `action_id`, `batch_id`, `deduplicated_event_id`,
+`action` (`filled`), `new_victim`, `choice_probability` (the best candidate's final probability), `cutoff`,
+`candidates_json` (name, support, sources), `replaced_json` (unusable victim roles demoted), `calibration_json`,
+`reason`, `roles_before_json` (for reversal; the ledger snapshot holds the event), `member_signature`, `created_at`.
+
+#### EntityProfiles / EntityProfileResearch (`dedup/entity_profiles.py`)
+
+`EntityProfiles(entity_id, kind, value, source, evidence, created_at)`, unique on `(entity_id, kind, value)`.
+`kind`: `jurisdiction`, `sector`, `type`, `administered_by`, `runs`, `holds_data`, `known_as`, `website`. `source`:
+`human` (entered with `entity-profile set --reason`; never replaced by research) or `llm` (Perplexity; `evidence` holds
+the citations). `EntityProfileResearch(entity_id, evidence_hash, prompt_version, model, status, citations_json,
+researched_at)`: one lookup per organisation, again when `evidence_hash` (its incident titles) changes.
+
+#### Other additions (2026-10-29)
+
+* `DeduplicatedEvents.roles_prompt_version` - the role prompt that decided the event's roles (`entity-roles-v2`);
+  an event on an older version with no victim is classified again.
+* `EntityAliasDecisions.evidence_hash` - a hash of the incidents and profiles an alias question showed. A decision by
+  another model is not reused; an `unsure` one is asked again when the hash changes.
+* `ModelJudgements` rows with `question_id = 'is_proper_name'` (subject = the name; Noul) and
+  `'event_named_organisations'` (`primitive = 'extraction'`; `answer` = the fast model's raw JSON list of possible
+  victims and actors, validated against the text on every read), and the choices `fill_victim` /
+  `fill_victim_escalated`.
+* Calibration files `name_calibration.json` and `victim_fill_calibration.json` (same fields as above; the fill
+  cut-off is the lowest best-candidate probability at which weighted precision met the target).
+* Label files `name_labels.csv` (`name,label,rationale,labeller`; `named` / `descriptive` / `unsure`) and
+  `victim_fill_labels.csv` (`deduplicated_event_id,label,correct_victim,rationale,labeller`; `named` /
+  `none_named` / `unsure`); `review_acceptance_cases.csv` (`deduplicated_event_id,expectation,value,note,source`).
+
 ### Configuration Tables
 
 #### DataSourcesV2

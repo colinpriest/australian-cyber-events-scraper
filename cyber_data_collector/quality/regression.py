@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import csv
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -201,6 +201,69 @@ def check_source_gate(conn, resolver: EventResolver, path: Path) -> Dict[str, Me
     return _result("source_gate", checked, contradictions, unchecked, len(rows),
                    "not_incident pages must not be evidence of an Active event; "
                    "reports_incident pages must not be deactivated")
+
+
+ACCEPTANCE_FILE = "review_acceptance_cases.csv"
+
+
+def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
+                       evaluation_dir: Path = EVALUATION_DIR) -> Dict[str, Measurement]:
+    """Whether the data satisfies the review's acceptance cases (``evaluation/review_acceptance_cases.csv``).
+
+    Cases are things the reviewer said must hold of the published data, each from a real fragment of the
+    database. ``victim <name>``: the (active) event the id now resolves to has a ``victim`` role for that
+    organisation, after alias resolution. ``same_incident_as <id>``: both ids resolve to the same Active
+    event. ``out_of_scope`` cases belong to the scope check and are not read here. A case whose event no
+    longer exists or cannot be traced is *unchecked*, never a pass. Warnings only: they say how far the
+    rules have come, they do not close the gate.
+    """
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    path = Path(evaluation_dir) / ACCEPTANCE_FILE
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    if rows and not {"deduplicated_event_id", "expectation", "value"} <= set(rows[0]):
+        raise ValueError(f"{path} lacks the deduplicated_event_id / expectation / value columns")
+    resolver = EventResolver(conn)
+    victims: Dict[str, List[str]] = defaultdict(list)
+    for event_id, name in conn.execute(
+            """SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.relationship_type = 'victim'"""):
+        victims[event_id].append(name)
+    failed: Dict[str, List[str]] = {"victim": [], "same_incident_as": []}
+    checked = Counter()
+    unchecked: Dict[str, int] = defaultdict(int)
+    for row in rows:
+        kind, event_id, value = row["expectation"].strip(), row["deduplicated_event_id"].strip(), row["value"].strip()
+        if kind not in failed:
+            unchecked[f"{kind or 'blank'} (not read here)"] += 1
+            continue
+        now, status = resolver.resolve(event_id)
+        if status != "Active":
+            unchecked[f"event {status}"] += 1
+            continue
+        checked[kind] += 1
+        if kind == "victim":
+            if not any(names_match(conn, value, name) for name in victims.get(now, ())):
+                failed[kind].append(f"{event_id[:8]}: wanted victim {value!r}, has {victims.get(now, []) or 'none'}")
+        else:
+            other, other_status = resolver.resolve(value)
+            if other_status != "Active":
+                unchecked[f"event {other_status}"] += 1
+                checked[kind] -= 1
+            elif other != now:
+                failed[kind].append(f"{event_id[:8]}: not in the same event as {value[:8]} "
+                                    f"({now[:8]} / {other[:8]})")
+    n_unchecked = sum(unchecked.values())
+    breakdown = ", ".join(f"{k} {v}" for k, v in sorted(unchecked.items())) or "none"
+    out: Dict[str, Measurement] = {}
+    for kind, name in (("victim", "victim"), ("same_incident_as", "same_incident")):
+        out[f"acceptance.{name}.failures"] = Measurement(
+            value=len(failed[kind]), examples=failed[kind][:EXAMPLES],
+            detail=f"{len(failed[kind])} of {checked[kind]} checkable {kind} case(s) not satisfied")
+    out["acceptance.checked"] = Measurement(value=sum(checked.values()), detail=f"{len(rows)} cases in {ACCEPTANCE_FILE}")
+    out["acceptance.unchecked"] = Measurement(value=n_unchecked, detail=f"cases not checked: {breakdown}")
+    return out
 
 
 LABEL_CHECKS: Dict[str, Callable] = {

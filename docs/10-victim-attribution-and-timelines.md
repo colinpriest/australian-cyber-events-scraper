@@ -262,3 +262,21 @@ python scripts/dedup_admin.py roles-status                         # expect 0 ou
 
 Recalibrating (new model or question version): `calibrate_victim_attribution.py
 --db <labelling snapshot> sample | packets --out <dir> | calibrate`.
+
+## Candidates from the event's text, and events with no victim (2026-10-29)
+
+The replacement candidates (`victim_judgement.replacement_candidates`) used to be each record's Perplexity victim
+and its linked organisations, so an organisation named only in the article body (the NSW National Parks and Wildlife
+Service, in "OpenAI reveals another hack into a government agency in Australia") was never offered, and a flagged
+pair stayed flagged with "no candidate chosen". They now also include the organisations the text names
+(`dedup/event_organisations.py`), a usable scalar victim, and the organisation a linked product is named after; names
+are folded through the alias tables; descriptions (`dedup/name_judgement.py`) and the attacking party are left out. This
+changes what the judgement offers, so `EVIDENCE_VERSION` is `victim-evidence-v2` and `REPLACEMENT_VERSION`
+`victim-replacement-v2`: the attribution calibration is stale until `dedup_admin.py recalibrate --step
+victim-attribution`, which re-asks only what changed (the extraction runs for the labelled-wrong pairs). The Noul
+question and its stored answers are unchanged, except that a pair whose recorded victim an attacker field names carries
+a `note_on_recorded_victim` in its state.
+
+Events with no usable victim are handled by `fill-victims` (README, "Incidents with no victim"), a separate step with
+its own calibration: its cut-off is the lowest probability of the chosen candidate at which at least 95% (weighted) of
+the events filled are labelled with that victim.

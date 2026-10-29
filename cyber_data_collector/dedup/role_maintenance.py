@@ -52,83 +52,125 @@ def member_signature(conn: sqlite3.Connection, deduplicated_event_id: str) -> st
     return signature_for_members([r[0] for r in rows])
 
 
+def _prompt_version() -> str:
+    from cyber_data_collector.dedup.entity_classification import ROLES_PROMPT_VERSION
+    return ROLES_PROMPT_VERSION
+
+
 def mark_classified(
     conn: sqlite3.Connection,
     deduplicated_event_id: str,
     signature: Optional[str] = None,
 ) -> str:
-    """Record that roles are current for this event's membership."""
+    """Record that roles are current for this event's membership (and the prompt that decided them)."""
     signature = signature or member_signature(conn, deduplicated_event_id)
     conn.execute(
         "UPDATE DeduplicatedEvents SET roles_member_signature = ?, "
         "roles_classified_at = ? WHERE deduplicated_event_id = ?",
         (signature, datetime.now().isoformat(), deduplicated_event_id),
     )
+    if _has_version_column(conn):
+        conn.execute("UPDATE DeduplicatedEvents SET roles_prompt_version = ? WHERE deduplicated_event_id = ?",
+                     (_prompt_version(), deduplicated_event_id))
     return signature
+
+
+def _has_version_column(conn: sqlite3.Connection) -> bool:
+    return any(r[1] == "roles_prompt_version" for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)"))
+
+
+def _usable_victim_names(conn: sqlite3.Connection) -> Dict[str, List[str]]:
+    """Victim-role names that can be a victim, by active event. Empty on a schema without entity roles."""
+    from cyber_data_collector.dedup.victim_agreement import _is_unusable_victim
+
+    try:
+        rows = conn.execute(
+            """SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               WHERE dee.relationship_type = 'victim'""").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    found: Dict[str, List[str]] = {}
+    for event_id, name in rows:
+        if name and not _is_unusable_victim(name):
+            found.setdefault(event_id, []).append(name)
+    return found
+
+
+def _role_rows(conn: sqlite3.Connection) -> List[Dict[str, object]]:
+    """Every active event with its stored signature and prompt version, members and usable victims."""
+    version = "d.roles_prompt_version" if _has_version_column(conn) else "NULL"
+    rows = conn.execute(
+        f"""
+        SELECT d.deduplicated_event_id AS id, d.roles_member_signature AS stored,
+               {version} AS version, GROUP_CONCAT(m.enriched_event_id) AS members
+        FROM DeduplicatedEvents d
+        LEFT JOIN EventDeduplicationMap m
+               ON m.deduplicated_event_id = d.deduplicated_event_id
+        WHERE COALESCE(d.status, 'Active') = 'Active'
+        GROUP BY d.deduplicated_event_id
+        """
+    ).fetchall()
+    victims = _usable_victim_names(conn)
+    return [{"id": r[0], "stored": r[1], "version": r[2], "has_version_column": _has_version_column(conn),
+             "members": (r[3] or "").split(",") if r[3] else [], "has_victim": r[0] in victims} for r in rows]
+
+
+def _state(row: Dict[str, object]) -> str:
+    """``never`` / ``outdated`` (membership) / ``prompt`` / ``current`` for one event's roles.
+
+    ``prompt``: classified under an older role prompt and left without a victim - the footprint of the
+    defect the newer prompt fixes (an incident event whose every entity was a bystander). Events that
+    have a victim keep the roles they have; ``roles-status --invalidate-all`` redoes everything.
+    """
+    stored = row["stored"]
+    if stored is None or not str(stored).strip():
+        return "never"
+    if stored != signature_for_members(row["members"]):
+        return "outdated"
+    if row["has_version_column"] and row["version"] != _prompt_version() and not row["has_victim"]:
+        return "prompt"
+    return "current"
 
 
 def stale_event_ids(
     conn: sqlite3.Connection,
     include_unclassified: bool = True,
 ) -> List[str]:
-    """Active events whose roles no longer match their membership.
+    """Active events whose roles no longer match their membership (or the role prompt, see :func:`_state`).
 
     Args:
         include_unclassified: Also return events that have never been
             classified. They are stale in the sense that matters - their roles
             are absent rather than merely outdated.
     """
-    rows = conn.execute(
-        """
-        SELECT d.deduplicated_event_id AS id, d.roles_member_signature AS stored,
-               GROUP_CONCAT(m.enriched_event_id) AS members
-        FROM DeduplicatedEvents d
-        LEFT JOIN EventDeduplicationMap m
-               ON m.deduplicated_event_id = d.deduplicated_event_id
-        WHERE COALESCE(d.status, 'Active') = 'Active'
-        GROUP BY d.deduplicated_event_id
-        """
-    ).fetchall()
-
     stale: List[str] = []
-    for row in rows:
-        members = (row["members"] or "").split(",") if row["members"] else []
-        current = signature_for_members(members)
-        stored = row["stored"]
-        if stored is None or not str(stored).strip():
+    for row in _role_rows(conn):
+        state = _state(row)
+        if state == "never":
             if include_unclassified:
                 stale.append(row["id"])
-            continue
-        if stored != current:
+        elif state in ("outdated", "prompt"):
             stale.append(row["id"])
     return stale
 
 
 def staleness_report(conn: sqlite3.Connection) -> Dict[str, int]:
-    """Counts of current, outdated and never-classified active events."""
-    rows = conn.execute(
-        """
-        SELECT d.deduplicated_event_id AS id, d.roles_member_signature AS stored,
-               GROUP_CONCAT(m.enriched_event_id) AS members
-        FROM DeduplicatedEvents d
-        LEFT JOIN EventDeduplicationMap m
-               ON m.deduplicated_event_id = d.deduplicated_event_id
-        WHERE COALESCE(d.status, 'Active') = 'Active'
-        GROUP BY d.deduplicated_event_id
-        """
-    ).fetchall()
+    """Counts of current, outdated and never-classified active events.
 
-    report = {"active": len(rows), "current": 0, "outdated": 0, "never_classified": 0}
+    ``outdated`` is membership that changed since; ``prompt_outdated`` events were classified under an
+    older role prompt and still have no victim (counted in neither ``current`` nor ``outdated``).
+    ``no_victim`` counts every active event with no usable victim role, whatever its state: a
+    classification that left an incident without a victim is not finished, and ``fill-victims`` takes it up.
+    """
+    rows = _role_rows(conn)
+    report = {"active": len(rows), "current": 0, "outdated": 0, "never_classified": 0, "prompt_outdated": 0,
+              "no_victim": sum(1 for r in rows if not r["has_victim"])}
     for row in rows:
-        members = (row["members"] or "").split(",") if row["members"] else []
-        current = signature_for_members(members)
-        stored = row["stored"]
-        if stored is None or not str(stored).strip():
-            report["never_classified"] += 1
-        elif stored != current:
-            report["outdated"] += 1
-        else:
-            report["current"] += 1
+        state = _state(row)
+        key = {"never": "never_classified", "outdated": "outdated", "prompt": "prompt_outdated",
+               "current": "current"}[state]
+        report[key] += 1
     return report
 
 

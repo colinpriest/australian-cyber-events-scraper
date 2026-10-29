@@ -99,6 +99,21 @@ def test_an_acronym_resolves_at_ingest_only_when_the_text_names_one_organisation
     assert canonical_entity_name(conn, "National Australia Bank") == "NAB"           # global aliases unchanged
 
 
+def test_a_full_name_elsewhere_in_the_article_does_not_place_a_mention(conn):
+    """Photo credit "AFP" in an article that names the police in another sentence is not the police."""
+    ca.migrate_contextual_aliases(conn)
+    ca.add_contextual_alias(conn, "AFP", "Australian Federal Police")
+    ca.add_contextual_alias(conn, "AFP", "Agence France-Presse")
+    credit = "Australian Federal Police investigated the incident. Photograph: AFP"
+    assert canonical_entity_name(conn, "AFP", context=credit) == "AFP"            # no explicit connection: undecided
+    nearby = "The Australian Federal Police (AFP) investigated the incident. Photograph: AFP"
+    assert canonical_entity_name(conn, "AFP", context=nearby) == "Australian Federal Police"
+    resolver = ca.MentionResolver(conn, use_models=False)
+    assert resolver.named("AFP", credit) == []
+    assert resolver.resolve("AFP", "t", credit, "s").method == ca.METHOD_NEEDS_MODEL      # only a model could place it
+    assert resolver.resolve("AFP", "t", nearby, "s").method == ca.METHOD_NAMED
+
+
 def test_links_are_placed_by_their_own_records_text(conn):
     # The old entity-wide fold put both AP records under Advance Press.
     _record(conn, "e1", "Advance Press, a Melbourne printer (AP), was hit by ransomware.", "Advance Press")
