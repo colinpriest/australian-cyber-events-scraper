@@ -1,10 +1,11 @@
 {
-  "note": "Per calibrated step, the database as it was when its labels were made: a backup beside the live database (instance/) taken before the labelled events were merged, split or rejected. `dedup_admin.py recalibrate` re-scores the labelled cases on it with the current evidence readers. A step is listed once its labels exist; each entry was checked to hold the labelled cases (event reality 162/162, duplicates 155/155, coherence 147/147, victim attribution 145/145, source gate 132/132 judgeable pages). Replace an entry, or pass --snapshot STEP=PATH, if the file is lost.",
+  "note": "Per calibrated step, the database as it was when its labels were made: a backup beside the live database (instance/) taken before the labelled events were merged, split or rejected. `dedup_admin.py recalibrate` re-scores the labelled cases on it with the current evidence readers. A step is listed once its labels exist; each entry was checked to hold the labelled cases (event reality 162/162, duplicates 155/155, coherence 147/147, victim attribution 145/145, source gate 132/132 judgeable pages; supplier victims 139/174 - all 72 pairs, but the 33 victim candidates named only by the unstored 2026-10-27 supplier searches cannot be rebuilt). Replace an entry, or pass --snapshot STEP=PATH, if the file is lost.",
   "snapshots": {
     "source-gate": "cyber_events.db.backup.20261027_pre_source_gate",
     "event-reality": "calibration_event_reality.db",
     "coherence": "cyber_events.db.backup.20261027_pre_overnight",
     "duplicates": "calibration_duplicates.db",
-    "victim-attribution": "calibration_event_reality.db"
+    "victim-attribution": "calibration_event_reality.db",
+    "supplier-victims": "calibration_supplier_victims.db"
   }
 }
