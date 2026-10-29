@@ -68,7 +68,7 @@ SAMPLE_PATH = vj.ROOT / "evaluation" / "victim_attribution_sample.csv"
 def cmd_sample(args) -> int:
     conn = sqlite3.connect(args.db)
     pairs = vj.pairs_to_check(conn)
-    probs = vj.stored_final_probabilities(conn)
+    probs = vj.stored_final_probabilities(conn, pairs)      # decisions on each pair's current evidence
     unjudged = sum(1 for p in pairs if p["pair_id"] not in probs)
     ids = [p["pair_id"] for p in pairs if p["pair_id"] in probs]
     bands = {"A": sorted(i for i in ids if probs[i] < args.census_below),
@@ -168,7 +168,7 @@ def cmd_calibrate(args) -> int:
     sample = {r["pair_id"]: r for r in csv.DictReader(SAMPLE_PATH.open(encoding="utf-8"))}
     labels = vj.load_labels(required=True)
     conn = sqlite3.connect(args.db)
-    probs = vj.stored_final_probabilities(conn)
+    probs = vj.stored_final_probabilities(conn, [p for p in vj.pairs_to_check(conn) if p["pair_id"] in sample])
 
     rows, wrong_rows = [], []
     excluded = {"unsure": 0, "not_incident": 0, "missing": 0}

@@ -346,6 +346,38 @@ def test_a_calibrated_low_score_blocks_the_chain_but_an_uncalibrated_one_does_no
     assert {x for m in merges for x in m[:2]} == {"m1", "m2", "m3"}
 
 
+def test_an_ai_decision_is_stored_under_the_ai_route_and_a_stale_low_one_is_asked_again(conn):
+    """The AI route's final scores are stored against the evidence like the organisation route's; one made on other
+    evidence neither counts as the pair's score nor vetoes, but is asked again where it could block a merge."""
+    pair = next(p for p in ad.candidate_pairs(conn) if p["pair_id"] == "m1|m3")
+    dj.score_pairs(conn, [pair], ad.ROUTE, judge=JevJudge(conn, client=FakeTypeSafe(default=0.05)))
+    assert tuple(conn.execute("SELECT step, final_score FROM FinalDecisions").fetchone()) == ("duplicates-ai", 0.05)
+    assert ad.stored_final_probabilities(conn, [pair]) == {"m1|m3": 0.05}
+    conn.execute("UPDATE DeduplicatedEvents SET event_date = '2026-09-26' WHERE deduplicated_event_id = 'm3'")
+    new_pair = next(p for p in ad.candidate_pairs(conn) if p["pair_id"] == "m1|m3")
+    assert ad.stored_final_probabilities(conn, [new_pair]) == {}                  # not this pair's score any more
+    lookups = {"organisation": lambda a, b: None, "ai": ad.AIUniverse(conn).pair}
+    conflicts, revisited = dj.calibrated_negatives(
+        conn, None, {"different_cutoff": 0.10}, {"m1", "m3"}, lookups,
+        judge=JevJudge(conn, client=FakeTypeSafe(default=0.95)))
+    assert conflicts == {} and revisited == ["m1|m3"]
+    assert ad.stored_final_probabilities(conn, [new_pair]) == {"m1|m3": 0.95}
+
+
+def test_ai_candidates_by_retrieval_are_the_enumerated_ones_and_never_leave_the_window(conn):
+    corpus = ranking.load_corpus(conn)
+    universe = ad.AIUniverse(conn)
+    enumerated, _ = universe.ranked(corpus)
+    retrieved, stats = universe.ranked(corpus, exhaustive_max=0)             # force bounded retrieval
+    assert stats["bounded_groups"] == 1
+    assert {p["pair_id"] for p in retrieved} == {p["pair_id"] for p in enumerated}
+    assert all(universe.owns(p["a"], p["b"]) for p in retrieved)             # "old" (2020) is outside the window
+    ids = {p["pair_id"] for p in retrieved}
+    assert not {"m1|old", "m2|old", "m3|old", "g1|old"} & ids                # dated 2026 events: years apart
+    assert "g2|old" in ids                                                   # g2 is undated: a missing date is no evidence
+    assert universe.pair("m1", "old") is None and universe.pair("m1", "m2")["pair_id"] == "m1|m2"
+
+
 def test_partition_takes_the_strongest_links_first_and_a_labelled_same_link_before_any_score():
     edges = [("a", "b", 0.90), ("b", "c", 0.99), ("c", "d", 2.0)]
     groups, held = dj.partition_without_conflicts(edges, {dj.pair_id("a", "c"): "x"})

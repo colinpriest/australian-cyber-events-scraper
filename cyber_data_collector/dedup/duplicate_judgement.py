@@ -29,11 +29,13 @@ import json
 import logging
 import sqlite3
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import bounded_candidates as bounded
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.dedup.event_reality import ROOT, build_state
 from cyber_data_collector.utils.llm_models import typesafe_model
 
@@ -97,54 +99,129 @@ def pair_id(a: str, b: str) -> str:
 GAP_UNKNOWN = "unknown - one or both events have no date"
 
 
-def candidate_pairs(conn: sqlite3.Connection, skip: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
-    """Every pair of active events sharing a victim, earliest first within each pair.
+#: ``skip`` for the candidate functions: pair ids another route owns, or a predicate on two event ids.
+Skip = Union[Iterable[str], Callable[[str, str], bool], None]
 
-    ``skip`` holds pair ids another route owns and asks itself: an AI-involved
-    pair within the window belongs to :mod:`ai_duplicates` (one question per
-    pair, the one that knows how rare AI incidents are), so it is not asked here
-    as well. The calibration and recalibration of this route ask for every pair.
 
-    Undated events are paired too: until 2026-10-28 they were left out, so 35
-    undated reports of the OpenAI agent's Medicare incident were never
-    compared with each other or with the dated event.
+def _skip_predicate(skip: Skip) -> Optional[Callable[[str, str], bool]]:
+    if skip is None:
+        return None
+    if callable(skip):
+        return skip
+    ids = set(skip)
+    return (lambda a, b: pair_id(a, b) in ids) if ids else None
 
-    "Sharing a victim" uses the organisation identity the recurrence analysis
-    and the entity dashboard count by (:func:`victim_counting.organisation_groups`),
-    not the entity row: until 2026-10-29 "ALS Global" / "ALS" and "St Vincent's
-    Health Australia" / "St Vincent's Health" were one organisation in the
-    analysis but never a candidate pair here, so a leak-site claim and the
-    victim's disclosure days later counted as a repeat attack.
+
+class PairUniverse:
+    """Active events grouped by the organisation they happened to, from which candidate pairs are built on demand.
+
+    "Sharing a victim" uses the organisation identity the recurrence analysis and the entity dashboard count
+    by (:func:`victim_counting.organisation_groups`), not the entity row: until 2026-10-29 "ALS Global" / "ALS"
+    and "St Vincent's Health Australia" / "St Vincent's Health" were one organisation in the analysis but never
+    a candidate pair here, so a leak-site claim and the victim's disclosure days later counted as a repeat attack.
+
+    Undated events are in it too: until 2026-10-28 they were left out, so 35 undated reports of the OpenAI
+    agent's Medicare incident were never compared with each other or with the dated event.
+
+    Loading is linear in the events. :meth:`all_pairs` builds every pair (calibration, recalibration, the
+    measurements that count them); :meth:`ranked` builds only the ones that are asked, retrieving them through
+    indexes in a large group (:mod:`bounded_candidates`); :meth:`pair` builds one.
     """
-    from cyber_data_collector.dedup.recurrence_check import load_recurrence_events
-    from cyber_data_collector.dedup.victim_counting import organisation_groups
 
-    skipped = set(skip or ())
-    previous = conn.row_factory
-    conn.row_factory = sqlite3.Row
-    try:
-        events = load_recurrence_events(conn, include_undated=True)
-    finally:
-        conn.row_factory = previous
-    groups = organisation_groups(conn, [e.entity_id for e in events])
-    by_entity = defaultdict(list)
-    for e in events:
-        by_entity[groups.get(e.entity_id, e.entity_id)].append(e)
-    pairs: Dict[str, Dict[str, Any]] = {}
-    for es in by_entity.values():
-        es = sorted(es, key=lambda e: (e.event_date is None, e.event_date or date.max, e.dedup_id))
-        for i, a in enumerate(es):
-            for b in es[i + 1:]:
-                if a.dedup_id == b.dedup_id:
-                    continue
-                pid = pair_id(a.dedup_id, b.dedup_id)
-                if pid in skipped:
-                    continue
-                pairs.setdefault(pid, {"pair_id": pid, "a": a.dedup_id, "b": b.dedup_id,
-                                       "organisation": a.entity_name, "entity_id": a.entity_id,
-                                       "group": groups.get(a.entity_id, a.entity_id),
-                                       "gap_days": a.gap_to(b) if a.gap_to(b) is not None else GAP_UNKNOWN})
-    return sorted(pairs.values(), key=lambda p: p["pair_id"])
+    def __init__(self, conn: sqlite3.Connection):
+        from cyber_data_collector.dedup.recurrence_check import load_recurrence_events
+        from cyber_data_collector.dedup.victim_counting import organisation_groups
+
+        previous = conn.row_factory
+        conn.row_factory = sqlite3.Row
+        try:
+            events = load_recurrence_events(conn, include_undated=True)
+        finally:
+            conn.row_factory = previous
+        group_of = organisation_groups(conn, [e.entity_id for e in events])
+        # Groups in the order their first event is loaded; within a group, earliest first (undated last), and the
+        # first row of an event names its organisation.
+        by_group: Dict[Any, List[Any]] = {}
+        for e in events:
+            by_group.setdefault(group_of.get(e.entity_id, e.entity_id), []).append(e)
+        self.groups: Dict[Any, Dict[str, bounded.Span]] = {}
+        for gid, members in by_group.items():
+            spans: Dict[str, bounded.Span] = {}
+            for e in sorted(members, key=lambda e: (e.event_date is None, e.event_date or date.max, e.dedup_id)):
+                spans.setdefault(e.dedup_id, bounded.Span(e.dedup_id, e.event_date, e.event_date, payload=e))
+            self.groups[gid] = spans
+        self._order = {gid: i for i, gid in enumerate(self.groups)}
+        self._groups_of: Dict[str, List[Any]] = defaultdict(list)
+        for gid, spans in self.groups.items():
+            for event_id in spans:
+                self._groups_of[event_id].append(gid)
+
+    @staticmethod
+    def _make(a: bounded.Span, b: bounded.Span, gap: Optional[int], gid: Any) -> Dict[str, Any]:
+        first = a.payload
+        return {"pair_id": pair_id(a.event_id, b.event_id), "a": a.event_id, "b": b.event_id,
+                "organisation": first.entity_name, "entity_id": first.entity_id, "group": gid,
+                "gap_days": gap if gap is not None else GAP_UNKNOWN}
+
+    def events(self) -> Set[str]:
+        return set(self._groups_of)
+
+    def shared_group(self, a_id: str, b_id: str) -> Optional[Any]:
+        """The group two events share (the first in load order if several), or None."""
+        common = set(self._groups_of.get(a_id, ())) & set(self._groups_of.get(b_id, ()))
+        return min(common, key=self._order.__getitem__) if common else None
+
+    def pair(self, a_id: str, b_id: str) -> Optional[Dict[str, Any]]:
+        """The candidate pair of two events, or None when they share no organisation."""
+        if a_id == b_id:
+            return None
+        gid = self.shared_group(a_id, b_id)
+        if gid is None:
+            return None
+        a, b = sorted((self.groups[gid][a_id], self.groups[gid][b_id]), key=bounded.span_order)
+        return self._make(a, b, bounded.span_gap(a, b), gid)
+
+    def all_pairs(self, skip: Skip = None) -> List[Dict[str, Any]]:
+        """Every pair of active events sharing a victim, earliest first within each pair."""
+        skipped = _skip_predicate(skip)
+        pairs: Dict[str, Dict[str, Any]] = {}
+        for gid, spans in self.groups.items():
+            ordered = sorted(spans.values(), key=bounded.span_order)
+            for i, a in enumerate(ordered):
+                for b in ordered[i + 1:]:
+                    pid = pair_id(a.event_id, b.event_id)
+                    if pid in pairs or (skipped is not None and skipped(a.event_id, b.event_id)):
+                        continue
+                    pairs[pid] = self._make(a, b, bounded.span_gap(a, b), gid)
+        return sorted(pairs.values(), key=lambda p: p["pair_id"])
+
+    def ranked(self, corpus, skip: Skip = None, cap: bool = True, partners_per_event: Optional[int] = None,
+               long_gap_budget: Optional[int] = None, exhaustive_max: Optional[int] = None,
+               uncapped_max: Optional[int] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """The pairs that are asked: ranked by :mod:`candidate_ranking` and, in a group of more than
+        ``uncapped_max`` (``bounded.UNCAPPED_GROUP_MAX``, 60) events, capped - without building the pairs of a
+        large group (``(pairs, stats)``). Every pair of a smaller group is a candidate. ``skip`` removes the pairs
+        another route owns."""
+        from cyber_data_collector.dedup import candidate_ranking as ranking
+
+        return bounded.rank_groups(
+            corpus, {gid: list(spans.values()) for gid, spans in self.groups.items()}, self._make, cap=cap,
+            partners_per_event=ranking.PARTNERS_PER_EVENT if partners_per_event is None else partners_per_event,
+            long_gap_budget=ranking.LONG_GAP_BUDGET if long_gap_budget is None else long_gap_budget,
+            exclude=_skip_predicate(skip),
+            exhaustive_max=bounded.EXHAUSTIVE_GROUP_MAX if exhaustive_max is None else exhaustive_max,
+            uncapped_max=bounded.UNCAPPED_GROUP_MAX if uncapped_max is None else uncapped_max)
+
+
+def candidate_pairs(conn: sqlite3.Connection, skip: Skip = None) -> List[Dict[str, Any]]:
+    """Every pair of active events sharing a victim, earliest first within each pair (:class:`PairUniverse`).
+
+    ``skip`` holds pair ids (or a predicate on two event ids) another route owns and asks itself: an
+    AI-involved pair within the window belongs to :mod:`ai_duplicates` (one question per pair, the one that
+    knows how rare AI incidents are), so it is not asked here as well. The calibration and recalibration of this
+    route ask for every pair. ``check_duplicates`` does not use this: it asks :meth:`PairUniverse.ranked`.
+    """
+    return PairUniverse(conn).all_pairs(skip)
 
 
 def _event_with_dates(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
@@ -240,11 +317,137 @@ def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], pro
     return out
 
 
-def stored_final_probabilities(conn: sqlite3.Connection, *, question_id: str = QUESTION_ID,
-                               version: str = QUESTION_VERSION, escalation_id: str = ESCALATION_QUESTION_ID,
-                               escalation_version: str = ESCALATION_VERSION,
-                               band: Tuple[float, float] = ESCALATE_BAND) -> Dict[str, float]:
-    """Final score per pair from storage: the escalation's in the band, else Jev's."""
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    final_decisions.ensure_schema(conn)
+
+
+state_hash = final_decisions.state_hash
+
+
+@dataclass(frozen=True)
+class Route:
+    """One duplicate question as the pipeline asks it: its Jev question, the escalation of its middle band,
+    and how a pair's evidence is built. The organisation route and the AI route (:mod:`ai_duplicates`) each
+    have one; ``name`` keys the stored decisions (``FinalDecisions.step`` is ``duplicates-<name>``)."""
+
+    name: str
+    question_id: str
+    version: str
+    make_question: Callable[[], Any]
+    state_builder: Callable[[sqlite3.Connection, Dict[str, Any]], Dict[str, Any]]
+    escalation_id: str
+    escalation_version: str
+    escalation_text: Callable[[], str]
+    band: Tuple[float, float]
+
+    @property
+    def step(self) -> final_decisions.Step:
+        return final_decisions.Step(
+            name=f"duplicates-{self.name}", question_id=self.question_id, version=self.version,
+            make_question=self.make_question, escalation_id=self.escalation_id,
+            escalation_version=self.escalation_version, escalation_text=self.escalation_text, band=self.band)
+
+    @property
+    def question_version(self) -> str:
+        return self.step.question_version
+
+    def models(self) -> Tuple[str, str]:
+        return self.step.models()
+
+
+def _memoised(builder: Callable[[sqlite3.Connection, Dict[str, Any]], Dict[str, Any]],
+              states: Dict[str, Dict[str, Any]]) -> Callable[[sqlite3.Connection, Dict[str, Any]], Dict[str, Any]]:
+    """``builder`` that builds each pair's state once per ``states`` (a pair's evidence is read from the database
+    to be asked, escalated, hashed and checked; none of that should read it again)."""
+    def build(conn: sqlite3.Connection, pair: Dict[str, Any]) -> Dict[str, Any]:
+        if pair["pair_id"] not in states:
+            states[pair["pair_id"]] = builder(conn, pair)
+        return states[pair["pair_id"]]
+    return build
+
+
+@dataclass
+class ScoredPairs:
+    """What :func:`score_pairs` found. ``final`` holds only pairs with a decision on their current evidence."""
+
+    final: Dict[str, float] = field(default_factory=dict)
+    jev: Dict[str, float] = field(default_factory=dict)
+    escalated: Dict[str, float] = field(default_factory=dict)
+    failed: List[str] = field(default_factory=list)       # in the escalation band, escalation failed: undecided
+    evidence: Dict[str, str] = field(default_factory=dict)  # pair id -> the evidence hash it was decided on
+
+
+def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], route: "Route", judge=None,
+                escalation_client=None, refresh: bool = False,
+                states: Optional[Dict[str, Dict[str, Any]]] = None) -> ScoredPairs:
+    """Judge ``pairs`` (Jev, then the reasoning model for the middle band) and store each final decision against
+    the evidence it was made on.
+
+    A pair's evidence is built once and both models are shown that same state, so the final score is
+    Jev's or the escalation's **on one evidence**; the decision is stored in ``FinalDecisions`` with the hash of
+    that evidence, the models and the question versions. A pair whose escalation failed has no decision (it
+    is retried next run, never merged on Jev's mid-band score). Stored model answers are reused whenever their
+    own input hash matches, so a run with unchanged evidence buys nothing.
+    """
+    ensure_schema(conn)
+    states = {} if states is None else states
+    build = _memoised(route.state_builder, states)
+    out = ScoredPairs(jev=judge_pairs(conn, pairs, judge=judge, refresh=refresh, question_id=route.question_id,
+                                      version=route.version, make_question=route.make_question,
+                                      state_builder=build))
+    out.escalated = escalate_band(conn, pairs, out.jev, client=escalation_client, failed=out.failed,
+                                  question_id=route.escalation_id, version=route.escalation_version,
+                                  state_builder=build, question_text=route.escalation_text, band=route.band)
+    out.final = final_decisions.record_scores(
+        conn, route.step, [(p["pair_id"], lambda p=p: states[p["pair_id"]]) for p in pairs],
+        out.jev, out.escalated, out.failed)
+    out.evidence = {pid: state_hash(states[pid]) for pid in out.final}
+    return out
+
+
+def current_decisions(conn: sqlite3.Connection, route: "Route", pairs: Sequence[Dict[str, Any]],
+                      states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
+    """Final score per pair from the decision made on the pair's **current** evidence; nothing for a pair with none.
+
+    The pair's state is built now and hashed; only a decision stored under that hash, the current models and the
+    current question versions is read. A decision made on other evidence is not a score for this pair - it is
+    :func:`stale_decisions`. Nothing is asked.
+    """
+    states = {} if states is None else states
+    build = _memoised(route.state_builder, states)
+    return final_decisions.read_current(
+        conn, route.step, [(p["pair_id"], lambda p=p: build(conn, p)) for p in pairs])
+
+
+def stale_decisions(conn: sqlite3.Connection, route: "Route", pair_ids: Optional[Iterable[str]] = None
+                    ) -> Dict[str, Tuple[float, str]]:
+    """``{pair_id: (final score, evidence hash)}``: the newest decision per pair under the current models and
+    question versions, whatever evidence it was made on. A score here is **not** a verdict on the pair as it is
+    now; it says only what it was once judged to be, and whether it needs revisiting is the caller's question."""
+    return final_decisions.latest(conn, route.step, pair_ids)
+
+
+def stored_final_probabilities(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]],
+                               route: Optional["Route"] = None,
+                               states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
+    """Final score per pair from storage: the decision made on the pair's current evidence (:func:`current_decisions`).
+
+    It used to select the latest Jev answer and the latest escalation for a pair independently, with no check
+    that they were given the same evidence, so a stale escalation could be combined with a fresh Jev answer (or
+    stand beside an old low score as a veto). Now only a stored decision whose evidence matches counts.
+    """
+    return current_decisions(conn, route or ORGANISATION, pairs, states)
+
+
+def unvalidated_final_probabilities(conn: sqlite3.Connection, *, question_id: str = QUESTION_ID,
+                                    version: str = QUESTION_VERSION, escalation_id: str = ESCALATION_QUESTION_ID,
+                                    escalation_version: str = ESCALATION_VERSION,
+                                    band: Tuple[float, float] = ESCALATE_BAND) -> Dict[str, float]:
+    """The newest Jev answer per pair, replaced by the newest escalation in the band - **not tied to any evidence**.
+
+    For reading a labelling-time snapshot's history (``scripts/evaluate_dedup.py``), where nothing can be rebuilt
+    to compare with. The pipeline never acts on this: it uses :func:`stored_final_probabilities`.
+    """
     from cyber_data_collector.utils.llm_models import openai_model
 
     def latest(qid: str, ver: str, model: str) -> Dict[str, float]:
@@ -298,6 +501,13 @@ def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
         if owned:
             judge.close()
     return out
+
+
+#: The organisation route: pairs of events recorded against one organisation.
+ORGANISATION = Route(
+    name="organisation", question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    state_builder=build_pair_state, escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND)
 
 
 def labelled_pairs(path: Path = LABELS_PATH) -> Dict[str, str]:
@@ -378,26 +588,65 @@ def rulings_between(conn: sqlite3.Connection, events: Sequence[str]) -> Dict[str
 
 
 def calibrated_negatives(conn: sqlite3.Connection, duplicate_calibration: Optional[Dict[str, Any]],
-                         ai_calibration: Optional[Dict[str, Any]]) -> Dict[str, str]:
-    """``{pair_id: reason}`` for stored final scores below a route's *calibrated* ``different_cutoff``.
+                         ai_calibration: Optional[Dict[str, Any]], events: Iterable[str],
+                         pair_lookups: Mapping[str, Callable[[str, str], Optional[Dict[str, Any]]]], judge=None,
+                         escalation_client=None, attempted: Iterable[str] = ()
+                         ) -> Tuple[Dict[str, str], List[str]]:
+    """``({pair_id: reason}, re-judged pair ids)``: final scores below a route's *calibrated* ``different_cutoff``
+    that are still true of the pair as it is now, among ``events`` - the events a proposed group involves.
 
-    A score is evidence of "different" only where a calibration measured how often pairs scoring
-    that low are labelled different (``calibrate_*_duplicates`` write ``different_cutoff``). A
-    route with no such cut-off - its calibration predates it, or does not apply - contributes
-    none: an uncalibrated low score is not a veto.
+    A score is evidence of "different" only where a calibration measured how often pairs scoring that low are
+    labelled different (``calibrate_*_duplicates`` write ``different_cutoff``); a route with no such cut-off
+    contributes none. It is evidence about the pair only on the evidence it was made on:
+
+    * a pair whose stored decision matches its current evidence vetoes at that score;
+    * a pair whose decision was made on **other** evidence and was low is revisited - asked again, on the
+      current evidence, and the new answer decides (a pair the question cannot answer now, or whose escalation
+      fails, vetoes nothing). This is the only place a stale decision is re-asked: it could still block a
+      proposed merge, so it must be right; a stale decision that could not (it was high, or the pair is not
+      among the proposed events) is left alone;
+    * a pair with no decision, or no longer a candidate, vetoes nothing.
+
+    ``pair_lookups`` give a route's pair (``{"organisation": universe.pair, "ai": ai_universe.pair}``);
+    ``attempted`` are pair ids already asked this run (a failed escalation is not tried twice).
     """
     from cyber_data_collector.dedup import ai_duplicates as ai
 
+    in_play = set(events)
+    tried = set(attempted)
     out: Dict[str, str] = {}
-    for name, cal, scores in (("organisation", duplicate_calibration, stored_final_probabilities),
-                              ("AI", ai_calibration, ai.stored_final_probabilities)):
+    revisited: List[str] = []
+    for name, route, cal in (("organisation", ORGANISATION, duplicate_calibration), ("AI", ai.ROUTE, ai_calibration)):
         bound = (cal or {}).get("different_cutoff")
         if bound is None:
             continue
-        for pid, p in scores(conn).items():
-            if p < bound:
-                out[pid] = f"{name} judgement {p:.2f} is below its calibrated 'different' bound {bound:.2f}"
-    return out
+        lookup = pair_lookups[route.name]
+        states: Dict[str, Dict[str, Any]] = {}
+        for pid, (old_score, _) in stale_decisions(conn, route).items():
+            ids = pid.split("|")
+            if len(ids) != 2 or not set(ids) <= in_play or pid in tried:
+                continue
+            pair = lookup(*ids)
+            if pair is None:
+                continue
+            current = current_decisions(conn, route, [pair], states)
+            if pid in current:
+                score, note = current[pid], ""
+            elif old_score < bound:
+                scored = score_pairs(conn, [pair], route, judge=judge, escalation_client=escalation_client,
+                                     states=states)
+                revisited.append(pid)
+                if pid not in scored.final:
+                    logger.warning("Duplicate pair %s: its stored decision was made on other evidence and could not "
+                                   "be re-asked (%s); it vetoes nothing this run", pid,
+                                   "escalation failed" if pid in scored.failed else "no answer")
+                    continue
+                score, note = scored.final[pid], " (re-judged: its evidence had changed)"
+            else:
+                continue
+            if score < bound:
+                out[pid] = f"{name} judgement {score:.2f} is below its calibrated 'different' bound {bound:.2f}{note}"
+    return out, revisited
 
 
 def partition_without_conflicts(edges: Sequence[Tuple[str, str, float]], conflicts: Mapping[str, str]
@@ -507,27 +756,31 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     from cyber_data_collector.dedup.org_timeline import research_all
 
     options = {"cap": cap_candidates, "partners_per_event": partners_per_event, "long_gap_budget": long_gap_budget}
-    org_options = {"cap": cap_candidates,
-                   "partners_per_event": ranking.PARTNERS_PER_EVENT if partners_per_event is None else partners_per_event,
-                   "long_gap_budget": ranking.LONG_GAP_BUDGET if long_gap_budget is None else long_gap_budget}
+    org_options = dict(options)
     research_all(conn, search=timeline_search)
     corpus = ranking.load_corpus(conn)
-    ai_all = ai.candidate_pairs(conn) if include_ai else []
-    ai_pairs, ai_stats = ai.ranked_candidates(conn, corpus=corpus, pairs=ai_all, **options) if include_ai else ([], None)
-    all_pairs = candidate_pairs(conn, skip={p["pair_id"] for p in ai_all})
-    pairs, org_stats = ranking.select(corpus, all_pairs, group_of=lambda p: p["group"], **org_options)
-    jev_scores = judge_pairs(conn, pairs, judge=judge)
-    escalation_failed: List[str] = []
-    escalated = escalate_band(conn, pairs, jev_scores, client=escalation_client, failed=escalation_failed)
-    probabilities = {p: escalated.get(p, v) for p, v in jev_scores.items() if p not in escalation_failed}
+    universe = PairUniverse(conn)
+    ai_universe = ai.AIUniverse(conn, universe) if include_ai else None
+    ai_pairs, ai_stats = ai_universe.ranked(corpus, **options) if include_ai else ([], None)
+    # Pairs are retrieved and ranked per group (bounded_candidates): the pairs that are not asked are never built.
+    pairs, org_stats = universe.ranked(corpus, skip=ai_universe.owns if include_ai else None, **org_options)
     labels = labelled_pairs(labels_path)
+    # Labels decide first: a pair labelled same is merged and one labelled different never is, whatever the model
+    # says, so neither is (re-)asked about.
+    scored = score_pairs(conn, [p for p in pairs if labels.get(p["pair_id"]) not in ("same", "different")],
+                         ORGANISATION, judge=judge, escalation_client=escalation_client)
+    escalated = scored.escalated
+    escalation_failed: List[str] = list(scored.failed)
+    probabilities = scored.final
     different = {p for p, label in labels.items() if label == "different"}
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     by_id = {p["pair_id"]: p for p in pairs}
+    # A labelled-same pair is merged without a score; any other pair needs its score at the cut-off.
     chosen = [] if cutoff is None else [
-        pid for pid, p in probabilities.items()
-        if (p >= cutoff and pid not in different) or labels.get(pid) == "same"]
+        pid for pid in sorted({q["pair_id"] for q in pairs} | set(probabilities))
+        if labels.get(pid) == "same"
+        or (pid in probabilities and probabilities[pid] >= cutoff and pid not in different)]
     proposals = [{**by_id[pid], "p_same": probabilities.get(pid), "label": labels.get(pid), "route": "organisation"}
                  for pid in sorted(chosen, key=lambda x: -(probabilities.get(x) or 0))]
     # Links carry their strength; a labelled-same link outranks any score.
@@ -550,12 +803,18 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
         proposals += ai_result["proposals"]
         escalation_failed = escalation_failed + ai_result["escalation_failed"]
 
-    groups, held = [], []
+    groups, held, rejudged = [], [], []
     if edges:
         events = sorted({x for a, b, _ in edges for x in (a, b)})
         conflicts = {p: "labelled different" for p in different}
         conflicts.update(rulings_between(conn, events))
-        conflicts.update(calibrated_negatives(conn, cal, ai_cal))
+        # A stored low score vetoes only on the evidence it was made on: one made on other evidence is
+        # asked again here (and only here), because it could still block this proposed merge.
+        negatives, rejudged = calibrated_negatives(
+            conn, cal, ai_cal, events,
+            {ORGANISATION.name: universe.pair, ai.ROUTE.name: ai_universe.pair if include_ai else (lambda a, b: None)},
+            judge=judge, escalation_client=escalation_client, attempted=escalation_failed)
+        conflicts.update(negatives)
         groups, held = partition_without_conflicts(edges, conflicts)
         for h in held:
             logger.warning("Duplicate link %s held: it would join %s, which is a conflict (%s)",
@@ -566,7 +825,8 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     out = {"pairs": len(pairs), "judged": len(probabilities), "escalated": len(escalated),
            "escalation_failed": escalation_failed, "cutoff": cutoff,
            "calibrated": cal is not None, "proposals": proposals, "merged": merged,
-           "held_conflicts": held, "candidates": {"organisation": org_stats, "ai": ai_stats}}
+           "held_conflicts": held, "veto_rejudged": rejudged,
+           "candidates": {"organisation": org_stats, "ai": ai_stats}}
     if ai_result is not None:
         out["ai"] = {k: v for k, v in ai_result.items()
                      if k not in ("chosen", "different", "labels", "probabilities", "calibration")}

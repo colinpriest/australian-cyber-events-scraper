@@ -71,7 +71,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.dedup.event_reality import PAGE_CHARS, ROOT, _perplexity
 from cyber_data_collector.utils.llm_models import typesafe_model
@@ -351,6 +351,7 @@ def judge_members(conn: sqlite3.Connection, items: Sequence[Tuple[Dict[str, Any]
             p_jev = float(answer.value)
             if not lo <= p_jev < hi:
                 out[sid] = {"p_jev": p_jev, "p_escalated": None, "p": p_jev, "error": None}
+                final_decisions.record(conn, STEP, sid, state, p_jev, escalated=False)
                 continue
             p_esc = escalate(conn, SUBJECT_TYPE, sid, ESCALATION_QUESTION_ID, ESCALATION_VERSION,
                              state, escalation_question(), client=escalation_client)
@@ -361,30 +362,28 @@ def judge_members(conn: sqlite3.Connection, items: Sequence[Tuple[Dict[str, Any]
                             "error": "escalation failed (see log); retried next run"}
             else:
                 out[sid] = {"p_jev": p_jev, "p_escalated": p_esc, "p": p_esc, "error": None}
+                final_decisions.record(conn, STEP, sid, state, p_esc, escalated=True)
             if i % 25 == 0:
                 logger.info("Judged %d/%d members", i, len(items))
     finally:
+        conn.commit()
         if owned:
             judge.close()
     return out
 
 
-def stored_final_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
-    """Final score per member subject from storage: the escalation's in the band, else Jev's."""
-    from cyber_data_collector.utils.llm_models import openai_model
+STEP = final_decisions.Step(
+    name="coherence", question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND)
 
-    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
-        out: Dict[str, float] = {}
-        for sid, value in conn.execute(
-                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
-            out[sid] = float(value)
-        return out
 
-    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
-    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
-    lo, hi = ESCALATE_BAND
-    return {s: (escalated[s] if s in escalated and lo <= v < hi else v) for s, v in jev.items()}
+def stored_final_probabilities(conn: sqlite3.Connection, items: Sequence[Tuple[Dict[str, Any], str]]
+                               ) -> Dict[str, float]:
+    """Final score per ``(event, member id)`` from its decision on the evidence it has **now**
+    (:mod:`final_decisions`); a member with no decision on its current evidence has no score here."""
+    return final_decisions.read_current(
+        conn, STEP, [(member_subject_id(event["id"], mid), lambda e=event, m=mid: build_member_state(conn, e, m)) for event, mid in items])
 
 
 # ----------------------------------------------------------------------
@@ -607,7 +606,10 @@ def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, e
     labelled_events = {sid.split("|", 1)[0] for sid in labels}
     resolver = EntityResolver(conn)
     events = find_suspect_events(conn, resolver, only=only, include=labelled_events)
-    items = [(e, mid) for e in events for mid in e["suspect_ids"]]
+    # Labels decide first: a member labelled same never leaves and one labelled different always does, whatever
+    # the model says, so it is not (re-)asked about.
+    items = [(e, mid) for e in events for mid in e["suspect_ids"]
+             if labels.get(member_subject_id(e["id"], mid)) not in ("same", "different")]
     scores = judge_members(conn, items, judge=judge, escalation_client=escalation_client)
     undecided = sorted(sid for sid, s in scores.items() if s.get("error"))
 
@@ -625,7 +627,8 @@ def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, e
             entry["new_events"] = split_groups(conn, event["id"], groups, ledger=ledger)
             splits.extend(entry["new_events"])
         findings.append(entry)
-    return {"events_judged": len(events), "members_judged": len(scores), "undecided": undecided,
+    return {"events_judged": len(events), "members_judged": len(scores),
+            "settled_by_label": sum(len(e["suspect_ids"]) for e in events) - len(items), "undecided": undecided,
             "escalated": sum(1 for s in scores.values() if s["p_escalated"] is not None),
             "calibrated": cal is not None, "cutoff": cutoff, "applied": bool(apply and splits),
             "strays": sum(len(g) for f in findings for g in f["groups"]),

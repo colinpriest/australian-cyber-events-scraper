@@ -71,6 +71,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from cyber_data_collector.dedup import bounded_candidates as bounded
 from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.dedup import duplicate_judgement as dj
 from cyber_data_collector.dedup.event_reality import ROOT
@@ -200,6 +201,67 @@ def interval_gap(a: AIEvent, b: AIEvent) -> Optional[int]:
     return (b.start - a.end).days if b.start > a.end else (a.start - b.end).days
 
 
+class AIUniverse:
+    """The AI route's events and the pairs among them, built on demand.
+
+    A pair of AI-involved events within ``window_days`` (or with an unknown gap) belongs to this route and is not
+    asked by the organisation route as well (:meth:`owns`). Loading is linear in the AI events; :meth:`all_pairs`
+    builds every pair (calibration, recalibration), :meth:`ranked` only the ones that are asked
+    (:mod:`bounded_candidates` once the group is large), :meth:`pair` one. A pair that also shares a victim
+    organisation carries it, so the judgement shows that organisation's timeline.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, organisations: Optional["dj.PairUniverse"] = None,
+                 window_days: int = AI_WINDOW_DAYS):
+        self.window_days = window_days
+        self.events = {e.dedup_id: e for e in ai_events(conn)}
+        self._spans = {i: bounded.Span(i, e.start, e.end, payload=e) for i, e in self.events.items()}
+        self._conn = conn
+        self._organisations = organisations
+        if self._organisations is None and len(self.events) > 1:
+            self._organisations = dj.PairUniverse(conn)
+
+    def owns(self, a_id: str, b_id: str) -> bool:
+        """True when this route asks about the pair: both events AI-involved, within the window or undated."""
+        a, b = self._spans.get(a_id), self._spans.get(b_id)
+        if a is None or b is None or a_id == b_id:
+            return False
+        gap = bounded.span_gap(a, b)
+        return gap is None or gap <= self.window_days
+
+    def _make(self, a: bounded.Span, b: bounded.Span, gap: Optional[int], _group: Any = None) -> Dict[str, Any]:
+        org = self._organisations.pair(a.event_id, b.event_id) if self._organisations is not None else None
+        return {"pair_id": dj.pair_id(a.event_id, b.event_id), "a": a.event_id, "b": b.event_id,
+                "organisation": org["organisation"] if org else None,
+                "entity_id": org["entity_id"] if org else None,
+                "shared_organisation": org is not None,
+                "gap_days": gap if gap is not None else dj.GAP_UNKNOWN}
+
+    def pair(self, a_id: str, b_id: str) -> Optional[Dict[str, Any]]:
+        if not self.owns(a_id, b_id):
+            return None
+        a, b = sorted((self._spans[a_id], self._spans[b_id]), key=bounded.span_order)
+        return self._make(a, b, bounded.span_gap(a, b))
+
+    def all_pairs(self) -> List[Dict[str, Any]]:
+        ordered = sorted(self._spans.values(), key=bounded.span_order)
+        pairs = [self._make(a, b, bounded.span_gap(a, b))
+                 for i, a in enumerate(ordered) for b in ordered[i + 1:] if self.owns(a.event_id, b.event_id)]
+        return sorted(pairs, key=lambda p: p["pair_id"])
+
+    def ranked(self, corpus, cap: bool = True, partners_per_event: Optional[int] = None,
+               long_gap_budget: Optional[int] = None, exhaustive_max: Optional[int] = None
+               ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        from cyber_data_collector.dedup import candidate_ranking as ranking
+
+        return bounded.rank_groups(
+            corpus, {ROUTE_AI: list(self._spans.values())}, self._make, window_days=self.window_days, cap=cap,
+            partners_per_event=AI_PARTNERS_PER_EVENT if partners_per_event is None else partners_per_event,
+            long_gap_budget=ranking.LONG_GAP_BUDGET if long_gap_budget is None else long_gap_budget,
+            exclude=lambda a, b: not self.owns(a, b),
+            exhaustive_max=bounded.EXHAUSTIVE_GROUP_MAX if exhaustive_max is None else exhaustive_max)
+
+
 def candidate_pairs(conn: sqlite3.Connection, window_days: int = AI_WINDOW_DAYS) -> List[Dict[str, Any]]:
     """Every pair of AI-involved active events within ``window_days`` (or with an unknown gap).
 
@@ -207,23 +269,7 @@ def candidate_pairs(conn: sqlite3.Connection, window_days: int = AI_WINDOW_DAYS)
     victim organisation carries it (``organisation``, ``entity_id``) so the
     judgement shows the organisation's timeline; ``shared_organisation`` says so.
     """
-    events = ai_events(conn)
-    shared = {p["pair_id"]: p for p in dj.candidate_pairs(conn)} if len(events) > 1 else {}
-    events = sorted(events, key=lambda e: (e.start is None, e.start or date.max, e.end or date.max, e.dedup_id))
-    pairs: List[Dict[str, Any]] = []
-    for i, a in enumerate(events):
-        for b in events[i + 1:]:
-            gap = interval_gap(a, b)
-            if gap is not None and gap > window_days:
-                continue
-            pid = dj.pair_id(a.dedup_id, b.dedup_id)
-            org = shared.get(pid)
-            pairs.append({"pair_id": pid, "a": a.dedup_id, "b": b.dedup_id,
-                          "organisation": org["organisation"] if org else None,
-                          "entity_id": org["entity_id"] if org else None,
-                          "shared_organisation": org is not None,
-                          "gap_days": gap if gap is not None else dj.GAP_UNKNOWN})
-    return sorted(pairs, key=lambda p: p["pair_id"])
+    return AIUniverse(conn, window_days=window_days).all_pairs()
 
 
 def ranked_candidates(conn: sqlite3.Connection, corpus=None, pairs: Optional[Sequence[Dict[str, Any]]] = None,
@@ -233,16 +279,18 @@ def ranked_candidates(conn: sqlite3.Connection, corpus=None, pairs: Optional[Seq
     """The candidate pairs that are asked: ranked and capped like every route's
     (:mod:`candidate_ranking`), all AI-involved events being one group.
 
-    ``pairs`` are :func:`candidate_pairs` when already computed. Returns
-    ``(pairs, stats)`` with the counts before and after. The calibration's
-    sample, the packet, the score step and ``check-duplicates`` use this;
-    recalibration scores the labelled pairs from :func:`candidate_pairs`, so a
+    ``pairs`` are :func:`candidate_pairs` when already computed (then they are ranked as given); without them
+    the pairs are retrieved through :class:`AIUniverse`, which never builds those it does not keep. Returns
+    ``(pairs, stats)`` with the counts before and after. The calibration's sample, the packet, the score step
+    and ``check-duplicates`` use this; recalibration scores the labelled pairs from :func:`candidate_pairs`, so a
     pair that ranks outside the cap today can still be re-scored.
     """
     from cyber_data_collector.dedup import candidate_ranking as ranking
 
     corpus = corpus or ranking.load_corpus(conn)
-    pairs = candidate_pairs(conn, window_days) if pairs is None else pairs
+    if pairs is None:
+        return AIUniverse(conn, window_days=window_days).ranked(
+            corpus, cap=cap, partners_per_event=partners_per_event, long_gap_budget=long_gap_budget)
     return ranking.select(
         corpus, pairs, group_of=lambda p: ROUTE_AI, window_days=window_days, cap=cap,
         partners_per_event=AI_PARTNERS_PER_EVENT if partners_per_event is None else partners_per_event,
@@ -362,6 +410,13 @@ def calibration_identity() -> Dict[str, str]:
 # Judging
 # ----------------------------------------------------------------------
 
+#: The AI route as the shared procedure asks it (:class:`duplicate_judgement.Route`).
+ROUTE = dj.Route(
+    name=ROUTE_AI, question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    state_builder=build_pair_state, escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND)
+
+
 def judge_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge=None,
                 refresh: bool = False) -> Dict[str, float]:
     """P(same incident) per pair id from the AI-pair question; stored answers are reused."""
@@ -376,11 +431,11 @@ def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], pro
                             state_builder=build_pair_state, question_text=escalation_question, band=ESCALATE_BAND)
 
 
-def stored_final_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
-    """Final score per AI pair from storage: the escalation's in the band, else Jev's."""
-    return dj.stored_final_probabilities(conn, question_id=QUESTION_ID, version=QUESTION_VERSION,
-                                         escalation_id=ESCALATION_QUESTION_ID,
-                                         escalation_version=ESCALATION_VERSION, band=ESCALATE_BAND)
+def stored_final_probabilities(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]],
+                               states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
+    """Final score per AI pair from the decision made on the pair's current evidence
+    (:func:`duplicate_judgement.current_decisions`); a pair with none has none."""
+    return dj.current_decisions(conn, ROUTE, pairs, states)
 
 
 def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge=None,
@@ -388,11 +443,10 @@ def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
     """``(final scores, escalated count, pairs whose escalation failed)``.
 
     A pair whose escalation failed has no final score: it is undecided, not scored on Jev's middle-band answer.
+    Each final score is stored against the evidence it was made on (``FinalDecisions``).
     """
-    jev_scores = judge_pairs(conn, pairs, judge=judge)
-    failed: List[str] = []
-    escalated = escalate_band(conn, pairs, jev_scores, client=escalation_client, failed=failed)
-    return {p: escalated.get(p, v) for p, v in jev_scores.items() if p not in failed}, len(escalated), failed
+    scored = dj.score_pairs(conn, pairs, ROUTE, judge=judge, escalation_client=escalation_client)
+    return scored.final, len(scored.escalated), scored.failed
 
 
 # ----------------------------------------------------------------------
@@ -465,16 +519,20 @@ def assess(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge=None
     labelled there is protected (or merged) the same way; where both files label
     a pair, this one's label wins.
     """
-    probabilities, escalated, failed = (score_pairs(conn, pairs, judge=judge, escalation_client=escalation_client)
-                                        if pairs else ({}, 0, []))
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     labels = {**(org_labels or {}), **labelled_pairs(labels_path, required=cal is not None)}
+    # Labels decide first (same merges, different never does), so a labelled pair is not (re-)asked about.
+    ask = [p for p in pairs if labels.get(p["pair_id"]) not in ("same", "different")]
+    probabilities, escalated, failed = (score_pairs(conn, ask, judge=judge, escalation_client=escalation_client)
+                                        if ask else ({}, 0, []))
     different = {p for p, label in labels.items() if label == "different"}
     by_id = {p["pair_id"]: p for p in pairs}
+    # A labelled-same pair is merged without a score; any other pair needs its score at the cut-off.
     chosen = [] if cutoff is None else [
-        pid for pid, p in probabilities.items()
-        if (p >= cutoff and pid not in different) or labels.get(pid) == "same"]
+        pid for pid in sorted({q["pair_id"] for q in pairs} | set(probabilities))
+        if labels.get(pid) == "same"
+        or (pid in probabilities and probabilities[pid] >= cutoff and pid not in different)]
     order = sorted(probabilities, key=lambda x: -probabilities[x])
     return {"pairs": len(pairs), "judged": len(probabilities), "escalated": escalated,
             "escalation_failed": failed, "cutoff": cutoff, "calibrated": cal is not None,

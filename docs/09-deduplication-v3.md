@@ -1087,6 +1087,64 @@ cut-off. On the 2026-10-29 copy the organisation route went from 229 to 69 candi
 `Adjudicator.candidate_pairs` (find-missed) now subdivides a bucket over `MAX_ENTITY_BUCKET` with the same ranking instead of
 skipping it.
 
+**No cap on a small group** (`UNCAPPED_GROUP_MAX` = 60). The partner cap and the "no pair beyond a year without strong evidence"
+rule bound a large group's cost; on a small one they only lost recall. On the labelling-time snapshot they dropped 6 of the
+17 labelled-`same` organisation pairs (gaps 707 to 4,603 days: misdated copies; Qantas, Optus, Swinburne, Telstra, UWA, Elina).
+Every pair of an organisation group of up to 60 events is now a candidate and is still scored and ranked; recall on the labels
+is 17/17 `same` and 138/138 `different` (49 -> 157 candidate pairs on the snapshot, 75 -> 236 on the 2026-10-29 copy). The AI
+route, one group, keeps its cap.
+
+**Retrieval instead of enumeration** (`dedup/bounded_candidates.py`, 2026-10-29). Ranking took the pairs as input, so every
+pair of a group was built (a dict each) before the cap discarded nearly all of them: CPU and memory grew with the square of the
+largest group (a 2,000-event group: 1,999,000 pairs, 30 s, 1.24 GB at peak, measured), though paid calls stayed bounded. Groups
+of up to `EXHAUSTIVE_GROUP_MAX` (60) events are ranked as before. A larger group (`PairUniverse.ranked`,
+`AIUniverse.ranked`, `ranking.subdivide(..., day_of=...)`) goes through `select_bounded`:
+
+1. *Posting lists* over the group for each key the score uses: non-hub source URLs, vendor, corpus-rare words, records-affected
+   figure. A key shared by many events (a vendor, a figure) is followed to its `PER_KEY_LIMIT` (24) nearest by date.
+2. *Date neighbours*: the group's events sorted by interval start and by interval end; the `K` neighbours either side of an
+   event are its nearest by interval gap (right of an event in start order, and left in end order, the gap is monotone).
+3. *Undated and tied pairs*: a pair with no date term ties at zero evidence and is ordered by pair id, so the `K` smallest
+   pair ids among an event's undated partners (all partners, for an undated event) are found by `bisect` over the sorted ids.
+4. The retrieved candidates are scored with the same `score_pair`, each event keeps its best `K`, and the reserved long-gap /
+   undated budget is filled from the same postings - which are exactly what "strong" means, so a strong match is retrieved
+   however far apart or undated.
+
+The counts before the cap (all pairs, long-gap, unknown-gap) are arithmetic (`bisect`), not enumerated; for a large group
+`before` includes pairs another route owns. On random groups (400 events, undated events, rare-word families, distinct dates) the
+kept set is identical to the enumerated one; ties among dated pairs of equal evidence and equal gap break on start order
+here and pair id there. `scripts/measure_candidate_generation.py` reports pairs built, time, peak memory and recall on the
+labelled pairs for `enumerate`, `retrieve` and `retrieve-forced` (retrieval for every group). Nothing in the evidence
+fingerprints changed.
+
+**Decisions tied to their evidence.** `FinalDecisions` (`step`, `subject_id`, `evidence_hash`, `question_version`, `jev_model`,
+`escalation_model`, `final_score`, `basis`, `jev_input_hash`, `escalation_input_hash`, `decided_at`; module
+`dedup/final_decisions.py`) holds the score a judging step acts on, with the SHA-256 of the state that Jev **and** the escalation
+were shown. Steps: `duplicates-organisation`, `duplicates-ai` (subject = pair), `event-reality`, `event-scope` (subject = event),
+`coherence`, `coherence-same-organisation` (subject = `event|record`) and `victim-attribution` (subject = `event|entity`). Each
+step records the decision where it scores (`record_final` / `judge_members` / `judge_pairs` / `duplicate_judgement.score_pairs`),
+and its `stored_final_probabilities` reads only a decision whose hash is the subject's evidence now. **Labels decide first**:
+`check-events --apply` does not ask about events labelled real, `check-scope --apply` about events labelled in or out of
+scope, `check-coherence` / `check-same-organisation` about members labelled same or different, and `check-duplicates` about
+pairs labelled same or different; victim attribution still judges labelled pairs, because flag review confirms a flagged pair
+labelled correct only with its score. The duplicate paragraph that follows applies to the pair steps. It is written by
+`duplicate_judgement.score_pairs` (both routes), read by `current_decisions` / `stored_final_probabilities(conn, pairs)` only
+when `evidence_hash` equals the hash of the pair's state now (and the models and question versions match), and `stale_decisions`
+returns the newest decision whatever its evidence. The old reader chose the newest Jev answer and the newest escalation
+independently (kept for snapshots as `unvalidated_final_probabilities`, used only by `scripts/evaluate_dedup.py`).
+`calibrated_negatives(conn, cal, ai_cal, events, pair_lookups, ...)` considers only pairs between the events a proposed
+group involves: a decision on the current evidence vetoes at its score; one on other evidence **and below the calibrated
+`different_cutoff`** is asked again on the current evidence (Jev, then the reasoning model for the middle band) and the new
+answer decides; a stale high one, one outside the proposed events, one for a pair no longer a candidate, or one whose
+escalation fails vetoes nothing. `check_duplicates` reports `veto_rejudged`. A first run after the change fills `FinalDecisions`
+from the stored answers (their input hashes still match) without a paid call; `recalibrate` and the calibration scripts read
+`FinalDecisions` for the labelled cases (the recalibration plans record as they re-score the copies).
+
+**Alias decisions.** `EntityAliasDecisions` rows are asked again when `evidence_hash` changed *and* the pair matters now
+(proposed for a fold, or a stored `different` / `related` / `parent_subsidiary` barring a name from a proposed fold); `human`
+rows never are; a row with no hash is treated as changed the first time it matters. Replaced rows go to
+`EntityAliasDecisionHistory`.
+
 **Conflicts inside a group.** A chain A=B, B=C used to merge A, B and C even when A and C were known to be different
 incidents. Links are now taken strongest first (a labelled-same link before any score) and one is *held* if it would put two
 events with a recorded conflict in one group: a `different` label (either file), an active `different` ruling, or a stored

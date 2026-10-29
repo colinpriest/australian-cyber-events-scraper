@@ -297,13 +297,17 @@ def test_the_middle_band_is_escalated_and_the_escalation_decides(conn, tmp_path)
     assert "au" in {r["deduplicated_event_id"] for r in result["rejections"]}
     assert dict(conn.execute("SELECT subject_id, value FROM ModelJudgements WHERE question_id = ?",
                              (es.ESCALATION_QUESTION_ID,)))["au"] == pytest.approx(0.02)
-    assert es.stored_final_probabilities(conn, ["au", "us"]) == pytest.approx({"au": 0.02, "us": 0.03})
+    decided = es.final_decisions.latest(conn, es.STEP, ["au", "us"])
+    assert {k: v[0] for k, v in decided.items()} == pytest.approx({"au": 0.02, "us": 0.03})
+    # Both were rejected, so their records are inactive and their evidence is no longer what they were judged on:
+    # neither has a decision on its current evidence (a reader must judge before it acts or calibrates).
+    assert es.stored_final_probabilities(conn, ["au", "us"]) == {}
 
 
 def test_a_failed_escalation_leaves_the_event_undecided(conn, tmp_path):
     fake = FakeTypeSafe({**{t: p for t, p in EVENTS.values()}, "Optus data breach": 0.4})
     result = _check(conn, tmp_path, cutoff=0.5, apply=True, judge=JevJudge(conn, client=fake),
-                    escalation_client=FakeReasoner(fail=True))
+                    escalation_client=FakeReasoner(fail=True), rows=[("supplier", "in_scope")])
     assert result["escalation_failed"] == ["au"]
     assert _status(conn)["au"] == "Active"        # 0.4 is below the cut-off, but it was not decided on Jev's mid-band score
     assert "au" not in {r["deduplicated_event_id"] for r in result["rejections"]}
@@ -312,7 +316,8 @@ def test_a_failed_escalation_leaves_the_event_undecided(conn, tmp_path):
 def test_one_jev_failure_leaves_that_event_undecided_and_the_rest_judged(conn, tmp_path):
     result = _check(conn, tmp_path, cutoff=0.3, apply=True,
                     judge=JevJudge(conn, client=FakeTypeSafe(fail_titles=["NHS trust ransomware"])))
-    assert result["judgement_failed"] == ["uk"] and result["judged"] == 3
+    # "au" is labelled in scope: the label decides, so the model is not asked about it (see the next test).
+    assert result["judgement_failed"] == ["uk"] and result["judged"] == 2 and result["settled_by_label"] == 1
     assert _status(conn) == {"us": "Rejected", "uk": "Active", "au": "Active", "supplier": "Active"}
 
 
@@ -490,6 +495,7 @@ def test_a_labelled_australian_event_the_model_scores_low_stops_the_cutoff(world
     conn = sqlite3.connect(world.db)
     conn.execute("UPDATE ModelJudgements SET value = 0.03 WHERE subject_id = 'a0' AND question_id = ?",
                  (es.QUESTION_ID,))
+    conn.execute("UPDATE FinalDecisions SET final_score = 0.03 WHERE subject_id = 'a0' AND step = ?", (es.STEP.name,))
     conn.commit()
     conn.close()
     cal.main(["--db", str(world.db), "calibrate", "--min-rejections", "1"])
@@ -609,3 +615,16 @@ def test_a_real_event_rejected_as_out_of_scope_is_not_a_reality_label_contradict
     contradictions = [m for k, m in result.items() if k.endswith("contradictions")][0]
     assert contradictions.value == 1
     assert any("junk" in e for e in contradictions.examples) and not any("mazda" in e for e in contradictions.examples)
+
+
+def test_labels_decide_first_so_a_labelled_event_is_not_asked_about(conn, tmp_path):
+    """Labelled in scope is never rejected and labelled out of scope always is: neither needs a (re-)ask."""
+    jev = FakeTypeSafe()
+    result = _check(conn, tmp_path, cutoff=0.3, apply=True, judge=JevJudge(conn, client=jev),
+                    rows=[("au", "in_scope"), ("us", "out_of_scope")])
+    asked = {state["event"]["title"] for state in jev.states}
+    assert asked.isdisjoint({EVENTS["au"][0], EVENTS["us"][0]}) and result["settled_by_label"] == 2
+    assert _status(conn)["us"] == "Rejected" and _status(conn)["au"] == "Active"
+    # Without --apply nothing is settled by a label: every event is judged and reported.
+    report = _check(conn, tmp_path, cutoff=0.3, apply=False, judge=JevJudge(conn, client=FakeTypeSafe()))
+    assert report["settled_by_label"] == 0
