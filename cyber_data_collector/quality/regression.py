@@ -19,7 +19,10 @@ event_reality          the event is still Active (merged into another event is n
 not_incident           counted: the incident it joined may be real)
 event_reality          the event is still Active (a real incident outside the dataset's
 out_of_scope           scope, e.g. not Australian)
-duplicates same        the two events are still two distinct Active events
+event_scope in_scope   the event (or the event it was merged into) is Rejected
+event_scope            the event is still Active
+out_of_scope
+duplicates same       the two events are still two distinct Active events
 duplicates different   both now resolve to one Active event
 source_gate            the record is evidence of an Active event, or is unmapped
 not_incident           but still Active (it would be deduplicated next run)
@@ -45,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EVALUATION_DIR = ROOT / "evaluation"
 LABEL_FILES = {
     "event_reality": "event_reality_labels.csv",
+    "event_scope": "event_scope_labels.csv",
     "duplicates": "duplicate_labels.csv",
     "source_gate": "source_gate_labels.csv",
 }
@@ -121,19 +125,21 @@ def _result(prefix: str, checked: int, contradictions: List[str], unchecked: Dic
     }
 
 
-def check_event_reality(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
+def _check_event_labels(prefix: str, resolver: EventResolver, path: Path, kept: str,
+                        rejected: Tuple[str, ...], note: str) -> Dict[str, Measurement]:
+    """Labels that an event must survive (``kept``, followed through merges) or must not (``rejected``, not Active)."""
     rows = read_labels(path, "deduplicated_event_id")
     contradictions, unchecked, checked = [], defaultdict(int), 0
     for row in rows:
         label, event_id = row["label"].strip(), row["deduplicated_event_id"].strip()
-        if label not in ("real", "not_incident", "out_of_scope"):
+        if label != kept and label not in rejected:
             unchecked[f"label {label!r}"] += 1
             continue
         raw = resolver.status.get(event_id)
         if raw is None:
             unchecked["event no longer exists"] += 1
             continue
-        if label in ("not_incident", "out_of_scope"):
+        if label in rejected:
             checked += 1
             if raw == "Active":
                 contradictions.append(f"{event_id}: labelled {label}, still Active - {row.get('rationale', '')[:90]}")
@@ -145,9 +151,18 @@ def check_event_reality(conn, resolver: EventResolver, path: Path) -> Dict[str, 
         checked += 1
         if status == "Rejected":
             via = "" if now == event_id else f" (merged into {now})"
-            contradictions.append(f"{event_id}: labelled real, Rejected{via} - {row.get('rationale', '')[:90]}")
-    return _result("event_reality", checked, contradictions, unchecked, len(rows),
-                   "real must be Active or merged into an Active event; not_incident must not be Active")
+            contradictions.append(f"{event_id}: labelled {kept}, Rejected{via} - {row.get('rationale', '')[:90]}")
+    return _result(prefix, checked, contradictions, unchecked, len(rows), note)
+
+
+def check_event_reality(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
+    return _check_event_labels("event_reality", resolver, path, "real", ("not_incident", "out_of_scope"),
+                               "real must be Active or merged into an Active event; not_incident must not be Active")
+
+
+def check_event_scope(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
+    return _check_event_labels("event_scope", resolver, path, "in_scope", ("out_of_scope",),
+                               "in_scope must be Active or merged into an Active event; out_of_scope must not be Active")
 
 
 def check_duplicates(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
@@ -205,6 +220,7 @@ def check_source_gate(conn, resolver: EventResolver, path: Path) -> Dict[str, Me
 
 LABEL_CHECKS: Dict[str, Callable] = {
     "event_reality": check_event_reality,
+    "event_scope": check_event_scope,
     "duplicates": check_duplicates,
     "source_gate": check_source_gate,
 }

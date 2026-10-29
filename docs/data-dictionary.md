@@ -1135,6 +1135,14 @@ Side-by-side comparison of PDF-scraped vs. Power BI dashboard-scraped data:
 `evaluation/calibration_snapshots.json` maps each step to the labelling-time backup it is recalibrated on.
 `ModelJudgements.subject_type` also takes `event_member_same_org` (`check-same-organisation`).
 
+`evaluation/event_scope_calibration.json` (`check-scope`) is calibrated on `evaluation/event_scope_labels.csv`
+(`deduplicated_event_id, label, rationale, labeller`; label `in_scope` / `out_of_scope` / `unsure`) and
+`evaluation/event_scope_sample.csv` (`deduplicated_event_id, stratum, weight`). Besides the fields above it records
+`labelled_out_of_scope` and `extra_labelled_outside_sample` (event-reality labels folded in as stratum `X`).
+`ModelJudgements` rows for scope have `question_id` `is_in_scope` (`event-scope-v1`, Jev) and `is_in_scope_escalated`
+(`event-scope-escalation-v1`, reasoning model), subject type `deduplicated_event`; value is P(in scope).
+Rejections are ledger batches `reject-event-scope-<timestamp>`.
+
 ### ASD Risk Classification Exports
 
 All files in the `risk_matrix/` directory. Created by `scripts/asd_risk_classifier.py`.

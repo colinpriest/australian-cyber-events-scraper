@@ -404,8 +404,9 @@ def gained_since_labelling(conn: sqlite3.Connection, event_ids: Sequence[str],
         snap.close()
 
 
-def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
-    """Undo this filter's rejection of any protected event (latest snapshot)."""
+def restore_protected(conn: sqlite3.Connection, protected: set,
+                      batch_prefix: str = "reject-event-reality") -> List[str]:
+    """Undo a filter's rejection of any protected event (latest snapshot of its ``batch_prefix`` batches)."""
     from cyber_data_collector.dedup.ledger import DedupLedger
 
     if not protected or not conn.execute(
@@ -418,8 +419,8 @@ def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
             """SELECT s.snapshot_id FROM DedupSnapshots s
                JOIN DeduplicatedEvents d ON d.deduplicated_event_id = s.deduplicated_event_id
                WHERE s.deduplicated_event_id = ? AND d.status = 'Rejected'
-                 AND s.batch_id LIKE 'reject-event-reality-%'
-               ORDER BY s.batch_id DESC LIMIT 1""", (did,)).fetchone()
+                 AND s.batch_id LIKE ?
+               ORDER BY s.batch_id DESC LIMIT 1""", (did, f"{batch_prefix}-%")).fetchone()
         if snap is None:
             continue
         ledger.restore_snapshot(snap[0])
@@ -430,16 +431,17 @@ def restore_protected(conn: sqlite3.Connection, protected: set) -> List[str]:
         restored.append(did)
     conn.commit()
     if restored:
-        logger.info("Restored %d labelled-real event(s) this filter had rejected", len(restored))
+        logger.info("Restored %d labelled event(s) this filter had rejected", len(restored))
     return restored
 
 
-def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) -> None:
-    """Reject events judged not to be incidents; snapshotted, so reversible."""
+def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]],
+                  batch_prefix: str = "reject-event-reality", reason: str = "judged not to be incidents") -> None:
+    """Reject events (by default those judged not to be incidents); snapshotted, so reversible."""
     from cyber_data_collector.dedup.ledger import DedupLedger
 
     ledger = DedupLedger(conn)
-    batch_id = f"reject-event-reality-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    batch_id = f"{batch_prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     now = datetime.now()
     try:
         for f in findings:
@@ -455,7 +457,7 @@ def reject_events(conn: sqlite3.Connection, findings: Sequence[Dict[str, Any]]) 
     except Exception:
         conn.rollback()
         raise
-    logger.info("Rejected %d event(s) judged not to be incidents (batch %s)", len(findings), batch_id)
+    logger.info("Rejected %d event(s) %s (batch %s)", len(findings), reason, batch_id)
 
 
 def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,

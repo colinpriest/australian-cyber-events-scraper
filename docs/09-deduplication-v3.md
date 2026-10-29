@@ -916,7 +916,7 @@ After `check-victims` (suspects are found against the corrected victim) and
 before `check-duplicates` (which re-homes the split-off records):
 
 ```
-recalibrate --if-stale, check-sources --apply, check-events --apply,
+recalibrate --if-stale, check-sources --apply, check-events --apply, check-scope --apply,
 classify-entities --stale-only, check-victims, check-victim-attribution --apply,
 check-coherence --apply, check-same-organisation --apply, check-duplicates --apply,
 find-supplier-victims --apply, resolve-label-contradictions
