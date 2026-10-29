@@ -1,4 +1,4 @@
-"""AI involvement: Jev required, all three probabilities stored, reused; chart and report read it."""
+"""AI involvement: Jev required, all four probabilities stored, reused; chart and report read it."""
 
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ class FakeClient:
 
 
 SCRIPT = {
-    MEDICARE: {"ai_attacker": 0.91, "ai_vulnerability": 0.05, "no_ai": 0.04},
-    CHATBOT: {"ai_attacker": 0.10, "ai_vulnerability": 0.85, "no_ai": 0.05},
-    RANSOM: {"ai_attacker": 0.02, "ai_vulnerability": 0.01, "no_ai": 0.97},
+    MEDICARE: {"ai_attacker": 0.91, "ai_vulnerability": 0.05, "ai_misuse": 0.0, "no_ai": 0.04},
+    CHATBOT: {"ai_attacker": 0.10, "ai_vulnerability": 0.85, "ai_misuse": 0.0, "no_ai": 0.05},
+    RANSOM: {"ai_attacker": 0.02, "ai_vulnerability": 0.01, "ai_misuse": 0.0, "no_ai": 0.97},
 }
 
 
@@ -115,7 +115,7 @@ def test_schema_comes_from_init(conn):
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'EventDescriptions'").fetchone()
 
 
-def test_label_and_all_three_probabilities_are_stored(conn):
+def test_label_and_all_four_probabilities_are_stored(conn):
     describer = FakeDescriber()
     report = _run(conn, describer=describer)
     values = _values(conn)
@@ -266,22 +266,52 @@ def test_dashboard_build_writes_the_chart_and_the_report(db_path, tmp_path, monk
     assert "Services Australia" in report and "Retailer" in report
 
 
-def _choice(attacker, vulnerability, no_ai):
-    probs = {"ai_attacker": attacker, "ai_vulnerability": vulnerability, "no_ai": no_ai}
+def _choice(attacker, vulnerability, no_ai, misuse=0.0):
+    probs = {"ai_attacker": attacker, "ai_vulnerability": vulnerability, "ai_misuse": misuse, "no_ai": no_ai}
     return SimpleNamespace(answer=max(probs, key=probs.get), probabilities=probs)
 
 
 def test_close_scores_never_become_a_definite_category():
     """Vercel on 2026-10-28: attacker 0.48, vulnerability 0.42, no AI 0.10 was published as AI-attacker."""
-    vercel = {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10}
+    vercel = {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "ai_misuse": 0.0, "no_ai": 0.10}
     assert not ai.is_settled(vercel)
     label, basis = ai.decide(vercel)
     assert label == ai.AI_UNCERTAIN and "category unsettled" in basis
     # Settled either way.
-    assert ai.decide({"ai_attacker": 0.9, "ai_vulnerability": 0.05, "no_ai": 0.05})[0] == ai.AI_ATTACKER
-    assert ai.decide({"ai_attacker": 0.03, "ai_vulnerability": 0.02, "no_ai": 0.95})[0] == ai.NO_AI
+    assert ai.decide(_choice(0.9, 0.05, 0.05).probabilities)[0] == ai.AI_ATTACKER
+    assert ai.decide(_choice(0.03, 0.02, 0.95).probabilities)[0] == ai.NO_AI
     # Involvement itself unsettled (P(AI) 0.5) without a calibration.
-    assert ai.decide({"ai_attacker": 0.45, "ai_vulnerability": 0.05, "no_ai": 0.5})[0] == ai.AI_UNCERTAIN
+    assert ai.decide(_choice(0.45, 0.05, 0.5).probabilities)[0] == ai.AI_UNCERTAIN
+
+
+def test_an_organisations_own_use_of_ai_is_misuse():
+    """Kmart's facial recognition: no attacker, the organisation's own AI use was the breach."""
+    label, basis = ai.decide(_choice(0.05, 0.05, 0.02, misuse=0.88).probabilities)
+    assert label == ai.AI_MISUSE and "misuse 90% of it" in basis
+    # Split three ways, no category holds three quarters: unsettled, never a guess.
+    label, basis = ai.decide(_choice(0.3, 0.3, 0.05, misuse=0.35).probabilities)
+    assert label == ai.AI_UNCERTAIN and "misuse 37%" in basis
+    values = ai.values_from_judgement(_choice(0.05, 0.05, 0.02, misuse=0.88), cutoff=0.67)
+    assert values["ai_involvement"] == ai.AI_MISUSE and values["ai_misuse_probability"] == 0.88
+
+
+def test_misuse_is_charted_and_listed(conn, monkeypatch):
+    import scripts.build_static_dashboard as sd
+    from scripts.build_ai_incident_report import build_report_html
+
+    monkeypatch.setitem(SCRIPT, RANSOM, {"ai_attacker": 0.02, "ai_vulnerability": 0.03, "ai_misuse": 0.9,
+                                         "no_ai": 0.05})
+    _run(conn)
+    assert ai.stored_probabilities(conn)["d2"]["category"] == "ai_misuse"
+    chart = sd.get_ai_involvement_by_half_year(conn, PERIOD.start_iso, PERIOD.end_iso)
+    assert dict(zip(chart["periods"], chart["misuse"]))["2025 H2"] == 1 and sum(chart["misuse"]) == 1
+    check = [c for c in sd.build_reconciliation_checks(
+        conn, _minimal_payload(conn, sd, chart), PERIOD, PERIOD, {"counts": [3]})
+        if c.name == "AI involvement per half-year"][0]
+    assert check.is_ok
+    page = build_report_html(conn, PERIOD)
+    assert '<tr data-category="misuse">' in page and "1 where the organisation's own use of AI" in page
+    assert [i["probability"] for i in ai.ai_incidents(conn, PERIOD) if i["deduplicated_event_id"] == "d2"] == [0.9]
 
 
 def test_a_calibrated_cutoff_decides_involvement():
@@ -300,10 +330,10 @@ def test_an_unsettled_answer_is_escalated_and_the_reasoned_answer_stored(conn, m
     def fake_escalate(conn_, subject_type, subject_id, question_id, version, state, question, options, client=None):
         calls.append(subject_id)
         assert set(options) == set(ai.LABELS)
-        return {"ai_attacker": 0.05, "ai_vulnerability": 0.9, "no_ai": 0.05}
+        return {"ai_attacker": 0.05, "ai_vulnerability": 0.9, "ai_misuse": 0.0, "no_ai": 0.05}
 
     monkeypatch.setattr(escalation, "escalate_choice", fake_escalate)
-    monkeypatch.setitem(SCRIPT, MEDICARE, {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10})
+    monkeypatch.setitem(SCRIPT, MEDICARE, _choice(0.48, 0.42, 0.10).probabilities)
     report = _run(conn)
     row = conn.execute("SELECT ai_involvement, ai_involvement_escalated, ai_vulnerability_probability "
                        "FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd0'").fetchone()
@@ -315,7 +345,7 @@ def test_a_failed_escalation_leaves_the_event_undecided(conn, monkeypatch):
     from cyber_data_collector.utils import escalation
 
     monkeypatch.setattr(escalation, "escalate_choice", lambda *a, **k: None)
-    monkeypatch.setitem(SCRIPT, MEDICARE, {"ai_attacker": 0.48, "ai_vulnerability": 0.42, "no_ai": 0.10})
+    monkeypatch.setitem(SCRIPT, MEDICARE, _choice(0.48, 0.42, 0.10).probabilities)
     with pytest.raises(ai.AIInvolvementIncomplete):
         _run(conn)
     assert conn.execute("SELECT ai_involvement FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd0'"

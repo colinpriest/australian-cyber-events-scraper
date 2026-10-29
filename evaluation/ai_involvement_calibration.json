@@ -1,33 +1,33 @@
 {
-  "question_version": "ai-involvement-v3+ai-involvement-escalation-v1",
+  "question_version": "ai-involvement-v4+ai-involvement-escalation-v2",
   "model": "jev-1.14.0+gpt-5.5-2026-04-23",
   "calibrated_on_database": "cyber_events.db",
-  "cutoff": 0.67,
+  "cutoff": 0.69,
   "precision_target": 0.95,
   "min_flags": 10,
   "at_cutoff": {
-    "cutoff": 0.67,
-    "flagged_labelled": 36,
-    "correct_labelled": 35,
-    "weighted_precision": 0.9722222222222222,
-    "weighted_recall": 0.9722222222222222,
+    "cutoff": 0.69,
+    "flagged_labelled": 35,
+    "correct_labelled": 34,
+    "weighted_precision": 0.9714285714285714,
+    "weighted_recall": 0.9444444444444444,
     "unweighted_precision_ci95": [
-      0.8582996626496918,
-      0.9950797197044302
+      0.8546659090672868,
+      0.9949386386341466
     ],
-    "category_agreement": 0.9714285714285714
+    "category_agreement": 0.9705882352941176
   },
   "labelled_used": 122,
   "unsure_excluded": 0,
   "missing": 0,
   "labels_file": "evaluation\\ai_involvement_labels.csv",
   "sample_file": "evaluation\\ai_involvement_sample.csv",
-  "generated": "2026-10-29T08:04:44.445125",
+  "generated": "2026-10-29T10:56:41.017177",
   "bootstrap_out_of_sample_precision": {
     "replicates": 1000,
     "median": 1.0,
-    "mean": 0.9535301659554756,
-    "p05": 0.7692307692307693
+    "mean": 0.9484442550483573,
+    "p05": 0.7857142857142857
   },
   "curve": [
     {
@@ -56,13 +56,13 @@
     },
     {
       "cutoff": 0.02,
-      "flagged_labelled": 52,
+      "flagged_labelled": 51,
       "correct_labelled": 36,
-      "weighted_precision": 0.6923076923076923,
+      "weighted_precision": 0.7058823529411765,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.5573015506778113,
-        0.8008543760864647
+        0.5700066466848335,
+        0.8129143475968796
       ],
       "category_agreement": 0.9722222222222222
     },
@@ -79,6 +79,18 @@
       "category_agreement": 0.9722222222222222
     },
     {
+      "cutoff": 0.04,
+      "flagged_labelled": 48,
+      "correct_labelled": 36,
+      "weighted_precision": 0.75,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.6121535625207293,
+        0.8507951119028996
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
       "cutoff": 0.05,
       "flagged_labelled": 47,
       "correct_labelled": 36,
@@ -91,7 +103,31 @@
       "category_agreement": 0.9722222222222222
     },
     {
-      "cutoff": 0.07,
+      "cutoff": 0.1,
+      "flagged_labelled": 45,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.6617674868607056,
+        0.8910399559749099
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.17,
+      "flagged_labelled": 45,
+      "correct_labelled": 36,
+      "weighted_precision": 0.8,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.6617674868607056,
+        0.8910399559749099
+      ],
+      "category_agreement": 0.9722222222222222
+    },
+    {
+      "cutoff": 0.18,
       "flagged_labelled": 44,
       "correct_labelled": 36,
       "weighted_precision": 0.8181818181818182,
@@ -103,19 +139,7 @@
       "category_agreement": 0.9722222222222222
     },
     {
-      "cutoff": 0.08,
-      "flagged_labelled": 43,
-      "correct_labelled": 36,
-      "weighted_precision": 0.8372093023255814,
-      "weighted_recall": 1.0,
-      "unweighted_precision_ci95": [
-        0.7002730466408176,
-        0.9188347549714246
-      ],
-      "category_agreement": 0.9722222222222222
-    },
-    {
-      "cutoff": 0.1,
+      "cutoff": 0.19,
       "flagged_labelled": 42,
       "correct_labelled": 36,
       "weighted_precision": 0.8571428571428571,
@@ -127,7 +151,7 @@
       "category_agreement": 0.9722222222222222
     },
     {
-      "cutoff": 0.13,
+      "cutoff": 0.28,
       "flagged_labelled": 42,
       "correct_labelled": 36,
       "weighted_precision": 0.8571428571428571,
@@ -139,31 +163,31 @@
       "category_agreement": 0.9722222222222222
     },
     {
-      "cutoff": 0.16,
+      "cutoff": 0.36,
       "flagged_labelled": 41,
-      "correct_labelled": 36,
-      "weighted_precision": 0.8780487804878049,
-      "weighted_recall": 1.0,
+      "correct_labelled": 35,
+      "weighted_precision": 0.8536585365853658,
+      "weighted_recall": 0.9722222222222222,
       "unweighted_precision_ci95": [
-        0.7445549235115514,
-        0.9467674200265919
+        0.7155624473141073,
+        0.9311584547054459
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 0.9714285714285714
     },
     {
-      "cutoff": 0.24,
+      "cutoff": 0.41,
       "flagged_labelled": 40,
-      "correct_labelled": 36,
-      "weighted_precision": 0.9,
-      "weighted_recall": 1.0,
+      "correct_labelled": 35,
+      "weighted_precision": 0.875,
+      "weighted_recall": 0.9722222222222222,
       "unweighted_precision_ci95": [
-        0.7694792561952611,
-        0.9604211124044252
+        0.7388757932976187,
+        0.9454058022645873
       ],
-      "category_agreement": 0.9722222222222222
+      "category_agreement": 0.9714285714285714
     },
     {
-      "cutoff": 0.26,
+      "cutoff": 0.59,
       "flagged_labelled": 39,
       "correct_labelled": 35,
       "weighted_precision": 0.8974358974358975,
@@ -175,7 +199,7 @@
       "category_agreement": 0.9714285714285714
     },
     {
-      "cutoff": 0.65,
+      "cutoff": 0.6,
       "flagged_labelled": 38,
       "correct_labelled": 35,
       "weighted_precision": 0.9210526315789473,
@@ -187,67 +211,55 @@
       "category_agreement": 0.9714285714285714
     },
     {
-      "cutoff": 0.67,
+      "cutoff": 0.62,
+      "flagged_labelled": 37,
+      "correct_labelled": 35,
+      "weighted_precision": 0.9459459459459459,
+      "weighted_recall": 0.9722222222222222,
+      "unweighted_precision_ci95": [
+        0.822950349364601,
+        0.9850493372294601
+      ],
+      "category_agreement": 0.9714285714285714
+    },
+    {
+      "cutoff": 0.63,
       "flagged_labelled": 36,
-      "correct_labelled": 35,
-      "weighted_precision": 0.9722222222222222,
-      "weighted_recall": 0.9722222222222222,
-      "unweighted_precision_ci95": [
-        0.8582996626496918,
-        0.9950797197044302
-      ],
-      "category_agreement": 0.9714285714285714
-    },
-    {
-      "cutoff": 0.76,
-      "flagged_labelled": 36,
-      "correct_labelled": 35,
-      "weighted_precision": 0.9722222222222222,
-      "weighted_recall": 0.9722222222222222,
-      "unweighted_precision_ci95": [
-        0.8582996626496918,
-        0.9950797197044302
-      ],
-      "category_agreement": 0.9714285714285714
-    },
-    {
-      "cutoff": 0.79,
-      "flagged_labelled": 35,
-      "correct_labelled": 35,
-      "weighted_precision": 1.0,
-      "weighted_recall": 0.9722222222222222,
-      "unweighted_precision_ci95": [
-        0.9010957324106112,
-        1.0
-      ],
-      "category_agreement": 0.9714285714285714
-    },
-    {
-      "cutoff": 0.81,
-      "flagged_labelled": 34,
       "correct_labelled": 34,
-      "weighted_precision": 1.0,
+      "weighted_precision": 0.9444444444444444,
       "weighted_recall": 0.9444444444444444,
       "unweighted_precision_ci95": [
-        0.8984820937803899,
-        1.0
+        0.8185502589238878,
+        0.9846303362329332
       ],
       "category_agreement": 0.9705882352941176
     },
     {
-      "cutoff": 0.84,
-      "flagged_labelled": 33,
+      "cutoff": 0.69,
+      "flagged_labelled": 35,
+      "correct_labelled": 34,
+      "weighted_precision": 0.9714285714285714,
+      "weighted_recall": 0.9444444444444444,
+      "unweighted_precision_ci95": [
+        0.8546659090672868,
+        0.9949386386341466
+      ],
+      "category_agreement": 0.9705882352941176
+    },
+    {
+      "cutoff": 0.8,
+      "flagged_labelled": 34,
       "correct_labelled": 33,
-      "weighted_precision": 1.0,
+      "weighted_precision": 0.9705882352941176,
       "weighted_recall": 0.9166666666666666,
       "unweighted_precision_ci95": [
-        0.8957265699643882,
-        1.0
+        0.8508409778365519,
+        0.9947892280744034
       ],
       "category_agreement": 0.9696969696969697
     },
     {
-      "cutoff": 0.85,
+      "cutoff": 0.83,
       "flagged_labelled": 32,
       "correct_labelled": 32,
       "weighted_precision": 1.0,
@@ -259,7 +271,7 @@
       "category_agreement": 0.96875
     },
     {
-      "cutoff": 0.88,
+      "cutoff": 0.89,
       "flagged_labelled": 31,
       "correct_labelled": 31,
       "weighted_precision": 1.0,
@@ -271,19 +283,19 @@
       "category_agreement": 0.967741935483871
     },
     {
-      "cutoff": 0.89,
-      "flagged_labelled": 29,
-      "correct_labelled": 29,
+      "cutoff": 0.92,
+      "flagged_labelled": 30,
+      "correct_labelled": 30,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.8055555555555556,
+      "weighted_recall": 0.8333333333333334,
       "unweighted_precision_ci95": [
-        0.8830264055344442,
+        0.8864829086095221,
         1.0
       ],
-      "category_agreement": 0.9655172413793104
+      "category_agreement": 0.9666666666666667
     },
     {
-      "cutoff": 0.9,
+      "cutoff": 0.93,
       "flagged_labelled": 28,
       "correct_labelled": 28,
       "weighted_precision": 1.0,
@@ -295,7 +307,19 @@
       "category_agreement": 0.9642857142857143
     },
     {
-      "cutoff": 0.92,
+      "cutoff": 0.95,
+      "flagged_labelled": 28,
+      "correct_labelled": 28,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.7777777777777778,
+      "unweighted_precision_ci95": [
+        0.8793527963418923,
+        1.0
+      ],
+      "category_agreement": 0.9642857142857143
+    },
+    {
+      "cutoff": 0.98,
       "flagged_labelled": 27,
       "correct_labelled": 27,
       "weighted_precision": 1.0,
@@ -307,7 +331,7 @@
       "category_agreement": 0.9629629629629629
     },
     {
-      "cutoff": 0.95,
+      "cutoff": 0.99,
       "flagged_labelled": 26,
       "correct_labelled": 26,
       "weighted_precision": 1.0,
@@ -319,7 +343,7 @@
       "category_agreement": 0.9615384615384616
     },
     {
-      "cutoff": 0.97,
+      "cutoff": 1.0,
       "flagged_labelled": 25,
       "correct_labelled": 25,
       "weighted_precision": 1.0,
@@ -329,30 +353,6 @@
         1.0
       ],
       "category_agreement": 0.96
-    },
-    {
-      "cutoff": 0.99,
-      "flagged_labelled": 24,
-      "correct_labelled": 24,
-      "weighted_precision": 1.0,
-      "weighted_recall": 0.6666666666666666,
-      "unweighted_precision_ci95": [
-        0.8620194241710247,
-        1.0
-      ],
-      "category_agreement": 1.0
-    },
-    {
-      "cutoff": 1.0,
-      "flagged_labelled": 22,
-      "correct_labelled": 22,
-      "weighted_precision": 1.0,
-      "weighted_recall": 0.6111111111111112,
-      "unweighted_precision_ci95": [
-        0.8513404742740388,
-        1.0
-      ],
-      "category_agreement": 1.0
     }
   ]
 }

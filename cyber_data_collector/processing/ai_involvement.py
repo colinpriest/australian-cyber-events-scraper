@@ -1,6 +1,6 @@
-"""AI involvement in every active event: AI as the attacker, the victim's AI attacked, or none.
+"""AI involvement in every active event: AI as the attacker, the victim's AI attacked, AI misused, or none.
 
-Each active event is asked one Jev Choice over three options, from the same
+Each active event is asked one Jev Choice over four options, from the same
 evidence the breach-source question reads (the event's title and, for up to
 five member records, each record's title, snippet, stored page excerpt and
 Perplexity research - :func:`breach_source.event_state`):
@@ -12,11 +12,15 @@ Perplexity research - :func:`breach_source.event_state`):
 * ``AI-vulnerability``: the victim's own AI system was attacked, misused or
   leaked data (prompt injection, a jailbroken chatbot, exposed model or
   training data);
+* ``AI-misuse``: no one attacked anything - the organisation's own use of AI
+  was the breach (Kmart's in-store facial recognition, Clearview AI's
+  face-scraping tool, a contractor uploading applicants' data to ChatGPT);
 * ``No-AI``: no AI involvement is reported.
 
-The chosen label and all three probabilities are stored on
+The chosen label and all four probabilities are stored on
 ``DeduplicatedEvents`` (``ai_involvement``, ``ai_attacker_probability``,
-``ai_vulnerability_probability``, ``no_ai_probability``); the full answer, the
+``ai_vulnerability_probability``, ``ai_misuse_probability``,
+``no_ai_probability``); the full answer, the
 question as sent and the input hash are in ``ModelJudgements`` and are reused
 while the evidence, the question and the model are unchanged, so a rerun asks
 only about new or changed events and a rebuilt ``DeduplicatedEvents`` is
@@ -26,7 +30,7 @@ Which label an event gets is decided by a **calibrated cut-off** when one
 matches the current model and question (``evaluation/ai_involvement_calibration.json``,
 made by ``scripts/calibrate_ai_involvement.py`` from blind labels): the event
 is AI-involved when P(AI) = 1 - P(No-AI) reaches the cut-off, and its category
-is the more probable of attacker and vulnerability. Labelled events take their
+is the most probable of attacker, vulnerability and misuse. Labelled events take their
 label (ground truth). With no matching calibration the label is the most
 probable option and ``ai_involvement_basis`` says so, as do the dashboard and
 the report. Evidence is whole pages within a budget (:func:`breach_source.event_state`).
@@ -60,17 +64,17 @@ CALIBRATION_PATH = ROOT / "evaluation" / "ai_involvement_calibration.json"
 #: ``ai_involvement_basis`` values (a calibrated one names the cut-off).
 BASIS_LABEL = "labelled"
 
-QUESTION_VERSION = "ai-involvement-v3"
+QUESTION_VERSION = "ai-involvement-v4"
 QUESTION_ID = "ai_involvement"
 ESCALATION_QUESTION_ID = "ai_involvement_escalated"
-ESCALATION_VERSION = "ai-involvement-escalation-v1"
+ESCALATION_VERSION = "ai-involvement-escalation-v2"
 #: Jev's answer is settled when its top option reaches DOMINANT or leads the
 #: next by MARGIN; otherwise the reasoning model is asked (Vercel, 2026-10-28:
 #: attacker 0.48 / vulnerability 0.42 had been published as "AI-attacker").
 DOMINANT = 0.8
 MARGIN = 0.3
 #: Without a calibration, AI is involved at P(AI) >= INVOLVED and not at
-#: <= NOT_INVOLVED; in between, and whenever neither side holds CATEGORY_SHARE
+#: <= NOT_INVOLVED; in between, and whenever no category holds CATEGORY_SHARE
 #: of P(AI), the event is AI-uncertain - never a definite category.
 INVOLVED = 0.65
 NOT_INVOLVED = 0.35
@@ -80,18 +84,24 @@ DESCRIPTION_PROMPT_VERSION = "ai-description-v1"
 
 AI_ATTACKER = "AI-attacker"
 AI_VULNERABILITY = "AI-vulnerability"
+AI_MISUSE = "AI-misuse"
 AI_UNCERTAIN = "AI-uncertain"
 NO_AI = "No-AI"
-#: The two definite AI categories.
-AI_LABELS = (AI_ATTACKER, AI_VULNERABILITY)
+#: The definite AI categories.
+AI_LABELS = (AI_ATTACKER, AI_VULNERABILITY, AI_MISUSE)
 #: Everything charted and listed as (possible) AI involvement.
-AI_INVOLVED_LABELS = (AI_ATTACKER, AI_VULNERABILITY, AI_UNCERTAIN)
+AI_INVOLVED_LABELS = (AI_ATTACKER, AI_VULNERABILITY, AI_MISUSE, AI_UNCERTAIN)
 
 #: Jev option -> stored label, and -> probability column.
-LABELS = {"ai_attacker": AI_ATTACKER, "ai_vulnerability": AI_VULNERABILITY, "no_ai": NO_AI}
+LABELS = {"ai_attacker": AI_ATTACKER, "ai_vulnerability": AI_VULNERABILITY, "ai_misuse": AI_MISUSE,
+          "no_ai": NO_AI}
+#: The options that mean AI was involved (all but no_ai), and their names in a basis.
+AI_OPTIONS = ("ai_attacker", "ai_vulnerability", "ai_misuse")
+CATEGORY_NAMES = {"ai_attacker": "attacker", "ai_vulnerability": "vulnerability", "ai_misuse": "misuse"}
 PROBABILITY_COLUMNS = {
     "ai_attacker": "ai_attacker_probability",
     "ai_vulnerability": "ai_vulnerability_probability",
+    "ai_misuse": "ai_misuse_probability",
     "no_ai": "no_ai_probability",
 }
 
@@ -108,14 +118,22 @@ INSTRUCTIONS = (
     "that AI was used counts even when hedged ('likely'); a journalist's or commentator's speculation "
     "that AI might have been used does not. "
     "Decide in two steps. First: did an AI system play a reported part in the incident? Second, if it "
-    "did: whose AI was it? If the AI was on the ATTACKING side - the attacker's own tool, or an AI agent "
-    "that itself did the unauthorised access - choose ai_attacker. If the AI was on the VICTIM's side - a "
-    "system the victim (or its supplier) owned, ran or had connected to its systems, which was attacked, "
-    "manipulated, leaked data or was the way in - choose ai_vulnerability, even when the attacker also "
-    "used AI. Worked boundaries: an AI company's agent that broke into someone else's portal is "
-    "ai_attacker (the portal's owner is the victim); a third-party AI tool an employee had connected to "
-    "the company's accounts, whose compromise let attackers in, is ai_vulnerability; a deepfake call to "
-    "staff is ai_attacker; a customer-service chatbot tricked into revealing data is ai_vulnerability."
+    "did: what part? If there was no attack at all and the incident IS the organisation's own use of AI - "
+    "an AI system it chose to deploy collected, used or disclosed people's information unlawfully or "
+    "improperly, or its staff or contractors put personal or confidential data into an AI tool - choose "
+    "ai_misuse. Otherwise there was an attack, a manipulation or a fault, and the question is whose AI it "
+    "was. If the AI was on the ATTACKING side - the attacker's own tool, or an AI agent that itself did "
+    "the unauthorised access - choose ai_attacker. If the AI was on the VICTIM's side - a system the "
+    "victim (or its supplier) owned, ran or had connected to its systems, which was attacked, "
+    "manipulated, leaked data through a flaw or was the way in - choose ai_vulnerability, even when the "
+    "attacker also used AI. Worked boundaries: an AI company's agent that broke into someone else's "
+    "portal is ai_attacker (the portal's owner is the victim); a third-party AI tool an employee had "
+    "connected to the company's accounts, whose compromise let attackers in, is ai_vulnerability; a "
+    "deepfake call to staff is ai_attacker; a customer-service chatbot tricked into revealing data is "
+    "ai_vulnerability; a hiring chatbot whose weak security exposed applicants' records is "
+    "ai_vulnerability; a retailer's in-store facial recognition that the privacy regulator found "
+    "unlawful is ai_misuse; a company scraping people's photos into its own face-recognition tool is "
+    "ai_misuse; an employee uploading customers' records to ChatGPT is ai_misuse."
 )
 CRITERIA = {
     "ai_attacker": (
@@ -128,9 +146,16 @@ CRITERIA = {
         "owned, ran or had connected to its systems was attacked, manipulated or leaked data - prompt "
         "injection, a jailbroken or manipulated chatbot or assistant, an AI model, its training data, "
         "prompts or conversation logs exposed or stolen, data poisoning, an AI feature that disclosed "
-        "information, or a compromised AI tool or integration through which the attackers got in. An "
-        "ordinary breach of a company that happens to work on AI is not this unless its AI system was "
-        "the weak point."),
+        "information through a flaw, or a compromised AI tool or integration through which the attackers "
+        "got in. An ordinary breach of a company that happens to work on AI is not this unless its AI "
+        "system was the weak point."),
+    "ai_misuse": (
+        "No one attacked or manipulated anything: the organisation's own use of AI was the breach. An AI "
+        "system it chose to deploy collected, used or disclosed people's personal information unlawfully "
+        "or improperly - facial recognition on customers or the public, scraping images or data into its "
+        "own AI model, training or running AI on personal data without consent - or its staff or "
+        "contractors disclosed personal or confidential data by entering it into an AI tool such as "
+        "ChatGPT. The AI worked as intended (or as its users meant); the wrong is in how it was used."),
     "no_ai": (
         "No AI involvement is reported for this incident: an ordinary attack, mistake or system fault, or "
         "AI is mentioned only in passing - as speculation, general commentary, a defensive tool, the "
@@ -245,7 +270,7 @@ def labelled_events(path: Optional[Path] = None) -> Dict[str, str]:
 
 
 def probabilities_from_judgement(judgement: Any) -> Dict[str, float]:
-    """Jev's distribution over the three options (raises on an unknown option or a missing probability)."""
+    """Jev's distribution over the four options (raises on an unknown option or a missing probability)."""
     if judgement.answer not in LABELS:
         raise ValueError(f"Jev returned unknown AI-involvement option {judgement.answer!r}")
     probs = judgement.probabilities or {}
@@ -266,8 +291,8 @@ def decide(probs: Mapping[str, float], cutoff: Optional[float] = None) -> Tuple[
 
     Involvement: P(AI) = 1 - P(No-AI) at or above the calibrated ``cutoff``;
     without one, at or above INVOLVED (and AI-uncertain between NOT_INVOLVED
-    and INVOLVED). Category: attacker or vulnerability only when it holds
-    CATEGORY_SHARE of P(AI); otherwise AI-uncertain.
+    and INVOLVED). Category: the most probable of attacker, vulnerability and
+    misuse, only when it holds CATEGORY_SHARE of P(AI); otherwise AI-uncertain.
     """
     p_ai = 1.0 - probs["no_ai"]
     if cutoff is not None:
@@ -280,12 +305,13 @@ def decide(probs: Mapping[str, float], cutoff: Optional[float] = None) -> Tuple[
         if p_ai < INVOLVED:
             return AI_UNCERTAIN, f"P(AI) {p_ai:.2f} between {NOT_INVOLVED} and {INVOLVED} (not calibrated)"
         rule = f"P(AI) {p_ai:.2f} >= {INVOLVED} (not calibrated)"
-    share = probs["ai_attacker"] / p_ai if p_ai else 0.0
-    if share >= CATEGORY_SHARE:
-        return AI_ATTACKER, f"{rule}; attacker {share:.0%} of it"
-    if share <= 1 - CATEGORY_SHARE:
-        return AI_VULNERABILITY, f"{rule}; vulnerability {1 - share:.0%} of it"
-    return AI_UNCERTAIN, f"{rule}; attacker {share:.0%} / vulnerability {1 - share:.0%} - category unsettled"
+    total = sum(probs[o] for o in AI_OPTIONS)
+    shares = {o: probs[o] / total if total else 0.0 for o in AI_OPTIONS}
+    top = max(AI_OPTIONS, key=lambda o: shares[o])
+    if shares[top] >= CATEGORY_SHARE:
+        return LABELS[top], f"{rule}; {CATEGORY_NAMES[top]} {shares[top]:.0%} of it"
+    split = " / ".join(f"{CATEGORY_NAMES[o]} {shares[o]:.0%}" for o in AI_OPTIONS)
+    return AI_UNCERTAIN, f"{rule}; {split} - category unsettled"
 
 
 def column_values(probs: Mapping[str, float], escalated: bool, cutoff: Optional[float] = None,
@@ -318,12 +344,12 @@ def stored_probabilities(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
     """``{event: {"ai": P(AI), "category": option}}`` - the final (escalated where unsettled)
     probabilities stored on every judged active event."""
     out: Dict[str, Dict[str, Any]] = {}
-    rows = conn.execute("SELECT deduplicated_event_id, ai_attacker_probability, ai_vulnerability_probability, "
-                        "no_ai_probability FROM DeduplicatedEvents WHERE status = 'Active' "
-                        "AND no_ai_probability IS NOT NULL").fetchall()
-    for subject, attacker, vulnerability, no_ai in rows:
-        out[subject] = {"ai": 1.0 - float(no_ai),
-                        "category": "ai_attacker" if attacker >= vulnerability else "ai_vulnerability"}
+    columns = ", ".join(PROBABILITY_COLUMNS[o] for o in AI_OPTIONS)
+    rows = conn.execute(f"SELECT deduplicated_event_id, {columns}, no_ai_probability FROM DeduplicatedEvents "
+                        "WHERE status = 'Active' AND no_ai_probability IS NOT NULL").fetchall()
+    for subject, *ai_probs, no_ai in rows:
+        by_option = {o: float(p or 0.0) for o, p in zip(AI_OPTIONS, ai_probs)}
+        out[subject] = {"ai": 1.0 - float(no_ai), "category": max(AI_OPTIONS, key=lambda o: by_option[o])}
     return out
 
 
@@ -497,7 +523,7 @@ def classify_events(conn: sqlite3.Connection, dry_run: bool = False, limit: Opti
 
 
 def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str, Any]]:
-    """Active incidents labelled AI-attacker or AI-vulnerability, oldest first, with their descriptions.
+    """Active incidents with (possible) AI involvement, oldest first, with their descriptions.
 
     ``period`` is a :class:`ReportingPeriod`; ``None`` lists every active
     incident, dated or not. Victims are the ``victim`` roles (an incident with
@@ -510,15 +536,17 @@ def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str,
     where, params = incident_filter(period, "de")
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row
-    has_basis = "ai_involvement_basis" in {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
-    basis = "de.ai_involvement_basis" if has_basis else "NULL"
+    present = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    optional = ", ".join(f"de.{c} AS {c}" if c in present else f"NULL AS {c}"
+                         for c in ("ai_involvement_basis", "ai_misuse_probability"))
+    marks = ", ".join("?" for _ in AI_INVOLVED_LABELS)
     try:
         rows = [dict(r) for r in conn.execute(
             f"""SELECT de.deduplicated_event_id, de.event_date, de.title, de.victim_organization_name,
                        de.ai_involvement, de.ai_attacker_probability, de.ai_vulnerability_probability,
-                       de.no_ai_probability, {basis} AS ai_involvement_basis
+                       de.no_ai_probability, {optional}
                 FROM DeduplicatedEvents de
-                WHERE {where} AND de.ai_involvement IN (?, ?, ?)
+                WHERE {where} AND de.ai_involvement IN ({marks})
                 ORDER BY de.event_date IS NULL, de.event_date, de.deduplicated_event_id""",
             [*params, *AI_INVOLVED_LABELS])]
         for row in rows:
@@ -530,9 +558,8 @@ def ai_incidents(conn: sqlite3.Connection, period: Any = None) -> List[Dict[str,
             row["victims"] = victims or ([row["victim_organization_name"]] if row["victim_organization_name"]
                                          else [])
             row["description"] = stored_description(conn, row["deduplicated_event_id"])
-            row["probability"] = (row["ai_attacker_probability"] if row["ai_involvement"] == AI_ATTACKER
-                                  else row["ai_vulnerability_probability"]
-                                  if row["ai_involvement"] == AI_VULNERABILITY else None)
+            option = next((o for o in AI_OPTIONS if LABELS[o] == row["ai_involvement"]), None)
+            row["probability"] = row[PROBABILITY_COLUMNS[option]] if option else None
             row["p_ai"] = 1.0 - row["no_ai_probability"] if row["no_ai_probability"] is not None else None
     finally:
         conn.row_factory = previous

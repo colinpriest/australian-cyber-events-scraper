@@ -17,12 +17,13 @@ Three steps, each reproducible from committed files:
 
 ``calibrate``  Reads ``evaluation/ai_involvement_labels.csv``
                (``deduplicated_event_id,label,rationale,labeller``; label
-               ``ai_attacker``, ``ai_vulnerability``, ``no_ai`` or ``unsure``)
+               ``ai_attacker``, ``ai_vulnerability``, ``ai_misuse``, ``no_ai`` or
+               ``unsure``)
                and writes ``evaluation/ai_involvement_calibration.json``. An
                event is flagged as AI when P(AI) >= cut-off; the cut-off is the
                smallest at which the flagged labelled events are, weighted by
                stratum, at least ``--precision`` (0.95) labelled AI. How often
-               the flagged events' category (attacker / vulnerability) matches
+               the flagged events' category (attacker / vulnerability / misuse) matches
                the label is reported beside it. The Jev model and question
                version are recorded; :mod:`ai_involvement` applies the cut-off
                only while both match.

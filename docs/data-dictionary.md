@@ -287,11 +287,12 @@ Final unique events after entity-based deduplication. The primary table used for
 | `date_confidence` | REAL | Yes | NULL | Confidence in the event date (0.0–1.0) |
 | `entity_confidence` | REAL | Yes | NULL | Confidence in entity identification (0.0–1.0) |
 | `data_source_reliability` | REAL | Yes | NULL | Reliability score for data source (0.0–1.0) |
-| `ai_involvement` | VARCHAR(20) | Yes | NULL | `AI-attacker`, `AI-vulnerability` or `No-AI` (`scripts/classify_ai_involvement.py`): the label if the event is labelled, else AI-involved when P(AI) = 1 - `no_ai_probability` reaches the calibrated cut-off, else (no matching calibration) Jev's most probable option. NULL = not judged yet |
+| `ai_involvement` | VARCHAR(20) | Yes | NULL | `AI-attacker`, `AI-vulnerability`, `AI-misuse`, `AI-uncertain` or `No-AI` (`scripts/classify_ai_involvement.py`): the label if the event is labelled, else AI-involved when P(AI) = 1 - `no_ai_probability` reaches the calibrated cut-off, else (no matching calibration) Jev's most probable option. NULL = not judged yet |
 | `ai_involvement_basis` | TEXT | Yes | NULL | How `ai_involvement` was decided: `labelled`, `calibrated: P(AI) >= <cut-off>` / `< <cut-off>`, or `most probable option (not calibrated)` |
 | `ai_attacker_probability` | REAL | Yes | NULL | Jev's probability that AI was the attacker or its instrument |
-| `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, misused or leaked data |
-| `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the three sum to 1) |
+| `ai_vulnerability_probability` | REAL | Yes | NULL | Jev's probability that the victim's AI was attacked, manipulated or leaked data through a flaw |
+| `ai_misuse_probability` | REAL | Yes | NULL | Jev's probability that there was no attack and the organisation's own use of AI was the breach (facial recognition, scraping into its own model, staff entering data into an AI tool). Added with question `ai-involvement-v4` |
+| `no_ai_probability` | REAL | Yes | NULL | Jev's probability that no AI involvement is reported (the four sum to 1) |
 | `first_reported_date` | TEXT | Yes | NULL | Earliest `RawEvents.publication_date` among the event's records |
 | `event_date_precision` | TEXT | Yes | NULL | Verified precision of `event_date` (`day` / `month` / `year`), set only when the records carrying it agree; NULL = unverified |
 | `event_date_earliest` | TEXT | Yes | NULL | First day of the incident-date interval (NULL when unverified) |
