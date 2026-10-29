@@ -1,0 +1,1104 @@
+{
+  "question_version": "victim-fill-v1+victim-fill-escalation-v1+event-organisations-v1",
+  "model": "jev-1.14.0+gpt-5.5-2026-04-23+gpt-5.4-mini-2026-03-17",
+  "evidence": "victim-fill:c65d47bf27978c63",
+  "settled_at": 0.9,
+  "calibrated_on_database": "calibration_victim_fill.db",
+  "cutoff": 0.97,
+  "precision_target": 0.95,
+  "min_fills": 10,
+  "at_cutoff": {
+    "threshold": 0.97,
+    "replaced_labelled": 10,
+    "correct_labelled": 10,
+    "weighted_precision": 1.0,
+    "unweighted_precision_ci95": [
+      0.7224598312333834,
+      1.0
+    ]
+  },
+  "bootstrap_out_of_sample_precision": {
+    "replicates": 514,
+    "median": 1.0,
+    "mean": 0.9821405410413192,
+    "p05": 1.0
+  },
+  "labelled_used": 56,
+  "labelled_named": 25,
+  "excluded": {
+    "unsure": 2,
+    "missing": 0
+  },
+  "recall_labelled_named": 0.4,
+  "labels_file": "evaluation\\victim_fill_labels.csv",
+  "sample_file": "evaluation\\victim_fill_sample.csv",
+  "generated": "2026-10-29T22:17:47.035212",
+  "curve": [
+    {
+      "threshold": 0.55,
+      "replaced_labelled": 36,
+      "correct_labelled": 19,
+      "weighted_precision": 0.5277777777777778,
+      "unweighted_precision_ci95": [
+        0.3700567162693947,
+        0.6801420709279067
+      ]
+    },
+    {
+      "threshold": 0.72,
+      "replaced_labelled": 35,
+      "correct_labelled": 19,
+      "weighted_precision": 0.5428571428571428,
+      "unweighted_precision_ci95": [
+        0.38189451340137515,
+        0.6953422636623914
+      ]
+    },
+    {
+      "threshold": 0.8,
+      "replaced_labelled": 31,
+      "correct_labelled": 19,
+      "weighted_precision": 0.6129032258064516,
+      "unweighted_precision_ci95": [
+        0.4382380114113197,
+        0.7626712464872843
+      ]
+    },
+    {
+      "threshold": 0.82,
+      "replaced_labelled": 30,
+      "correct_labelled": 19,
+      "weighted_precision": 0.6333333333333333,
+      "unweighted_precision_ci95": [
+        0.45513246433604937,
+        0.7812629779598231
+      ]
+    },
+    {
+      "threshold": 0.83,
+      "replaced_labelled": 28,
+      "correct_labelled": 17,
+      "weighted_precision": 0.6071428571428571,
+      "unweighted_precision_ci95": [
+        0.42408726034906297,
+        0.7643454817241996
+      ]
+    },
+    {
+      "threshold": 0.84,
+      "replaced_labelled": 27,
+      "correct_labelled": 16,
+      "weighted_precision": 0.5925925925925926,
+      "unweighted_precision_ci95": [
+        0.4072638305536409,
+        0.7548548662714265
+      ]
+    },
+    {
+      "threshold": 0.85,
+      "replaced_labelled": 26,
+      "correct_labelled": 15,
+      "weighted_precision": 0.5769230769230769,
+      "unweighted_precision_ci95": [
+        0.3894829692111983,
+        0.744558100972706
+      ]
+    },
+    {
+      "threshold": 0.86,
+      "replaced_labelled": 25,
+      "correct_labelled": 15,
+      "weighted_precision": 0.6,
+      "unweighted_precision_ci95": [
+        0.40739127785127344,
+        0.7659694233580909
+      ]
+    },
+    {
+      "threshold": 0.87,
+      "replaced_labelled": 23,
+      "correct_labelled": 14,
+      "weighted_precision": 0.6086956521739131,
+      "unweighted_precision_ci95": [
+        0.4078517960374599,
+        0.7784262201761787
+      ]
+    },
+    {
+      "threshold": 0.88,
+      "replaced_labelled": 22,
+      "correct_labelled": 14,
+      "weighted_precision": 0.6363636363636364,
+      "unweighted_precision_ci95": [
+        0.4295134934371804,
+        0.802670272273921
+      ]
+    },
+    {
+      "threshold": 0.9,
+      "replaced_labelled": 21,
+      "correct_labelled": 13,
+      "weighted_precision": 0.6190476190476191,
+      "unweighted_precision_ci95": [
+        0.40878295815501514,
+        0.7924923220201749
+      ]
+    },
+    {
+      "threshold": 0.92,
+      "replaced_labelled": 17,
+      "correct_labelled": 11,
+      "weighted_precision": 0.6470588235294118,
+      "unweighted_precision_ci95": [
+        0.4129996672121182,
+        0.826905138560951
+      ]
+    },
+    {
+      "threshold": 0.93,
+      "replaced_labelled": 16,
+      "correct_labelled": 11,
+      "weighted_precision": 0.6875,
+      "unweighted_precision_ci95": [
+        0.4440393186673406,
+        0.8583556494803894
+      ]
+    },
+    {
+      "threshold": 0.94,
+      "replaced_labelled": 15,
+      "correct_labelled": 11,
+      "weighted_precision": 0.7333333333333333,
+      "unweighted_precision_ci95": [
+        0.4804911034231324,
+        0.8910272389681718
+      ]
+    },
+    {
+      "threshold": 0.95,
+      "replaced_labelled": 13,
+      "correct_labelled": 10,
+      "weighted_precision": 0.7692307692307693,
+      "unweighted_precision_ci95": [
+        0.49743126004873084,
+        0.918206209075343
+      ]
+    },
+    {
+      "threshold": 0.96,
+      "replaced_labelled": 11,
+      "correct_labelled": 10,
+      "weighted_precision": 0.9090909090909091,
+      "unweighted_precision_ci95": [
+        0.6226353745137962,
+        0.9837682477371741
+      ]
+    },
+    {
+      "threshold": 0.97,
+      "replaced_labelled": 10,
+      "correct_labelled": 10,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.7224598312333834,
+        1.0
+      ]
+    },
+    {
+      "threshold": 0.98,
+      "replaced_labelled": 9,
+      "correct_labelled": 9,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.7008472464490407,
+        1.0
+      ]
+    },
+    {
+      "threshold": 0.99,
+      "replaced_labelled": 7,
+      "correct_labelled": 7,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.6456611570247934,
+        1.0
+      ]
+    },
+    {
+      "threshold": 1.0,
+      "replaced_labelled": 3,
+      "correct_labelled": 3,
+      "weighted_precision": 1.0,
+      "unweighted_precision_ci95": [
+        0.43849391955098227,
+        1.0
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "id": "247185cd-f9f7-4019-8d07-516e927dd41e",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Microsoft",
+        "Nine Entertainment",
+        "Arctic Wolf",
+        "Avast",
+        "California State Controller\u2019s Office",
+        "Sierra Wireless",
+        "Sydney Morning Herald",
+        "The Australian Financial Review"
+      ]
+    },
+    {
+      "id": "27f277f4-a81b-4516-aa79-e29bdb723baa",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Trellix",
+        "Australian Federal Police",
+        "Dutch national police"
+      ]
+    },
+    {
+      "id": "39f21519-1501-41ce-bf18-584c960845ea",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "CISA"
+      ]
+    },
+    {
+      "id": "542bf331-6b21-4d9b-88f6-ec166edf9153",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "JetBrains",
+        "MSP",
+        "TeamCity Cloud"
+      ]
+    },
+    {
+      "id": "648ee8e9-e87a-4eff-88e1-20c68cd16fc0",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "BleepingComputer",
+        "Cracked[.]io",
+        "Cyber Daily",
+        "Google",
+        "HMK Group",
+        "Nulled[.]to"
+      ]
+    },
+    {
+      "id": "738453a0-c7eb-4e1b-b680-f691ad45561b",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian Federal Police",
+        "Five Eyes Law Enforcement Group (FELEG)",
+        "HWL Ebsworth"
+      ]
+    },
+    {
+      "id": "7650d0ad-1f9c-41ea-acf0-b44a973ebcd6",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Cyber Daily",
+        "United States"
+      ]
+    },
+    {
+      "id": "782885d3-950d-4fb8-85f6-614822293926",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "www.warzone[.]ws",
+        "the RAT"
+      ]
+    },
+    {
+      "id": "80303c02-94d6-46d9-8345-648b025d7a60",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Citrix",
+        "Meta Platforms, Inc.",
+        "Microsoft",
+        "7NEWS",
+        "ABC Investigations",
+        "Australian Strategic Policy Institute (ASPI)",
+        "BlueScope Steel",
+        "Chinese government"
+      ]
+    },
+    {
+      "id": "95fb29eb-66f4-4256-8729-8498a6fb77d8",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australia Post",
+        "Linkt",
+        "Liverpool Police Station",
+        "NSW Police Force Cybercrime Squad",
+        "Strike Force Kanbi",
+        "Sydney Local Court"
+      ]
+    },
+    {
+      "id": "9868e1f7-2faf-4caf-a72a-a15b7b1be9e6",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "AFP",
+        "airports in Adelaide, Melbourne, and Perth"
+      ]
+    },
+    {
+      "id": "b2f2bc02-a60c-40a2-9339-275f1b734761",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Ivanti"
+      ]
+    },
+    {
+      "id": "b5f2e88f-614d-4d31-a83e-d367b5c81cc1",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "ACCC",
+        "NSW Police",
+        "Apple News",
+        "DigiGround",
+        "Facebook",
+        "Secure VPN"
+      ]
+    },
+    {
+      "id": "b93c6353-e028-4006-bf1d-4f257fdcef81",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Pulse Secure",
+        "ANZ",
+        "Australian superannuation funds",
+        "CISA",
+        "NAB",
+        "National Anti-Scam Centre",
+        "Westpac",
+        "the Commonwealth Bank"
+      ]
+    },
+    {
+      "id": "bd1eb6df-a77d-463b-aed1-c78533e6eac2",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Ivanti, Inc."
+      ]
+    },
+    {
+      "id": "e998a383-e1aa-485e-b5b5-3fc0d4961d79",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "SecurityScorecard",
+        "Team Cymru",
+        "Brazil",
+        "Dropbox",
+        "STRIKE intelligence team"
+      ]
+    },
+    {
+      "id": "eaa61d0c-0ad0-4cc0-938a-f36f49bfa05e",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "TikTok",
+      "candidates": [
+        "China",
+        "Singapore",
+        "US"
+      ]
+    },
+    {
+      "id": "efbfebc0-6898-464d-8e38-e421eee42c3f",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian Federal Police",
+        "IDCARE",
+        "NSW Police Force",
+        "the United States Secret Service"
+      ]
+    },
+    {
+      "id": "fc98d727-75b0-463e-94c4-4a55ba8dea31",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "FBI",
+        "Metricon Homes",
+        "Microsoft"
+      ]
+    },
+    {
+      "id": "fef39e6c-93f9-4193-9fae-45b8afaab504",
+      "stratum": "A",
+      "weight": 3.85,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Cisco Systems, Inc.",
+        "CISA",
+        "Cisco Talos",
+        "Five Eyes",
+        "SD-WAN Manager",
+        "watchTowr"
+      ]
+    },
+    {
+      "id": "19c65b54-c3fc-4eed-94c3-b2a87080d830",
+      "stratum": "B",
+      "weight": 1.0,
+      "choice": "Australian car dealerships",
+      "prob": 0.72,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Auto-IT",
+      "candidates": [
+        "Auto-IT",
+        "Australian Broadcasting Corporation (ABC)",
+        "Australian car dealerships",
+        "Citizen Lab"
+      ]
+    },
+    {
+      "id": "1af64a9c-9102-4c4a-8631-650cfba29c46",
+      "stratum": "B",
+      "weight": 1.0,
+      "choice": "Ghost criminal messaging app",
+      "prob": 0.72,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Ghost criminal messaging app",
+        "Ghost networking app"
+      ]
+    },
+    {
+      "id": "aa0021cc-f4ff-4f8c-98ea-78f2c5a750bb",
+      "stratum": "B",
+      "weight": 1.0,
+      "choice": "cPanel, L.L.C.",
+      "prob": 0.72,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "cPanel, L.L.C.",
+        "KnownHost",
+        "HostPapa",
+        "InMotion",
+        "Namecheap",
+        "Rapid7",
+        "hosting.com",
+        "watchTowr"
+      ]
+    },
+    {
+      "id": "d7add526-f7e6-4011-8e19-57b1f3eccb88",
+      "stratum": "B",
+      "weight": 1.0,
+      "choice": "Services Australia",
+      "prob": 0.72,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "AUSTRALIAN TAXATION OFFICE",
+        "KnowBe4",
+        "Cyber Daily",
+        "Services Australia"
+      ]
+    },
+    {
+      "id": "da9b4a4d-8cd9-4288-89e4-a0a7bf38ae06",
+      "stratum": "B",
+      "weight": 1.0,
+      "choice": "Navman Wireless Australia Pty Limited",
+      "prob": 0.55,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Teletrac Navman",
+      "candidates": [
+        "Navman Wireless Australia Pty Limited",
+        "Teletrac Navman",
+        "Aldi Stores Australia",
+        "BHP Newman Operations",
+        "Gold Coast City Council",
+        "KiwiRail"
+      ]
+    },
+    {
+      "id": "00ac6d2a-e89b-4193-a291-99d6a0adcb45",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Medibank Private Limited",
+      "prob": 0.92,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Medibank Private Limited",
+        "My Home Hospital"
+      ]
+    },
+    {
+      "id": "150d8cf4-f285-4e30-9ce0-74b99a2eef48",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Transport for NSW",
+      "prob": 0.94,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Transport for NSW",
+      "candidates": [
+        "Transport for NSW"
+      ]
+    },
+    {
+      "id": "27f90993-044e-4a6d-b49a-7d2343231c7f",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Sri Lanka",
+      "prob": 0.84,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Sri Lanka",
+      "candidates": [
+        "Sri Lanka",
+        "BBC News",
+        "Public Debt Management Office",
+        "the Australian creditor"
+      ]
+    },
+    {
+      "id": "461943aa-92fa-44ab-9370-6b62e836f5fe",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "State of Queensland",
+      "prob": 0.86,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "LinkedIn",
+      "candidates": [
+        "State of Queensland",
+        "Queensland Crime and Corruption Commission (CCC)"
+      ]
+    },
+    {
+      "id": "4af0447f-9480-4839-98ad-cc1bdf95379c",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Auto-IT",
+      "prob": 0.9,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Auto-IT",
+      "candidates": [
+        "Auto-IT",
+        "Aussie software firm",
+        "Australian charity",
+        "Broadmeadow-based office technology supplier",
+        "Mathspace",
+        "Newcastle Airport",
+        "Penfold Motors",
+        "Royal Life Saving Australia"
+      ]
+    },
+    {
+      "id": "4d0f674c-08da-4218-8101-5ad814da7da5",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Department of Education",
+      "prob": 0.82,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Department of Education",
+      "candidates": [
+        "Department of Education",
+        "Keeper Security",
+        "NordVPN",
+        "Victorian government"
+      ]
+    },
+    {
+      "id": "54a836f0-96db-4434-a7d8-56902f600799",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "RMS",
+      "prob": 0.88,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "RMS",
+      "candidates": [
+        "BIG4",
+        "Reflections Holidays",
+        "Summerstar Tourist Parks",
+        "ABC News Australia",
+        "RMS",
+        "UA.News"
+      ]
+    },
+    {
+      "id": "57cf4880-c110-48ff-8893-464196ea6612",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Australian target",
+      "prob": 0.9,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Aussie Fluid Power",
+      "candidates": [
+        "Australian target"
+      ]
+    },
+    {
+      "id": "703a33c9-652f-4274-96cd-3795fb74c598",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Samoans in Australia",
+      "prob": 0.87,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Samoans in Australia",
+        "United States Secret Service"
+      ]
+    },
+    {
+      "id": "7d8b0f5f-b85b-444f-b6ff-37431193cc6e",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "The Good Guys",
+      "prob": 0.83,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "The Good Guys",
+      "candidates": [
+        "My Rewards",
+        "Pegasus Group Australia",
+        "The Good Guys"
+      ]
+    },
+    {
+      "id": "7df2e906-afd6-4caf-8f9c-89e7cabc7e4d",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Australian networks",
+      "prob": 0.85,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Cisco",
+        "Australian networks"
+      ]
+    },
+    {
+      "id": "8500d9ae-7710-4d69-b637-8066d9343d66",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Australian government services",
+      "prob": 0.8,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Services Australia",
+      "candidates": [
+        "Australian government services",
+        "Government"
+      ]
+    },
+    {
+      "id": "9d5654da-1128-433c-8a7e-451c35876648",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Department for Education, Children and Young People, Tasmania",
+      "prob": 0.86,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Department for Education, Children and Young People, Tasmania",
+      "candidates": [
+        "Australian Clinical Labs",
+        "Department for Education, Children and Young People, Tasmania",
+        "MedLab Pathology",
+        "Clyde & Co",
+        "MedLab IT systems",
+        "Medibank Private Limited",
+        "Optus"
+      ]
+    },
+    {
+      "id": "aef97dac-596a-423a-bf0b-9095219831ae",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Latitude Financial Services Pty Ltd",
+      "prob": 0.93,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Latitude Financial Services Pty Ltd"
+      ]
+    },
+    {
+      "id": "b46f16b8-75b3-44c6-bfd0-806a23430c3f",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Goa Digital",
+      "prob": 0.82,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Goa Digital",
+      "candidates": [
+        "Goa Digital",
+        "Medibank Private Limited",
+        "Optus",
+        "The Smith Family"
+      ]
+    },
+    {
+      "id": "bbe69fad-460e-4790-a4e8-18c765b4390c",
+      "stratum": "C",
+      "weight": 1.0,
+      "choice": "Parliament of Australia",
+      "prob": 0.9,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Parliament of Australia",
+      "candidates": [
+        "Parliament of Australia",
+        "IPAC"
+      ]
+    },
+    {
+      "id": "086c2b36-0bc5-4532-a5a3-2c9577c9c330",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Sold RE PTY LTD",
+      "prob": 0.97,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Sold RE PTY LTD",
+      "candidates": [
+        "Sold RE PTY LTD",
+        "Malibu Boats Australia"
+      ]
+    },
+    {
+      "id": "0cb0dd62-58c9-4d47-b094-1a6c1c4505af",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "NSW Health",
+      "prob": 1.0,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "NSW Health",
+      "candidates": [
+        "NSW Health",
+        "Accellion",
+        "SBS"
+      ]
+    },
+    {
+      "id": "2431d506-0c75-45c3-9d6e-9148884702f7",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Toll Holdings Limited",
+      "prob": 0.99,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Toll Holdings Limited",
+      "candidates": [
+        "Toll Holdings Limited"
+      ]
+    },
+    {
+      "id": "376facf9-af9a-44a6-94dc-65372742a81c",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Adobe Commerce merchants",
+      "prob": 0.96,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "CISA",
+        "Adobe Commerce merchants"
+      ]
+    },
+    {
+      "id": "47cb4689-9e48-498d-bb88-445a5f468c3e",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Transport for NSW",
+      "prob": 0.98,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Transport for NSW",
+      "candidates": [
+        "Transport for NSW",
+        "Accellion"
+      ]
+    },
+    {
+      "id": "650f680d-9490-4293-8e54-2e7fecc4dc62",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Needlework Tours",
+      "prob": 0.99,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Needlework Tours",
+      "candidates": [
+        "Needlework Tours"
+      ]
+    },
+    {
+      "id": "69d6372d-b771-42a3-97f7-0f849d657187",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "the gym's booking API",
+      "prob": 0.95,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Nemko Digital",
+        "the gym's booking API"
+      ]
+    },
+    {
+      "id": "6f05f28e-5652-451c-a714-534f9dc1c9c4",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Services Australia",
+      "prob": 0.95,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian Federal Police",
+        "Services Australia"
+      ]
+    },
+    {
+      "id": "8412673e-45e2-489f-b5cc-de8e6b29f297",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "a South Australian woman",
+      "prob": 0.94,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Binance",
+        "a fake Digital Currency Exchange account",
+        "Australian Federal Police",
+        "Joint Policing Cybercrime Coordination Centre",
+        "Revolut",
+        "a South Australian woman",
+        "conveyancer"
+      ]
+    },
+    {
+      "id": "938493fc-1f43-43db-8879-516c880d43a0",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Department of Health (Western Australia)",
+      "prob": 0.98,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Department of Health (Western Australia)",
+      "candidates": [
+        "Department of Health (Western Australia)"
+      ]
+    },
+    {
+      "id": "aa8ba783-e9a7-44ee-a4aa-deaebcfb2399",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "YOUR COMMUNITY HEALTH",
+      "prob": 1.0,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "YOUR COMMUNITY HEALTH",
+      "candidates": [
+        "YOUR COMMUNITY HEALTH"
+      ]
+    },
+    {
+      "id": "b3516ce9-0028-4d35-887d-68c3df36a63e",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Spectrum Medical Imaging",
+      "prob": 0.99,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Spectrum Medical Imaging",
+      "candidates": [
+        "AC Laser",
+        "ATF Services",
+        "Spectrum Medical Imaging"
+      ]
+    },
+    {
+      "id": "c65bcfd9-779c-4680-9bb1-8e49dc695b2c",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "TMA Group of Companies Pty Ltd",
+      "prob": 1.0,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "TMA Group of Companies Pty Ltd",
+      "candidates": [
+        "TMA Group of Companies Pty Ltd",
+        "NSW",
+        "The ToolShed"
+      ]
+    },
+    {
+      "id": "ed134a6e-47f0-4b5f-9815-1d3cd312a0a0",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "five Australian victims",
+      "prob": 0.9,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "AFP Eastern Command Cybercrime",
+        "Australian Federal Police",
+        "Joint Policing Cybercrime Coordination Centre",
+        "five Australian victims",
+        "law enforcement agencies in Australia and offshore"
+      ]
+    },
+    {
+      "id": "f1100e07-7152-4e63-b20b-e951bc170b59",
+      "stratum": "D",
+      "weight": 1.0,
+      "choice": "Allens Linklaters",
+      "prob": 0.99,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Allens Linklaters",
+      "candidates": [
+        "Allens Linklaters"
+      ]
+    }
+  ]
+}
