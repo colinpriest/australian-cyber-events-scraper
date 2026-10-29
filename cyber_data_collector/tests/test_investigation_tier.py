@@ -23,6 +23,19 @@ TIMELINE = "1. 2024-08-14 | Student management system breach | Oct 2024 notice |
            "2. 2025-06-19 | Third-party breach | Oct 2025 notice | https://y"
 
 
+
+@pytest.fixture(autouse=True)
+def _no_text_extraction(monkeypatch):
+    """The victim candidates include organisations the text names (an extraction by the fast model).
+    These tests are about something else: the fake finds none, and bogus keys make a forgotten fake fail."""
+    from cyber_data_collector.dedup import event_organisations
+
+    for var in ("OPENAI_API_KEY", "TYPESAFE_API_KEY", "PERPLEXITY_API_KEY"):
+        monkeypatch.setenv(var, "bogus-not-a-real-key")
+    monkeypatch.setattr(event_organisations, "default_extractor",
+                        lambda: (lambda text: event_organisations.NamedOrganisations()))
+
+
 @pytest.fixture
 def conn():
     c = sqlite3.connect(":memory:")

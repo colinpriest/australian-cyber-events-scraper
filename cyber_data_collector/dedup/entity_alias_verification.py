@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS EntityAliasDecisions (
     model          TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
     decided_at     TEXT NOT NULL,
+    evidence_hash  TEXT,               -- the incidents (and profiles) the question showed; see pair_evidence
     PRIMARY KEY (name, other_name, prompt_version)
 );
 """
@@ -81,6 +82,8 @@ class AliasVerificationUnavailable(RuntimeError):
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    if "evidence_hash" not in {r[1] for r in conn.execute("PRAGMA table_info(EntityAliasDecisions)")}:
+        conn.execute("ALTER TABLE EntityAliasDecisions ADD COLUMN evidence_hash TEXT")
 
 
 def _pair(a: str, b: str) -> Tuple[str, str]:
@@ -88,10 +91,18 @@ def _pair(a: str, b: str) -> Tuple[str, str]:
 
 
 def stored_verdicts(conn: sqlite3.Connection) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """The reusable decisions: this prompt version and this Perplexity model.
+
+    A decision made by another model is not reused (it is asked again), so changing ``PERPLEXITY_MODEL``
+    cannot leave old verdicts standing as if the new model had given them. Each entry carries the
+    ``evidence_hash`` it was made on; :func:`verify_pair` re-asks an ``unsure`` one when that changed.
+    """
     ensure_schema(conn)
-    rows = conn.execute("SELECT name, other_name, verdict, canonical_name, reason FROM EntityAliasDecisions "
-                        "WHERE prompt_version = ?", (PROMPT_VERSION,)).fetchall()
-    return {(r[0], r[1]): {"verdict": r[2], "canonical_name": r[3], "reason": r[4]} for r in rows}
+    rows = conn.execute("SELECT name, other_name, verdict, canonical_name, reason, evidence_hash "
+                        "FROM EntityAliasDecisions WHERE prompt_version = ? AND model = ?",
+                        (PROMPT_VERSION, perplexity_model())).fetchall()
+    return {(r[0], r[1]): {"verdict": r[2], "canonical_name": r[3], "reason": r[4], "evidence_hash": r[5]}
+            for r in rows}
 
 
 def incident_context(conn: sqlite3.Connection, name: str) -> str:
@@ -103,6 +114,27 @@ def incident_context(conn: sqlite3.Connection, name: str) -> str:
            WHERE v.entity_name = ? AND e.title IS NOT NULL ORDER BY e.enriched_event_id LIMIT 1""",
         (name,)).fetchone()
     return f'\n   (named in: "{row[0][:160]}")' if row else ""
+
+
+def _context(conn: sqlite3.Connection, name: str) -> str:
+    """What the question tells about one name: an incident it appeared in, and its stored profile if any."""
+    from cyber_data_collector.dedup.entity_profiles import profile_text
+
+    profile = profile_text(conn, name)
+    return incident_context(conn, name) + (f"\n   (profile: {profile})" if profile else "")
+
+
+def pair_evidence(conn: sqlite3.Connection, a: str, b: str) -> str:
+    """A hash of what a question about the pair shows: the incident each name appeared in, and any stored
+    profile of either organisation (:mod:`entity_profiles`). It changes when the evidence does.
+    """
+    import hashlib
+
+    from cyber_data_collector.dedup.entity_profiles import profile_text
+
+    blob = json.dumps({"a": incident_context(conn, a), "b": incident_context(conn, b),
+                       "profile_a": profile_text(conn, a), "profile_b": profile_text(conn, b)}, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def perplexity_search(prompt: str) -> Optional[Dict[str, Any]]:
@@ -157,23 +189,28 @@ def verify_pair(conn: sqlite3.Connection, a: str, b: str, search: Search,
                 known: Dict[Tuple[str, str], Dict[str, Any]], report: VerificationReport) -> Optional[str]:
     """The verdict for one pair (stored, else asked and stored); None when undecided."""
     key = _pair(a, b)
+    evidence = pair_evidence(conn, key[0], key[1])
     if key in known:
-        report.reused += 1
-        return known[key]["verdict"]
-    prompt = PROMPT.format(a=key[0], b=key[1], a_context=incident_context(conn, key[0]),
-                           b_context=incident_context(conn, key[1]))
+        # A settled verdict stands. An `unsure` one was the evidence's fault: it is asked again when the
+        # evidence (the incidents or profiles shown) is not what it was asked on.
+        if known[key]["verdict"] != "unsure" or known[key].get("evidence_hash") == evidence:
+            report.reused += 1
+            return known[key]["verdict"]
+    prompt = PROMPT.format(a=key[0], b=key[1], a_context=_context(conn, key[0]), b_context=_context(conn, key[1]))
     report.asked += 1
     answer = search(prompt)
     verdict = parse_verdict(answer["text"]) if answer else None
     if verdict is None:
         report.failed.append(key)
         return None
-    conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
+                 "citations_json, model, prompt_version, decided_at, evidence_hash) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                  (key[0], key[1], verdict["verdict"], verdict["canonical_name"], verdict["reason"],
                   json.dumps(answer.get("citations") or []), perplexity_model(), PROMPT_VERSION,
-                  datetime.now().isoformat(timespec="seconds")))
+                  datetime.now().isoformat(timespec="seconds"), evidence))
     conn.commit()
-    known[key] = verdict
+    known[key] = {**verdict, "evidence_hash": evidence}
     return verdict["verdict"]
 
 

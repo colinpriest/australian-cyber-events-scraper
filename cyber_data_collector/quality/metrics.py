@@ -543,10 +543,15 @@ def measure_staleness(conn: sqlite3.Connection, thresholds: Thresholds, today: d
         detail = f"entity roles: {roles}"
         out["staleness.roles_outdated"] = Measurement(value=roles["outdated"], detail=detail)
         out["staleness.roles_never_classified"] = Measurement(value=roles["never_classified"], detail=detail)
+        out["staleness.roles_no_victim"] = Measurement(
+            value=roles["no_victim"],
+            detail=f"active events with no usable victim role (an incident with no victim is not a finished "
+                   f"classification; dedup_admin.py fill-victims): {roles['no_victim']} of {roles['active']}")
     else:
         reason = "DeduplicatedEvents.roles_member_signature missing"
         out["staleness.roles_outdated"] = Measurement.unavailable(reason)
         out["staleness.roles_never_classified"] = Measurement.unavailable(reason)
+        out["staleness.roles_no_victim"] = Measurement.unavailable(reason)
 
     if "facts_member_signature" not in columns(conn, "DeduplicatedEvents") or not has_table(conn, "EventFactOverrides"):
         # event_facts.stale_events would create these (a write); a quality check only reads.

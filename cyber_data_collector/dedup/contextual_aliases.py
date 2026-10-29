@@ -202,6 +202,25 @@ def mentions(text: str, raw: str) -> bool:
     return bool(mention_pattern(raw).search(text or ""))
 
 
+_SEGMENT_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def locally_named(raw: str, text: str, names: Iterable[str]) -> bool:
+    """True when some mention of ``raw`` sits in the same sentence or line as one of the full ``names``.
+
+    "Australian Federal Police (AFP) investigated" and "the AFP said the Australian Federal Police..."
+    connect the mention to the organisation; a full name elsewhere in the article does not. Without this a
+    photo credit ("Photograph: AFP") in an article that names the Australian Federal Police in another
+    sentence was resolved to the police. The names are normalised full names (:func:`search_names`).
+    """
+    names = [n for n in names if n]
+    pattern = mention_pattern(raw)
+    for segment in _SEGMENT_BREAK.split(text or ""):
+        if pattern.search(segment) and names_in(segment, names):
+            return True
+    return False
+
+
 def excerpt(text: str, raw: str, limit: int = EXCERPT_CHARS) -> str:
     """The text around each mention of ``raw``, up to ``limit`` characters; the start when none."""
     spans: List[Tuple[int, int]] = []
@@ -262,7 +281,7 @@ def resolve_in_context(conn: sqlite3.Connection, name: str, context: Optional[st
     candidates = contextual_aliases(conn).get(name.strip())
     if not candidates:
         return None
-    named = [c for c in candidates if names_in(context, search_names(conn, c))]
+    named = [c for c in candidates if locally_named(name.strip(), context, search_names(conn, c))]
     return named[0] if len(named) == 1 else None
 
 
@@ -326,7 +345,8 @@ class MentionResolver:
         return self._names[canonical]
 
     def named(self, raw: str, text: str) -> List[str]:
-        return [c for c in self.aliases.get(raw, []) if names_in(text, self.names_for(c))]
+        """The candidates the text connects to the mention: named in full in the mention's own sentence."""
+        return [c for c in self.aliases.get(raw, []) if locally_named(raw, text, self.names_for(c))]
 
     def resolve(self, raw: str, title: str, text: str, subject: str) -> Resolution:
         candidates = self.aliases.get(raw, [])
@@ -338,6 +358,11 @@ class MentionResolver:
         if not self.use_models:
             return Resolution(None, METHOD_NEEDS_MODEL)
         state = {"mention": raw, "record_title": title, "text": excerpt(text, raw)}
+        from cyber_data_collector.dedup.entity_profiles import candidate_profiles
+
+        profiles = candidate_profiles(self.conn, list(candidates))     # what each candidate is: evidence, not a matcher
+        if profiles:
+            state["candidate_profiles"] = profiles
         options = _options(raw, candidates)
         answer = self.judge.ask("entity_mention", subject, QUESTION_VERSION, state,
                                 {QUESTION_ID: mention_question(raw, candidates)})[QUESTION_ID]

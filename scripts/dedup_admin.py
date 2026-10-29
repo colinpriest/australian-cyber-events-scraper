@@ -65,8 +65,10 @@ from cyber_data_collector.dedup.entity_classification import (
     ClassificationFailed,
     EntityRole,
     EntityRoleClassifier,
+    classifier_detail,
     resolve_victim,
 )
+from cyber_data_collector.dedup import alias_learning, name_judgement
 from cyber_data_collector.dedup.role_maintenance import (
     invalidate_all,
     mark_classified,
@@ -134,6 +136,12 @@ def _connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Which names are descriptions rather than names (calibrated Jev verdicts and labels) decides what
+    # can be a victim in every command; load them once per connection. Reads only.
+    try:
+        name_judgement.activate(conn)
+    except sqlite3.OperationalError:
+        name_judgement.deactivate()      # no ModelJudgements yet: nothing has been judged
     return conn
 
 
@@ -2133,7 +2141,7 @@ def cmd_classify_entities(args) -> int:
         print(f"role status: {report['current']} current, {report['outdated']} "
               f"outdated, {report['never_classified']} never classified")
         print(f"classifying entities for {len(rows)} event(s)")
-        victims = vendors = labelled = failed = 0
+        victims = vendors = labelled = failed = unresolved = 0
 
         for index, r in enumerate(rows, start=1):
             links = conn.execute("""
@@ -2170,7 +2178,7 @@ def cmd_classify_entities(args) -> int:
             )[: args.max_entities]
 
             try:
-                result = classifier.classify(r["title"] or "", r["summary"], names)
+                result = classifier.classify(r["title"] or "", classifier_detail(conn, r["id"], r["summary"]), names)
             except ClassificationFailed as exc:
                 failed += 1
                 print(f"  FAILED {r['id'][:8]} {(r['title'] or '')[:50]}: {exc}")
@@ -2201,6 +2209,9 @@ def cmd_classify_entities(args) -> int:
                                             dry_run=args.dry_run)
             if victim:
                 victims += 1
+            else:
+                unresolved += 1
+                print(f"  NO VICTIM {r['id'][:8]} {(r['title'] or '')[:60]} (left for fill-victims)")
             if vendor:
                 vendors += 1
             if args.show_roles or index <= 8:
@@ -2218,6 +2229,9 @@ def cmd_classify_entities(args) -> int:
 
         print(f"\n{'DRY RUN: ' if args.dry_run else ''}labelled {labelled} link(s); "
               f"{victims} event(s) with a victim, {vendors} with a vendor")
+        if unresolved:
+            print(f"{unresolved} incident event(s) left with NO victim: not a finished classification; "
+                  "run fill-victims")
         print(f"classifier stats: {classifier.stats}")
         if failed:
             print(f"{failed} event(s) not classified (model call failed); they stay stale and are retried")
@@ -2306,6 +2320,14 @@ def cmd_canonicalise_entities(args) -> int:
             if args.dry_run:
                 for keep, drop in proposed:
                     print(f"  {keep!r} <- {', '.join(repr(d) for d in drop)}")
+                variants = alias_learning.variant_proposals(conn)
+                pairs = alias_learning.coreference_proposals(conn)
+                print(f"\n{len(variants)} variant(s) of known aliases and {len(pairs)} co-referring name pair(s) "
+                      "proposed from evidence (each also verified before it is applied):")
+                for name, variant, canonical in variants:
+                    print(f"  {name!r} ~ known variant {variant!r} (-> {canonical!r})")
+                for a, b in pairs:
+                    print(f"  {a!r} / {b!r} (victims of two records of one event)")
             else:
                 try:
                     stored = verify_stored_aliases(conn, report=report)
@@ -2314,6 +2336,9 @@ def cmd_canonicalise_entities(args) -> int:
                     for raw, canonical, verdict in stored.removed:
                         print(f"  removed alias {raw!r} -> {canonical!r} ({verdict}); its earlier fold needs review")
                     confirmed = verified_groups(conn, proposed, report=report)
+                    # Evidence, not name shape: variants of folded-away aliases and names that co-refer in
+                    # one event (dedup/alias_learning.py); verified the same way, asked once per pair.
+                    confirmed += alias_learning.learn(conn, report=report, limit=args.limit)
                 except AliasVerificationUnavailable as exc:
                     print(f"ERROR: proposed folds cannot be verified: {exc}; none applied", file=sys.stderr)
                     return 2
@@ -2615,10 +2640,14 @@ def cmd_roles_status(args) -> int:
         print(f"  roles current      : {report['current']}")
         print(f"  roles outdated     : {report['outdated']}  (membership changed since)")
         print(f"  never classified   : {report['never_classified']}")
+        print(f"  older role prompt  : {report['prompt_outdated']}  (classified before the current role prompt "
+              "and still without a victim)")
+        print(f"  NO VICTIM          : {report['no_victim']}  (active events with no usable victim role; "
+              "python scripts/dedup_admin.py fill-victims)")
 
         stale = stale_event_ids(conn, include_unclassified=False)
         if stale:
-            print(f"\noutdated events (membership changed after classification):")
+            print(f"\noutdated events (membership changed or older role prompt):")
             for dedup_id in stale[: args.limit or 20]:
                 row = conn.execute(
                     "SELECT title, (SELECT COUNT(*) FROM EventDeduplicationMap m "
@@ -2627,7 +2656,7 @@ def cmd_roles_status(args) -> int:
                     (dedup_id,)).fetchone()
                 if row:
                     print(f"   [{row['n']:>3} members] {str(row['title'])[:58]!r}")
-        if report["outdated"] or report["never_classified"]:
+        if report["outdated"] or report["never_classified"] or report["prompt_outdated"]:
             print("\nrun: python scripts/dedup_admin.py classify-entities --stale-only")
     finally:
         conn.close()
@@ -3166,6 +3195,150 @@ def cmd_check_victim_attribution(args) -> int:
     print(f"Earlier flags: {review['flagged_before']} reassessed ({review['inputs_changed']} with changed input) - "
           f"{review['confirmed']} confirmed, {review['demoted']} demoted, {review['reattributed']} re-attributed, "
           f"{review['still_flagged']} still flagged; {review['unresolved_now']} attribution(s) unresolved now")
+    if result["errors"]:
+        for e in result["errors"]:
+            print(f"ERROR: {e['deduplicated_event_id'][:8]} left as it was: {e['error']}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_entity_profile(args) -> int:
+    """Entity profiles (see :mod:`cyber_data_collector.dedup.entity_profiles`).
+
+    ``set``: record a human attribute (``--reason`` required; never replaced by research). ``show``: an
+    organisation's profile. ``research``: one Perplexity lookup per organisation whose evidence changed
+    (``--dry-run`` lists them); exit 2 without PERPLEXITY_API_KEY, 1 when a lookup failed (retried next run).
+    """
+    from cyber_data_collector.dedup import entity_profiles as ep
+
+    conn = _connect(args.db)
+    try:
+        ep.ensure_schema(conn)
+        if args.action == "set":
+            try:
+                entity_id = ep.set_profile(conn, args.entity, args.kind, args.value, args.reason)
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            print(f"entity {entity_id}: {args.kind} = {args.value!r} (human)")
+            return 0
+        if args.action == "show":
+            rows = conn.execute("SELECT kind, value, source, evidence FROM EntityProfiles p JOIN EntitiesV2 v "
+                                "ON v.entity_id = p.entity_id WHERE v.entity_name = ? COLLATE NOCASE "
+                                "ORDER BY kind, source", (args.entity,)).fetchall()
+            for r in rows:
+                print(f"  {r['kind']:16} {r['value']}  [{r['source']}]")
+            print(f"{len(rows)} attribute(s) for {args.entity!r}")
+            return 0
+        todo = ep.pending(conn, args.limit or None)
+        if args.entity:
+            todo = [t for t in todo if t[1].lower() == args.entity.lower()]
+        print(f"{len(todo)} organisation(s) to look up")
+        if args.dry_run:
+            for _id, name in todo[:40]:
+                print(f"  {name!r}")
+            return 0
+        failed = 0
+        for entity_id, name in todo:
+            try:
+                stored = ep.research_profile(conn, entity_id, name)
+            except RuntimeError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            if stored is None:
+                failed += 1
+                print(f"  could not look up {name!r}; it stays pending")
+        print(f"Looked up {len(todo) - failed} of {len(todo)} organisation(s).")
+        return 1 if failed else 0
+    finally:
+        conn.close()
+
+
+def cmd_judge_names(args) -> int:
+    """Judge whether each name that can matter to a victim decision names one organisation or describes one.
+
+    See :mod:`cyber_data_collector.dedup.name_judgement`. Asks Jev once per name (and sentence), stores every
+    answer, and says whether a calibration makes the verdicts act (without one only names labelled
+    ``descriptive`` are treated as descriptions). Exit 2 without Jev.
+    """
+    from cyber_data_collector.utils import jev
+
+    conn = _connect(args.db)
+    try:
+        todo = name_judgement.names_to_judge(conn)
+        if args.limit:
+            todo = todo[: args.limit]
+        if args.dry_run:
+            print(f"{len(todo)} name(s) have no verdict yet:")
+            for n in todo[:40]:
+                print(f"  {n!r}")
+            return 0
+        if not jev.available():
+            print("ERROR: TYPESAFE_API_KEY not set or typesafe-sdk missing; names cannot be judged.", file=sys.stderr)
+            return 2
+        scores = name_judgement.judge_names(conn, [(n, name_judgement.sentence_for(conn, n)) for n in todo])
+        cal = name_judgement.active_calibration()
+        acts = f"cut-off {cal['cutoff']:.3f}" if cal else "REPORT ONLY (no calibration for this model and question)"
+        low = sorted((p, n) for n, p in scores.items() if p < (cal["cutoff"] if cal else 0.5))
+        for p, n in low[:40]:
+            print(f"  {p:.3f}  {n!r}")
+        print(f"Judged {len(scores)} name(s); {len(low)} below {'the cut-off' if cal else 0.5}; {acts}")
+    finally:
+        conn.close()
+    return 0
+
+
+def cmd_fill_victims(args) -> int:
+    """Give every active event with no usable victim the organisation its evidence says it happened to.
+
+    See :mod:`cyber_data_collector.dedup.victim_fill`. Fails (exit 2) when Jev or the OpenAI key is
+    unavailable, or with --apply when the labels are missing; exit 1 when an extraction or escalation
+    failed for some event (that event is left as it was and retried next run). Without a matching
+    calibration only labelled events are filled and the rest are reported with their best candidate.
+    Findings: ``instance/victim_fill_findings.json``.
+    """
+    import os
+
+    from cyber_data_collector.dedup import victim_fill
+    from cyber_data_collector.utils import jev
+
+    conn = _connect(args.db)
+    try:
+        if args.dry_run:
+            rows = victim_fill.stored_candidates(conn, args.event)
+            print(f"{len(rows)} active event(s) have no usable victim "
+                  f"({sum(1 for r in rows if r['unusable'])} with a placeholder victim role).")
+            print(f"  with at least one candidate from stored evidence: {sum(1 for r in rows if r['stored'])}")
+            print(f"  with none (only the text extraction can help): {sum(1 for r in rows if not r['stored'])}")
+            print(f"  with a stored text extraction already: {sum(1 for r in rows if r['with_text'] is not None)}")
+            for r in rows[:30]:
+                print(f"  {r['deduplicated_event_id'][:8]} {(r['title'] or '')[:55]!r}: {r['with_text'] or r['stored']}")
+            return 0
+        if not jev.available() or not os.getenv("OPENAI_API_KEY"):
+            print("ERROR: TYPESAFE_API_KEY (Jev) and OPENAI_API_KEY (text extraction, escalation) are both "
+                  "required; no other model is substituted.", file=sys.stderr)
+            return 2
+        try:
+            result = victim_fill.fill_victims(conn, apply=args.apply, only_event=args.event)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "victim_fill_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), **result}, indent=2, default=str),
+                   encoding="utf-8")
+    for p in result["plans"]:
+        tag = f"-> {p['new_victim']}" if p["action"] == "filled" else f"({p['reason']})"
+        print(f"  {p['action']:9} {(p['title'] or '')[:55]!r} {tag}")
+    verb = "Applied" if result["applied"] else "Would apply (dry run; pass --apply)"
+    state = (f"calibrated cut-off {result['cutoff']}" if result["calibrated"]
+             else "REPORT ONLY: no calibration for these models, questions and evidence (labelled events only)")
+    print(f"{verb}: {result['counts']} of {result['eligible']} eligible event(s); {state}; findings in {out}")
+    if result["errors"]:
+        for e in result["errors"]:
+            print(f"ERROR: {e['deduplicated_event_id'][:8]} left undecided: {e['error']}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -3854,6 +4027,37 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Demote / re-attribute (only with a calibration matching the current models and "
                         "questions, and readable labels; otherwise refuses or reports)")
     p.set_defaults(func=cmd_check_victim_attribution)
+
+    p = sub.add_parser("entity-profile",
+                       help="Entity profiles - jurisdiction, sector, type, parent, services run, data held, other "
+                            "names, website - as evidence for disambiguation: set (human), show, research (Perplexity)")
+    p.add_argument("action", choices=["set", "show", "research"])
+    p.add_argument("entity", nargs="?", help="The organisation's name (set / show; optional filter for research)")
+    p.add_argument("kind", nargs="?", help="set: jurisdiction | sector | type | administered_by | runs | "
+                                          "holds_data | known_as | website")
+    p.add_argument("value", nargs="?", help="set: the value")
+    p.add_argument("--reason", help="set: why (required)")
+    p.add_argument("--dry-run", action="store_true", help="research: list the organisations; ask nothing")
+    p.add_argument("--limit", type=int, default=0, help="research: at most this many organisations")
+    p.set_defaults(func=cmd_entity_profile)
+
+    p = sub.add_parser("judge-names",
+                       help="Ask Jev whether each name that can matter to a victim decision is the proper name "
+                            "of one organisation or a description of one (stored; asked once per name)")
+    p.add_argument("--dry-run", action="store_true", help="List the names that would be asked; ask nothing")
+    p.add_argument("--limit", type=int, default=0, help="Judge at most this many names")
+    p.set_defaults(func=cmd_judge_names)
+
+    p = sub.add_parser("fill-victims",
+                       help="Give every incident with no usable victim the organisation its own evidence says it "
+                            "happened to (calibrated Jev choice among the organisations the evidence names)")
+    p.add_argument("--apply", action="store_true",
+                   help="Make the fills (only with a calibration matching the current models, questions and "
+                        "evidence, and readable labels; labelled events are filled either way)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Count the eligible events and the candidates their STORED evidence gives; ask no model")
+    p.add_argument("--event", help="Only the event whose id starts with this")
+    p.set_defaults(func=cmd_fill_victims)
 
     p = sub.add_parser("check-duplicates",
                        help="Ask Jev whether each pair of events sharing a victim is one "

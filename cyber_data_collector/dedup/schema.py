@@ -178,6 +178,9 @@ DEDUP_EVENT_COLUMNS = {
     # having to remember to raise a flag.
     "roles_member_signature": "TEXT",
     "roles_classified_at": "TIMESTAMP",
+    # The role prompt that decided them (entity_classification.ROLES_PROMPT_VERSION). An event classified
+    # under an older prompt and left without a victim is classified again (role_maintenance).
+    "roles_prompt_version": "TEXT",
     "has_human_override": "INTEGER NOT NULL DEFAULT 0",
 }
 
