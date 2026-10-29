@@ -1,0 +1,431 @@
+"""Re-score the labelled cases on current evidence, and recalibrate each stale cut-off.
+
+A calibrated cut-off applies only to the evidence processing it was measured on
+(:mod:`calibration_guard`). When a reader changes - pages withheld, records
+filtered, character limits moved - the stored calibration no longer applies and
+its step falls back to reporting. This module is how a step gets its cut-off
+back without anyone remembering the procedure:
+
+1. **Find the labelling-time snapshot.** Labels describe the database as it was
+   when they were made; since then events were merged, split and rejected, so
+   most labelled items are no longer active in the live database and cannot be
+   re-judged there. ``evaluation/calibration_snapshots.json`` names, per step, a
+   backup beside the live database taken before those changes.
+2. **Work on a copy.** The snapshot is copied to ``<instance>/recalibration/
+   <step>.db`` and the live database's stored organisation timelines and
+   corroboration searches are carried over (a search cannot be replayed, and
+   re-searching would measure something the pipeline does not use). The copy
+   is kept between runs: Jev and escalation answers are keyed on a hash of the
+   evidence, so a repeat run - or a resumed one - buys only what is missing.
+3. **Re-score every labelled case with the current readers** - the same
+   functions the pipeline uses, so current evidence is exactly what a model is
+   shown. A case that cannot be scored raises; nothing is calibrated on a
+   silently smaller label set.
+4. **Recompute the cut-off** with the step's own calibration script, which
+   records the new evidence fingerprint beside the model and question version.
+   If far fewer labelled cases were usable than in the calibration being
+   replaced (``--min-coverage``), the old file is restored and the step fails.
+
+Limits, stated because they bound what the new cut-off proves. The snapshot
+holds the *records, research and pages as they were at labelling time*; the
+readers and the questions are today's. A change the live data has had since
+(re-enrichment, re-scraped pages, a corrected date) is not in the measurement,
+so the fingerprint certifies the reader, not the data. The strata weights come
+from the original sample file and are not redrawn (they describe the labelling
+population). A step whose snapshot is gone, whose keys are missing, or whose
+labels are not in the snapshot fails with exit code 2 and stays report-only.
+"""
+
+from __future__ import annotations
+
+import csv
+import importlib
+import json
+import logging
+import os
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup.event_reality import ROOT
+
+logger = logging.getLogger(__name__)
+
+SNAPSHOT_REGISTRY = ROOT / "evaluation" / "calibration_snapshots.json"
+WORK_DIR_NAME = "recalibration"
+DEFAULT_PRECISION = 0.95
+DEFAULT_MIN_COVERAGE = 0.9
+
+
+class RecalibrationError(RuntimeError):
+    """A step could not be recalibrated; its old calibration is left (or restored) untouched."""
+
+
+class PrerequisiteMissing(RecalibrationError):
+    """A snapshot, key or label file is missing: nothing was spent."""
+
+
+@dataclass(frozen=True)
+class StepSpec:
+    name: str
+    module: str               # module with CALIBRATION_PATH, calibration_identity()
+    escalates: bool           # needs the OpenAI key as well as Jev's
+    automatic: bool = True    # False: recalibrate with its own calibration script
+
+
+SPECS: Dict[str, StepSpec] = {s.name: s for s in (
+    StepSpec("source-gate", "cyber_data_collector.dedup.source_gate", escalates=False),
+    StepSpec("event-reality", "cyber_data_collector.dedup.event_reality", escalates=True),
+    StepSpec("coherence", "cyber_data_collector.dedup.coherence", escalates=True),
+    StepSpec("coherence-same-organisation", "cyber_data_collector.dedup.coherence_same_org", escalates=True),
+    StepSpec("duplicates", "cyber_data_collector.dedup.duplicate_judgement", escalates=True),
+    StepSpec("victim-attribution", "cyber_data_collector.dedup.victim_judgement", escalates=True),
+    # Its scoring is the find-supplier-victims candidate generation; recalibrate it with
+    # scripts/calibrate_supplier_victims.py on a snapshot. Staleness is still reported.
+    StepSpec("supplier-victims", "cyber_data_collector.dedup.supplier_victims", escalates=True, automatic=False),
+)}
+
+
+def _module(spec: StepSpec):
+    return importlib.import_module(spec.module)
+
+
+# ----------------------------------------------------------------------
+# State
+# ----------------------------------------------------------------------
+
+def calibration_state(spec: StepSpec, path: Optional[Path] = None) -> Dict[str, Any]:
+    """``{"step", "state", "reason", ...}``; state is current / stale / missing / unreadable / report-only."""
+    mod = _module(spec)
+    path = Path(path or mod.CALIBRATION_PATH)
+    out: Dict[str, Any] = {"step": spec.name, "path": str(path), "automatic": spec.automatic}
+    try:
+        cal = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {**out, "state": "missing", "reason": f"{path.name} does not exist"}
+    except (OSError, ValueError) as exc:
+        return {**out, "state": "unreadable", "reason": f"{path.name} unreadable: {exc}"}
+    reason = calibration_guard.mismatch(cal, mod.calibration_identity())
+    out.update(cutoff=cal.get("cutoff"), evidence=cal.get("evidence"), generated=cal.get("generated"))
+    if reason:
+        return {**out, "state": "stale", "reason": reason}
+    if "cutoff" in cal and cal.get("cutoff") is None:
+        return {**out, "state": "report-only", "reason": "current, but no cut-off reached the precision target"}
+    return {**out, "state": "current", "reason": ""}
+
+
+def states(names: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+    return [calibration_state(SPECS[n]) for n in (names or SPECS)]
+
+
+def needs_recalibration(state: Dict[str, Any]) -> bool:
+    return state["state"] in ("stale", "missing", "unreadable")
+
+
+# ----------------------------------------------------------------------
+# Snapshots
+# ----------------------------------------------------------------------
+
+def registered_snapshot(step: str, live_db: Path, overrides: Optional[Dict[str, str]] = None,
+                        registry: Path = SNAPSHOT_REGISTRY) -> Path:
+    """The labelling-time database for ``step``: an explicit override, else the registry entry beside ``live_db``."""
+    override = (overrides or {}).get(step)
+    if override:
+        path = Path(override)
+    else:
+        try:
+            names = json.loads(Path(registry).read_text(encoding="utf-8"))["snapshots"]
+        except (OSError, ValueError, KeyError) as exc:
+            raise PrerequisiteMissing(f"snapshot registry {registry} unreadable: {exc}") from exc
+        if step not in names:
+            raise PrerequisiteMissing(f"{registry.name} names no labelling snapshot for {step}; pass "
+                                      f"--snapshot {step}=<path>")
+        path = Path(live_db).resolve().parent / names[step]
+    if not path.is_file():
+        raise PrerequisiteMissing(f"labelling snapshot for {step} not found: {path}. Without it the labelled "
+                                  "cases cannot be found as they were labelled (merges, splits and rejections "
+                                  "since have changed the live database); restore it or pass "
+                                  f"--snapshot {step}=<a backup taken before the labels were applied>")
+    return path
+
+
+def work_database(step: str, live_db: Path, snapshot: Path, fresh: bool = False) -> Path:
+    """The recalibration copy for ``step``: made from the snapshot once, then kept so answers are reused."""
+    from scripts import prepare_calibration_snapshot as prep
+
+    work = Path(live_db).resolve().parent / WORK_DIR_NAME / f"{step}.db"
+    work.parent.mkdir(parents=True, exist_ok=True)
+    if fresh and work.exists():
+        work.unlink()
+    if work.exists():
+        added = prep.carry_over(str(work), str(live_db))
+        logger.info("Reusing recalibration copy %s (carried over %s)", work, added)
+    else:
+        added = prep.prepare(str(snapshot), str(work), str(live_db))
+        logger.info("Made recalibration copy %s from %s (carried over %s)", work, snapshot.name, added)
+    return work
+
+
+# ----------------------------------------------------------------------
+# Scoring the labelled cases on current evidence
+# ----------------------------------------------------------------------
+
+def _csv_column(path: Path, column: str) -> List[str]:
+    with Path(path).open(encoding="utf-8") as fh:
+        return [r[column] for r in csv.DictReader(fh)]
+
+
+def _require_scored(kind: str, wanted: Sequence[str], got: Dict[str, Any]) -> None:
+    missing = sorted(set(wanted) - set(got))
+    if missing:
+        raise RecalibrationError(f"{len(missing)} labelled {kind}(s) could not be scored on current evidence "
+                                 f"(first: {missing[0]}); see the log. Nothing was calibrated.")
+
+
+def _require_agreement(kind: str, returned: Dict[str, float], stored: Dict[str, float]) -> None:
+    """The calibration scripts read the latest stored answers; they must be the ones just obtained."""
+    for key, value in returned.items():
+        if key not in stored or abs(stored[key] - value) > 1e-9:
+            raise RecalibrationError(f"stored final score for {kind} {key} ({stored.get(key)}) is not the one "
+                                     f"just obtained ({value}); refusing to calibrate on stale answers")
+
+
+@dataclass
+class Plan:
+    """What a step would score: the labelled cases the snapshot holds, out of those labelled."""
+
+    items: List[Any]
+    labelled: int
+    runner: Callable[..., None]
+
+    @property
+    def present(self) -> int:
+        return len(self.items)
+
+
+def _plan_event_reality(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import event_reality as er
+    from scripts import calibrate_event_reality as cal
+
+    labels = {r["deduplicated_event_id"]: r["label"] for r in _rows(er.LABELS_PATH)}
+    wanted = [d for d in _csv_column(cal.SAMPLE_PATH, "deduplicated_event_id") if labels.get(d) in ("real", "not_incident")]
+    active = set(er.active_events(conn))
+    items = [d for d in wanted if d in active]
+
+    def run(conn, judge, client):
+        jev = er.judge_events(conn, items, judge=judge, version=er.QUESTION_VERSION)
+        _require_scored("event", items, jev)
+        failed: List[str] = []
+        escalated = er.escalate_band(conn, jev, client=client, failed=failed)
+        if failed:
+            raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
+                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
+        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        _require_agreement("event", final, er.stored_final_probabilities(conn, items))
+
+    return Plan(items, len(wanted), run)
+
+
+def _plan_duplicates(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import duplicate_judgement as dj
+
+    labels = dj.labelled_pairs()
+    wanted = {pid for pid, label in labels.items() if label in ("same", "different")}
+    items = [p for p in dj.candidate_pairs(conn) if p["pair_id"] in wanted]
+
+    def run(conn, judge, client):
+        jev = dj.judge_pairs(conn, items, judge=judge)
+        _require_scored("pair", [p["pair_id"] for p in items], jev)
+        failed: List[str] = []
+        escalated = dj.escalate_band(conn, items, jev, client=client, failed=failed)
+        if failed:
+            raise RecalibrationError(f"{len(failed)} pair(s) in the escalation band could not be escalated "
+                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
+        final = {pid: escalated.get(pid, p) for pid, p in jev.items()}
+        _require_agreement("pair", final, dj.stored_final_probabilities(conn))
+
+    return Plan(items, len(wanted), run)
+
+
+def _plan_coherence(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import coherence as co
+    from scripts import calibrate_coherence as cal
+
+    labels = co.load_labels()
+    sample = [r for r in cal._sample() if r["stratum"] == "S"
+              and labels.get(co.member_subject_id(r["deduplicated_event_id"], r["enriched_event_id"])) in ("same", "different")]
+    events = cal._events(conn)
+    items = [(events[r["deduplicated_event_id"]], r["enriched_event_id"]) for r in sample
+             if r["deduplicated_event_id"] in events
+             and r["enriched_event_id"] in events[r["deduplicated_event_id"]]["suspect_ids"]]
+
+    def run(conn, judge, client):
+        scores = co.judge_members(conn, items, judge=judge, escalation_client=client)
+        undecided = sorted(s for s, v in scores.items() if v.get("error"))
+        if undecided:
+            raise RecalibrationError(f"{len(undecided)} member(s) could not be escalated (first: {undecided[0]}); "
+                                     "see the log. Nothing was calibrated.")
+        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, co.stored_final_probabilities(conn))
+
+    return Plan(items, len(sample), run)
+
+
+def _plan_source_gate(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import source_gate as sg
+
+    labels = sg.labels(required=True)
+    wanted = [i for i in _csv_column(sg.SAMPLE_PATH, "enriched_event_id")
+              if labels.get(i) in ("reports_incident", "not_incident")]
+    records = {r["enriched_event_id"]: r for r in sg.google_records(conn)}
+    items = [records[i] for i in wanted if i in records and sg.judgeable(records[i])]
+    # Pages with too little text are not calibrated on, so they are not "labelled cases" to find.
+    judgeable_labelled = len([i for i in wanted if i not in records or sg.judgeable(records[i])])
+
+    def run(conn, judge, client):
+        sg.judge_records(conn, items, judge=judge)        # raises on any failure
+
+    return Plan(items, judgeable_labelled, run)
+
+
+def _plan_victim_attribution(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import victim_judgement as vj
+    from scripts import calibrate_victim_attribution as cal
+
+    labels = vj.load_labels(required=True)
+    wanted = [pid for pid in _csv_column(cal.SAMPLE_PATH, "pair_id")
+              if (labels.get(pid) or {}).get("label") in ("correct", "wrong")]
+    present = {p["pair_id"]: p for p in vj.pairs_to_check(conn)}
+    items = [present[pid] for pid in wanted if pid in present]
+
+    def run(conn, judge, client):
+        vj.judge_pairs(conn, items, judge=judge, escalation_client=client)    # raises on any failure
+        # The replacement threshold's choices are made (and stored) by the calibration script.
+
+    return Plan(items, len(wanted), run)
+
+
+def _plan_coherence_same_org(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import coherence_same_org as so
+    from scripts import calibrate_coherence_same_org as cal
+
+    return cal.plan(conn, so)
+
+
+def _rows(path: Path) -> List[Dict[str, str]]:
+    with Path(path).open(encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
+    "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "coherence": _plan_coherence,
+    "coherence-same-organisation": _plan_coherence_same_org, "duplicates": _plan_duplicates,
+    "victim-attribution": _plan_victim_attribution,
+}
+
+#: argv for each step's calibration script (``--db`` and the model arguments are added by the caller).
+CALIBRATE: Dict[str, Tuple[str, List[str]]] = {
+    "source-gate": ("scripts.calibrate_source_gate", ["calibrate"]),
+    "event-reality": ("scripts.calibrate_event_reality", ["calibrate"]),
+    "coherence": ("scripts.calibrate_coherence", ["calibrate"]),
+    "coherence-same-organisation": ("scripts.calibrate_coherence_same_org", ["calibrate"]),
+    "duplicates": ("scripts.calibrate_duplicates", []),
+    "victim-attribution": ("scripts.calibrate_victim_attribution", ["calibrate"]),
+}
+
+
+def check_keys(spec: StepSpec) -> None:
+    """Fail before anything is spent when a key the step needs is absent (no fallback to another model)."""
+    from cyber_data_collector.utils import jev
+
+    try:
+        jev.require()
+    except Exception as exc:  # noqa: BLE001 - JevUnavailable: say what is missing
+        raise PrerequisiteMissing(str(exc)) from exc
+    if spec.escalates and not os.getenv("OPENAI_API_KEY"):
+        raise PrerequisiteMissing("OPENAI_API_KEY is not set; the escalation model is required and no other "
+                                  "model will be substituted")
+
+
+def recalibrate_step(name: str, live_db: Path, snapshot: Optional[Path] = None,
+                     judge_factory: Optional[Callable[[sqlite3.Connection], Any]] = None,
+                     escalation_client: Any = None, precision: float = DEFAULT_PRECISION,
+                     min_coverage: float = DEFAULT_MIN_COVERAGE, fresh: bool = False,
+                     verify_keys: bool = True, dry_run: bool = False,
+                     calibrate_args: Sequence[str] = ()) -> Dict[str, Any]:
+    """Re-score ``name``'s labelled cases on current evidence and rewrite its calibration file.
+
+    Returns a summary (``before`` / ``after`` cut-offs and fingerprints, cases scored). With ``dry_run``
+    nothing is copied, judged or written: the labelled cases the snapshot holds are counted from it
+    directly (read-only). Any failure leaves the previous calibration file exactly as it was.
+    ``judge_factory(conn)`` builds the Jev judge on the recalibration copy (tests pass a fake client);
+    ``calibrate_args`` go to the step's calibration script (for instance ``--min-rejections``).
+    """
+    spec = SPECS[name]
+    mod = _module(spec)
+    if not spec.automatic:
+        raise RecalibrationError(f"{name} is not recalibrated here: run scripts/calibrate_supplier_victims.py "
+                                 "(sample / calibrate) on a labelling-time snapshot")
+    snapshot = snapshot or registered_snapshot(name, live_db)
+    before = calibration_state(spec)
+    if dry_run:
+        conn = sqlite3.connect(f"file:{Path(snapshot).as_posix()}?mode=ro", uri=True)
+        try:
+            plan = PLANS[name](conn)
+        finally:
+            conn.close()
+        return {"step": name, "dry_run": True, "snapshot": str(snapshot), "before": before,
+                "labelled": plan.labelled, "present_in_snapshot": plan.present,
+                "would_become": mod.calibration_identity()["evidence"]}
+    if verify_keys:
+        check_keys(spec)
+    work = work_database(name, live_db, Path(snapshot), fresh=fresh)
+    cal_path = Path(mod.CALIBRATION_PATH)
+    old_text = cal_path.read_text(encoding="utf-8") if cal_path.exists() else None
+    old = json.loads(old_text) if old_text else {}
+
+    from cyber_data_collector.utils.jev import JevJudge
+
+    conn = sqlite3.connect(work)
+    judge = (judge_factory or JevJudge)(conn)
+    try:
+        plan = PLANS[name](conn)
+        if not plan.items:
+            raise RecalibrationError(f"{name}: none of the {plan.labelled} labelled cases is in {snapshot.name}")
+        logger.info("%s: scoring %d of %d labelled case(s) on current evidence", name, plan.present, plan.labelled)
+        plan.runner(conn, judge, escalation_client)
+    finally:
+        if hasattr(judge, "close"):
+            judge.close()
+        conn.close()
+
+    module_name, argv = CALIBRATE[name]
+    script = importlib.import_module(module_name)
+    try:
+        code = script.main(["--db", str(work), *argv, "--precision", str(precision), *calibrate_args])
+        if code not in (0, None):
+            raise RecalibrationError(f"{module_name} exited {code}")
+        new = json.loads(cal_path.read_text(encoding="utf-8"))
+        used, was = new.get("labelled_used"), old.get("labelled_used")
+        if isinstance(used, int) and isinstance(was, int) and used < min_coverage * was:
+            raise RecalibrationError(
+                f"{name}: only {used} labelled case(s) were usable against {was} in the calibration being "
+                f"replaced (< {min_coverage:.0%}); the snapshot does not hold enough of them. Old calibration kept.")
+        new["recalibration"] = {
+            "reason": "evidence processing changed" if before["state"] == "stale" else before["state"],
+            "labelling_snapshot": Path(snapshot).name, "work_copy": work.name,
+            "previous": {"evidence": old.get("evidence"), "cutoff": old.get("cutoff"),
+                         "generated": old.get("generated"), "labelled_used": was},
+            "cases_scored": plan.present, "cases_labelled": plan.labelled,
+        }
+        cal_path.write_text(json.dumps(new, indent=2), encoding="utf-8")
+    except BaseException:
+        if old_text is not None:
+            cal_path.write_text(old_text, encoding="utf-8")
+        raise
+    after = calibration_state(spec)
+    logger.info("%s recalibrated: cut-off %s -> %s, evidence %s -> %s", name, old.get("cutoff"), new.get("cutoff"),
+                old.get("evidence"), new.get("evidence"))
+    return {"step": name, "dry_run": False, "snapshot": str(snapshot), "before": before, "after": after,
+            "cases_scored": plan.present, "cases_labelled": plan.labelled}

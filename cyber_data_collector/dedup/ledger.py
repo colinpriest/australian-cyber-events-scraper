@@ -470,6 +470,13 @@ class DedupLedger:
                 raise ValueError(
                     f"merge {source_dedup_id} -> {target_dedup_id} blocked by a 'different' "
                     f"override ({conflict}); remove or replace the override to merge")
+            # Labels are ground truth too: a pair labelled 'different' is never merged by a pass that
+            # respects rulings (the recurrence check merged two such pairs on 2026-10-28).
+            from cyber_data_collector.dedup import label_contradictions
+            labelled = label_contradictions.conflict(self.conn, target_dedup_id, source_dedup_id)
+            if labelled:
+                raise ValueError(f"merge {source_dedup_id} -> {target_dedup_id} blocked by a label "
+                                 f"({labelled}); a human can overrule it with merge --force")
         batch_id = f"merge-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         self.snapshot_event(batch_id, target_dedup_id)
         self.snapshot_event(batch_id, source_dedup_id)

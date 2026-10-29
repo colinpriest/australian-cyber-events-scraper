@@ -18,9 +18,10 @@ of this database's events (``evaluation/event_reality_labels.csv``) fixes the
 largest cut-off whose rejections meet a precision target, and the result is
 written to ``evaluation/event_reality_calibration.json`` together with the
 model and question version it was measured on. :func:`active_calibration`
-returns it only while both still match, so changing the question or the model
-turns rejection back into a report until it is recalibrated
-(``scripts/calibrate_event_reality.py``).
+returns it only while the model, the question version **and the evidence
+processing** (:func:`evidence_fingerprint`) all still match, so changing any of
+them turns rejection back into a report until it is recalibrated on current
+evidence (``scripts/dedup_admin.py recalibrate``; ``scripts/calibrate_event_reality.py``).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.utils.llm_models import typesafe_model
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,14 @@ CORROBORATE_BELOW = 0.5
 MAX_RECORDS = 10
 PAGE_CHARS = 1200
 REASONING_CHARS = 800
+#: Bump when what ``_evidence_state`` shows a model changes (which records, which pages,
+#: how research is summarised). v1 (2026-10-27) showed every mapped record and every page;
+#: v2 (2026-10-28) shows active records only and withholds pages of other articles
+#: (``processing/active_evidence.py``). Every calibration measured before v2 is stale.
+EVIDENCE_VERSION = "event-evidence-v2"
+#: The Perplexity research fields a judgement is shown.
+RESEARCH_FIELDS = ("formal_entity_name", "overall_confidence", "earliest_event_date", "attack_method",
+                   "threat_actor", "victim_count", "sources_consulted")
 
 ROOT = Path(__file__).resolve().parents[2]
 LABELS_PATH = ROOT / "evaluation" / "event_reality_labels.csv"
@@ -105,9 +115,7 @@ def _perplexity(pe: Optional[str]) -> Dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         return {}
-    keep = ("formal_entity_name", "overall_confidence", "earliest_event_date", "attack_method",
-            "threat_actor", "victim_count", "sources_consulted")
-    out = {k: data.get(k) for k in keep if data.get(k) not in (None, "", [], {})}
+    out = {k: data.get(k) for k in RESEARCH_FIELDS if data.get(k) not in (None, "", [], {})}
     if data.get("reasoning"):
         out["reasoning"] = str(data["reasoning"])[:REASONING_CHARS]
     return out
@@ -222,11 +230,23 @@ def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
     return out
 
 
+def evidence_fingerprint() -> str:
+    """A hash of everything that shapes the evidence a reality judgement sees.
+
+    Also the evidence of the duplicate, victim-attribution and supplier judgements, which
+    build on :func:`build_state`, so they nest this value in their own.
+    """
+    return calibration_guard.fingerprint(
+        "event-reality", version=EVIDENCE_VERSION, max_records=MAX_RECORDS, page_chars=PAGE_CHARS,
+        reasoning_chars=REASONING_CHARS, research_fields=list(RESEARCH_FIELDS),
+        corroborate_below=CORROBORATE_BELOW, escalate_band=list(ESCALATE_BAND), **calibration_guard.shared_parts())
+
+
 def calibration_identity() -> Dict[str, str]:
-    """What a calibration must have been measured on to apply: question, escalation and both models."""
+    """What a calibration must have been measured on to apply: question, escalation, both models, evidence."""
     from cyber_data_collector.utils.llm_models import openai_model
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
 
 
 def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None,
@@ -295,17 +315,16 @@ def active_events(conn: sqlite3.Connection) -> List[str]:
 
 
 def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
-    """The calibration, only if it was measured on the current model and question."""
+    """The calibration, only if it was measured on the current model, question and evidence processing."""
     try:
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logger.error("Event reality calibration unreadable (%s): %s - REPORT ONLY, nothing will be acted on",
                      path, exc)
         return None
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        logger.warning("Event reality calibration is for %s / %s, not %s / %s: report only",
-                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning(calibration_guard.report_only_message("event reality", cal, reason))
         return None
     if cal.get("cutoff") is None:
         return None

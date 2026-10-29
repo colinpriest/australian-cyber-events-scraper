@@ -711,9 +711,15 @@ def pair_escalation_question() -> str:
 def calibration_identity() -> Dict[str, str]:
     """What a calibration must have been measured on to apply."""
     from cyber_data_collector.utils.llm_models import openai_model
+    from cyber_data_collector.dedup import calibration_guard, event_reality
+
     return {"question_version": f"{VICTIM_VERSION}+{VICTIM_ESCALATION_VERSION}|"
                                 f"{PAIR_VERSION}+{PAIR_ESCALATION_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}",
+            # The incident events are shown as event reality shows them (build_state, RECORDS_PER_EVENT records).
+            "evidence": calibration_guard.fingerprint(
+                "supplier-victims", records_per_event=RECORDS_PER_EVENT, escalate_band=list(ESCALATE_BAND),
+                events=event_reality.evidence_fingerprint())}
 
 
 @dataclass
@@ -848,11 +854,12 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Dict[str, Any]:
                                "scripts/calibrate_supplier_victims.py calibrate") from exc
     except ValueError as exc:
         raise CalibrationError(f"calibration {path} is not valid JSON: {exc}") from exc
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        raise CalibrationError(
-            f"calibration {path} was measured on {cal.get('model')} / {cal.get('question_version')}, "
-            f"not the current {want['model']} / {want['question_version']}; recalibrate before applying")
+    from cyber_data_collector.dedup import calibration_guard
+
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        raise CalibrationError(f"calibration {path} does not apply to the current model, question and evidence "
+                               f"processing ({reason}); recalibrate before applying")
     return cal
 
 

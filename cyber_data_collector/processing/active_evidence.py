@@ -20,10 +20,15 @@ page another one would refuse:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
 from typing import Iterable, Optional, Sequence, Tuple
+
+#: Bump when the two rules below change what a judgement is shown. Part of every
+#: calibrated reader's evidence fingerprint (``dedup/calibration_guard.py``).
+RULES_VERSION = "active-evidence-v1"
 
 #: Words that say what happened, not to whom - no help in telling articles apart.
 _GENERIC = {
@@ -41,6 +46,16 @@ _GENERIC = {
 }
 
 
+def rules_fingerprint() -> str:
+    """A hash of :data:`RULES_VERSION`, the generic-word list and the legal-suffix pattern.
+
+    The word list and the pattern decide which pages are withheld, so editing
+    either changes what calibrated judgements see even if the version is not bumped.
+    """
+    blob = json.dumps({"version": RULES_VERSION, "generic": sorted(_GENERIC), "legal": _LEGAL_PATTERN})
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def member_condition(conn: sqlite3.Connection, alias: str = "e") -> str:
     """SQL condition (``AND ...``) keeping active member records; empty on a schema without status."""
     columns = {r[1] for r in conn.execute("PRAGMA table_info(EnrichedEvents)")}
@@ -51,7 +66,8 @@ def _tokens(text: Optional[str], min_len: int = 4) -> set:
     return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) >= min_len and w not in _GENERIC}
 
 
-_LEGAL = re.compile(r"\b(pty|ltd|limited|inc|incorporated|llc|plc|corp|corporation|co|the)\b\.?", re.I)
+_LEGAL_PATTERN = r"\b(pty|ltd|limited|inc|incorporated|llc|plc|corp|corporation|co|the)\b\.?"
+_LEGAL = re.compile(_LEGAL_PATTERN, re.I)
 
 
 def _normal(text: Optional[str]) -> str:
