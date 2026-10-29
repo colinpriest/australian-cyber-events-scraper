@@ -350,8 +350,8 @@ def reconcile_organisation(conn: sqlite3.Connection, entity_id: int, org: str, j
         state = {"organisation": org, "event": evidence, "incidents": timeline_text}
         match = judge.ask("deduplicated_event", f"{did}|{entity_id}", MATCH_VERSION, state,
                           {MATCH_QUESTION_ID: _match_question(incidents)})[MATCH_QUESTION_ID]
-        entry = {"deduplicated_event_id": did, "entity_id": entity_id, "title": title, "event_date": event_date,
-                 "match": match.answer, "match_probability": match.value,
+        entry = {"deduplicated_event_id": did, "entity_id": entity_id, "victim": org, "title": title,
+                 "event_date": event_date, "match": match.answer, "match_probability": match.value,
                  "low_confidence": (match.value or 0) < LOW_CONFIDENCE}
         if match.answer and match.answer != "none":
             number = match.answer.split("_", 1)[1]
@@ -397,9 +397,14 @@ def _resolve_unmatched(conn: sqlite3.Connection, organisations: List[Dict[str, A
     from cyber_data_collector.dedup import event_reality as er
     from cyber_data_collector.dedup import victim_judgement as vj
 
-    victim_scores = vj.stored_final_probabilities(conn)
-    victim_cal = vj.active_calibration()
     events = [e for o in organisations for e in o["events"] if e.get("unmatched_kind")]
+    # Scores are read from the decision made on each event's evidence as it is now: a judgement given before the
+    # event's records, timeline or co-victims changed says nothing about it today.
+    victim_scores = vj.stored_final_probabilities(conn, [
+        {"pair_id": f"{e['deduplicated_event_id']}|{e['entity_id']}", "deduplicated_event_id": e["deduplicated_event_id"],
+         "entity_id": e["entity_id"], "victim": e["victim"]}
+        for e in events if e["unmatched_kind"] == "wrong_organisation"])
+    victim_cal = vj.active_calibration()
     reality = er.stored_final_probabilities(conn, [e["deduplicated_event_id"] for e in events])
     reality_cal = er.active_calibration()
     for e in events:
@@ -408,7 +413,7 @@ def _resolve_unmatched(conn: sqlite3.Connection, organisations: List[Dict[str, A
             p = victim_scores.get(f"{e['deduplicated_event_id']}|{e['entity_id']}")
             cut = victim_cal["cutoff"] if victim_cal else None
             if p is None:
-                outcome = "not yet judged: run check-victim-attribution"
+                outcome = "no judgement on its current evidence: run check-victim-attribution"
             elif cut is None:
                 outcome = "victim attribution is report-only (no matching calibration)"
             else:
@@ -420,7 +425,7 @@ def _resolve_unmatched(conn: sqlite3.Connection, organisations: List[Dict[str, A
             p = reality.get(e["deduplicated_event_id"])
             cut = reality_cal["cutoff"] if reality_cal else None
             if p is None:
-                outcome = "not yet judged: run check-events"
+                outcome = "no judgement on its current evidence: run check-events"
             elif cut is None:
                 outcome = "event reality is report-only (no matching calibration)"
             else:

@@ -166,7 +166,18 @@ def test_middle_band_is_escalated_and_its_score_is_final(conn):
     assert scores["sharp|x1"] == {"p_jev": pytest.approx(0.4), "p_escalated": pytest.approx(0.05),
                                   "p": pytest.approx(0.05), "error": None}
     assert esc.calls == 1
-    assert co.stored_final_probabilities(conn)["sharp|x1"] == pytest.approx(0.05)
+    assert co.stored_final_probabilities(conn, [(event, "x1")])["sharp|x1"] == pytest.approx(0.05)
+
+
+def test_a_member_score_is_read_only_from_a_decision_on_its_current_evidence(conn):
+    event = next(e for e in co.find_suspect_events(conn) if e["id"] == "sharp")
+    co.judge_members(conn, [(event, "x1")], judge=JevJudge(conn, client=FakeTypeSafe({"Mathspace": 0.4})),
+                     escalation_client=FakeEscalation(p=0.05))
+    assert co.stored_final_probabilities(conn, [(event, "x1")]) == {"sharp|x1": pytest.approx(0.05)}
+    conn.execute("UPDATE EnrichedEvents SET title = 'Corrected title' WHERE enriched_event_id = 'x1'")
+    # The record changed: the old escalation (0.05) is not a score for it any more, and is not combined with
+    # a fresh Jev answer either - it has no score until it is judged again.
+    assert co.stored_final_probabilities(conn, [(event, "x1")]) == {}
 
 
 def test_jev_failure_raises_instead_of_falling_back(conn):
@@ -353,6 +364,15 @@ def test_check_coherence_without_apply_changes_nothing(conn, tmp_path):
                                 labels_path=_labels(tmp_path, [("clean", "o2", "different")]))
     assert ledger.splits == []
     assert report["strays"] == 2                                # x1 by the model, o2 by its label
+
+
+def test_labels_decide_first_so_a_labelled_member_is_not_asked_about(conn, tmp_path):
+    fake = FakeTypeSafe({"Mathspace": 0.9})                       # the model would keep x1; its label says it leaves
+    report = co.check_coherence(conn, apply=False, judge=JevJudge(conn, client=fake), ledger=FakeLedger(),
+                                calibration_path=_cal(tmp_path, 0.3),
+                                labels_path=_labels(tmp_path, [("sharp", "x1", "different")]))
+    assert report["settled_by_label"] == 1 and "sharp|x1" not in report["scores"]
+    assert report["strays"] >= 1                                  # decided by the label, not asked about
 
 
 def test_command_fails_loudly_without_keys(monkeypatch, capsys):

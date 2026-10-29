@@ -2557,7 +2557,8 @@ def cmd_canonicalise_entities(args) -> int:
                 reverse_overturned()       # an alias verification just removed leaves its earlier fold behind
                 for name, other, verdict in report.rejected:
                     print(f"  not folded: {name!r} / {other!r} ({verdict})")
-                print(f"Perplexity: {report.asked} pair(s) asked, {report.reused} from stored verdicts; "
+                print(f"Perplexity: {report.asked} pair(s) asked ({len(report.revisited)} stored decisions asked again: "
+                      f"their evidence had changed and the pair matters now), {report.reused} from stored verdicts; "
                       f"{len(report.accepted)} confirmed, {len(report.rejected)} rejected, "
                       f"{len(report.failed)} undecided")
         if args.dry_run:
@@ -3655,8 +3656,15 @@ def cmd_check_duplicates(args) -> int:
                   f"({stats['long_gap_before']} -> {stats['long_gap_after']} more than {stats['parameters']['window_days']} "
                   f"days apart; partners per event {stats['parameters']['partners_per_event']}, reserved long-gap/undated "
                   f"budget {stats['parameters']['long_gap_budget']} per group)")
+    for route, stats in (result.get("candidates") or {}).items():
+        if stats and stats.get("bounded_groups"):
+            print(f"  ({route}: {stats['bounded_groups']} group(s) of more than 60 events ranked by indexed retrieval, "
+                  "not by building every pair)")
     for held in result.get("held_conflicts") or []:
         print(f"  HELD {held['pair_id'][:8]}|...: would join {held['blocked_by'][:8]}|... ({held['reason']})")
+    if result.get("veto_rejudged"):
+        print(f"  {len(result['veto_rejudged'])} stored low score(s) were made on other evidence and were asked again "
+              "because they could block a proposed merge")
     ai = result.get("ai")
     if ai:
         shown = ai["scored"][:10]
@@ -4453,7 +4461,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--skip-ai-pairs", action="store_true",
                    help="Leave out the AI-pair route (pairs of AI-involved events with any victim)")
     p.add_argument("--partners-per-event", type=int, default=None,
-                   help="Best-ranked partners kept per event within a group (default 8; 16 for AI pairs; "
+                   help="Best-ranked partners kept per event, in an organisation group of more than 60 events and always for AI pairs (default 8; 16 for AI pairs; "
                         "0 = no limit). See dedup/candidate_ranking.py")
     p.add_argument("--long-gap-budget", type=int, default=None,
                    help="Strong long-gap or undated pairs kept per group beyond the partner limit (default 5)")

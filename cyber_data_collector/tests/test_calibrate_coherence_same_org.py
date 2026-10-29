@@ -52,6 +52,7 @@ def test_a_candidate_with_no_stored_score_fails_the_sample(world, capsys):
     db, tmp = world
     conn = sqlite3.connect(db)
     conn.execute("DELETE FROM ModelJudgements")
+    conn.execute("DELETE FROM FinalDecisions")
     conn.commit()
     conn.close()
     assert cal.main(["--db", str(db), "sample"]) == 1

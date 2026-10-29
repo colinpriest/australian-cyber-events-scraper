@@ -431,7 +431,8 @@ class Context:
                 sources.insert(0, sqlite3.connect(f"file:{Path(self.snapshot_path).as_posix()}?mode=ro", uri=True))
             for conn in sources:
                 try:
-                    self._judgements.update(dj.stored_final_probabilities(conn))
+                    # A labelling-time snapshot cannot be re-asked, so the stored history is read as it is (not evidence-checked).
+                    self._judgements.update(dj.unvalidated_final_probabilities(conn))
                     lo, hi = dj.ESCALATE_BAND
                     escalated = {r[0] for r in conn.execute(
                         "SELECT DISTINCT subject_id FROM ModelJudgements WHERE question_id = ? AND question_version = ?",

@@ -232,7 +232,7 @@ def _plan_event_reality(conn: sqlite3.Connection) -> Plan:
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        final = er.record_final(conn, jev, escalated)
         _require_agreement("event", final, er.stored_final_probabilities(conn, items))
 
     return Plan(items, len(wanted), run)
@@ -257,7 +257,7 @@ def _plan_event_scope(conn: sqlite3.Connection) -> Plan:
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        final = es.record_final(conn, jev, escalated)
         _require_agreement("event", final, es.stored_final_probabilities(conn, items))
 
     return Plan(items, len(cases), run)
@@ -271,36 +271,33 @@ def _plan_duplicates(conn: sqlite3.Connection) -> Plan:
     items = [p for p in dj.candidate_pairs(conn) if p["pair_id"] in wanted]
 
     def run(conn, judge, client):
-        jev = dj.judge_pairs(conn, items, judge=judge)
-        _require_scored("pair", [p["pair_id"] for p in items], jev)
-        failed: List[str] = []
-        escalated = dj.escalate_band(conn, items, jev, client=client, failed=failed)
-        if failed:
-            raise RecalibrationError(f"{len(failed)} pair(s) in the escalation band could not be escalated "
-                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {pid: escalated.get(pid, p) for pid, p in jev.items()}
-        _require_agreement("pair", final, dj.stored_final_probabilities(conn))
+        # Each final score is stored against the evidence it was made on (FinalDecisions); the calibration
+        # script reads exactly those, so it cannot pick up an answer given on other evidence.
+        scored = dj.score_pairs(conn, items, dj.ORGANISATION, judge=judge, escalation_client=client)
+        _require_scored("pair", [p["pair_id"] for p in items], scored.jev)
+        if scored.failed:
+            raise RecalibrationError(f"{len(scored.failed)} pair(s) in the escalation band could not be escalated "
+                                     f"(first: {scored.failed[0]}); see the log. Nothing was calibrated.")
+        _require_agreement("pair", scored.final, dj.stored_final_probabilities(conn, items))
 
     return Plan(items, len(wanted), run)
 
 
 def _plan_ai_duplicates(conn: sqlite3.Connection) -> Plan:
     from cyber_data_collector.dedup import ai_duplicates as ad
+    from cyber_data_collector.dedup import duplicate_judgement as dj
 
     labels = ad.labelled_pairs(required=True)
     wanted = {pid for pid, label in labels.items() if label in ("same", "different")}
     items = [p for p in ad.candidate_pairs(conn) if p["pair_id"] in wanted]
 
     def run(conn, judge, client):
-        jev = ad.judge_pairs(conn, items, judge=judge)
-        _require_scored("pair", [p["pair_id"] for p in items], jev)
-        failed: List[str] = []
-        escalated = ad.escalate_band(conn, items, jev, client=client, failed=failed)
-        if failed:
-            raise RecalibrationError(f"{len(failed)} pair(s) in the escalation band could not be escalated "
-                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {pid: escalated.get(pid, p) for pid, p in jev.items()}
-        _require_agreement("pair", final, ad.stored_final_probabilities(conn))
+        scored = dj.score_pairs(conn, items, ad.ROUTE, judge=judge, escalation_client=client)
+        _require_scored("pair", [p["pair_id"] for p in items], scored.jev)
+        if scored.failed:
+            raise RecalibrationError(f"{len(scored.failed)} pair(s) in the escalation band could not be escalated "
+                                     f"(first: {scored.failed[0]}); see the log. Nothing was calibrated.")
+        _require_agreement("pair", scored.final, ad.stored_final_probabilities(conn, items))
 
     return Plan(items, len(wanted), run)
 
@@ -323,7 +320,7 @@ def _plan_coherence(conn: sqlite3.Connection) -> Plan:
         if undecided:
             raise RecalibrationError(f"{len(undecided)} member(s) could not be escalated (first: {undecided[0]}); "
                                      "see the log. Nothing was calibrated.")
-        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, co.stored_final_probabilities(conn))
+        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, co.stored_final_probabilities(conn, items))
 
     return Plan(items, len(sample), run)
 

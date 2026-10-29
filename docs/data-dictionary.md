@@ -788,7 +788,9 @@ researched_at)`: one lookup per organisation, again when `evidence_hash` (its in
 * `DeduplicatedEvents.roles_prompt_version` - the role prompt that decided the event's roles (`entity-roles-v2`);
   an event on an older version with no victim is classified again.
 * `EntityAliasDecisions.evidence_hash` - a hash of the incidents and profiles an alias question showed. A decision by
-  another model is not reused; an `unsure` one is asked again when the hash changes.
+  another model is not reused. Since 2026-10-29 a model's decision of any verdict is asked again when the hash changes
+  and the pair matters now (proposed for a fold, or barring one); a `human` decision never is; a row with a NULL hash
+  counts as changed the first time it matters. The row it replaces goes to `EntityAliasDecisionHistory`.
 * `ModelJudgements` rows with `question_id = 'is_proper_name'` (subject = the name; Noul) and
   `'event_named_organisations'` (`primitive = 'extraction'`; `answer` = the fast model's raw JSON list of possible
   victims and actors, validated against the text on every read), and the choices `fill_victim` /
@@ -1299,6 +1301,30 @@ vetoes a link (`duplicate_judgement.partition_without_conflicts`); a calibration
 | `ai_duplicate_sample.csv` | `pair_id` (the two event ids, sorted, joined by `\|`), `stratum` (`low` below 0.30, `census` 0.30-0.90, `high` 0.90 and above, on the stored final score), `weight` (stratum size / number sampled) |
 | `ai_duplicate_labels.csv` | `pair_id,label,rationale,corroboration,labeller`; label `same`, `different` or `unsure` (the definitions of `duplicate_labels.csv`; see `ai_duplicate_labelling_guide.md`) |
 | `ai_duplicate_calibration.json` | the calibration-file fields above, plus `window_days`, `labels_sha256`, `sample_file`, `at_cutoff`, `min_merges`, `organisation_route_cutoff` (the organisation route's, for comparison) |
+
+#### `FinalDecisions`, `EntityAliasDecisionHistory`
+
+`FinalDecisions` is the final score a judging step acts on, tied to the evidence it was made on (`dedup/final_decisions.py`).
+Primary key (`step`, `subject_id`, `evidence_hash`, `question_version`, `jev_model`, `escalation_model`).
+
+| Column | Type | Description |
+|---|---|---|
+| `step` | TEXT | `event-reality`, `event-scope`, `coherence`, `coherence-same-organisation`, `victim-attribution`, `duplicates-organisation` or `duplicates-ai` |
+| `subject_id` | TEXT | the event id; `event\|record` for a member; `event\|entity` for an event-victim pair; the two event ids, sorted, joined by `\|`, for a duplicate pair |
+| `evidence_hash` | TEXT | SHA-256 of the state exactly as Jev and the escalation were shown it (the subject's records, research, page text, timeline and whatever else the step shows) |
+| `question_version` | TEXT | Jev question version + `+` + escalation question version |
+| `jev_model`, `escalation_model` | TEXT | the requested models |
+| `final_score` | REAL | the probability acted on: the escalation's inside the step's escalation band, else Jev's |
+| `basis` | TEXT | `jev` or `escalated` |
+| `jev_input_hash`, `escalation_input_hash` | TEXT | the `ModelJudgements.input_hash` of the answers it rests on (the second NULL when `basis = 'jev'`) |
+| `decided_at` | TEXT | ISO time |
+
+A subject whose escalation failed has no row. A row is a subject's score only while its `evidence_hash` equals the hash of the
+subject's current state; otherwise it is stale: every `stored_final_probabilities` ignores it, and the duplicate check asks a
+stale low pair again only where it could block a proposed merge (`duplicate_judgement.calibrated_negatives`). Replaces
+`PairDecisions` (introduced and replaced within 2026-10-29, never in a released database).
+`EntityAliasDecisionHistory` has `EntityAliasDecisions`'s columns plus
+`superseded_at` and `superseded_by` (the new verdict): the decision a re-ask on changed evidence replaced.
 
 `ModelJudgements` rows for these pairs: `subject_type = 'event_pair'`, `question_id = 'same_incident_ai'`
 (`same-incident-ai-v1`) and, for scores Jev puts in 0.2-0.8, `same_incident_ai_escalated` (`primitive = 'escalation'`).
