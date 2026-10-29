@@ -542,8 +542,14 @@ returns (and keeps as `processor.last_counts`) `attempted`, `enriched`
 (= `validated` + `partially_supported`), `validated`, `partially_supported`,
 `failed` (gate rejection, request failure, failed write, corrupt baseline),
 `storage_failed`, `corrupt_baseline`, `budget_refused` (not attempted - neither
-success nor failure) and `dry_run`. A failed database write is a failed
-attempt, never a success.
+success nor failure) and `dry_run`. A failed database write is never a
+success. It is a failed attempt when the record or answer is to blame (an
+integrity or validation error), but not when the store failed for a temporary
+cause (a locked or busy database, a disk I/O error): that is counted in
+`storage_failed` and `temporary_storage_failures`, written to the log, and
+leaves `perplexity_attempt_count` alone, so a locked database cannot walk a
+record to quarantine (the same rule as the discovery retry queue,
+`retry_queue.classify_failure`).
 
 **Re-judging stored answers.** Older code stored a constant
 `data_source_reliability = 0.85` for every validated record and let any cited

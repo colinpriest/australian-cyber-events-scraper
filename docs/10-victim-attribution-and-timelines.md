@@ -172,7 +172,11 @@ who it happened to is not settled. It is exposed separately:
   reports, under "unresolved victim attributions" in the data-quality summary,
   how many rows, events and organisations are unresolved and the observed
   repeats per elapsed-time band with them **included** and **excluded**, plus
-  how many repeats involve one. `--unresolved-attributions exclude` (both
+  how many repeats involve one. The flag belongs to an (organisation,
+  incident) pair, and so does the count: on a shared supplier incident with
+  several customers, flagging one customer marks only that customer's repeat
+  (`repeats_involving_unresolved`); it used to mark every customer's repeat
+  that touched the incident id. `--unresolved-attributions exclude` (both
   `analyze_recurrent_timing.py` and `analyze_recurrence_extensions.py`; default
   `include`) runs the whole analysis without them.
 

@@ -495,7 +495,7 @@ class TestBackfillWithheldClaims:
         processor = _processor(db, [_answer()])
 
         def broken(*args, **kwargs):
-            raise sqlite3.OperationalError("disk I/O error")
+            raise sqlite3.IntegrityError("CHECK constraint failed: reliability")
 
         monkeypatch.setattr(db, "record_enrichment_success", broken)
         counts = _run(processor)
@@ -504,6 +504,24 @@ class TestBackfillWithheldClaims:
         assert processor.stats["storage_failures"] == 1
         row = _row(db, enriched_id)
         assert row["perplexity_attempt_count"] == 1 and "storage error" in row["perplexity_last_error"]
+
+    @pytest.mark.parametrize("error", [sqlite3.OperationalError("database is locked"),
+                                       sqlite3.OperationalError("disk I/O error")])
+    def test_a_temporary_storage_failure_is_not_an_attempt(self, db, monkeypatch, error):
+        """A locked database must not walk a record to quarantine: only the answer failing counts."""
+        enriched_id = _record(db)
+
+        def broken(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(db, "record_enrichment_success", broken)
+        for _ in range(5):                                   # more than the attempts quarantine allows
+            processor = _processor(db, [_answer()])
+            counts = _run(processor)
+            assert counts["failed"] == 1 and counts["storage_failed"] == 1
+            assert processor.stats["temporary_storage_failures"] == 1
+        row = _row(db, enriched_id)
+        assert not row["perplexity_attempt_count"] and row["perplexity_status"] != "quarantined"
 
     def test_apply_returns_false_when_the_write_fails(self, db, monkeypatch):
         _record(db)
