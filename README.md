@@ -696,7 +696,7 @@ removed and the event kept for its replacement evidence.
 | 0 | `check-sources --apply` | Does a Google result's page itself report an incident? | Jev | remove below **0.58** | 0.953 (95/100) | 0.97 | 0.95 |
 | 1 | `classify-pages` | What kind of page each suspect record is (informs, removes nothing) | Jev | - | - | - | - |
 | 2 | `check-events --apply` | Is the event a real, specific incident? | Jev + escalation | reject below **0.28** | 0.954 (68/72) | 0.71 | 0.91 |
-| 2a | `check-scope --apply` | Does the event affect Australia (an Australian victim, or Australians among the victims)? A foreign incident that Australia only reacts to is out of scope | Jev + escalation | none yet: report-only until a sample is labelled and calibrated (`scripts/calibrate_event_scope.py`) | - | - | - |
+| 2a | `check-scope --apply` | Does the event affect Australia (an Australian victim, or Australians among the victims)? A foreign incident that Australia only reacts to is out of scope | Jev + escalation | reject below **0.72** (2026-10-29) | 0.969 (57/59) | 0.48 | 0.93 |
 | 3 | `check-victims` | Do the records name a different victim? (deterministic rule) | none | - | 8/9 reviewed | - | - |
 | 3b | `check-coherence --apply` (not yet wired into `run_full_pipeline.py`) | Is each suspect record about its event's incident? (splits strays out) | Jev + escalation | split below **0.15** | 1.00 (17/17) | 0.94 | 0.98 |
 | 3c | `check-same-organisation --apply` | Is a member that may be a *separate incident at the same organisation* (verified far date, or another incident in the timeline) the event's incident? | Jev + escalation | none yet: report-only until labelled and calibrated | - | - | - |
@@ -827,13 +827,17 @@ among those affected, whoever is recorded as the victim. Out of scope: the
 reporting identifies who was harmed and none of them is in Australia; an
 Australian regulator's or commentator's reaction, an Australian outlet, "could
 affect Australia" speculation and an unaffected Australian office are not
-victims. Thin evidence is never grounds to reject. The decision is the model's
+victims. A global breach (Okta, Twitch, a worldwide outage) counts as
+Australian only where a source places Australians among its victims - not
+because its users "must" include some (convention confirmed by the project
+owner, 2026-10-29). Thin evidence is never grounds to reject. The decision is the model's
 over the evidence: there are no country, agency or outlet lists in the code.
 Calibration: `scripts/calibrate_event_scope.py sample | packet --out DIR |
 calibrate` on blind labels in `evaluation/event_scope_labels.csv`
 (`deduplicated_event_id,label,rationale,labeller`; `in_scope`, `out_of_scope` or
-`unsure`), folded with the event-reality labels `real` (= in scope) and
-`out_of_scope` (a scope-file label overrides them); the cut-off is the largest
+`unsure`), folded with the event-reality label `out_of_scope` (`real` means a
+real incident, not an Australian one, so it says nothing about scope; a
+scope-file label overrides); the cut-off is the largest
 at which at least 95% (weighted) of the events it would reject are labelled
 out of scope. With `--apply` and a matching calibration, events below it and
 events labelled `out_of_scope` are rejected through the ledger (batch
