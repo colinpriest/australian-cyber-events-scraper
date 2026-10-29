@@ -34,6 +34,9 @@ CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT, raw_cont
     raw_description TEXT);
 CREATE TABLE DedupSnapshots (snapshot_id TEXT, batch_id TEXT, deduplicated_event_id TEXT,
     payload_json TEXT);
+CREATE TABLE DedupOverrides (override_id TEXT PRIMARY KEY, pair_key TEXT UNIQUE, left_enriched_event_id TEXT,
+    right_enriched_event_id TEXT, verdict TEXT, reason TEXT, created_by TEXT, created_at TEXT,
+    active INTEGER DEFAULT 1);
 """
 
 ENTITIES = [(1, "ProctorU", "organisation"), (2, "University of Sydney", "organisation"),
@@ -103,10 +106,11 @@ def _judge(conn, **kw):
     return JevJudge(conn, client=FakeTypeSafe(**kw))
 
 
-def _calibration(tmp_path, victim=0.9, same=0.9, identity=None):
+def _calibration(tmp_path, victim=0.9, same=0.9, identity=None, different=0.5):
     path = tmp_path / "cal.json"
     path.write_text(json.dumps({**(identity or sv.calibration_identity()),
-                                "victim": {"cutoff": victim}, "same_incident": {"cutoff": same}}))
+                                "victim": {"cutoff": victim},
+                                "same_incident": {"cutoff": same, "different_cutoff": different}}))
     return path
 
 
@@ -331,7 +335,162 @@ def test_a_refused_merge_holds_the_victim_back(conn, tmp_path, merge_events):
                                       calibration_path=_calibration(tmp_path))
     assert [m.get("refused") is not None for m in result["merged"]] == [True]
     assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
+    assert "ruled the same incident (model) but not merged" in result["held"][0]["why"]
     assert "Curtin University" not in _victims(conn, "e1")
+
+
+# ----------------------------------------------------------------------
+# A victim with its own event near the incident: decided by the ruling on that pair
+# ----------------------------------------------------------------------
+
+def _curtin_is_a_candidate(conn):
+    """Curtin is linked on the supplier incident's record, and has its own event e2 (pair e1|e2)."""
+    conn.execute("INSERT INTO EnrichedEventEntities VALUES ('r1', 4, 'affected_customer', NULL)")
+
+
+def _override(conn, verdict, left="r1", right="r2", active=1):
+    conn.execute("INSERT INTO DedupOverrides VALUES (?, ?, ?, ?, ?, 'test', 'human', NULL, ?)",
+                 (f"o-{verdict}-{active}", f"{left}|{right}|{verdict}", left, right, verdict, active))
+
+
+def _apply_curtin(conn, tmp_path, p, pair_label=None, calibration=None, victim_label="affected"):
+    """Curtin's victim candidacy is accepted by label, so only the pair ruling varies."""
+    rows = [("victim", "e1|4", victim_label)]
+    if pair_label:
+        rows.append(("same_incident", "e1|e2", pair_label))
+    return sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=p),
+                                    labels_path=_labels(tmp_path, rows),
+                                    calibration_path=calibration or _calibration(tmp_path))
+
+
+def test_own_event_ruled_the_same_by_override_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "same")
+    result = _apply_curtin(conn, tmp_path, p=0.05)   # the model alone would say a different incident
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == []
+    assert "Curtin University" in _victims(conn, "e1")
+    assert conn.execute("SELECT decided_by FROM SupplierVictimAttachments WHERE entity_name = 'Curtin University'"
+                        ).fetchone()[0] == "merge"
+
+
+def test_own_event_ruled_the_same_by_label_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+def test_own_event_ruled_the_same_by_the_model_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.95)
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+@pytest.mark.parametrize("how", ["override", "label", "model"])
+def test_own_event_ruled_different_attaches_the_customer(conn, tmp_path, merge_events, how):
+    _curtin_is_a_candidate(conn)
+    if how == "override":
+        _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="different" if how == "label" else None)
+    assert merge_events.calls == [] and result["held"] == []
+    assert "Curtin University" in _victims(conn, "e1")
+    attached = next(a for a in result["attached"] if a["victim"] == "Curtin University")
+    assert [(r["own_event"], r["verdict"], r["basis"]) for r in attached["own_events_ruled_different"]] == [
+        ("e2", "different", how)]
+    # Its own event stays, as a separate incident.
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
+                        ).fetchone()[0] == "Active"
+
+
+def test_a_different_override_beats_a_confident_model(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.99)
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+def test_conflicting_rulings_are_held_with_the_reason(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
+    assert merge_events.calls == []
+    assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
+    assert "conflicting rulings: label says same, override says different" in result["held"][0]["why"]
+    assert "Curtin University" not in _victims(conn, "e1")
+
+
+def test_no_cutoff_leaves_an_unruled_pair_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.95, calibration=_calibration(tmp_path, same=None))
+    assert merge_events.calls == []
+    assert "no calibrated same-incident cut-off" in result["held"][0]["why"]
+
+
+def test_an_inactive_override_is_no_ruling(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different", active=0)
+    result = _apply_curtin(conn, tmp_path, p=0.95)
+    assert merge_events.calls == [("e1", "e2")] and result["held"] == []
+
+
+def test_a_pair_nobody_judged_is_held_and_says_why(conn):
+    ruling = sv.rule_on_own_event(conn, "e1", "e2", {}, sv.Scores(), 0.9, known_pairs=[])
+    assert ruling.verdict == sv.UNRESOLVED and "never a candidate" in ruling.basis
+    failed = sv.Scores(failed=["e1|e2"])
+    assert "Jev failed" in sv.rule_on_own_event(conn, "e1", "e2", {}, failed, 0.9, ["e1|e2"]).basis
+    undecided = sv.Scores(undecided=["e1|e2"])
+    assert "escalation band" in sv.rule_on_own_event(conn, "e1", "e2", {}, undecided, 0.9, ["e1|e2"]).basis
+
+
+def test_ruling_order_labels_and_overrides_before_the_model(conn):
+    scores = sv.Scores(final={"e1|e2": 0.5})
+    assert sv.rule_on_own_event(conn, "e1", "e2", {}, scores, 0.9, different_cutoff=0.6).verdict == sv.RULED_DIFFERENT
+    assert sv.rule_on_own_event(conn, "e1", "e2", {}, scores, 0.5).verdict == sv.RULED_SAME   # at the cut-off
+    unsure = {("same_incident", "e1|e2"): "unsure"}
+    assert sv.rule_on_own_event(conn, "e1", "e2", unsure, scores, 0.9, different_cutoff=0.6).basis == "model"
+    assert sv.rule_on_own_event(conn, "e1", "e2", {("same_incident", "e1|e2"): "same"}, scores, 0.9
+                                ).basis == "label"
+
+
+def test_a_score_between_the_two_bounds_is_held_and_the_band_is_named(conn):
+    """The merge cut-off measured only the precision of merging: 0.85 under a 0.87 cut-off is not 'different'."""
+    for p, expected in ((0.95, sv.RULED_SAME), (0.87, sv.RULED_SAME), (0.85, sv.UNRESOLVED),
+                        (0.78, sv.UNRESOLVED), (0.7799, sv.RULED_DIFFERENT), (0.1, sv.RULED_DIFFERENT)):
+        ruling = sv.rule_on_own_event(conn, "e1", "e2", {}, sv.Scores(final={"e1|e2": p}), 0.87,
+                                      different_cutoff=0.78)
+        assert ruling.verdict == expected, p
+    band = sv.rule_on_own_event(conn, "e1", "e2", {}, sv.Scores(final={"e1|e2": 0.85}), 0.87, different_cutoff=0.78)
+    assert "between the calibrated 'different' bound (0.78) and the merge cut-off (0.87)" in band.basis
+
+
+def test_without_a_different_bound_a_model_score_never_rules_different(conn):
+    ruling = sv.rule_on_own_event(conn, "e1", "e2", {}, sv.Scores(final={"e1|e2": 0.05}), 0.87)
+    assert ruling.verdict == sv.UNRESOLVED and "no calibrated bound for 'different'" in ruling.basis
+    # A label still rules.
+    assert sv.rule_on_own_event(conn, "e1", "e2", {("same_incident", "e1|e2"): "different"},
+                                sv.Scores(final={"e1|e2": 0.05}), 0.87).verdict == sv.RULED_DIFFERENT
+
+
+def test_apply_holds_a_pair_in_the_band_and_attaches_one_below_the_different_bound(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    cal = _calibration(tmp_path, same=0.95, different=0.82)
+    # The pair scores 0.9: under the 0.95 merge cut-off, above the 0.82 'different' bound -> in the band.
+    held = _apply_curtin(conn, tmp_path, p=0.9, calibration=cal)
+    assert merge_events.calls == [] and "Curtin University" not in _victims(conn, "e1")
+    assert [h["victim"] for h in held["held"]] == ["Curtin University"]
+    assert "between the calibrated 'different' bound (0.82) and the merge cut-off (0.95)" in held["held"][0]["why"]
+    assert held["cutoffs"]["different"] == 0.82
+    # Below the bound the same pair (its stored 0.9 is reused) is a different incident: the customer is attached.
+    attached = _apply_curtin(conn, tmp_path, p=0.9, calibration=_calibration(tmp_path, same=0.95, different=0.92))
+    assert attached["held"] == [] and "Curtin University" in _victims(conn, "e1")
+    # With no 'different' bound recorded (an older calibration) the same score is held.
+    conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'e1' AND entity_id = 4")
+    older = _apply_curtin(conn, tmp_path, p=0.9, calibration=_calibration(tmp_path, same=0.95, different=None))
+    assert [h["victim"] for h in older["held"]] == ["Curtin University"]
+    assert "no calibrated bound for 'different'" in older["held"][0]["why"]
+
 
 
 # ----------------------------------------------------------------------
@@ -491,3 +650,75 @@ def test_within_event_duplicates_keep_one_name():
     rows = [(1, "Australian Red Cross", "z1"), (2, "Australian Red Cross Society", "z1"),
             (3, "International Committee of the Red Cross", "z1"), (1, "Australian Red Cross", "z2")]
     assert within_event_duplicates(c, rows, EntityResolver()) == {(2, "z1")}
+
+
+# ----------------------------------------------------------------------
+# Calibrating the bound for "different"
+# ----------------------------------------------------------------------
+
+def _pair_rows():
+    """Labelled pairs: many low-scoring different ones (heavy weight), a few near the cut-off, same above."""
+    rows = [{"id": f"low{i}", "stratum": "low", "weight": 20.0, "p": 0.02 * i, "positive": False}
+            for i in range(10)]
+    rows += [{"id": "d1", "stratum": "mid", "weight": 1.0, "p": 0.5, "positive": False},
+             {"id": "d2", "stratum": "mid", "weight": 1.0, "p": 0.78, "positive": False},
+             {"id": "s1", "stratum": "high", "weight": 1.0, "p": 0.8, "positive": True},
+             {"id": "d3", "stratum": "high", "weight": 1.0, "p": 0.86, "positive": False},
+             {"id": "s2", "stratum": "high", "weight": 1.0, "p": 0.93, "positive": True},
+             {"id": "s3", "stratum": "high", "weight": 1.0, "p": 0.99, "positive": True}]
+    return rows
+
+
+def test_calibrate_computes_a_different_bound_below_every_labelled_same_pair():
+    from scripts.calibrate_supplier_victims import choose_different, different_bound
+
+    bound = different_bound(_pair_rows(), 0.95, 5, n=50)
+    # Weighted precision alone would run past 0.8 (the heavy low-scoring stratum drowns the labelled-same pair at
+    # 0.8); a pair labelled the same incident is never ruled different, so the bound stops at 0.78 (just above).
+    assert bound["different_cutoff"] == pytest.approx(0.780001)
+    at = bound["different_at_cutoff"]
+    assert at["correct_labelled"] == at["rejected_labelled"] == 12 and at["weighted_precision"] == 1.0
+    assert 0 < at["weighted_recall"] <= 1.0
+    assert bound["different_bootstrap_out_of_sample_precision"]["replicates"] > 0
+    chosen, _ = choose_different(_pair_rows(), 0.95, 5)
+    assert not any(r["positive"] and r["p"] < chosen["cutoff"] for r in _pair_rows())
+
+
+def test_calibrate_has_no_different_bound_without_enough_labelled_pairs():
+    from scripts.calibrate_supplier_victims import different_bound
+
+    rows = [{"id": "d", "stratum": "mid", "weight": 1.0, "p": 0.3, "positive": False},
+            {"id": "s", "stratum": "high", "weight": 1.0, "p": 0.95, "positive": True}]
+    assert different_bound(rows, 0.95, 5, n=10)["different_cutoff"] is None
+
+
+def test_different_only_adds_the_one_field_and_refuses_changed_data(tmp_path, monkeypatch):
+    from scripts import calibrate_supplier_victims as cal
+
+    rows = _pair_rows()
+    sample_map = {("same_incident", r["id"]): {"stratum": r["stratum"], "weight": str(r["weight"])} for r in rows}
+    label_map = {("same_incident", r["id"]): "same" if r["positive"] else "different" for r in rows}
+    probs = {r["id"]: r["p"] for r in rows}
+    chosen, _, _ = cal.accept_cutoff(rows, 0.95, 5)     # the merge cut-off the stored judgements reproduce
+    existing = {"model": "m", "question_version": "q", "precision_target": 0.95, "min_accepts": 5,
+                "victim": {"cutoff": 0.9}, "same_incident": {"cutoff": chosen["cutoff"] if chosen else None, "marker": "kept"}}
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps(existing))
+    monkeypatch.setattr(cal, "read_sample", lambda: sample_map)
+    monkeypatch.setattr(cal.sv, "read_labels", lambda p=None: label_map)
+    monkeypatch.setattr(cal.sv, "CALIBRATION_PATH", path)
+    monkeypatch.setattr(cal.sv, "stored_final_probabilities", lambda conn, kind: probs)
+    args = SimpleNamespace(db=str(tmp_path / "x.db"), precision=0.95, min_accepts=5, different_only=True)
+
+    assert cal.cmd_calibrate(args) == 0
+    written = json.loads(path.read_text())
+    assert written["same_incident"]["different_cutoff"] == pytest.approx(0.780001)
+    assert written["same_incident"]["marker"] == "kept" and written["victim"] == {"cutoff": 0.9}
+    assert {k: v for k, v in written.items() if k != "same_incident"} == \
+        {k: v for k, v in existing.items() if k != "same_incident"}
+
+    # The data no longer reproduces the calibration's merge cut-off: refuse, change nothing.
+    existing["same_incident"]["cutoff"] = 0.123
+    path.write_text(json.dumps(existing))
+    assert cal.cmd_calibrate(args) == 2
+    assert "different_cutoff" not in json.loads(path.read_text())["same_incident"]

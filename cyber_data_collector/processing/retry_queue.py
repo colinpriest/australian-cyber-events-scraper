@@ -19,11 +19,22 @@ State per record lives in ``DiscoveryRecordState``:
   not the record, failed;
 * **permanent** failures (the record itself cannot be processed - malformed
   model output for its content, a request the provider refuses as invalid, a
-  store that fails validation): counted, backed off, and after
+  store that fails validation or an integrity rule): counted, backed off, and after
   :data:`MAX_PERMANENT_ATTEMPTS` the record is quarantined - marked processed
   with ``Rejected at retry_quarantine: ...`` so it leaves every queue - and
   reported. ``python scripts/discovery_queue.py release`` puts quarantined
   records back.
+
+A failed *store* keeps its exception: :class:`StorageError` carries the stage
+(``store_raw`` / ``store_enriched`` / ``mark_processed``), the kind and the
+message of what failed. A locked or busy database, a disk I/O error or a full
+disk is the store failing, not the record, so it is temporary and never counts
+toward quarantine; an integrity or validation error is the record's and is
+permanent. A record quarantined before that distinction, whose stored error
+identifies a temporary cause, is released automatically
+(:meth:`RetryQueue.release_temporary_storage_quarantines`, called by every
+discovery run); one whose error text does not say why (the old generic
+"enriched event could not be stored") is released with ``release``.
 
 The queue itself is ``RawEvents.is_processed = 0``: state rows only add
 back-off and history, so a record from a run that crashed before any state was
@@ -41,7 +52,9 @@ reported by the status command and the quality report.
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -144,19 +157,38 @@ _TEMPORARY_NAMES = {
     "ServiceUnavailableError", "ConnectError", "ConnectTimeout", "ReadTimeout", "WriteTimeout",
     "PoolTimeout", "ReadError", "RemoteProtocolError", "NetworkError", "TimeoutException",
     "ConnectionError", "ConnectionResetError", "ConnectionAbortedError", "ConnectionRefusedError",
-    "BrokenPipeError", "BudgetExhausted", "PageGateUnavailable", "OperationalError",
+    "BrokenPipeError", "BudgetExhausted", "PageGateUnavailable", "OperationalError", "BlockingIOError",
+    "InterruptedError",
 }
 _TEMPORARY_TEXT = ("timed out", "timeout", "rate limit", "temporarily", "overloaded", "connection reset",
                    "connection aborted", "connection refused", "service unavailable", "bad gateway",
-                   "gateway timeout", "too many requests", "database is locked")
+                   "gateway timeout", "too many requests", "database is locked", "database is busy",
+                   "database table is locked", "disk i/o error", "disk is full", "unable to open database file",
+                   "sqlite_busy", "operationalerror")
+#: OS errors that pass: an I/O hiccup, a busy or full disk, too many open files, an interrupted call.
+_TEMPORARY_ERRNO = {errno.EIO, errno.EBUSY, errno.EAGAIN, errno.EINTR, errno.ENOSPC, errno.EMFILE, errno.ENFILE,
+                    errno.ETIMEDOUT}
+#: What the store returns for a record it will never accept.
+_PERMANENT_STORE_ERRORS = (sqlite3.IntegrityError, sqlite3.DataError)
+
+#: The stages of :class:`StorageError`.
+STAGE_STORE_RAW = "store_raw"
+STAGE_STORE_ENRICHED = "store_enriched"
+STAGE_MARK_PROCESSED = "mark_processed"
+STORAGE_STAGES = (STAGE_STORE_RAW, STAGE_STORE_ENRICHED, STAGE_MARK_PROCESSED)
+#: ``"3 permanent failures at store_enriched; last: <error>"``, as written by :meth:`RetryQueue.record_failure`.
+_QUARANTINE_REASON = re.compile(r"\d+ permanent failures at (?P<stage>\w+); last: (?P<last>.*)", re.DOTALL)
+#: What discovery stored as the error of a failed store before :class:`StorageError` kept the cause.
+LEGACY_STORE_REASONS = ("enriched event could not be stored",)
 
 
 def classify_failure(exc: BaseException) -> str:
     """``'temporary'`` when the provider (not the record) failed, else ``'permanent'``.
 
-    Temporary: timeouts, rate limits, 429/5xx, connection errors, a locked
-    database and API-budget refusals - anything that may succeed unchanged
-    later. Everything else counts toward quarantine.
+    Temporary: timeouts, rate limits, 429/5xx, connection errors, a locked or
+    busy database, transient I/O errors and API-budget refusals - anything that
+    may succeed unchanged later. An integrity or data error from the store is
+    the record's (permanent), as is everything else.
     """
     if is_budget_refusal(exc):
         return KIND_TEMPORARY
@@ -164,7 +196,11 @@ def classify_failure(exc: BaseException) -> str:
     current: Optional[BaseException] = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, (asyncio.TimeoutError, TimeoutError, ConnectionError)):
+        if isinstance(current, _PERMANENT_STORE_ERRORS):
+            return KIND_PERMANENT
+        if isinstance(current, (asyncio.TimeoutError, TimeoutError, ConnectionError, sqlite3.OperationalError)):
+            return KIND_TEMPORARY
+        if isinstance(current, OSError) and current.errno in _TEMPORARY_ERRNO:
             return KIND_TEMPORARY
         if any(cls.__name__ in _TEMPORARY_NAMES for cls in type(current).__mro__):
             return KIND_TEMPORARY
@@ -178,6 +214,34 @@ def classify_failure(exc: BaseException) -> str:
             return KIND_TEMPORARY
         current = current.__cause__ or current.__context__
     return KIND_PERMANENT
+
+
+def has_temporary_cause(text: Optional[str]) -> bool:
+    """Whether a stored error message names a temporary cause (a locked database, a timeout ...)."""
+    lowered = (text or "").lower()
+    return any(fragment in lowered for fragment in _TEMPORARY_TEXT)
+
+
+class StorageError(RuntimeError):
+    """A store call failed; ``kind`` says whether the store (temporary) or the record (permanent) did.
+
+    Raised instead of returning ``None`` so the caller keeps *why*: a locked
+    database must not be recorded the way an integrity error is.
+    """
+
+    def __init__(self, stage: str, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.kind = kind
+
+    @classmethod
+    def from_exception(cls, stage: str, exc: BaseException) -> "StorageError":
+        """The failure of ``stage`` that ``exc`` was, typed by :func:`classify_failure`."""
+        return cls(stage, f"{type(exc).__name__}: {exc}"[:500], classify_failure(exc))
+
+    @property
+    def is_temporary(self) -> bool:
+        return self.kind == KIND_TEMPORARY
 
 
 def source_month_backoff(count: int) -> timedelta:
@@ -389,12 +453,53 @@ class RetryQueue:
             ids = [r[0] for r in c.execute(
                 "SELECT raw_event_id FROM RawEvents WHERE processing_error LIKE ?",
                 (f"{REJECTION_PREFIX}{STAGE_RETRY_QUARANTINE}%",))]
-            c.executemany("UPDATE RawEvents SET is_processed = 0, processing_error = NULL WHERE raw_event_id = ?",
-                          [(rid,) for rid in ids])
-            c.executemany("UPDATE DiscoveryRecordState SET attempts = 0, next_attempt_at = NULL, "
-                          "quarantined_at = NULL, updated_at = ? WHERE raw_event_id = ?",
-                          [(stamp, rid) for rid in ids])
-            c.commit()
+            self._release(c, ids, stamp)
+        return len(ids)
+
+    @staticmethod
+    def _release(c: sqlite3.Connection, ids: List[str], stamp: str) -> None:
+        c.executemany("UPDATE RawEvents SET is_processed = 0, processing_error = NULL WHERE raw_event_id = ?",
+                      [(rid,) for rid in ids])
+        c.executemany("UPDATE DiscoveryRecordState SET attempts = 0, next_attempt_at = NULL, "
+                      "quarantined_at = NULL, updated_at = ? WHERE raw_event_id = ?",
+                      [(stamp, rid) for rid in ids])
+        c.commit()
+
+    def _storage_quarantines(self, keep: Callable[[str], bool]) -> List[Dict[str, Any]]:
+        """Quarantined records whose reason is a store stage failing with a last error ``keep`` accepts."""
+        out = []
+        for row in self.quarantined():
+            match = _QUARANTINE_REASON.search(row.get("processing_error") or "")
+            if match and match.group("stage") in STORAGE_STAGES and keep(match.group("last")):
+                out.append({**row, "stage": match.group("stage"), "last_error": match.group("last")})
+        return out
+
+    def temporary_storage_quarantines(self) -> List[Dict[str, Any]]:
+        """Quarantined records whose stored reason is a *store* stage failing for a temporary cause.
+
+        A temporary storage failure never counts toward quarantine now, so these
+        were quarantined by an earlier version that did. Only a reason that
+        says why is read as temporary; the old generic "enriched event could
+        not be stored" does not (see :meth:`unexplained_storage_quarantines`).
+        """
+        return self._storage_quarantines(has_temporary_cause)
+
+    def unexplained_storage_quarantines(self) -> List[Dict[str, Any]]:
+        """Records quarantined at a store stage with the old generic reason, which does not say why.
+
+        Their cause is unknown, so they are not released automatically; ``release``
+        returns them to the queue, where a repeat failure now records the real error.
+        """
+        return self._storage_quarantines(lambda last: last.strip() in LEGACY_STORE_REASONS)
+
+    def release_temporary_storage_quarantines(self, now: Optional[datetime] = None) -> int:
+        """Release records quarantined for a temporary storage failure. Idempotent; returns how many."""
+        stamp = _iso(now or self.clock())
+        ids = [row["raw_event_id"] for row in self.temporary_storage_quarantines()]
+        if ids:
+            with self._locked() as c:
+                self._release(c, ids, stamp)
+            logger.warning("[RETRY] Released %d record(s) quarantined for a temporary storage failure", len(ids))
         return len(ids)
 
     def quarantined(self) -> List[Dict[str, Any]]:

@@ -32,6 +32,19 @@ Three steps, each reproducible from committed files:
                precision. Missing or unreadable labels fail loudly. The models
                and question versions are recorded; ``find-supplier-victims
                --apply`` refuses to act unless both still match.
+               For ``same_incident`` it also records a ``different_cutoff``:
+               the largest score below which, weighted, at least ``--precision``
+               of the labelled pairs are labelled ``different`` (same weighting,
+               minimum and bootstrap) and none is labelled ``same`` (a label is
+               never acted on the other way). The merge cut-off measures only the
+               precision of merging, so a score just under it is not evidence
+               that two events are different incidents; ``find-supplier-victims
+               --apply`` attaches a customer that has its own event only below
+               ``different_cutoff`` (or on a label/override), and holds it in
+               between. ``calibrate --different-only`` adds just that field to
+               the existing calibration, from the stored judgements and labels
+               (no API calls), after checking they still reproduce its merge
+               cut-off.
 
 Usage (from the project root):
     python scripts/calibrate_supplier_victims.py --db <db> sample
@@ -208,7 +221,117 @@ def accept_cutoff(rows: List[Dict], precision: float, min_accepts: int):
     return at, curve, mirrored
 
 
+def choose_different(rows: List[Dict], precision: float, min_accepts: int):
+    """The largest cut-off below which the labelled pairs are, weighted, at least ``precision`` labelled
+    ``different``, at least ``min_accepts`` of them, **and none labelled ``same``**.
+
+    The last condition is the project rule that a label is ground truth: a pair labelled the same incident
+    is never treated as a different one. It also keeps the bound below the lowest labelled-same pair. Without
+    it the weighted precision, dominated by the many low-scoring pairs, let the bound run above the merge
+    cut-off (0.91 against 0.87 on the 2026-10-29 data), where labelled-same pairs sit.
+    """
+    below = [{**r, "not_incident": not r["positive"]} for r in rows]
+    _, table = choose_cutoff(below, precision, min_accepts)
+    ok = [t for t in table if t["weighted_precision"] is not None and t["weighted_precision"] >= precision
+          and t["rejected_labelled"] >= min_accepts
+          and not any(r["positive"] and r["p"] < t["cutoff"] for r in rows)]
+    return (max(ok, key=lambda t: t["cutoff"]) if ok else None), below
+
+
+def different_bound(rows: List[Dict], precision: float, min_accepts: int, n: int = 1000,
+                    seed: int = 1) -> Dict[str, object]:
+    """The ``different_cutoff`` of the same-incident pairs (see :func:`choose_different`), with the weighted
+    precision and recall at it and a stratified bootstrap of the whole choose-then-test procedure.
+
+    ``rows`` are the labelled pairs as :func:`cmd_calibrate` builds them (``positive`` = labelled ``same``).
+    """
+    chosen, below = choose_different(rows, precision, min_accepts)
+    rng = random.Random(seed)
+    strata: Dict[str, List[Dict]] = {}
+    for r in rows:
+        strata.setdefault(r["stratum"], []).append(r)
+    oob: List[float] = []
+    for _ in range(n):
+        sampled = [rng.choice(rs) for rs in strata.values() for _ in rs]
+        pick, _ = choose_different(sampled, precision, min_accepts)
+        if pick is None:
+            continue
+        taken = {id(r) for r in sampled}
+        out = [r for r in rows if id(r) not in taken and r["p"] < pick["cutoff"]]
+        weight = sum(r["weight"] for r in out)
+        if weight:
+            oob.append(sum(r["weight"] for r in out if not r["positive"]) / weight)
+    oob.sort()
+    boot = ({"replicates": 0, "median": None, "mean": None, "p05": None} if not oob else
+            {"replicates": len(oob), "median": oob[len(oob) // 2], "mean": sum(oob) / len(oob),
+             "p05": oob[int(0.05 * len(oob))]})
+    return {"different_cutoff": chosen["cutoff"] if chosen else None, "different_at_cutoff": chosen,
+            "different_bootstrap_out_of_sample_precision": boot}
+
+
+def _labelled_rows(kind: str, sample, labels, probs):
+    rows, unsure, missing = [], 0, 0
+    for (k, sid), s in sample.items():
+        if k != kind:
+            continue
+        label = labels.get((kind, sid))
+        if label is None or sid not in probs:
+            missing += 1
+            continue
+        if label == "unsure":
+            unsure += 1
+            continue
+        rows.append({"id": sid, "stratum": s["stratum"], "weight": float(s["weight"]), "p": probs[sid],
+                     "positive": label == sv.POSITIVE[kind]})
+        assert label == sv.POSITIVE[kind] or label in sv.NEGATIVE[kind]
+    return rows, unsure, missing
+
+
+def _print_different(bound: Dict[str, object], precision: float, min_accepts: int) -> None:
+    at = bound["different_at_cutoff"]
+    if at:
+        print(f"{sv.KIND_PAIR}: 'different' bound {at['cutoff']:.4f} covers {at['rejected_labelled']} labelled, "
+              f"{at['correct_labelled']} labelled different; weighted precision {at['weighted_precision']:.3f}, "
+              f"weighted recall {at['weighted_recall']:.3f}; bootstrap "
+              f"{bound['different_bootstrap_out_of_sample_precision']}")
+    else:
+        print(f"{sv.KIND_PAIR}: no 'different' bound reaches precision {precision} with {min_accepts}+ labelled "
+              "pairs - a pair with its own event stays held unless a label or override rules on it.")
+
+
+def cmd_different_only(args) -> int:
+    """Add ``different_cutoff`` to the existing calibration, leaving everything else in it as it is."""
+    sample = read_sample()
+    try:
+        labels = sv.read_labels(sv.LABELS_PATH)
+        existing = json.loads(sv.CALIBRATION_PATH.read_text(encoding="utf-8"))
+    except (sv.CalibrationError, OSError, ValueError) as exc:
+        print(f"Cannot update the calibration: {exc}")
+        return 2
+    conn = sqlite3.connect(args.db)
+    rows, _, _ = _labelled_rows(sv.KIND_PAIR, sample, labels, sv.stored_final_probabilities(conn, sv.KIND_PAIR))
+    # The stored judgements must still be the ones the calibration was measured on.
+    chosen, _, _ = accept_cutoff(rows, existing.get("precision_target", args.precision),
+                                 existing.get("min_accepts", args.min_accepts))
+    stored = (existing.get(sv.KIND_PAIR) or {}).get("cutoff")
+    if (chosen["cutoff"] if chosen else None) != stored:
+        print(f"Refusing: the stored judgements give a merge cut-off of {chosen['cutoff'] if chosen else None}, "
+              f"not the calibration's {stored}. The data changed since it was calibrated; run a full "
+              "'calibrate' instead.")
+        return 2
+    bound = different_bound(rows, existing.get("precision_target", args.precision),
+                            existing.get("min_accepts", args.min_accepts))
+    _print_different(bound, existing.get("precision_target", args.precision),
+                     existing.get("min_accepts", args.min_accepts))
+    existing[sv.KIND_PAIR].update(bound)
+    sv.CALIBRATION_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    print(f"Updated {sv.CALIBRATION_PATH}")
+    return 0
+
+
 def cmd_calibrate(args) -> int:
+    if args.different_only:
+        return cmd_different_only(args)
     sample = read_sample()
     try:
         labels = sv.read_labels(sv.LABELS_PATH)
@@ -225,26 +348,17 @@ def cmd_calibrate(args) -> int:
                                  "generated": datetime.now().isoformat()}
     for kind in KINDS:
         probs = sv.stored_final_probabilities(conn, kind)
-        rows, unsure, missing, negatives = [], 0, 0, sv.NEGATIVE[kind]
-        for (k, sid), s in sample.items():
-            if k != kind:
-                continue
-            label = labels.get((kind, sid))
-            if label is None or sid not in probs:
-                missing += 1
-                continue
-            if label == "unsure":
-                unsure += 1
-                continue
-            rows.append({"id": sid, "stratum": s["stratum"], "weight": float(s["weight"]), "p": probs[sid],
-                         "positive": label == sv.POSITIVE[kind]})
-            assert label == sv.POSITIVE[kind] or label in negatives
+        rows, unsure, missing = _labelled_rows(kind, sample, labels, probs)
         chosen, curve, mirrored = accept_cutoff(rows, args.precision, args.min_accepts)
         boot = bootstrap(mirrored, args.precision, args.min_accepts)
         result[kind] = {"cutoff": chosen["cutoff"] if chosen else None, "at_cutoff": chosen,
                         "bootstrap_out_of_sample_precision": boot, "labelled_used": len(rows),
                         "labelled_positive": sum(r["positive"] for r in rows), "unsure_excluded": unsure,
                         "missing": missing, "curve": curve}
+        if kind == sv.KIND_PAIR:
+            bound = different_bound(rows, args.precision, args.min_accepts)
+            result[kind].update(bound)
+            _print_different(bound, args.precision, args.min_accepts)
         if chosen:
             print(f"{kind}: cut-off {chosen['cutoff']:.4f} accepts {chosen['accepted_labelled']} labelled, "
                   f"{chosen['correct_labelled']} correct; weighted precision {chosen['weighted_precision']:.3f}, "
@@ -279,6 +393,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--precision", type=float, default=0.95)
     p.add_argument("--min-accepts", type=int, default=5,
                    help="A cut-off must accept at least this many labelled items to count.")
+    p.add_argument("--different-only", action="store_true",
+                   help="Add only different_cutoff to the existing calibration (no API calls); refuses if "
+                        "the stored judgements no longer reproduce its merge cut-off.")
     p.set_defaults(func=cmd_calibrate)
     args = parser.parse_args(argv)
     apply_model_arguments(args)

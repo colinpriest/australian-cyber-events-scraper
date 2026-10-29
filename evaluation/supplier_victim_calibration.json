@@ -711,6 +711,24 @@
           0.6464174290959985
         ]
       }
-    ]
+    ],
+    "different_cutoff": 0.780001,
+    "different_at_cutoff": {
+      "cutoff": 0.780001,
+      "rejected_labelled": 27,
+      "correct_labelled": 27,
+      "weighted_precision": 1.0,
+      "weighted_recall": 0.9824561403508771,
+      "unweighted_precision_ci95": [
+        0.8754409628553641,
+        1.0
+      ]
+    },
+    "different_bootstrap_out_of_sample_precision": {
+      "replicates": 1000,
+      "median": 1.0,
+      "mean": 0.9952998866647438,
+      "p05": 0.9785407725321889
+    }
   }
 }

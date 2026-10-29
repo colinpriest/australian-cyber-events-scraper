@@ -9,6 +9,8 @@ handles the cases a run does not:
     python scripts/discovery_queue.py drain             # process due records now, without discovery
     python scripts/discovery_queue.py release           # put quarantined records, given-up source-months
                                                         # and given-up Cyber Daily stories back in the queue
+                                                        # (records quarantined for a temporary storage failure
+                                                        # are released by every discovery run anyway)
     python scripts/discovery_queue.py backfill --source CyberDaily --months 12
                                                         # run a source added later over processed months
     python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
@@ -47,6 +49,8 @@ def _status(db_path: str, show_all: bool) -> int:
         due = len(queue.due())
         waiting = queue.waiting()
         quarantined = queue.quarantined()
+        temporary_storage = queue.temporary_storage_quarantines()
+        unexplained_storage = queue.unexplained_storage_quarantines()
         searches = queue.failed_discoveries()
         stories = cyberdaily_refetch.unrecoverable(conn)
     finally:
@@ -61,6 +65,12 @@ def _status(db_path: str, show_all: bool) -> int:
                   f"{r['quarantined']:>12}")
     else:
         print("\nEvery tracked source-month is complete." if not show_all else "\nNothing tracked yet.")
+    if temporary_storage:
+        print(f"\n{len(temporary_storage)} quarantined record(s) failed on a temporary storage error (a locked "
+              "database, an I/O error); the next discovery run releases them.")
+    if unexplained_storage:
+        print(f"\n{len(unexplained_storage)} quarantined record(s) failed to store for a reason the old record "
+              "does not give; 'release' puts them back, and a repeat failure records the real error.")
     for q in quarantined:
         print(f"\nQUARANTINED {q['raw_event_id']} [{q['source_type']}] {q['raw_title'] or ''}\n"
               f"  {q['processing_error']}")

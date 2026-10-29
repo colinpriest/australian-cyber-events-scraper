@@ -825,8 +825,25 @@ the same incident under another customer. Jev judges each (middle band
 escalated; a failed escalation leaves the item undecided). With `--apply` and a
 calibration for the current models and questions it merges those events
 through the ledger and attaches the accepted customers as `victim` roles, with
-an audit row each; a victim that still has its own separate event near the
-incident is held rather than counted twice.
+an audit row each. A victim that has its own separate event near the incident
+is decided by whether that pair has been *ruled on*: ruled the **same** incident
+(a pair label, a `same` override, or the calibrated same-incident judgement at
+its cut-off) it is merged into the supplier incident through the ledger, which
+carries the customer across; ruled a **different** incident (a label, a
+`different` override, or the calibrated judgement below its own `different_cutoff`)
+the customer is attached as a victim of the supplier incident as well, and the
+findings record which ruling allowed it; only an **unresolved** pair is held,
+and the report says why (no judgement of the pair, a failed or un-escalated
+one, no cut-off, or a label and an override that disagree). A label or override
+outranks the model; two that disagree are held, never picked between. The
+merge cut-off measured only the precision of merging, so a score just under it
+is not evidence of "different": the calibration records a separate
+`different_cutoff` (the largest score below which at least 95% of labelled
+pairs, weighted, are labelled different and none is labelled the same), and a
+pair scoring between the two, or any model-only pair when a calibration has no
+such bound, is held with the band named. On 2026-10-29 it is 0.78 against a
+0.87 merge cut-off (`calibrate_supplier_victims.py calibrate --different-only`
+adds it to an existing calibration from the stored judgements, no API calls).
 
 ```bash
 python scripts/dedup_admin.py find-supplier-victims --research            # report
@@ -1119,6 +1136,21 @@ python scripts/discovery_queue.py release   # return quarantined records to the 
 python scripts/discovery_queue.py backfill --source CyberDaily --months 12   # a source added later, over processed months
 ```
 
+**A failed store keeps its cause.** Storing a record, or marking it processed,
+used to log the exception and return `None`, and the caller recorded every
+`None` as a permanent failure: three locked-database errors quarantined a good
+record. The store calls now raise `StorageError` (`processing/retry_queue.py`)
+with the stage and the error text. A locked or busy database, a disk I/O error
+or a full disk is the store failing, not the record: it is *temporary*, retried
+with back-off and never counted toward quarantine (the same applies to a failed
+write of a Perplexity enrichment). An integrity or validation error is the
+record's and still quarantines after 3, with the real error in the reason. A
+raw event that cannot be stored leaves its source-month recorded as failed, so
+the month is searched again. Every discovery run first releases records an
+earlier version quarantined for a temporary storage failure when their stored
+reason says so; one quarantined with the old generic "enriched event could not
+be stored" is listed by `status` and returned by `release`.
+
 ### API request budgets
 
 `--api-budget openai=3000 perplexity=1500 typesafe=20000` (or
@@ -1128,7 +1160,8 @@ sent - the hook is on the HTTP libraries, so threads, SDK retries and fallback
 searches all count - and once a budget is spent the request is refused without
 being sent. Nothing is lost: each step stores what it finished, and a refused
 enrichment is not counted as a failed attempt, so the next run continues where
-this one stopped. A run that hit a budget ends **degraded** (exit code 2). The
+this one stopped. The same holds for a store that fails for a temporary cause (a
+locked database, a disk I/O error): see "Discovery filter and retry queue". A run that hit a budget ends **degraded** (exit code 2). The
 end-of-run log lists requests per provider. Token costs are still reported by
 the token tracker; they cannot be capped directly because the GPT-5 snapshots
 have no listed price.
@@ -1663,8 +1696,12 @@ check flagged and could not resolve are tagged `attribution_unresolved` when the
 data loads. Every run reports, under "unresolved victim attributions" in the
 data-quality summary (and `analysis_summary.json`), how many rows, events and
 organisations they are. It also reports the observed repeats per elapsed-time
-band with them included and excluded, and how many repeats involve one. They
-are kept by default (`--unresolved-attributions include`; `exclude` drops them
+band with them included and excluded, and how many repeats involve one. A
+repeat involves one only when its own organisation's attribution on the event
+before or after it is unresolved: the flag belongs to an (organisation,
+incident) pair, so on a supplier incident shared by several customers,
+flagging one does not mark the others' repeats (and `exclude` drops only the
+flagged customer's row). They are kept by default (`--unresolved-attributions include`; `exclude` drops them
 from the whole analysis, in both scripts). On the 2026-10-28 copy, 41
 attributions were unresolved and 19 of 150 observed repeats involved one.
 

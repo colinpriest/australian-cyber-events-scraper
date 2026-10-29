@@ -3113,10 +3113,13 @@ def cmd_find_supplier_victims(args) -> int:
             print(f"  merged  {m['source'][:8]} -> {m['target'][:8]}  victims carried: "
                   f"{', '.join(m['carried_victims']) or '-'}")
     for a in result["attached"]:
+        ruled = a.get("own_events_ruled_different") or []
         print(f"  victim  {a['deduplicated_event_id'][:8]}  + {a['victim']}  ({a['decided_by']}, "
-              f"p={a['p_affected'] if a['p_affected'] is None else round(a['p_affected'], 3)})")
+              f"p={a['p_affected'] if a['p_affected'] is None else round(a['p_affected'], 3)})"
+              + (f"  own event(s) ruled different: {', '.join(r['own_event'][:8] for r in ruled)}" if ruled else ""))
     for h in result["held"]:
-        print(f"  held    {h['deduplicated_event_id'][:8]}  {h['victim']}: own event {h['own_event'][:8]}")
+        print(f"  held    {h['deduplicated_event_id'][:8]}  {h['victim']}: own event {h['own_event'][:8]} - "
+              f"{'; '.join(r['basis'] for r in h['own_event_rulings'])}")
     for v in result["variants"]:
         print(f"  variant {v['deduplicated_event_id'][:8]}  {v['candidate']} = {v['victim']} (not attached)")
     if apply:

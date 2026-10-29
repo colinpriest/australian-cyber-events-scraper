@@ -161,6 +161,23 @@ The same-incident cut-off is solid; its one labelled error above the cut-off is
 a contaminated event (the NSW Department of Education's July 2021 attack
 holding NSW Health Accellion records).
 
+**The bound for "different" (added 2026-10-29).** The merge cut-off measured only
+the precision of merging, so a score just under it is not evidence that two
+events are different incidents (the labelled pairs between 0.78 and 0.87 are 3
+the same incident, 3 different). `calibrate` therefore also records
+`same_incident.different_cutoff`: the largest score below which, weighted,
+at least 95% of the labelled pairs are labelled `different`, with at least 5 of
+them **and none labelled `same`** (a label is never acted on the other way; the
+weighted precision alone ran to 0.91, past the merge cut-off, because the many
+low-scoring pairs outweigh the few near it). Measured on the same stored
+judgements and labels: **0.78** (27 of 27 labelled pairs below it are
+different, weighted recall 0.98, bootstrap out-of-sample precision mean 0.995 /
+p05 0.979). A model score between 0.78 and 0.87, or any model score when a
+calibration has no `different_cutoff`, leaves the pair unresolved. `python
+scripts/calibrate_supplier_victims.py calibrate --different-only` adds the field
+to an existing calibration, after checking the stored judgements still
+reproduce its merge cut-off.
+
 ## 5. Applying
 
 In order:
@@ -184,9 +201,31 @@ In order:
    are checked the same way, and descriptions ("Sydney radiologist") are not
    carried.
    A victim that still has **its own active event within 365 days** of the
-   incident is **held**, not attached: if that event is the same incident the
-   organisation would be counted twice. It is reported until the pair is
-   merged or ruled different.
+   incident (or an undated one) would be counted twice if that event were the
+   same incident, so the pair is *ruled on* first (`rule_on_own_event`), in
+   order of authority:
+
+   1. a **pair label** (`evaluation/supplier_victim_labels.csv`, kind
+      `same_incident`; `unsure` is no ruling) and an active `DedupOverrides`
+      ruling between any member records of the two events; a label and an
+      override that disagree leave the pair **unresolved**;
+   2. the calibrated **same-incident judgement** of the pair: at or above the
+      merge cut-off the same incident, below the calibrated `different_cutoff`
+      a different one, and in between neither (held, the band named).
+
+   *Same incident:* the own event is merged into the supplier incident in step 1
+   (also when only a label or override says so, and the pair was not a model
+   candidate), and the ledger carries the customer across as a victim.
+   *Different incident:* the customer is attached as a victim of the supplier
+   incident; its own event stays a separate incident, and the findings'
+   `attached[].own_events_ruled_different` give the event, the ground and the
+   judgement. *Unresolved* (no stored or fresh judgement of the pair - undated,
+   over 365 days apart, or sharing a victim with the incident, so
+   `check-duplicates` decides - a failed or un-escalated judgement, no
+   cut-off, conflicting rulings, or a ruled-same merge the ledger refused): the
+   victim is **held**, reported in `held[]` with `why`, and decided on a later
+   run once something rules on the pair. A `different` ruling cached as an
+   override makes the ledger refuse the merge, so it reads as different here.
 
 Every attachment is recorded in `SupplierVictimAttachments` (event, entity,
 previous role, decided by `jev` / `escalation` / `label` / `merge`,

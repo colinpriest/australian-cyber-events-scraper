@@ -43,6 +43,7 @@ from cyber_data_collector.processing.enrichment_gate import (
 )
 from cyber_data_collector.processing.perplexity_enrichment import PerplexityEnrichmentEngine
 from cyber_data_collector.processing.record_evidence import RecordEvidence
+from cyber_data_collector.processing.retry_queue import KIND_TEMPORARY, classify_failure
 from cyber_data_collector.utils import ConfigManager
 from cyber_data_collector.utils.api_budget import is_budget_refusal
 
@@ -60,7 +61,7 @@ OUTCOME_PARTIAL = 'partially_supported'    # supported facts stored; confident u
 OUTCOME_REJECTED = 'rejected'              # answer failed the gate (failed attempt)
 OUTCOME_REQUEST_FAILED = 'request_failed'  # the API call failed (failed attempt)
 OUTCOME_BUDGET_REFUSED = 'budget_refused'  # refused by the run's API budget: not attempted, not a failure
-OUTCOME_STORAGE_FAILED = 'storage_failed'  # accepted, but writing it failed (failed attempt)
+OUTCOME_STORAGE_FAILED = 'storage_failed'  # accepted, but writing it failed (a failed attempt unless the store itself failed temporarily)
 OUTCOME_CORRUPT_BASELINE = 'corrupt_baseline'  # stored enrichment unreadable: quarantined, nothing written
 OUTCOME_DRY_RUN = 'dry_run'                # accepted; dry run wrote nothing
 
@@ -115,6 +116,7 @@ class PerplexityBackfillProcessor:
             'enriched_failed': 0,
             'partially_supported': 0,
             'storage_failures': 0,
+            'temporary_storage_failures': 0,
             'bookkeeping_failures': 0,
             'quarantined': 0,
             'skipped': 0,
@@ -373,6 +375,13 @@ class PerplexityBackfillProcessor:
             return OUTCOME_CORRUPT_BASELINE
         except Exception as exc:
             self.stats['storage_failures'] += 1
+            if classify_failure(exc) == KIND_TEMPORARY:
+                # The store failed (a locked database, an I/O error), not the answer: the record stays as it
+                # was, is enriched again next run, and the attempt does not count toward quarantine.
+                self.stats['temporary_storage_failures'] += 1
+                logger.error(f"Temporary storage error for {event_id} (not counted as an attempt): "
+                             f"{type(exc).__name__}: {str(exc)[:300]}")
+                return OUTCOME_STORAGE_FAILED
             self._record_failure(original_event, f"storage error: {str(exc)[:300]}")
             return OUTCOME_STORAGE_FAILED
 

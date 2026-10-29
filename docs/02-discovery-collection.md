@@ -987,14 +987,39 @@ keeps:
 | Column | Meaning |
 |---|---|
 | `source_type`, `discovery_year`, `discovery_month` | where and when it was found |
-| `temporary_failures` | provider failures: timeouts, 429/5xx, connection errors, API-budget refusals, Jev outages - **never** a reason to give up |
-| `attempts` | permanent failures (the record itself: invalid output for its content, a request refused as invalid, a store that fails) |
+| `temporary_failures` | provider failures: timeouts, 429/5xx, connection errors, API-budget refusals, Jev outages, and a store that failed for a temporary cause (a locked or busy database, a disk I/O error, a full disk) - **never** a reason to give up |
+| `attempts` | permanent failures (the record itself: invalid output for its content, a request refused as invalid, a store that fails an integrity or validation rule) |
 | `last_stage`, `last_error`, `last_error_kind` | the latest failure |
 | `next_attempt_at` | back-off: temporary 15 min doubling to 12 h; permanent 1 h doubling to 7 days |
 | `quarantined_at`, `completed_at` | outcome |
 
 After 3 permanent failures the record is quarantined: marked processed with
 `Rejected at retry_quarantine: ...` (so it leaves every queue) and logged as an error.
+
+**A failed store keeps its cause.** Storing a record (`store_raw`, `store_enriched`) or marking
+it processed (`mark_processed`) used to log the exception and return `None`, and the caller
+recorded every `None` as a permanent failure with the generic text "enriched event could not
+be stored": three locked-database errors quarantined a record that was fine. The store calls
+now raise `StorageError` (`processing/retry_queue.py`) carrying the stage, the message
+(`OperationalError: database is locked`) and the kind from `classify_failure`:
+
+| Cause | Kind | Effect |
+|---|---|---|
+| `sqlite3.OperationalError` (locked, busy, disk I/O, unable to open), OS errors EIO / EBUSY / ENOSPC / EAGAIN ... | temporary | back-off, never quarantines |
+| `sqlite3.IntegrityError` / `DataError`, any other exception | permanent | counts toward quarantine; the real error is in `last_error` and in the `Rejected at retry_quarantine` reason |
+
+A database constraint violation (NOT NULL, FOREIGN KEY, UNIQUE) still stops the pipeline. A raw
+event that cannot be stored is not in the queue, so its source's search of the month is
+recorded `failed` (error type `other`, message `storing '<title>' failed (temporary): ...`) and
+the month is searched again; `find_existing_raw_event` and `create_enriched_event`'s existence
+check raise instead of answering "none", and `mark_raw_event_processed` raises, so a record
+whose marking failed is queued as a failure rather than reported finished.
+
+**Quarantines from before this are released.** Every discovery run (`drain_retry_queue`) first
+releases records quarantined at a store stage whose stored reason names a temporary cause
+(`RetryQueue.release_temporary_storage_quarantines`; idempotent). A record quarantined with the
+old generic text names no cause and is not guessed at: `status` lists it, and `release` returns
+it - a repeat failure then records the real error.
 
 **Completion per source and month.** The view `SourceMonthCompletion` gives, per source and
 discovery month, records `stored`, `processed`, `rejected`, `pending`, `failing` and
