@@ -653,6 +653,106 @@ def test_within_event_duplicates_keep_one_name():
 
 
 # ----------------------------------------------------------------------
+# Recalibrating on a labelling-time snapshot
+# ----------------------------------------------------------------------
+
+@pytest.fixture
+def recal(conn, tmp_path, monkeypatch):
+    """A labelling-time snapshot (the fixture database), a live database holding one stored search, and the
+    label, sample and calibration files for one labelled victim and one labelled pair."""
+    from scripts import calibrate_supplier_victims as cal
+
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    snapshot = instance / "labelling.db"
+    out = sqlite3.connect(snapshot)
+    conn.backup(out)
+    out.close()
+    live = instance / "live.db"
+    lc = sqlite3.connect(live)
+    sv.ensure_schema(lc)
+    from cyber_data_collector.dedup import corroboration, org_timeline
+    org_timeline.ensure_schema(lc)
+    corroboration.ensure_schema(lc)
+    lc.execute("INSERT INTO SupplierIncidentSearches VALUES ('e1', 'h1', 'q', 'sonar', ?, '[]', '2026-10-28')",
+               ("AFFECTED: Monash University | exam records | https://y",))
+    lc.commit()
+    lc.close()
+    labels = tmp_path / "labels.csv"
+    labels.write_text("kind,subject_id,label,rationale,labeller\n"
+                      "victim,e1|3,affected,why,test\nsame_incident,e1|e2,same,why,test\n"
+                      "victim,e1|name:gone away university,affected,why,test\n", encoding="utf-8")
+    sample = {("victim", "e1|3"): {"stratum": "high", "weight": "1"},
+              ("same_incident", "e1|e2"): {"stratum": "high", "weight": "1"},
+              ("victim", "e1|name:gone away university"): {"stratum": "high", "weight": "1"}}
+    calibration = tmp_path / "calibration.json"
+    old = {**sv.calibration_identity(), "evidence": "supplier-victims:0000000000000000",
+           "victim": {"cutoff": 0.96}, "same_incident": {"cutoff": 0.87}, "generated": "2026-10-27T20:00:00"}
+    calibration.write_text(json.dumps(old), encoding="utf-8")
+    monkeypatch.setattr(sv, "ROOT", tmp_path)
+    monkeypatch.setattr(sv, "LABELS_PATH", labels)
+    monkeypatch.setattr(sv, "CALIBRATION_PATH", calibration)
+    monkeypatch.setattr(cal, "SAMPLE_PATH", tmp_path / "sample.csv")
+    (tmp_path / "sample.csv").write_text("kind,subject_id,stratum,weight\n")
+    monkeypatch.setattr(cal, "read_sample", lambda: sample)
+    return SimpleNamespace(live=live, snapshot=snapshot, calibration=calibration, labels=labels, sample=sample,
+                           tmp=tmp_path)
+
+
+def _recalibrate(recal, fake, **kwargs):
+    from cyber_data_collector.dedup import recalibration as rc
+    from cyber_data_collector.utils.jev import JevJudge
+
+    return rc.recalibrate_step("supplier-victims", recal.live, recal.snapshot,
+                               judge_factory=lambda c: JevJudge(c, client=fake), escalation_client=object(),
+                               verify_keys=False, calibrate_args=["--min-accepts", "1"], **kwargs)
+
+
+def test_supplier_victims_recalibrate_on_the_snapshot_and_record_the_evidence(recal):
+    from cyber_data_collector.dedup import recalibration as rc
+
+    assert rc.calibration_state(rc.SPECS["supplier-victims"])["state"] == "stale"
+    fake = FakeTypeSafe(p=0.95)
+    # 3 labelled; the one named only by a search that was never stored is gone, 2 of 3 > 65%: scored.
+    result = _recalibrate(recal, fake)
+    assert (result["cases_scored"], result["cases_labelled"]) == (2, 3) and fake.calls == 2
+    new = json.loads(recal.calibration.read_text(encoding="utf-8"))
+    assert new["evidence"] == sv.calibration_identity()["evidence"]
+    assert new["recalibration"]["previous"]["evidence"] == "supplier-victims:0000000000000000"
+    assert new["recalibration"]["labelling_snapshot"] == "labelling.db" and new["recalibration"]["cases_scored"] == 2
+    assert new["victim"]["labelled_used"] == 1 and new["same_incident"]["labelled_used"] == 1
+    assert "different_cutoff" in new["same_incident"]
+    assert sv.active_calibration(recal.calibration)["same_incident"]["cutoff"] == new["same_incident"]["cutoff"]
+    assert result["after"]["state"] == "current"
+    # The live database's stored search was carried into the working copy (and a repeat run buys nothing).
+    work = recal.live.parent / "recalibration" / "supplier-victims.db"
+    assert sqlite3.connect(work).execute("SELECT COUNT(*) FROM SupplierIncidentSearches").fetchone()[0] == 1
+    again = _recalibrate(recal, fake)
+    assert fake.calls == 2 and again["cases_scored"] == 2
+
+
+def test_supplier_recalibration_refuses_a_snapshot_that_lacks_too_many_labelled_cases(recal):
+    from cyber_data_collector.dedup import recalibration as rc
+
+    before = recal.calibration.read_text(encoding="utf-8")
+    recal.labels.write_text(recal.labels.read_text(encoding="utf-8")
+                            + "victim,e1|name:other gone,affected,why,test\n", encoding="utf-8")
+    recal.sample[("victim", "e1|name:other gone")] = {"stratum": "high", "weight": "1"}
+    fake = FakeTypeSafe(p=0.95)
+    with pytest.raises(rc.RecalibrationError, match="only 2 of 4 labelled case"):
+        _recalibrate(recal, fake)
+    assert fake.calls == 0 and recal.calibration.read_text(encoding="utf-8") == before
+
+
+def test_supplier_recalibration_dry_run_counts_on_a_throwaway_copy(recal):
+    from cyber_data_collector.dedup import recalibration as rc
+
+    result = rc.recalibrate_step("supplier-victims", recal.live, recal.snapshot, dry_run=True)
+    assert (result["present_in_snapshot"], result["labelled"]) == (2, 3)
+    assert not (recal.live.parent / rc.WORK_DIR_NAME).exists()
+
+
+# ----------------------------------------------------------------------
 # Calibrating the bound for "different"
 # ----------------------------------------------------------------------
 

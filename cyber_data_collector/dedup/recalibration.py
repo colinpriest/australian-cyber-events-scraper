@@ -73,6 +73,8 @@ class StepSpec:
     module: str               # module with CALIBRATION_PATH, calibration_identity()
     escalates: bool           # needs the OpenAI key as well as Jev's
     automatic: bool = True    # False: recalibrate with its own calibration script
+    carries: Tuple[str, ...] = ()   # stored research (tables) carried from the live database into the copy
+    min_present: float = 0.0  # fewest labelled cases the snapshot may lack: present/labelled below this fails
 
 
 SPECS: Dict[str, StepSpec] = {s.name: s for s in (
@@ -82,9 +84,11 @@ SPECS: Dict[str, StepSpec] = {s.name: s for s in (
     StepSpec("coherence-same-organisation", "cyber_data_collector.dedup.coherence_same_org", escalates=True),
     StepSpec("duplicates", "cyber_data_collector.dedup.duplicate_judgement", escalates=True),
     StepSpec("victim-attribution", "cyber_data_collector.dedup.victim_judgement", escalates=True),
-    # Its scoring is the find-supplier-victims candidate generation; recalibrate it with
-    # scripts/calibrate_supplier_victims.py on a snapshot. Staleness is still reported.
-    StepSpec("supplier-victims", "cyber_data_collector.dedup.supplier_victims", escalates=True, automatic=False),
+    # Its scoring is the find-supplier-victims candidate generation, run on the snapshot with the live
+    # database's stored per-incident searches. A victim candidate named only by a search made at labelling
+    # time (2026-10-27, not stored) cannot be rebuilt, so some labelled victims are absent: 70 of 103.
+    StepSpec("supplier-victims", "cyber_data_collector.dedup.supplier_victims", escalates=True,
+             carries=("SupplierIncidentSearches",), min_present=0.65),
 )}
 
 
@@ -151,7 +155,8 @@ def registered_snapshot(step: str, live_db: Path, overrides: Optional[Dict[str, 
     return path
 
 
-def work_database(step: str, live_db: Path, snapshot: Path, fresh: bool = False) -> Path:
+def work_database(step: str, live_db: Path, snapshot: Path, fresh: bool = False,
+                  extra_tables: Tuple[str, ...] = ()) -> Path:
     """The recalibration copy for ``step``: made from the snapshot once, then kept so answers are reused."""
     from scripts import prepare_calibration_snapshot as prep
 
@@ -160,10 +165,10 @@ def work_database(step: str, live_db: Path, snapshot: Path, fresh: bool = False)
     if fresh and work.exists():
         work.unlink()
     if work.exists():
-        added = prep.carry_over(str(work), str(live_db))
+        added = prep.carry_over(str(work), str(live_db), extra_tables)
         logger.info("Reusing recalibration copy %s (carried over %s)", work, added)
     else:
-        added = prep.prepare(str(snapshot), str(work), str(live_db))
+        added = prep.prepare(str(snapshot), str(work), str(live_db), extra_tables)
         logger.info("Made recalibration copy %s from %s (carried over %s)", work, snapshot.name, added)
     return work
 
@@ -313,6 +318,35 @@ def _plan_coherence_same_org(conn: sqlite3.Connection) -> Plan:
     return cal.plan(conn, so)
 
 
+def _plan_supplier_victims(conn: sqlite3.Connection) -> Plan:
+    """The labelled victim candidates and event pairs that candidate generation still produces on the snapshot."""
+    from cyber_data_collector.dedup import supplier_victims as sv
+    from scripts import calibrate_supplier_victims as cal
+
+    sample, labels = cal.read_sample(), sv.read_labels(sv.LABELS_PATH)
+    wanted = {kind: {sid for (k, sid) in sample if k == kind and labels.get((k, sid)) not in (None, "unsure")}
+              for kind in cal.KINDS}
+    g = sv.gather(conn)
+    by_id = g.by_id
+    victims = [(c.subject_id, sv.build_victim_state(conn, by_id[c.dedup_id], c))
+               for cs in g.candidates.values() for c in cs if c.subject_id in wanted[sv.KIND_VICTIM]]
+    pairs = [(p.pair_id, sv.build_pair_state(conn, by_id[p.supplier_id], p))
+             for p in g.pairs if p.pair_id in wanted[sv.KIND_PAIR]]
+
+    def run(conn, judge, client):
+        for kind, items in ((sv.KIND_VICTIM, victims), (sv.KIND_PAIR, pairs)):
+            scores = sv.judge(conn, items, kind, judge, client)
+            if scores.failed or scores.undecided:
+                bad = scores.failed + scores.undecided
+                raise RecalibrationError(
+                    f"{len(bad)} labelled {kind} item(s) could not be judged or escalated (first: {bad[0]}); "
+                    "see the log. Nothing was calibrated.")
+            _require_scored(kind, [sid for sid, _ in items], scores.final)
+            _require_agreement(kind, scores.final, sv.stored_final_probabilities(conn, kind))
+
+    return Plan(victims + pairs, sum(len(w) for w in wanted.values()), run)
+
+
 def _rows(path: Path) -> List[Dict[str, str]]:
     with Path(path).open(encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
@@ -321,7 +355,7 @@ def _rows(path: Path) -> List[Dict[str, str]]:
 PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
     "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "coherence": _plan_coherence,
     "coherence-same-organisation": _plan_coherence_same_org, "duplicates": _plan_duplicates,
-    "victim-attribution": _plan_victim_attribution,
+    "victim-attribution": _plan_victim_attribution, "supplier-victims": _plan_supplier_victims,
 }
 
 #: argv for each step's calibration script (``--db`` and the model arguments are added by the caller).
@@ -332,6 +366,7 @@ CALIBRATE: Dict[str, Tuple[str, List[str]]] = {
     "coherence-same-organisation": ("scripts.calibrate_coherence_same_org", ["calibrate"]),
     "duplicates": ("scripts.calibrate_duplicates", []),
     "victim-attribution": ("scripts.calibrate_victim_attribution", ["calibrate"]),
+    "supplier-victims": ("scripts.calibrate_supplier_victims", ["calibrate"]),
 }
 
 
@@ -365,22 +400,37 @@ def recalibrate_step(name: str, live_db: Path, snapshot: Optional[Path] = None,
     spec = SPECS[name]
     mod = _module(spec)
     if not spec.automatic:
-        raise RecalibrationError(f"{name} is not recalibrated here: run scripts/calibrate_supplier_victims.py "
-                                 "(sample / calibrate) on a labelling-time snapshot")
+        raise RecalibrationError(f"{name} is not recalibrated here: run its own calibration script "
+                                 "on a labelling-time snapshot")
     snapshot = snapshot or registered_snapshot(name, live_db)
     before = calibration_state(spec)
     if dry_run:
-        conn = sqlite3.connect(f"file:{Path(snapshot).as_posix()}?mode=ro", uri=True)
-        try:
-            plan = PLANS[name](conn)
-        finally:
-            conn.close()
+        if spec.carries:
+            # Candidate generation needs the carried research, which the snapshot lacks: count on a throwaway copy.
+            import tempfile
+
+            from scripts import prepare_calibration_snapshot as prep
+
+            with tempfile.TemporaryDirectory() as scratch:
+                copy = Path(scratch) / "dry_run.db"
+                prep.prepare(str(snapshot), str(copy), str(live_db), spec.carries)
+                conn = sqlite3.connect(copy)
+                try:
+                    plan = PLANS[name](conn)
+                finally:
+                    conn.close()
+        else:
+            conn = sqlite3.connect(f"file:{Path(snapshot).as_posix()}?mode=ro", uri=True)
+            try:
+                plan = PLANS[name](conn)
+            finally:
+                conn.close()
         return {"step": name, "dry_run": True, "snapshot": str(snapshot), "before": before,
                 "labelled": plan.labelled, "present_in_snapshot": plan.present,
                 "would_become": mod.calibration_identity()["evidence"]}
     if verify_keys:
         check_keys(spec)
-    work = work_database(name, live_db, Path(snapshot), fresh=fresh)
+    work = work_database(name, live_db, Path(snapshot), fresh=fresh, extra_tables=spec.carries)
     cal_path = Path(mod.CALIBRATION_PATH)
     old_text = cal_path.read_text(encoding="utf-8") if cal_path.exists() else None
     old = json.loads(old_text) if old_text else {}
@@ -393,6 +443,10 @@ def recalibrate_step(name: str, live_db: Path, snapshot: Optional[Path] = None,
         plan = PLANS[name](conn)
         if not plan.items:
             raise RecalibrationError(f"{name}: none of the {plan.labelled} labelled cases is in {snapshot.name}")
+        if plan.present < spec.min_present * plan.labelled:
+            raise RecalibrationError(
+                f"{name}: only {plan.present} of {plan.labelled} labelled case(s) are in {snapshot.name} "
+                f"(< {spec.min_present:.0%}); nothing was spent. Old calibration kept.")
         logger.info("%s: scoring %d of %d labelled case(s) on current evidence", name, plan.present, plan.labelled)
         plan.runner(conn, judge, escalation_client)
     finally:

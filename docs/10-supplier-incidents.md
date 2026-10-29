@@ -161,6 +161,41 @@ The same-incident cut-off is solid; its one labelled error above the cut-off is
 a contaminated event (the NSW Department of Education's July 2021 attack
 holding NSW Health Accellion records).
 
+### Recalibration on current evidence (2026-10-29)
+
+`dedup/calibration_guard.py` makes a calibration apply only to the evidence
+processing it was measured on, so the 2026-10-27 file (no evidence fingerprint)
+stopped applying and `find-supplier-victims --apply` refused. The step is now
+recalibrated by `dedup_admin.py recalibrate --step supplier-victims` (or
+`--if-stale`, which the refresh runs): it copies the labelling-time snapshot
+named in `evaluation/calibration_snapshots.json`
+(`instance/calibration_supplier_victims.db`, the 2026-10-27 23:21 backup, which
+holds every labelled event and pair), carries the live database's stored
+`SupplierIncidentSearches` and timelines in, re-scores the labelled victim
+candidates and pairs with today's readers (Jev, the middle band escalated; answers are
+keyed on a hash of the evidence, so a repeat run buys nothing), and runs
+`calibrate_supplier_victims.py calibrate`, which records the evidence
+fingerprint.
+
+Coverage is partial and stated. The working copy re-scored **70 of 103**
+labelled victim candidates and **69 of 71** labelled pairs (139 of 174; 139
+Jev calls and 37 GPT-5.5 escalations). The 33 missing victims were named only by
+the supplier searches of 2026-10-27, which were not stored (the working database
+`work.db` is gone) and cannot be replayed; the searches stored on 2026-10-28 name
+others. The step fails below 65% coverage. The labels are the same ones, now
+measured on today's scores:
+
+| Question | Labelled used (positive) | Cut-off | Accepted at cut-off | Weighted precision | Weighted recall | Bootstrap out-of-sample precision (mean / p05) |
+|---|---|---|---|---|---|---|
+| victim | 70 (42) | **0.87** (was 0.96) | 26, 25 right | 0.96 | 0.58 (was 0.11) | 0.94 / 0.76 |
+| same incident, merge | 69 (36) | **0.89** (was 0.87) | 27, all right | 1.00 | 0.75 | 0.95 / 0.79 |
+| same incident, "different" below | 69 (36) | **0.09** (was 0.78) | 19, all right | 1.00 | 0.92 | 0.99 / 0.97 |
+
+The victim bootstrap p05 of 0.76 says that cut-off is fragile; the "different"
+bound is low because two labelled-same pairs now score 0.11 and 0.19 (the bound
+stops below every labelled-same pair), so a model-only "different" is rare and
+most unlabelled pairs between 0.09 and 0.89 are held.
+
 **The bound for "different" (added 2026-10-29).** The merge cut-off measured only
 the precision of merging, so a score just under it is not evidence that two
 events are different incidents (the labelled pairs between 0.78 and 0.87 are 3
@@ -169,10 +204,10 @@ the same incident, 3 different). `calibrate` therefore also records
 at least 95% of the labelled pairs are labelled `different`, with at least 5 of
 them **and none labelled `same`** (a label is never acted on the other way; the
 weighted precision alone ran to 0.91, past the merge cut-off, because the many
-low-scoring pairs outweigh the few near it). Measured on the same stored
-judgements and labels: **0.78** (27 of 27 labelled pairs below it are
+low-scoring pairs outweigh the few near it). Measured first on the 2026-10-27
+scores: **0.78** (27 of 27 labelled pairs below it are
 different, weighted recall 0.98, bootstrap out-of-sample precision mean 0.995 /
-p05 0.979). A model score between 0.78 and 0.87, or any model score when a
+p05 0.979); the 2026-10-29 recalibration above replaced it. A model score between the two bounds, or any model score when a
 calibration has no `different_cutoff`, leaves the pair unresolved. `python
 scripts/calibrate_supplier_victims.py calibrate --different-only` adds the field
 to an existing calibration, after checking the stored judgements still
