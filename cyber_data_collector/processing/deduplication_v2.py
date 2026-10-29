@@ -115,7 +115,8 @@ class CyberEvent:
     victim_organization_industry: Optional[str] = None
     data_sources: List[str] = None
     urls: List[str] = None
-    confidence: float = 0.5
+    # The master record's stored score; None = it has none (nothing measured one). It is copied, never defaulted.
+    confidence: Optional[float] = None
     # Incident-specific facts (dedup/merge_corroboration.py). Each is a list because
     # an event of several records carries every record's value; empty means unknown.
     attack_methods: List[str] = None

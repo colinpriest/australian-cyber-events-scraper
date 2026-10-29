@@ -343,11 +343,18 @@ def validate_enrichment_data_for_storage(
     validated["is_australian_event"] = safe_bool(validated.get("is_australian_event"), default=False)
     validated["is_specific_event"] = safe_bool(validated.get("is_specific_event"), default=False)
 
-    # Ensure confidence_score is a float in [0, 1]
-    score = safe_float(validated.get("confidence_score"), default=0.0, field_name="confidence_score")
+    # confidence_score is a float in [0, 1], or None when nothing measured it.
+    # A missing (or unreadable) score is stored as NULL: a default here would
+    # read downstream as model output (it was 0.0, and `score or 0.0` turned a
+    # real 0.0 into the same value).
+    score = safe_float(validated.get("confidence_score"), default=None, field_name="confidence_score")
     if score is not None:
         score = max(0.0, min(1.0, score))
-    validated["confidence_score"] = score or 0.0
+    validated["confidence_score"] = score
+    if score is None:
+        # No score, so no model or score version to attribute.
+        validated["confidence_model"] = None
+        validated["confidence_version"] = None
 
     # Ensure australian_relevance_score is a float
     aus_score = safe_float(validated.get("australian_relevance_score"), default=0.0, field_name="australian_relevance_score")

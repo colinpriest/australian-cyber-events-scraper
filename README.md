@@ -272,11 +272,22 @@ With CyberDaily among the sources, every run also does two more things:
   and re-enriched; unchanged text writes nothing.
 
 - **Self-healing.** Every failure keeps its type: `throttled` (429/503),
-  `missing` (404/410), `network`, `parse` or `incomplete`
-  (`processing/fetch_errors.py`; stored in `SourceMonthDiscovery`,
-  `CyberDailyRefetches` and `DiscoveryRecordState`). Temporary failures are
-  retried by later runs with back-off, and given up after 5. A 404/410 is
-  never retried. Given-up months and stories are reported until `release`.
+  `missing` (404/410), `network`, `parse`, `incomplete`, `other` (another 4xx)
+  or `unknown` (`processing/fetch_errors.py`; stored in `SourceMonthDiscovery`,
+  `CyberDailyRefetches` and `DiscoveryRecordState`), and each type belongs to
+  one of three classes. A **permanent** failure (404/410) is given up at once
+  and never retried or probed; only `release` reopens it. A **temporary** one is
+  retried with back-off (30 minutes doubling to a day); an **unknown** one
+  (`other`, `unknown`: nothing recognised it as temporary or permanent) with a
+  longer one (6 hours doubling to a week). After 5 consecutive failures a month
+  is *parked*, not abandoned: the source is probed (one parked month searched,
+  after a week, then after 2 and 4 weeks while the probe keeps failing) and a
+  successful probe reopens every parked month of that source and searches them
+  in the same run. A parked month also reopens when the configuration it failed
+  under changes - the source's API key (stored as a hash), its query version
+  (`processing/source_config.py`) or the installed client library versions -
+  which every backfill checks first. No one has to run `release` for a
+  throttled or broken-for-a-while month.
 - **Incomplete stories are re-queued.** A story whose stored text is cut off
   or under 300 characters is fetched again, at most 200 per run;
   `refetch-cyberdaily --until-empty` drains the whole backlog in one command
@@ -291,15 +302,18 @@ With CyberDaily among the sources, every run also does two more things:
 - **Monitored.** The quality report shows Cyber Daily articles seen in the
   feed, stored and judged per publication month. It warns on months short
   against their neighbours, on months not searched or retrying after a
-  temporary failure, and on incomplete stories. It blocks publication only on
-  a month that was given up (404/410, or 5 failures in a row).
+  temporary failure, on months parked and sources whose probe is overdue, and
+  on incomplete stories. It blocks publication only on a month that was given
+  up for good (404/410).
 
 ```bash
 python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
 python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
 python scripts/discovery_queue.py refetch-cyberdaily --until-empty [--max-minutes N] [--concurrency N]   # drain the backlog
-python scripts/discovery_queue.py status    # failed searches with type and next retry; stories no longer fetched
-python scripts/discovery_queue.py release   # given-up months and stories back in the queue
+python scripts/discovery_queue.py status    # failed searches with type and next retry; permanent give-ups; parked months with
+                                            # their next probe and what would reopen them; stories no longer fetched
+python scripts/discovery_queue.py reopen [--dry-run]   # reopen parked months whose source configuration has changed
+python scripts/discovery_queue.py release   # permanently given-up months and stories back in the queue
 python run_full_pipeline.py --cyberdaily-backfill-since none --skip-cyberdaily-refetch   # opt out for a run
 ```
 
@@ -340,6 +354,7 @@ australian-cyber-events-scraper/
 ├── scripts/                       # Utility scripts (run from project root)
 │   ├── asd_risk_classifier.py     # Standalone ASD risk classification
 │   ├── build_static_dashboard.py  # HTML dashboard generation
+│   ├── repair_confidence_defaults.py # Clear provably-defaulted confidence values (--dry-run)
 │   ├── analyze_recurrent_timing.py # Repeat-event survival/recurrent timing analysis
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
 │   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
@@ -1343,6 +1358,31 @@ python scripts/perplexity_backfill_events.py --release-quarantine
 python scripts/perplexity_backfill_events.py --requeue-empty   # old empty "validated" rows
 ```
 
+#### One active enrichment per record, enforced by the database
+
+`create_enriched_event` used to look for an active enrichment, release its
+lock, and take it again to insert, so two workers (threads, or processes with
+their own connection) could both find none and both insert: two events from one
+article. Creation is now one statement (`INSERT ... WHERE NOT EXISTS`, under one
+lock) that returns the existing enrichment's id when there is one, and the
+database backs it with a trigger (`trg_enriched_one_active_per_record`,
+`storage/enrichment_uniqueness.py`, installed by `pipeline.py init` and on every
+connection) that aborts the insert of an *active* enrichment for a record that
+already has one. It is a trigger on `INSERT`, not a partial unique index on
+`EnrichedEvents(raw_event_id) WHERE status = 'Active'`, because the
+record-identity repair (`processing/record_identity.py`) moves enrichments
+between records with an `UPDATE` of `raw_event_id`: a record that holds an
+enrichment known to be about another article keeps it (reported as
+`left_with_two`) while the one that belongs to it is attached, and a chain of
+moves passes through states a unique index forbids. The invariant the pipeline
+owns is that ingest never creates a second one.
+
+Records that already hold two (none on the 2026-10-29 copy: 0 of 3,627 active
+enrichments) are never repaired silently: `init` logs them at ERROR, and
+`python scripts/check_data_integrity.py` fails
+(`active-enrichment-unique-per-record`) for any pair that no `RecordIdentityChecks`
+finding explains.
+
 #### Citations must support the facts
 
 A cited URL is not support until its page has been read. The gate retrieves
@@ -1373,17 +1413,38 @@ the calibrated source-gate question and rejects pages below its cut-off
 and kept: on the event labels the same cut-off would drop real incidents
 (Perplexity lower-bound precision 0.36, `evaluation/page_gate_source_evaluation.json`).
 Every run first drains a durable retry queue of stored-but-unfinished records
-(temporary failures retried with back-off forever, permanent ones quarantined
-after 3), and a month whose search lost results is searched again. No TypeSafe
+(temporary failures retried with back-off forever, *recognised* permanent ones
+quarantined after 3, unrecognised ones retried with a long back-off and never
+quarantined), and a month whose search lost results is searched again. No TypeSafe
 or OpenAI key: discovery stops, it does not fall back. Details:
 [docs/04-event-filtering.md](docs/04-event-filtering.md) section 3.0 and
 [docs/02-discovery-collection.md](docs/02-discovery-collection.md) section 7.
 
 ```bash
-python scripts/discovery_queue.py status    # incomplete source-months, quarantined records
-python scripts/discovery_queue.py release   # return quarantined records to the queue
+python scripts/discovery_queue.py status    # incomplete source-months, quarantined records, parked months, probes
+python scripts/discovery_queue.py reopen --dry-run   # parked months whose source key / query / client version changed
+python scripts/discovery_queue.py release   # return quarantined records and permanently given-up months to the queue
 python scripts/discovery_queue.py backfill --source CyberDaily --months 12   # a source added later, over processed months
 ```
+
+**Three kinds of failure, none assumed permanent.** The classifier used to call
+every exception it did not recognise *permanent*, so an unexpected library error
+or a code bug quarantined good records after three tries, and a source-month that
+failed five times for any reason was given up until a person ran `release`. Now:
+
+| Class | Recognised as | Record | Source-month search |
+|---|---|---|---|
+| permanent | a validation failure of the record's content (`ValueError`, a pydantic `ValidationError`, malformed JSON), a store integrity/data error, a value SQLite cannot bind, a request the provider refuses as invalid (400/404/410/413/414/415/422); `missing` (404/410) for a search | quarantined after 3; `release` returns it | given up at once; only `release` reopens it; never probed |
+| temporary | timeouts, 429/5xx, connection errors, a locked database, API-budget refusals; `throttled`, `network`, `parse`, `incomplete` | retried with back-off forever | back-off 30 min doubling to 1 day; parked after 5 |
+| unknown | anything else: an exception nothing recognises, 401/403, a message that says nothing | retried with a 6 h to 7 day back-off, logged at ERROR each time, never quarantined | back-off 6 h doubling to 7 days; parked after 5 |
+
+A **parked** month is probed rather than abandoned (`RetryQueue.probe_due` /
+`record_probe`, state in `SourceProbes`) and reopens on a successful probe or
+when the configuration stored with the give-up (`give_up_config`: key hashes,
+query version, client versions) differs from the current one. `status` and the
+quality report (`discovery.source_months_parked`, `discovery.parked_config_changed`,
+`discovery.source_probes_overdue`, `discovery.records_unknown_failures`) show
+them. A month parked before configurations were recorded is searched once more.
 
 **A failed store keeps its cause.** Storing a record, or marking it processed,
 used to log the exception and return `None`, and the caller recorded every
@@ -1441,6 +1502,48 @@ organisation is capped at the national population, while a genuinely global
 victim (Dell, Ticketmaster) keeps its real figure. Only over-statements are
 corrected - small counts are often exactly right ("6 senators confirm being
 targeted").
+
+### Confidence is unknown, not 0.7
+
+A missing confidence used to be filled in: `0.7` for an event, `0.8` for an
+entity with no score, `0.5` for a record rebuilt without one, and `0.0` by
+validation (which also turned a real 0.0 into the same value). Stored, they read
+as measured model output. Now:
+
+- `ConfidenceScore.overall` is `Optional`; a missing score is stored as **NULL**
+  in `EnrichedEvents`, `EnrichedEventEntities`, `EntitiesV2` and
+  `DeduplicatedEvents`. A real `0.0` stays `0.0`.
+- Where a score exists, `EnrichedEvents.confidence_model` and
+  `confidence_version` say where it came from: `source-prior-v1` (the fixed prior
+  of the data source that found the record, no model) or `classifier-adjusted-v1`
+  with the fast OpenAI model that adjusted it. A NULL score has NULL provenance.
+- Readers handle unknown explicitly: the collector's threshold keeps an
+  unscored event (an uncalibrated cut-off may not drop records) and counts it;
+  collection statistics average only scored events and report how many were not;
+  the classifier does not adjust or cap a score that is not there; deduplication
+  copies a master's NULL instead of writing 0.5, ranks a scored record above an
+  unscored one and invents no score from the number of sources; SQL that
+  orders by confidence puts NULL last (`DESC`) or first (`ASC`), i.e. as the
+  lowest. The review dashboard and exports show NULL as empty.
+- The quality report counts `confidence.events_unscored` (trend),
+  `confidence.defaults_proven` (warns; should be 0) and
+  `confidence.defaults_ambiguous` (trend).
+
+```bash
+python scripts/repair_confidence_defaults.py --dry-run   # what is provably a default, what is only suspect
+python scripts/repair_confidence_defaults.py             # set the proven defaults to NULL (logged in ConfidenceRepairs)
+```
+
+The repair clears a value only when the database proves the code path that
+wrote the default: `EnrichedEvents.confidence_score = 0.7` with no numeric
+`confidence` in `RawEvents.source_metadata` and a successful `llm_analysis` entry in
+`ProcessingLog` (the single-record path's `source_metadata.get('confidence', 0.7)`);
+the 0.8 / 0.6 constants of that path's entity links; and a deduplicated event
+copying a cleared master. Everything else at 0.7 or 0.8 is *ambiguous* - a
+source prior plus a classifier adjustment can equal it - and is reported and left
+alone. Idempotent; every cleared value is kept in `ConfidenceRepairs`. On the
+2026-10-29 copy: 298 values proven (54 events, 213 entity links, 31 deduplicated
+events) and 6,553 ambiguous values left.
 
 ### Entity typing: victim, vendor, and what each entity is
 
@@ -2032,6 +2135,9 @@ python scripts/check_data_integrity.py --quiet         # Only show failures
 python scripts/check_data_integrity.py --db PATH       # Override DB path
 python scripts/dedup_admin.py normalise-enums [--dry-run]  # repair qualified enum names
 ```
+
+`active-enrichment-unique-per-record` fails when a record holds more than one
+active enrichment that no record-identity finding explains.
 
 Qualified names (`EventSeverity.MEDIUM`) came from `str()` of a `(str, Enum)`
 member on Python 3.11+; the enums now stringify to their values, storage

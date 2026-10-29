@@ -40,6 +40,11 @@ ENRICHMENT_TRACKING_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("records_affected_basis", "TEXT"),
     ("records_affected_scope", "TEXT"),
     ("records_affected_source", "TEXT"),
+    # Where confidence_score came from. NULL score = nothing measured one (it is
+    # never a default); the model that produced a score (NULL for a source's
+    # fixed prior) and the version of the scoring rule that did.
+    ("confidence_model", "TEXT"),
+    ("confidence_version", "TEXT"),
 )
 
 STATUS_RETRYING = "retrying"
@@ -120,6 +125,8 @@ class CyberEventDataV2:
         ensure_publication_schema(self._conn)
         from cyber_data_collector.processing.incident_dates import ensure_schema as ensure_incident_schema
         ensure_incident_schema(self._conn)
+        from cyber_data_collector.storage.enrichment_uniqueness import ensure_schema as ensure_uniqueness
+        ensure_uniqueness(self._conn)
         self._conn.commit()
         if added:
             self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
@@ -387,28 +394,24 @@ class CyberEventDataV2:
         if not self._conn:
             raise ConnectionError("Database not connected")
 
-        with self._lock:
-            cursor = self._conn.cursor()
-
-            # Return existing enriched event if one already exists for this raw event
-            try:
-                cursor.execute(
-                    "SELECT enriched_event_id FROM EnrichedEvents "
-                    "WHERE raw_event_id = ? AND status = 'Active' LIMIT 1",
-                    (raw_event_id,),
-                )
-                existing = cursor.fetchone()
-                if existing:
-                    self._logger.debug(
-                        "Enriched event already exists for raw_event_id %s", raw_event_id
-                    )
-                    return existing["enriched_event_id"]
-            except sqlite3.Error as e:
-                # Not "none exists": inserting after a failed lookup could store a second one.
-                self._logger.error("Error checking for an existing enriched event: %s", e)
-                raise
-
         enriched_event_id = str(uuid.uuid4())
+        status = enriched_data.get('status', 'Active')
+        confidence = enriched_data.get('confidence_score')
+        # Provenance is kept only with a score: NULL has no model or version.
+        confidence_model = enriched_data.get('confidence_model') if confidence is not None else None
+        confidence_version = enriched_data.get('confidence_version') if confidence is not None else None
+
+        # Look-then-insert is one statement under one lock: the lookup and the
+        # insert used to be separate critical sections, so two workers (threads
+        # or processes) could both find no active enrichment and both insert.
+        # An active enrichment is inserted only if the record has none; the
+        # database refuses a second one in any case (enrichment_uniqueness).
+        guard = ""
+        guard_params: Tuple[Any, ...] = ()
+        if status == 'Active':
+            guard = (" WHERE NOT EXISTS (SELECT 1 FROM EnrichedEvents "
+                     "WHERE raw_event_id = ? AND status = 'Active')")
+            guard_params = (raw_event_id,)
 
         with self._lock:
             cursor = self._conn.cursor()
@@ -418,9 +421,9 @@ class CyberEventDataV2:
                         enriched_event_id, raw_event_id, title, description, summary,
                         event_type, severity, event_date, records_affected,
                         is_australian_event, is_specific_event, confidence_score,
-                        australian_relevance_score, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
+                        australian_relevance_score, status, created_at, updated_at,
+                        confidence_model, confidence_version
+                    ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + guard, (
                     enriched_event_id,
                     raw_event_id,
                     enriched_data.get('title'),
@@ -434,12 +437,28 @@ class CyberEventDataV2:
                     enriched_data.get('records_affected'),
                     enriched_data.get('is_australian_event', False),
                     enriched_data.get('is_specific_event', False),
-                    enriched_data.get('confidence_score', 0.0),
+                    # NULL = no score. A default here would read as model output downstream.
+                    confidence,
                     enriched_data.get('australian_relevance_score', 0.0),
-                    enriched_data.get('status', 'Active'),
+                    status,
                     datetime.now().isoformat(),
-                    datetime.now().isoformat()
-                ))
+                    datetime.now().isoformat(),
+                    confidence_model,
+                    confidence_version,
+                ) + guard_params)
+
+                if cursor.rowcount == 0:
+                    # The record already has an active enrichment (another worker's, or an earlier run's).
+                    self._conn.rollback()
+                    existing = cursor.execute(
+                        "SELECT enriched_event_id FROM EnrichedEvents "
+                        "WHERE raw_event_id = ? AND status = 'Active' ORDER BY created_at, enriched_event_id LIMIT 1",
+                        (raw_event_id,)).fetchone()
+                    if existing is None:
+                        raise sqlite3.IntegrityError(
+                            f"enriched event for {raw_event_id} was neither inserted nor found")
+                    self._logger.debug("Enriched event already exists for raw_event_id %s", raw_event_id)
+                    return existing["enriched_event_id"]
 
                 # Add entities if provided
                 if enriched_data.get('entities'):
@@ -761,7 +780,7 @@ class CyberEventDataV2:
                 entity_name,
                 canonical_enum_value(entity_data.get('type'), EntityType),
                 entity_data.get('is_australian', False),
-                entity_data.get('confidence_score', 0.0),
+                entity_data.get('confidence_score'),      # NULL = not scored, never a default
                 datetime.now().isoformat()
             ))
 
@@ -778,7 +797,7 @@ class CyberEventDataV2:
                 enriched_event_id,
                 entity_id,
                 entity_data.get('relationship_type', 'affected'),
-                entity_data.get('confidence_score', 0.0)
+                entity_data.get('confidence_score')       # NULL = not scored, never a default
             ))
 
     def get_enriched_events(self, australian_only: bool = True, specific_only: bool = True, limit: int = 100) -> List[Dict[str, Any]]:

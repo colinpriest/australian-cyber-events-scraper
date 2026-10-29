@@ -351,7 +351,7 @@ class DeduplicationStorage:
                 'victim_organization_industry': event.victim_organization_industry if hasattr(event, 'victim_organization_industry') else None,
                 'is_australian_event': True,  # All events are Australian
                 'is_specific_event': True,  # Deduplicated events are specific
-                'confidence_score': event.confidence if hasattr(event, 'confidence') else 0.5,
+                'confidence_score': getattr(event, 'confidence', None),   # NULL = the master has no score
                 'status': 'Active',
                 'created_at': datetime.now(),
                 'updated_at': datetime.now()
