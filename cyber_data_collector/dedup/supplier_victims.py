@@ -44,10 +44,15 @@ always is. With a calibration, :func:`find_supplier_victims` with ``apply``:
   :meth:`DedupLedger.merge_events` (which refuses across a cached
   ``different`` ruling), carrying the merged event's victims across - except
   one that is the supplier itself;
-* attaches each accepted victim candidate as a ``victim`` role, **unless** that
-  organisation still has its own separate event near the incident's date - a
-  second record of the same breach would then count it twice. Such victims are
-  held and reported until the pair is resolved.
+* attaches each accepted victim candidate as a ``victim`` role. An organisation
+  with its own separate event near the incident's date is decided by whether
+  that event has been *ruled on* (:func:`rule_on_own_event`): ruled the **same**
+  incident (a label, a ``same`` override, or a calibrated same-incident
+  judgement at its cut-off) it is merged into the supplier incident through the
+  ledger, which carries the customer across; ruled a **different** incident (a
+  label, a ``different`` override, or a calibrated judgement below the cut-off)
+  the customer is attached as a victim of the supplier incident as well; only
+  an **unresolved** pair is held, with the reason it is unresolved.
 
 Every attachment is recorded in ``SupplierVictimAttachments`` (who, which
 judgement, probability, cut-off, question version) after a ledger snapshot.
@@ -1035,18 +1040,103 @@ def merge_pairs(conn: sqlite3.Connection, pairs: Sequence[PairCandidate], incide
     return merged
 
 
-def held_by_own_event(cand: VictimCandidate, incident: SupplierIncident,
-                      own: Dict[int, List[Tuple[str, Optional[str]]]]) -> Optional[str]:
-    """The candidate's own active event near the incident, which would count it twice."""
+def nearby_own_events(cand: VictimCandidate, incident: SupplierIncident,
+                      own: Dict[int, List[Tuple[str, Optional[str]]]]) -> List[str]:
+    """The candidate's own active events near the incident (undated ones too), which could count it twice."""
     if cand.entity_id is None:
-        return None
+        return []
+    out: List[str] = []
     for did, edate in own.get(cand.entity_id, []):
         if did == incident.dedup_id:
             continue
         gap = _gap(incident.event_date, edate)
         if gap is None or gap <= OWN_EVENT_WINDOW_DAYS:
-            return did
-    return None
+            out.append(did)
+    return out
+
+
+def held_by_own_event(cand: VictimCandidate, incident: SupplierIncident,
+                      own: Dict[int, List[Tuple[str, Optional[str]]]]) -> Optional[str]:
+    """The first of the candidate's own active events near the incident, if any."""
+    blockers = nearby_own_events(cand, incident, own)
+    return blockers[0] if blockers else None
+
+
+RULED_SAME, RULED_DIFFERENT, UNRESOLVED = "same", "different", "unresolved"
+CONFLICT = "conflicting rulings: "
+
+
+@dataclass
+class OwnEventRuling:
+    """Whether a candidate victim's own event is the supplier incident, and on what ground."""
+
+    own_event: str
+    verdict: str                          # RULED_SAME / RULED_DIFFERENT / UNRESOLVED
+    basis: str                            # label / override / model / (for UNRESOLVED) the reason
+    probability: Optional[float] = None   # the calibrated judgement, when that was the ground
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"own_event": self.own_event, "verdict": self.verdict, "basis": self.basis,
+                "p_same": self.probability}
+
+
+def override_verdicts(conn: sqlite3.Connection, left_dedup_id: str, right_dedup_id: str) -> Set[str]:
+    """The verdicts ('same' / 'different') of active ``DedupOverrides`` between any member of each event.
+
+    Checked across all members, like :meth:`DedupLedger.override_conflict`. An unreadable table
+    raises: it must not read as "no ruling".
+    """
+    members = "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?"
+    try:
+        rows = conn.execute(
+            f"""SELECT DISTINCT o.verdict FROM DedupOverrides o WHERE o.active = 1 AND (
+                  (o.left_enriched_event_id IN ({members}) AND o.right_enriched_event_id IN ({members}))
+                  OR (o.left_enriched_event_id IN ({members}) AND o.right_enriched_event_id IN ({members})))""",
+            (left_dedup_id, right_dedup_id, right_dedup_id, left_dedup_id)).fetchall()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"cannot read DedupOverrides to rule on a held victim: {exc}") from exc
+    return {r[0] for r in rows}
+
+
+def rule_on_own_event(conn: sqlite3.Connection, incident_id: str, own_id: str,
+                      labels: Dict[Tuple[str, str], str], pair_scores: Optional[Scores],
+                      cutoff: Optional[float], known_pairs: Iterable[str] = ()) -> OwnEventRuling:
+    """Has the candidate's own event been ruled the same incident as the supplier incident, or a different one?
+
+    In order of authority: a pair label or an active ``DedupOverrides`` ruling (ground truth;
+    two that disagree leave it unresolved, never a pick), then the calibrated same-incident
+    judgement - at or above its cut-off the same incident, below it a different one. Anything
+    else (no judgement, a failed or un-escalated one, no cut-off) is UNRESOLVED, with the reason.
+    """
+    pid = "|".join(sorted((incident_id, own_id)))
+    signals: List[Tuple[str, str]] = []
+    label = labels.get((KIND_PAIR, pid))
+    if label in (POSITIVE[KIND_PAIR], *NEGATIVE[KIND_PAIR]):
+        signals.append(("label", RULED_SAME if label == POSITIVE[KIND_PAIR] else RULED_DIFFERENT))
+    signals += [("override", RULED_SAME if v == "same" else RULED_DIFFERENT)
+                for v in sorted(override_verdicts(conn, incident_id, own_id))]
+    if len({v for _, v in signals}) > 1:
+        return OwnEventRuling(own_id, UNRESOLVED,
+                              CONFLICT + ", ".join(f"{k} says {v}" for k, v in signals))
+    if signals:
+        return OwnEventRuling(own_id, signals[0][1], signals[0][0])
+    scores = pair_scores
+    if scores is not None and pid in scores.final:
+        if cutoff is None:
+            return OwnEventRuling(own_id, UNRESOLVED, "no calibrated same-incident cut-off to read the judgement against",
+                                  scores.final[pid])
+        p = scores.final[pid]
+        return OwnEventRuling(own_id, RULED_SAME if p >= cutoff else RULED_DIFFERENT, "model", p)
+    if scores is not None and pid in scores.failed:
+        reason = "Jev failed on the pair"
+    elif scores is not None and pid in scores.undecided:
+        reason = "the pair's score is in the escalation band and has no escalated answer"
+    elif pid not in set(known_pairs):
+        reason = ("the pair was never a candidate (undated, over 365 days apart, or sharing a victim with the "
+                  "incident), so nothing judged it; check-duplicates or a human ruling decides")
+    else:
+        reason = "the pair has not been judged"
+    return OwnEventRuling(own_id, UNRESOLVED, reason)
 
 
 # ----------------------------------------------------------------------
@@ -1160,25 +1250,68 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
     pair_ok = {sid: how for sid, how in accepted(pscores.final, labels, KIND_PAIR, pcut).items()
                if sid in known_pairs}
     different = {sid for (k, sid), lab in labels.items() if k == KIND_PAIR and lab in NEGATIVE[KIND_PAIR]}
-    result["merged"] = merge_pairs(conn, [p for p in pairs if p.pair_id in pair_ok], by_id, resolver,
-                                   different, role_refresher, pscores.final, pcut)
+
+    # A victim with its own event near the incident is decided by whether that pair has been ruled on.
+    victim_ok = accepted(vscores.final, labels, KIND_VICTIM, vcut)
+    rulings: Dict[Tuple[str, str], OwnEventRuling] = {}
+    to_merge = [p for p in pairs if p.pair_id in pair_ok]
+    queued = {p.pair_id for p in to_merge}
+    own_now = victim_events(conn)
+    for sid in sorted(victim_ok):
+        cand = flat.get(sid)
+        if cand is None:
+            continue
+        inc = by_id[cand.dedup_id]
+        for own_id in nearby_own_events(cand, inc, own_now):
+            ruling = rulings[(sid, own_id)] = rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
+                                                                pcut, known_pairs)
+            pid = "|".join(sorted((inc.dedup_id, own_id)))
+            if ruling.verdict == RULED_SAME and pid not in queued:
+                # Ruled the same by a label or override (a model ruling is already in pair_ok).
+                queued.add(pid)
+                to_merge.append(PairCandidate(inc.dedup_id, own_id,
+                                              [f"own event of candidate victim {cand.name}, ruled the same "
+                                               f"incident ({ruling.basis})"],
+                                              _gap(inc.event_date, dict(own_now[cand.entity_id]).get(own_id))))
+    # A pair whose label and override disagree is held for a human, not offered to the ledger.
+    conflicted = {"|".join(sorted((flat[sid].dedup_id, own_id)))
+                  for (sid, own_id), r in rulings.items() if r.basis.startswith(CONFLICT)}
+    to_merge = [p for p in to_merge if p.pair_id not in conflicted]
+    result["merged"] = merge_pairs(conn, to_merge, by_id, resolver, different, role_refresher, pscores.final, pcut)
     if role_refresher is not None:
         role_refresher.flush(conn)   # merges reclassify roles before victims are attached
         conn.commit()
     gone = {m["source"] for m in result["merged"] if "refused" not in m}
+    refused = {frozenset((m["target"], m["source"])): m["refused"] for m in result["merged"] if "refused" in m}
 
-    own = victim_events(conn)
-    for sid, how in sorted(accepted(vscores.final, labels, KIND_VICTIM, vcut).items()):
+    own = victim_events(conn)   # after the merges
+    for sid, how in sorted(victim_ok.items()):
         cand = flat.get(sid)
         if cand is None or cand.dedup_id in gone:
             continue
         inc = by_id[cand.dedup_id]
-        blocker = held_by_own_event(cand, inc, own)
-        if blocker:
+        ruled_different: List[OwnEventRuling] = []
+        unresolved: List[OwnEventRuling] = []
+        for own_id in nearby_own_events(cand, inc, own):
+            ruling = rulings.get((sid, own_id)) or rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
+                                                                     pcut, known_pairs)
+            if ruling.verdict == RULED_DIFFERENT:
+                ruled_different.append(ruling)
+            elif ruling.verdict == RULED_SAME:
+                # Ruled the same incident, but the event is still there: the merge was refused or did not run.
+                why = refused.get(frozenset((inc.dedup_id, own_id)), "the merge did not run")
+                unresolved.append(OwnEventRuling(own_id, UNRESOLVED,
+                                                 f"ruled the same incident ({ruling.basis}) but not merged: {why}",
+                                                 ruling.probability))
+            else:
+                unresolved.append(ruling)
+        if unresolved:
             result["held"].append({"deduplicated_event_id": inc.dedup_id, "victim": cand.name,
-                                   "own_event": blocker, "p_affected": vscores.final.get(sid),
-                                   "why": "the organisation has its own event near this incident; merge it "
-                                          "or rule it a different incident before attaching"})
+                                   "own_event": unresolved[0].own_event, "p_affected": vscores.final.get(sid),
+                                   "own_event_rulings": [r.as_dict() for r in unresolved],
+                                   "why": "the organisation has its own event near this incident and the pair "
+                                          "is unresolved: " + "; ".join(f"{r.own_event[:8]}: {r.basis}"
+                                                                        for r in unresolved)})
             continue
         variant = variant_of_victim(conn, inc.dedup_id, cand.entity_id, cand.name, resolver)
         if variant:
@@ -1191,6 +1324,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                          probability=vscores.final.get(sid), cutoff=vcut, question_version=VICTIM_VERSION):
             result["attached"].append({"deduplicated_event_id": inc.dedup_id, "title": inc.title,
                                        "victim": cand.name, "p_affected": vscores.final.get(sid),
-                                       "decided_by": decided})
+                                       "decided_by": decided,
+                                       "own_events_ruled_different": [r.as_dict() for r in ruled_different]})
     conn.commit()
     return result

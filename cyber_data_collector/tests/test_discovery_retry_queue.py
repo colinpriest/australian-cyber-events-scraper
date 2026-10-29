@@ -403,3 +403,220 @@ def test_failed_content_write_is_a_failed_scrape(tmp_path):
     finally:
         db.close()
     assert result["success"] is False and status == "failed"
+
+
+# ---------------------------------------------------------------------------
+# A failed store keeps its cause: a locked database is the store's failure, not the record's
+# ---------------------------------------------------------------------------
+
+import errno  # noqa: E402
+
+
+@pytest.mark.parametrize("exc,kind", [
+    (sqlite3.OperationalError("database is locked"), rq.KIND_TEMPORARY),
+    (sqlite3.OperationalError("database table is locked"), rq.KIND_TEMPORARY),
+    (sqlite3.OperationalError("disk I/O error"), rq.KIND_TEMPORARY),
+    (sqlite3.OperationalError("unable to open database file"), rq.KIND_TEMPORARY),
+    (OSError(errno.EIO, "input/output error"), rq.KIND_TEMPORARY),
+    (OSError(errno.ENOSPC, "no space left on device"), rq.KIND_TEMPORARY),
+    (sqlite3.IntegrityError("CHECK constraint failed: confidence_score"), rq.KIND_PERMANENT),
+    (sqlite3.DataError("string or blob too big"), rq.KIND_PERMANENT),
+    (sqlite3.ProgrammingError("Error binding parameter 3: type 'dict' is not supported"), rq.KIND_PERMANENT),
+    (ValueError("title is empty"), rq.KIND_PERMANENT),
+])
+def test_storage_failure_kinds(exc, kind):
+    assert rq.classify_failure(exc) == kind
+    failure = rq.StorageError.from_exception(rq.STAGE_STORE_ENRICHED, exc)
+    assert failure.kind == kind and failure.stage == "store_enriched"
+    assert type(exc).__name__ in str(failure) and failure.is_temporary is (kind == rq.KIND_TEMPORARY)
+
+
+def _locked(*args, **kwargs):
+    raise sqlite3.OperationalError("database is locked")
+
+
+def test_locked_database_never_quarantines_a_record(env, monkeypatch):
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    real = CyberEventDataV2.create_enriched_event
+    monkeypatch.setattr(CyberEventDataV2, "create_enriched_event", _locked)
+    with pytest.raises(RuntimeError, match="Too many events failed to store"):
+        asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    FakeCollector.sources = {"oaic": FakeSource([])}
+    for _ in range(rq.MAX_PERMANENT_ATTEMPTS + 4):          # far more failures than quarantine allows
+        env.clock.now += rq.TEMPORARY_BACKOFF_CAP
+        with pytest.raises(RuntimeError, match="Too many events failed to store"):
+            asyncio.run(env.make().drain_retry_queue())
+    [row] = _raw(env.path)
+    assert not row["is_processed"] and row["processing_error"] is None
+    conn = sqlite3.connect(env.path)
+    state = conn.execute("SELECT attempts, temporary_failures, last_stage, last_error_kind, last_error, "
+                         "quarantined_at FROM DiscoveryRecordState").fetchone()
+    conn.close()
+    assert state[0] == 0 and state[1] == rq.MAX_PERMANENT_ATTEMPTS + 5
+    assert state[2:4] == ("store_enriched", "temporary") and state[5] is None
+    assert "OperationalError" in state[4] and "database is locked" in state[4]   # the cause is kept
+    # The lock clears: the next drain stores the record.
+    monkeypatch.setattr(CyberEventDataV2, "create_enriched_event", real)
+    env.clock.now += rq.TEMPORARY_BACKOFF_CAP
+    assert asyncio.run(env.make().drain_retry_queue())["completed"] == 1
+    [row] = _raw(env.path)
+    assert row["is_processed"] and _count(env.path, "SELECT COUNT(*) FROM EnrichedEvents") == 1
+
+
+def test_a_temporary_store_failure_backs_off(env, monkeypatch):
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    real = CyberEventDataV2.create_enriched_event
+    monkeypatch.setattr(CyberEventDataV2, "create_enriched_event", _locked)
+    with pytest.raises(RuntimeError):
+        asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    monkeypatch.setattr(CyberEventDataV2, "create_enriched_event", real)
+    FakeCollector.sources = {"oaic": FakeSource([])}
+    pipeline = env.make()
+    assert asyncio.run(pipeline.drain_retry_queue()) == {"due": 0, "completed": 0, "waiting": 1}
+    env.clock.now += rq.backoff(rq.KIND_TEMPORARY, 1)
+    assert asyncio.run(pipeline.drain_retry_queue())["completed"] == 1
+
+
+def test_a_permanent_store_failure_still_quarantines_and_says_why(env, monkeypatch):
+    def invalid(*args, **kwargs):
+        raise sqlite3.IntegrityError("CHECK constraint failed: confidence_score")
+
+    monkeypatch.setattr(CyberEventDataV2, "create_enriched_event", invalid)
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    with pytest.raises(RuntimeError):
+        asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    FakeCollector.sources = {"oaic": FakeSource([])}
+    for _ in range(rq.MAX_PERMANENT_ATTEMPTS - 1):
+        env.clock.now += timedelta(days=8)
+        with pytest.raises(RuntimeError):
+            asyncio.run(env.make().drain_retry_queue())
+    [row] = _raw(env.path)
+    assert row["is_processed"] and row["processing_error"].startswith("Rejected at retry_quarantine")
+    assert "store_enriched" in row["processing_error"] and "IntegrityError" in row["processing_error"]
+    assert "could not be stored" not in row["processing_error"]
+
+
+def test_failing_to_mark_a_record_processed_is_a_retried_failure(env, monkeypatch):
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    real = CyberEventDataV2.mark_raw_event_processed
+    calls = []
+
+    def flaky(self, raw_event_id, error_message=None):
+        calls.append(raw_event_id)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real(self, raw_event_id, error_message=error_message)
+
+    monkeypatch.setattr(CyberEventDataV2, "mark_raw_event_processed", flaky)
+    asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    [row] = _raw(env.path)
+    assert not row["is_processed"]                        # not reported finished when it is not
+    conn = sqlite3.connect(env.path)
+    state = conn.execute("SELECT attempts, temporary_failures, last_stage, completed_at "
+                         "FROM DiscoveryRecordState").fetchone()
+    conn.close()
+    assert state == (0, 1, "mark_processed", None)
+    FakeCollector.sources = {"oaic": FakeSource([])}
+    env.clock.now += rq.backoff(rq.KIND_TEMPORARY, 1)
+    assert asyncio.run(env.make().drain_retry_queue())["completed"] == 1
+    assert _raw(env.path)[0]["is_processed"] and _count(env.path, "SELECT COUNT(*) FROM EnrichedEvents") == 1
+
+
+def test_a_raw_event_that_cannot_be_stored_leaves_the_month_to_be_searched_again(env, monkeypatch):
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    real = CyberEventDataV2.add_raw_event
+    monkeypatch.setattr(CyberEventDataV2, "add_raw_event", _locked)
+    pipeline = env.make()
+    asyncio.run(pipeline.discover_events(source_types=["OAIC"], date_range_days=1))
+    assert _raw(env.path) == []
+    assert _count(env.path, "SELECT COUNT(*) FROM MonthProcessed WHERE is_processed") == 0
+    conn = sqlite3.connect(env.path)
+    status, failures, error_type = conn.execute(
+        "SELECT status, failures_json, error_type FROM SourceMonthDiscovery WHERE source_type = 'OAIC'").fetchone()
+    conn.close()
+    assert status == "failed" and "database is locked" in failures and "(temporary)" in failures
+    assert error_type == "other" and pipeline.stats["source_months_failed"] >= 1
+    # The lock clears: the next run searches the month again and stores the article.
+    monkeypatch.setattr(CyberEventDataV2, "add_raw_event", real)
+    asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    assert len(_raw(env.path)) == 1 and _count(env.path, "SELECT COUNT(*) FROM EnrichedEvents") == 1
+    assert _count(env.path, "SELECT COUNT(*) FROM SourceMonthDiscovery WHERE status = 'complete'") >= 1
+
+
+def test_storage_calls_raise_instead_of_answering_none_or_nothing(tmp_path):
+    """A failed lookup used to answer "no such event" (and store a duplicate); a failed mark said nothing."""
+    db_path = tmp_path / "s.db"
+    initialize_database(str(db_path))
+    db = CyberEventDataV2(db_path)
+    try:
+        raw_id = db.add_raw_event("OAIC", {"title": "x", "source_url": URL, "metadata": {}})
+        assert db.find_existing_raw_event("OAIC", URL, "x") == raw_id
+        db._conn.execute("ALTER TABLE RawEvents RENAME TO RawEventsMoved")
+        with pytest.raises(sqlite3.OperationalError):
+            db.find_existing_raw_event("OAIC", URL, "x")
+        with pytest.raises(sqlite3.OperationalError):
+            db.mark_raw_event_processed(raw_id)
+        db._conn.execute("ALTER TABLE EnrichedEvents RENAME TO EnrichedEventsMoved")
+        with pytest.raises(sqlite3.OperationalError):     # the existence check no longer falls through to insert
+            db.create_enriched_event(raw_id, {"title": "x"})
+    finally:
+        db.close()
+
+
+def _queue_with_quarantines(tmp_path):
+    conn = sqlite3.connect(tmp_path / "q.db")
+    conn.execute("CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_type TEXT, raw_title TEXT, "
+                 "raw_description TEXT, raw_content TEXT, event_date TEXT, source_url TEXT, source_metadata TEXT, "
+                 "discovered_at TEXT, is_processed INTEGER DEFAULT 0, processing_error TEXT, "
+                 "processing_attempted_at TEXT)")
+    queue = rq.RetryQueue(conn)
+    causes = {"locked": ("store_enriched", "OperationalError: database is locked"),
+              "io": ("store_raw", "OperationalError: disk I/O error"),
+              "legacy": ("store_enriched", "enriched event could not be stored"),
+              "integrity": ("store_enriched", "IntegrityError: CHECK constraint failed: confidence_score"),
+              "timeout": ("classification", "timed out")}   # not a store stage: left alone
+    for rid, (stage, error) in causes.items():
+        conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, event_date) VALUES (?, 'OAIC', '2025-03-14')",
+                     (rid,))
+        for _ in range(rq.MAX_PERMANENT_ATTEMPTS):     # what the old code did to every failed store
+            outcome = queue.record_failure(rid, stage, error, rq.KIND_PERMANENT)
+        assert outcome == "quarantined"
+    return conn, queue
+
+
+def test_records_quarantined_for_a_temporary_storage_failure_are_released(tmp_path):
+    conn, queue = _queue_with_quarantines(tmp_path)
+    assert {r["raw_event_id"] for r in queue.temporary_storage_quarantines()} == {"locked", "io"}
+    assert {r["raw_event_id"] for r in queue.unexplained_storage_quarantines()} == {"legacy"}
+
+    assert queue.release_temporary_storage_quarantines() == 2
+    assert queue.release_temporary_storage_quarantines() == 0          # idempotent
+    state = {r[0]: r[1:] for r in conn.execute("SELECT raw_event_id, is_processed, processing_error FROM RawEvents")}
+    assert state["locked"] == (0, None) and state["io"] == (0, None)
+    for kept in ("legacy", "integrity", "timeout"):                    # not read as temporary
+        assert state[kept][0] == 1 and state[kept][1].startswith("Rejected at retry_quarantine")
+    assert {r["raw_event_id"] for r in queue.due()} >= {"locked", "io"}
+    attempts = dict(conn.execute("SELECT raw_event_id, attempts FROM DiscoveryRecordState"))
+    assert attempts["locked"] == 0 and attempts["integrity"] == rq.MAX_PERMANENT_ATTEMPTS
+
+    # The old generic reason names no cause: the existing release path returns it (and the rest).
+    assert queue.release_quarantine() == 3
+
+
+def test_a_discovery_run_releases_storage_quarantines_before_draining(env):
+    FakeCollector.sources = {"oaic": FakeSource([_event()])}
+    FakeCollector.classify = "timeout"
+    asyncio.run(env.make().discover_events(source_types=["OAIC"], date_range_days=1))
+    [row] = _raw(env.path)
+    queue = env.make().retry_queue
+    for _ in range(rq.MAX_PERMANENT_ATTEMPTS):
+        queue.record_failure(row["raw_event_id"], "store_enriched", "OperationalError: database is locked",
+                             rq.KIND_PERMANENT)
+    assert _raw(env.path)[0]["processing_error"].startswith("Rejected at retry_quarantine")
+
+    FakeCollector.sources, FakeCollector.classify = {"oaic": FakeSource([])}, "ok"
+    pipeline = env.make()
+    assert asyncio.run(pipeline.drain_retry_queue())["completed"] == 1
+    assert pipeline.stats["storage_quarantines_released"] == 1
+    assert _raw(env.path)[0]["processing_error"] is None
+    assert _count(env.path, "SELECT COUNT(*) FROM EnrichedEvents") == 1

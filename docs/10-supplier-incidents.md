@@ -184,9 +184,30 @@ In order:
    are checked the same way, and descriptions ("Sydney radiologist") are not
    carried.
    A victim that still has **its own active event within 365 days** of the
-   incident is **held**, not attached: if that event is the same incident the
-   organisation would be counted twice. It is reported until the pair is
-   merged or ruled different.
+   incident (or an undated one) would be counted twice if that event were the
+   same incident, so the pair is *ruled on* first (`rule_on_own_event`), in
+   order of authority:
+
+   1. a **pair label** (`evaluation/supplier_victim_labels.csv`, kind
+      `same_incident`; `unsure` is no ruling) and an active `DedupOverrides`
+      ruling between any member records of the two events; a label and an
+      override that disagree leave the pair **unresolved**;
+   2. the calibrated **same-incident judgement** of the pair: at or above the
+      cut-off the same incident, below it a different one.
+
+   *Same incident:* the own event is merged into the supplier incident in step 1
+   (also when only a label or override says so, and the pair was not a model
+   candidate), and the ledger carries the customer across as a victim.
+   *Different incident:* the customer is attached as a victim of the supplier
+   incident; its own event stays a separate incident, and the findings'
+   `attached[].own_events_ruled_different` give the event, the ground and the
+   judgement. *Unresolved* (no stored or fresh judgement of the pair - undated,
+   over 365 days apart, or sharing a victim with the incident, so
+   `check-duplicates` decides - a failed or un-escalated judgement, no
+   cut-off, conflicting rulings, or a ruled-same merge the ledger refused): the
+   victim is **held**, reported in `held[]` with `why`, and decided on a later
+   run once something rules on the pair. A `different` ruling cached as an
+   override makes the ledger refuse the merge, so it reads as different here.
 
 Every attachment is recorded in `SupplierVictimAttachments` (event, entity,
 previous role, decided by `jev` / `escalation` / `label` / `merge`,

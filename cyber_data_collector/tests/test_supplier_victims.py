@@ -34,6 +34,9 @@ CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, source_url TEXT, raw_cont
     raw_description TEXT);
 CREATE TABLE DedupSnapshots (snapshot_id TEXT, batch_id TEXT, deduplicated_event_id TEXT,
     payload_json TEXT);
+CREATE TABLE DedupOverrides (override_id TEXT PRIMARY KEY, pair_key TEXT UNIQUE, left_enriched_event_id TEXT,
+    right_enriched_event_id TEXT, verdict TEXT, reason TEXT, created_by TEXT, created_at TEXT,
+    active INTEGER DEFAULT 1);
 """
 
 ENTITIES = [(1, "ProctorU", "organisation"), (2, "University of Sydney", "organisation"),
@@ -331,7 +334,123 @@ def test_a_refused_merge_holds_the_victim_back(conn, tmp_path, merge_events):
                                       calibration_path=_calibration(tmp_path))
     assert [m.get("refused") is not None for m in result["merged"]] == [True]
     assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
+    assert "ruled the same incident (model) but not merged" in result["held"][0]["why"]
     assert "Curtin University" not in _victims(conn, "e1")
+
+
+# ----------------------------------------------------------------------
+# A victim with its own event near the incident: decided by the ruling on that pair
+# ----------------------------------------------------------------------
+
+def _curtin_is_a_candidate(conn):
+    """Curtin is linked on the supplier incident's record, and has its own event e2 (pair e1|e2)."""
+    conn.execute("INSERT INTO EnrichedEventEntities VALUES ('r1', 4, 'affected_customer', NULL)")
+
+
+def _override(conn, verdict, left="r1", right="r2", active=1):
+    conn.execute("INSERT INTO DedupOverrides VALUES (?, ?, ?, ?, ?, 'test', 'human', NULL, ?)",
+                 (f"o-{verdict}-{active}", f"{left}|{right}|{verdict}", left, right, verdict, active))
+
+
+def _apply_curtin(conn, tmp_path, p, pair_label=None, calibration=None, victim_label="affected"):
+    """Curtin's victim candidacy is accepted by label, so only the pair ruling varies."""
+    rows = [("victim", "e1|4", victim_label)]
+    if pair_label:
+        rows.append(("same_incident", "e1|e2", pair_label))
+    return sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=p),
+                                    labels_path=_labels(tmp_path, rows),
+                                    calibration_path=calibration or _calibration(tmp_path))
+
+
+def test_own_event_ruled_the_same_by_override_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "same")
+    result = _apply_curtin(conn, tmp_path, p=0.05)   # the model alone would say a different incident
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == []
+    assert "Curtin University" in _victims(conn, "e1")
+    assert conn.execute("SELECT decided_by FROM SupplierVictimAttachments WHERE entity_name = 'Curtin University'"
+                        ).fetchone()[0] == "merge"
+
+
+def test_own_event_ruled_the_same_by_label_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+def test_own_event_ruled_the_same_by_the_model_is_merged_not_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.95)
+    assert merge_events.calls == [("e1", "e2")]
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+@pytest.mark.parametrize("how", ["override", "label", "model"])
+def test_own_event_ruled_different_attaches_the_customer(conn, tmp_path, merge_events, how):
+    _curtin_is_a_candidate(conn)
+    if how == "override":
+        _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="different" if how == "label" else None)
+    assert merge_events.calls == [] and result["held"] == []
+    assert "Curtin University" in _victims(conn, "e1")
+    attached = next(a for a in result["attached"] if a["victim"] == "Curtin University")
+    assert [(r["own_event"], r["verdict"], r["basis"]) for r in attached["own_events_ruled_different"]] == [
+        ("e2", "different", how)]
+    # Its own event stays, as a separate incident.
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
+                        ).fetchone()[0] == "Active"
+
+
+def test_a_different_override_beats_a_confident_model(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.99)
+    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
+
+
+def test_conflicting_rulings_are_held_with_the_reason(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different")
+    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
+    assert merge_events.calls == []
+    assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
+    assert "conflicting rulings: label says same, override says different" in result["held"][0]["why"]
+    assert "Curtin University" not in _victims(conn, "e1")
+
+
+def test_no_cutoff_leaves_an_unruled_pair_held(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    result = _apply_curtin(conn, tmp_path, p=0.95, calibration=_calibration(tmp_path, same=None))
+    assert merge_events.calls == []
+    assert "no calibrated same-incident cut-off" in result["held"][0]["why"]
+
+
+def test_an_inactive_override_is_no_ruling(conn, tmp_path, merge_events):
+    _curtin_is_a_candidate(conn)
+    _override(conn, "different", active=0)
+    result = _apply_curtin(conn, tmp_path, p=0.95)
+    assert merge_events.calls == [("e1", "e2")] and result["held"] == []
+
+
+def test_a_pair_nobody_judged_is_held_and_says_why(conn):
+    ruling = sv.rule_on_own_event(conn, "e1", "e2", {}, sv.Scores(), 0.9, known_pairs=[])
+    assert ruling.verdict == sv.UNRESOLVED and "never a candidate" in ruling.basis
+    failed = sv.Scores(failed=["e1|e2"])
+    assert "Jev failed" in sv.rule_on_own_event(conn, "e1", "e2", {}, failed, 0.9, ["e1|e2"]).basis
+    undecided = sv.Scores(undecided=["e1|e2"])
+    assert "escalation band" in sv.rule_on_own_event(conn, "e1", "e2", {}, undecided, 0.9, ["e1|e2"]).basis
+
+
+def test_ruling_order_labels_and_overrides_before_the_model(conn):
+    scores = sv.Scores(final={"e1|e2": 0.5})
+    assert sv.rule_on_own_event(conn, "e1", "e2", {}, scores, 0.9).verdict == sv.RULED_DIFFERENT
+    assert sv.rule_on_own_event(conn, "e1", "e2", {}, scores, 0.5).verdict == sv.RULED_SAME   # at the cut-off
+    unsure = {("same_incident", "e1|e2"): "unsure"}
+    assert sv.rule_on_own_event(conn, "e1", "e2", unsure, scores, 0.9).basis == "model"
+    assert sv.rule_on_own_event(conn, "e1", "e2", {("same_incident", "e1|e2"): "same"}, scores, 0.9
+                                ).basis == "label"
 
 
 # ----------------------------------------------------------------------
