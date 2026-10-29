@@ -1299,9 +1299,20 @@ source states (`RawEvents.event_date_precision` / `event_date_basis`); the
 publication date is never copied into it, and the search window's first day is
 no longer stored as one. Webber list headings ("Vertel - June 2025") are a
 month, stored as the 1st with precision `month` - they used to become the 15th
-(all 832 Webber records), outranking any day the article stated; a stated day
-now wins, and the newsletter date in the link is the publication date.
-`publication-dates` repairs stored Webber records (idempotent). Each event's
+(all 832 Webber records), outranking any day the article stated. A day the
+article states wins only when its wording ties it to the breach ("the breach
+occurred on", "discovered", "detected", "the attack on", "between X and Y");
+the first date in an article is usually its byline or publication date
+(`incident_date_from_text`: "Published 1 June 2025. The breach occurred on 2 May
+2025." gives 2 May at day precision, "Published 1 June 2025" alone leaves the
+heading's month), and a tied date more than 6 months before the heading's month
+or after the next month is background. The newsletter date in the link is the
+publication date. `publication-dates` repairs stored Webber records
+(idempotent; `--dry-run`): the 15th goes to the heading month, then
+`rederive_webber_dates` gives a heading-month record the day its stored text ties
+to the incident (20 of 765 on the 2026-10-29 copy; the rest keep their month) and
+returns a day the old parser took from a byline to the heading month (it reads
+the live list for that, only when such records exist; none on that copy). Each event's
 `event_date_precision` is set only when the records carrying its date agree on
 a verified precision (a source-stated one, or a citation-checked Perplexity
 date), with `event_date_earliest` / `event_date_latest` as the interval; NULL
@@ -1327,8 +1338,82 @@ On 2026-10-28 **1,051 of 2,690** stored pages behind active events failed the
 check - another article entirely (the "Mackay Sugar ransomware" record held a
 page about the OpenAI agent; a "WA Department of Health" record an iTnews page
 about Garmin): Webber 435, Perplexity 334, Google 191, OAIC 80, Cyber Daily 11.
-In most of them the record's URL itself points at the other article, so the
-pairing goes wrong at ingest (see `docs/TODO.md`).
+The cause is below.
+
+#### Records linked to the wrong article
+
+Measured on a copy of the live database (2026-10-29: 1,179 of 3,402 active records
+failed the page rule; Webber 457, Perplexity 409, Google 220, OAIC 80, Cyber Daily
+13), the URL was usually *not* the problem. In about 840 of them the raw record
+is whole - its title, URL and stored page are one article - but the
+`EnrichedEvents` row attached to it (title, description, date, Perplexity
+research, entities) describes another article, and in 827 of 840 that enriched
+title is *exactly* the raw title of a different record. 1,088 of the 1,283
+enrichments made in September 2025 (mostly 2025-09-28) are unrelated to the title
+of their record; since 2026-03 the rate is 1-2%. Records and enrichments were
+paired by position in an old run and the enrichments came back in another order;
+records are paired by id now (`_store_enriched_event` carries `raw_event_id`), and
+`create_enriched_event` records any enrichment that does not describe its record.
+The rest are pages that are not the record's article: Perplexity citations that
+are a site root or a breach list (cybertrackerau.com, borderlesscs.com.au; the
+model writes the `source_urls` itself), Webber links whose page heading is a site
+name ("Gizmodo", "News", "Lifehacker Disclaimer"), Google matches on a snippet.
+Webber's own pairing of an entry with its link was sound; its filter dropped 203
+of 1,282 entries (see [01-data-sources.md](docs/01-data-sources.md#5-webber-insurance-data-breaches-list)).
+
+`processing/record_identity.py` (table `RecordIdentityChecks`, [data
+dictionary](docs/data-dictionary.md)) checks every record and repairs what it can:
+
+```bash
+python scripts/dedup_admin.py check-record-identity --dry-run     # what would change (rolls back)
+python scripts/dedup_admin.py check-record-identity [--limit 100] # repair + queue retrieval
+python scripts/dedup_admin.py check-record-identity --reverse <enriched_event_id>   # undo one move
+```
+
+* An enrichment whose title is exactly one other stored record's title, which that
+  record's page does not contradict, is **re-attached** to that record
+  (`EnrichedEvents.raw_event_id` and `EventDeduplicationMap.raw_event_id`; the
+  enrichment is untouched, so no event is rebuilt). Of several copies the earliest
+  goes; a move that would put a record into one event twice, or that no record
+  can take, is not made. Moves repeat until none is left. Free, unlimited.
+* A record left with no enrichment whose page is its article is reopened
+  (`is_processed = 0`) for the discovery retry queue.
+* A page that is not the record's article is queued for the **re-fetch**
+  (`PageRescrapes`; the record becomes a `rescrape-short-pages` candidate whatever
+  the length of its text, and the new text is checked again) when its URL is an
+  article, and for the **replacement search** (`source_gate.replace_evidence`: the
+  citation becomes a new record with its own URL, never the record's own page) when
+  the URL is a site root or a page cited by more than 3 records, the re-fetch
+  still gives another article, or the enrichment could not be re-attached. A
+  search is skipped when the event has another record whose page is its article or
+  another event covers the incident. `--limit` caps each route per run;
+  a missing `PERPLEXITY_API_KEY` for a needed search exits 2.
+* **Tracking and identity parameters are stripped from every record URL**
+  (`utils/url_clean.py`: `utm_*`, `token` and `*token`, click and mail ids, a
+  newsletter's `eid`+`edate`, `campaign`, session ids). A newsletter link carries
+  the subscriber with it - 24 stored `source_url` values (22 Webber, 2 Google) held a
+  signed token naming a subscriber's email. New links are cleaned in the Webber source
+  and in `add_raw_event` (so Google, Perplexity and every other source; the newsletter
+  date in a Webber link is kept as the publication date), and `check-record-identity`
+  cleans what is stored (URL columns, and URLs quoted in stored text) idempotently;
+  its report gives counts only, never a value. On the 2026-10-29 copy: 299 stored
+  values in 11 columns (110 `RawEvents.source_url`, 141 `DeduplicatedEventSources`).
+* New records are checked as they arrive: after scraping, a page that is not the
+  record's article is withheld from classification (the record is classified from
+  its snippet) and its retrieval is queued; as an enrichment is stored, one that
+  does not describe its record is recorded.
+
+On the copy of 2026-10-29 (a full run with a stubbed search; the next three runs
+find nothing left to move): 1,343 enrichments and 147 pages mismatched (Webber 553,
+Perplexity 586, Google 276, OAIC 73); **923 enrichments re-attached** in the first
+run; 482 records they left without an enrichment are reopened, 100 a run (five
+runs); 95 page re-fetches queued; 17 replacement searches (the other mismatches sit
+in events that have another record whose page is the article). What remains: 227
+enrichments are copies inside the event that already holds their record, 66 have no
+stored record, 96 an ambiguous one (several records share the title), 27 sit on a
+record that has an enrichment of its own, and 122 records end holding two active
+enrichments (one known not to describe it; reported, not removed). The hygiene phase
+runs the command first of all.
 
 ### Dashboard
 

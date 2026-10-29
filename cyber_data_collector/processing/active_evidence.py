@@ -105,6 +105,13 @@ def page_identity(title: Optional[str], names: Iterable[Optional[str]],
     return False, "page carries none of the title's distinctive words"
 
 
+def shares_distinctive_words(*texts: Optional[str]) -> bool:
+    """Do the first text and any other share a distinctive word (one that says whom or what, not that it was a breach)?"""
+    first, *rest = texts
+    wanted = _tokens(first)
+    return any(wanted & _tokens(other) for other in rest)
+
+
 def evidence_page(title: Optional[str], names: Iterable[Optional[str]], page_text: Optional[str]) -> Tuple[str, Optional[str]]:
     """The page text to show a judgement, and a note when it was withheld."""
     belongs, reason = page_identity(title, names, page_text)

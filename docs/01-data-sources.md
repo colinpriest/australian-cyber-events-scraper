@@ -543,30 +543,23 @@ Webber Insurance maintains a curated, chronological list of Australian data brea
 **Phase 1 — List Page Scraping:**
 
 1. Fetch the main page listing all breaches
-2. Parse `<h3>` section headers to extract month-year groupings (e.g., "June 2025")
-3. Walk sibling elements between headers to find `<a>` links
-4. Filter links by inclusion/exclusion keywords:
-
-| Criteria | Keywords |
-|----------|----------|
-| **Include** (link text must contain) | breach, cyber, hack, attack, ransomware, incident |
-| **Exclude** (link text must not contain) | guide, ultimate, notification laws, essentials |
-| **Minimum text length** | 20 characters |
-
-5. Apply date range filtering using section header dates (skips sections outside the requested date range before fetching detail pages)
+2. Parse `<h3>` section headers to extract month-year groupings (e.g., "Vertel - June 2025"); the organisation is the heading without its month
+3. Walk sibling elements between headers and take each list entry (`<li>`) as one item: **the item's own link**, its link text and its text. A link is never taken from a neighbouring entry or another heading, and the item travels with the record (the list's title, the heading's organisation). Links to Webber's own guides and in-page anchors are not items. A link outside any list is kept only when its text reads as a breach report (the old rule applied to every link: only text containing breach, cyber, hack, attack, ransomware or incident was kept, which dropped 203 of 1,282 entries on 2026-10-29, e.g. "Almost 2m impacted, almost 50k credit cards compromised")
+4. Apply date range filtering using section header dates (skips sections outside the requested date range before fetching detail pages)
 
 **Phase 2 — Detail Page Scraping:**
 
-For each qualifying link:
+For each item:
 
-1. Fetch the detail page
-2. Extract title from `<h1>` tag
+1. Fetch the detail page (an article on another site)
+2. Title: the page's `<h1>`, unless it shares no distinctive word with the item's link text or organisation (a site name, a disclaimer, another article): then the list's own link text, so the identity check after scraping (`processing/record_identity.py`) sees the mismatch instead of a title copied from the page
 3. Extract content from `<article>`, `<div class="content">`, or full page (cascading selectors)
-4. Extract entity name from title using regex: split on dash/en-dash (e.g., "Vertel - Data Breach" yields "Vertel")
-5. Parse event date using three-tier fallback:
-   - **Tier 1:** Section header date (most reliable)
-   - **Tier 2:** Date patterns in page text (e.g., `19 Jun 2025`, `June 19, 2025`, `2025-06-19`)
-   - **Tier 3:** Date patterns in URL (e.g., `20_06_2025`)
+4. Entity name: the heading's organisation
+5. Incident date (`processing/incident_dates.py`):
+   - A day in the article counts only when its wording ties it to the breach: "occurred on", "took place", "discovered", "detected", "the attack on", "between 1 and 3 May 2025", "On 2 May 2025 the company detected ...". Publication, byline, "updated" and announcement dates ("Published 1 June 2025", "the company said on 5 May", "disclosed on") never count; a tied date more than 6 months before the heading's month, or after the following month, is background, not the incident. Of several tied dates, the first for when the incident began wins, else the first for when it was found. Stored at `day` precision, basis `stated in the source page`.
+   - Otherwise the heading's month (stored as the 1st, precision `month`, basis `Webber list heading (month)`).
+   - A date in the link (`campaign=20_06_2025`) is the newsletter's date: a publication date, never the incident's.
+   `dedup_admin.py publication-dates` applies the same rule to stored records (`rederive_webber_dates`).
 
 ### Perplexity Fallback for Failed Scrapes
 

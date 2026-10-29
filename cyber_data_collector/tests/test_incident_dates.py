@@ -80,12 +80,12 @@ def test_only_verified_precision_is_stored_and_unverified_dates_get_no_interval(
     assert report.verified == {"month": 1, "day": 1} and report.unverified == 1
 
 
-def test_webber_detail_page_prefers_the_articles_day_and_keeps_the_link_date_as_publication(monkeypatch):
+def test_webber_detail_page_prefers_the_day_tied_to_the_breach_and_keeps_the_link_date_as_publication(monkeypatch):
     from cyber_data_collector.datasources import webber_insurance as wi
     from cyber_data_collector.models.config import DataSourceConfig
     from cyber_data_collector.utils import RateLimiter
 
-    html = b"<html><body><h1>Vertel - data breach</h1><article>Vertel disclosed on 19 June 2025 that ...</article></body></html>"
+    html = b"<html><body><h1>Vertel - data breach</h1><article>Vertel said the breach occurred on 19 June 2025 and ...</article></body></html>"
 
     class Response:
         content = html
