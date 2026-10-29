@@ -1225,9 +1225,12 @@ class DeduplicationEngine:
         # Choose master event (most complete or most recent)
         master_event = self._select_master_event(events)
         merged_events = [e for e in events if e.event_id != master_event.event_id]
-        
-        # Merge data from all events
-        merged_event = self._merge_event_data(events)
+
+        # Merge data from all events. The merged event keeps the id of the first
+        # event it is given, so the chosen master goes first: given the input order
+        # it kept events[0]'s id while merged_events left out the chosen master, and
+        # that record belonged to no event (2 on 2026-10-30).
+        merged_event = self._merge_event_data([master_event] + merged_events)
         
         # Calculate similarity scores
         similarity_scores = {}
