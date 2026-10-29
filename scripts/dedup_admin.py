@@ -1514,6 +1514,214 @@ def cmd_check_coherence(args) -> int:
     return 0
 
 
+def cmd_recalibrate(args) -> int:
+    """Re-score the labelled cases on current evidence and recompute each stale cut-off.
+
+    See :mod:`cyber_data_collector.dedup.recalibration`. A calibration is valid
+    only for the model, question and *evidence processing* it was measured on;
+    when a reader changes, its step is report-only until this has run. Labelled
+    cases are scored on the labelling-time snapshot named in
+    ``evaluation/calibration_snapshots.json`` (or ``--snapshot STEP=PATH``),
+    using a kept copy under ``instance/recalibration/`` into which the live
+    database's stored timelines and corroboration searches are carried. Spends
+    Jev and escalation calls only for evidence not already judged.
+
+    ``--status`` prints each calibration's state and spends nothing; ``--dry-run``
+    also counts the labelled cases each snapshot holds. ``--if-stale`` limits the
+    work to calibrations that exist but no longer match (what the refresh runs).
+    Exit 2: a snapshot, key or label file is missing (nothing spent for that
+    step); exit 1: a step failed (its old calibration is untouched).
+    """
+    from cyber_data_collector.dedup import recalibration as rc
+
+    names = args.step or list(rc.SPECS)
+    unknown = [n for n in names if n not in rc.SPECS]
+    if unknown:
+        print(f"recalibrate: unknown step(s) {', '.join(unknown)}; known: {', '.join(rc.SPECS)}", file=sys.stderr)
+        return 2
+    current = rc.states(names)
+    print(f"{'step':30} {'state':12} {'cut-off':>9}  reason")
+    for st in current:
+        cutoff = "-" if st.get("cutoff") is None else f"{st['cutoff']:.4f}"
+        print(f"{st['step']:30} {st['state']:12} {cutoff:>9}  {st['reason']}")
+    if args.status:
+        return 0
+    if args.if_stale:
+        todo = [st for st in current if st["state"] == "stale"]
+    elif args.step:
+        todo = current
+    else:
+        # A step never calibrated has no labels to re-score yet: name it, don't fail on it.
+        todo = [st for st in current if st["state"] != "missing"]
+        for st in current:
+            if st["state"] == "missing":
+                print(f"{st['step']}: never calibrated ({st['reason']}); label it, then --step {st['step']}")
+    if not todo:
+        print("Every calibration matches the current model, question and evidence processing.")
+        return 0
+    overrides = {}
+    for item in args.snapshot or []:
+        step, sep, value = item.partition("=")
+        if not sep or step not in rc.SPECS:
+            print(f"recalibrate: --snapshot wants STEP=PATH with a known step, got {item!r}", file=sys.stderr)
+            return 2
+        overrides[step] = value
+    exit_code = 0
+    for st in todo:
+        spec = rc.SPECS[st["step"]]
+        if not spec.automatic:
+            print(f"\n{spec.name}: stale but not recalibrated here - run scripts/calibrate_supplier_victims.py "
+                  "on a labelling-time snapshot (its --apply refuses until then)", file=sys.stderr)
+            continue
+        try:
+            snapshot = rc.registered_snapshot(spec.name, Path(args.db), overrides)
+            result = rc.recalibrate_step(spec.name, Path(args.db), snapshot, precision=args.precision,
+                                         min_coverage=args.min_coverage, fresh=args.fresh, dry_run=args.dry_run)
+        except rc.PrerequisiteMissing as exc:
+            print(f"\n{spec.name}: cannot recalibrate - {exc}", file=sys.stderr)
+            exit_code = max(exit_code, 2)
+            continue
+        except Exception as exc:  # noqa: BLE001 - one step failing must not hide the others
+            logger.exception("recalibrate %s failed", spec.name)
+            print(f"\n{spec.name}: FAILED - {exc}. Its calibration file is unchanged.", file=sys.stderr)
+            exit_code = max(exit_code, 1)
+            continue
+        if result["dry_run"]:
+            print(f"\n{spec.name}: would score {result['present_in_snapshot']} of {result['labelled']} labelled "
+                  f"case(s) from {Path(result['snapshot']).name}; new evidence fingerprint {result['would_become']}")
+        else:
+            after = result["after"]
+            print(f"\n{spec.name}: recalibrated on {result['cases_scored']} of {result['cases_labelled']} "
+                  f"labelled case(s): cut-off {result['before'].get('cutoff')} -> {after.get('cutoff')}, "
+                  f"state {after['state']}")
+    return exit_code
+
+
+def cmd_check_same_organisation(args) -> int:
+    """Find separate incidents merged under one organisation; split them only when calibrated.
+
+    See :mod:`cyber_data_collector.dedup.coherence_same_org`. A member naming the
+    event's own organisation is a candidate only on evidence of a different
+    incident (a verified date far from the event's, or a different incident in
+    the organisation's researched timeline) - never a date gap by itself. Jev
+    judges each candidate (the middle band escalated). With ``--apply``,
+    candidates below the calibrated cut-off and members labelled 'different' are
+    split out through the ledger; without a calibration matching the current
+    models, questions and evidence processing only labelled members are split.
+    Findings: ``dedup_coherence_same_org_findings.json`` beside the database.
+
+    No fallback: a missing TypeSafe or OpenAI key (exit 2), a Jev failure, or an
+    unreadable labels or calibration file (exit 1) stops the command before
+    anything is split; a failed escalation leaves that member undecided (not
+    acted on, exit 1).
+    """
+    from cyber_data_collector.dedup import coherence_same_org as same_org
+    from cyber_data_collector.utils import jev
+
+    missing = []
+    if not os.getenv("TYPESAFE_API_KEY"):
+        missing.append("TYPESAFE_API_KEY")
+    elif not jev.available():
+        missing.append("the typesafe-sdk package")
+    if not os.getenv("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY (escalation model)")
+    if missing:
+        print(f"check-same-organisation cannot run: {', '.join(missing)} missing. Nothing judged or split.",
+              file=sys.stderr)
+        return 2
+    conn = _connect(args.db)
+    refresher = _make_refresher(args)
+    try:
+        ledger = DedupLedger(conn, role_refresher=refresher)
+        try:
+            result = same_org.check_same_organisation(conn, apply=args.apply, only=args.event or None,
+                                                      ledger=ledger)
+        except (coherence.CoherenceJudgementError, coherence.CoherenceConfigError) as exc:
+            print(f"check-same-organisation failed: {exc}. Nothing split; stored judgements are kept.",
+                  file=sys.stderr)
+            return 1
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+
+    for f in result["findings"]:
+        print(f"\n[{f['event'][:8]}] {(f['title'] or '')[:70]}  ({f['records']} records; victim {f['victim']})")
+        for i, group in enumerate(f["groups"]):
+            for s in group:
+                score = "label" if s.get("basis") == "label" else f"{s['p_same']:.3f}"
+                print(f"    - [{i + 1}] {score:>6}  {str(s.get('date') or '?'):10} {s['title'][:55]}")
+        for s in f["held"]:
+            score = "label" if s.get("label") else f"{s['p_same']:.3f}"
+            print(f"    = held {score:>6}  {str(s.get('date') or '?'):10} {s['title'][:45]}  ({s['guard']})")
+        if f["note"]:
+            print(f"    note: {f['note']}")
+    out = Path(args.db).parent / "dedup_coherence_same_org_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), "apply": args.apply,
+                               **{k: v for k, v in result.items() if k != "scores"}},
+                              indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"\nJudged {result['candidates_judged']} same-organisation candidate(s) in {result['events_judged']} "
+          f"event(s) ({result['escalated']} escalated).")
+    if not result["calibrated"]:
+        print("REPORT ONLY for model-judged candidates: no same-organisation calibration for this model, "
+              "question and evidence (label the candidates, then run scripts/calibrate_coherence_same_org.py); "
+              "only members labelled 'different' can be split.")
+    verb = "Split out" if args.apply else "Would split out"
+    print(f"{verb} {result['records_to_split']} record(s) from {result['events_with_splits']} event(s)"
+          + (f" at cut-off {result['cutoff']}" if result["cutoff"] is not None else "")
+          + f"; findings in {out}")
+    if result["undecided"]:
+        print(f"check-same-organisation: {len(result['undecided'])} member(s) UNDECIDED - escalation failed; "
+              "they were not acted on and will be retried next run.", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_resolve_label_contradictions(args) -> int:
+    """Split labelled-different pairs that were merged into one event.
+
+    See :mod:`cyber_data_collector.dedup.label_contradictions`. The quality gate's
+    ``labels.duplicates.contradictions``: a pair labelled 'different' that now
+    resolves to one Active event. The records of each labelled event (read from
+    the database it was labelled on, ``--snapshot`` or the registry's
+    'duplicates' entry) are separated again through the ledger: snapshotted,
+    reversible, with 'different' rulings cached. No API calls. Exit 2 when the
+    snapshot is needed and missing (the contradictions are still listed).
+    """
+    from cyber_data_collector.dedup import label_contradictions, recalibration
+
+    conn = _connect(args.db)
+    refresher = _make_refresher(args)
+    try:
+        found = label_contradictions.find(conn)
+        if not found:
+            print("No labelled-different pair is merged into one event.")
+            return 0
+        snapshot = None
+        try:
+            snapshot = recalibration.registered_snapshot(
+                "duplicates", Path(args.db), {"duplicates": args.snapshot} if args.snapshot else None)
+        except recalibration.PrerequisiteMissing as exc:
+            print(f"resolve-label-contradictions: {exc}", file=sys.stderr)
+        ledger = DedupLedger(conn, role_refresher=refresher)
+        result = label_contradictions.resolve(conn, snapshot, apply=not args.dry_run, ledger=ledger)
+    finally:
+        _flush_refresher(conn, refresher)
+        conn.close()
+    unresolved = 0
+    for c in result:
+        print(f"\n{c.a[:8]} vs {c.b[:8]} (labelled different) are both in event {c.event[:8]}")
+        if c.unresolved:
+            unresolved += 1
+            print(f"    UNRESOLVED: {c.unresolved}")
+            continue
+        print(f"    {len(c.side_a)} record(s) from {c.a[:8]}, {len(c.side_b)} from {c.b[:8]}; "
+              f"{'would split' if args.dry_run else 'split'} out {len(c.leaving)}"
+              + (f" as {c.new_event[:8]}" if c.new_event else ""))
+    if args.dry_run:
+        print("\nDRY RUN - nothing changed.")
+    return 2 if snapshot is None else (1 if unresolved else 0)
+
+
 def cmd_adjudicate_candidates(args) -> int:
     """Find missed duplicates by judging whole groups of candidates.
 
@@ -2507,8 +2715,13 @@ def cmd_merge(args) -> int:
             print(f"Refusing: a 'different' ruling exists ({conflict}). "
                   "Re-run with --force to overrule it.")
             return 1
-        ledger.merge_events(args.target, args.source, args.reason, actor="human",
-                            respect_overrides=not args.force)
+        try:
+            ledger.merge_events(args.target, args.source, args.reason, actor="human",
+                                respect_overrides=not args.force)
+        except ValueError as exc:
+            conn.rollback()
+            print(f"Refusing: {exc}")
+            return 1
         conn.commit()
         print(f"Merged {args.source} into {args.target} (override recorded)")
     finally:
@@ -3304,6 +3517,48 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Split (model-judged strays only with a calibration matching the current "
                         "models and question; labelled strays always). Otherwise report only.")
     p.set_defaults(func=cmd_check_coherence)
+
+    p = sub.add_parser("recalibrate",
+                       help="Re-score the labelled cases on current evidence and recompute every cut-off "
+                            "whose evidence processing changed (spends Jev/escalation calls)")
+    p.add_argument("--step", action="append", default=None,
+                   help="Only this step (source-gate, event-reality, coherence, "
+                        "coherence-same-organisation, duplicates, victim-attribution, supplier-victims); "
+                        "repeatable. Default: all.")
+    p.add_argument("--status", action="store_true", help="Print each calibration's state; spend nothing")
+    p.add_argument("--if-stale", action="store_true",
+                   help="Only calibrations that exist but no longer match the current model, question or "
+                        "evidence processing (what the refresh runs)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Count the labelled cases each snapshot holds; judge and write nothing")
+    p.add_argument("--snapshot", action="append", default=None, metavar="STEP=PATH",
+                   help="Labelling-time database for a step, overriding evaluation/calibration_snapshots.json")
+    p.add_argument("--precision", type=float, default=0.95)
+    p.add_argument("--min-coverage", type=float, default=0.9,
+                   help="Fail (keeping the old calibration) when fewer than this share of the previously "
+                        "labelled cases are usable")
+    p.add_argument("--fresh", action="store_true",
+                   help="Rebuild the recalibration copy from the snapshot instead of reusing its stored answers")
+    p.set_defaults(func=cmd_recalibrate)
+
+    p = sub.add_parser("check-same-organisation",
+                       help="Find separate incidents merged under one organisation (Jev, calibrated split; "
+                            "report only until labelled and calibrated)")
+    p.add_argument("--event", action="append", default=None,
+                   help="Only this event (dedup id or prefix); repeatable.")
+    p.add_argument("--apply", action="store_true",
+                   help="Split (model-judged candidates only with a calibration matching the current models, "
+                        "questions and evidence; labelled-different members always). Otherwise report only.")
+    p.set_defaults(func=cmd_check_same_organisation)
+
+    p = sub.add_parser("resolve-label-contradictions",
+                       help="Split pairs labelled different that were merged into one event (ledger split, "
+                            "reversible; no API calls)")
+    p.add_argument("--dry-run", action="store_true", help="List what would be split; change nothing")
+    p.add_argument("--snapshot", default=None,
+                   help="The database the duplicate labels were made on (default: evaluation/"
+                        "calibration_snapshots.json, 'duplicates')")
+    p.set_defaults(func=cmd_resolve_label_contradictions)
 
     p = sub.add_parser("adjudicate-candidates",
                        help="Find missed duplicates by partitioning whole groups of "

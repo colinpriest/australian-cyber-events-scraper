@@ -75,6 +75,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.utils.llm_models import typesafe_model
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,9 @@ REPLACEMENT_QUESTION_ID = "replacement_victim"
 REPLACEMENT_VERSION = "victim-replacement-v1"
 REPORT_BELOW = 0.5
 MAX_CANDIDATES = 8
+#: Bump when what the judgement shows beyond event reality's evidence changes (the victim, the other
+#: victims, the victim's timeline, the replacement options).
+EVIDENCE_VERSION = "victim-evidence-v1"
 
 ROOT = Path(__file__).resolve().parents[2]
 LABELS_PATH = ROOT / "evaluation" / "victim_attribution_labels.csv"
@@ -158,11 +162,20 @@ def escalation_question() -> str:
             " Did the incident happen to the recorded victim?")
 
 
+def evidence_fingerprint() -> str:
+    """A hash of the evidence a victim judgement sees: the event's reality evidence plus its own additions."""
+    from cyber_data_collector.dedup import event_reality
+
+    return calibration_guard.fingerprint(
+        "victim-attribution", version=EVIDENCE_VERSION, max_candidates=MAX_CANDIDATES,
+        escalate_band=list(ESCALATE_BAND) if ESCALATE_BAND else None, events=event_reality.evidence_fingerprint())
+
+
 def calibration_identity() -> Dict[str, str]:
-    """What a calibration must have been measured on to apply: all three questions and both models."""
+    """What a calibration must have been measured on to apply: all three questions, both models, evidence."""
     from cyber_data_collector.utils.llm_models import openai_model
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}+{REPLACEMENT_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
 
 
 # ---------------------------------------------------------------- population
@@ -362,11 +375,10 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     except (OSError, ValueError) as exc:
         logger.warning("No victim attribution calibration (%s): REPORT ONLY", exc)
         return None
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        logger.warning("VICTIM ATTRIBUTION IS REPORT ONLY: calibration is for %s / %s, current is %s / %s. "
-                       "Rerun scripts/calibrate_victim_attribution.py.", cal.get("model"),
-                       cal.get("question_version"), want["model"], want["question_version"])
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning("VICTIM ATTRIBUTION IS REPORT ONLY. %s",
+                       calibration_guard.report_only_message("victim attribution", cal, reason))
         return None
     if cal.get("cutoff") is None:
         logger.warning("VICTIM ATTRIBUTION IS REPORT ONLY: no cut-off reached the precision target")

@@ -560,9 +560,10 @@ then (correctly) refuses to regroup them.
 Every refresh cleans the data after deduplication and before the recurrence
 check (`run_full_pipeline.py`, `--skip-data-hygiene` to opt out). Each step
 that deletes, merges or re-attributes acts only at a cut-off **calibrated on
-labelled examples from this database**, recorded with the models and question
-versions it was measured on; change a model or a question and the step falls
-back to reporting until it is recalibrated. Labels are ground truth: an item
+labelled examples from this database**, recorded with the models, question
+versions **and evidence processing** it was measured on; change a model, a
+question or what a judgement is shown and the step falls back to reporting
+until it is recalibrated (see [Calibrations hold only for their evidence](#calibrations-hold-only-for-their-evidence)). Labels are ground truth: an item
 labelled one way is never acted on the other way. A labelled non-incident is
 rejected whatever it scores, unless it holds a record it did not hold when
 labelled (checked against the labelling snapshot; then it is held for review).
@@ -576,6 +577,7 @@ removed and the event kept for its replacement evidence.
 | 2 | `check-events --apply` | Is the event a real, specific incident? | Jev + escalation | reject below **0.28** | 0.954 (68/72) | 0.71 | 0.91 |
 | 3 | `check-victims` | Do the records name a different victim? (deterministic rule) | none | - | 8/9 reviewed | - | - |
 | 3b | `check-coherence --apply` (not yet wired into `run_full_pipeline.py`) | Is each suspect record about its event's incident? (splits strays out) | Jev + escalation | split below **0.15** | 1.00 (17/17) | 0.94 | 0.98 |
+| 3c | `check-same-organisation --apply` | Is a member that may be a *separate incident at the same organisation* (verified far date, or another incident in the timeline) the event's incident? | Jev + escalation | none yet: report-only until labelled and calibrated | - | - | - |
 | 4 | `check-duplicates --apply` | Are two events about one organisation the same incident? | Jev + escalation | merge at **0.81** | 1.00 (16/16) | 0.94 | 0.97 |
 | 3b | `check-victim-attribution --apply` | Is the recorded victim really the affected organisation? Demote / replace from the evidence / flag | Jev + escalation | act below **0.15**; replace at choice **0.84** | 0.956 (43/45); replacements 23/25 | 0.38 | 0.94 |
 | 5 | `reconcile-timelines --queue-gaps` | Do events agree with the organisation's researched timeline? Resolved by steps 2 and 3b; re-dating report only (2 eligible conflicts, too few to calibrate) | Jev | - | - | - | - |
@@ -589,16 +591,71 @@ python scripts/dedup_admin.py check-sources [--apply] [--unmapped-only]
 python scripts/dedup_admin.py check-events [--apply]
 python scripts/dedup_admin.py check-victims [--dry-run]
 python scripts/dedup_admin.py check-coherence [--apply] [--event <dedup_id>]
+python scripts/dedup_admin.py check-same-organisation [--apply] [--event <dedup_id>]
 python scripts/dedup_admin.py check-duplicates [--apply]
 python scripts/dedup_admin.py check-victim-attribution [--apply]
+python scripts/dedup_admin.py resolve-label-contradictions [--dry-run]
 python scripts/dedup_admin.py research-timelines
 python scripts/dedup_admin.py reconcile-timelines [--queue-gaps] [--apply]
+python scripts/dedup_admin.py recalibrate [--status | --if-stale | --dry-run] [--step STEP ...]
 ```
 
 These commands fail (exit 2) rather than skip when Jev or Perplexity is
 needed and unavailable, and `--apply` refuses when its labels file is
-missing, unreadable or empty. A calibration measured on another model or
-question version makes the step report-only, and the log says so.
+missing, unreadable or empty. A calibration measured on another model,
+question version or evidence processing makes the step report-only, and the
+log says which part differs.
+
+#### Calibrations hold only for their evidence
+
+A cut-off measured on labelled cases scored over one body of evidence says
+nothing about another. On 2026-10-28 the evidence readers changed
+(`processing/active_evidence.py`: active records only, pages of other articles
+withheld) while the event-reality, duplicate and coherence cut-offs - activated
+on the model and question version alone - kept rejecting and merging. Each
+reader now carries an **evidence fingerprint** (`dedup/calibration_guard.py`):
+a hash of an `EVIDENCE_VERSION` constant, bumped by hand when the *logic* of
+what a model is shown changes, and of the parameters that shape it (character
+limits, record caps, the escalation effort, the shared active-evidence rules,
+the timeline and corroboration limits, date provenance). It is written into
+every calibration file as `evidence` beside `model` and `question_version`;
+activation needs all three to match, and a calibration with no `evidence`
+(measured before fingerprinting) does not apply. A reader that changes no
+parameter but changes what it shows must bump its `EVIDENCE_VERSION`.
+
+`recalibrate` is the committed way back. For each calibration that no longer
+matches it:
+
+1. finds the **labelling-time snapshot** named for the step in
+   `evaluation/calibration_snapshots.json` (a backup beside the live database,
+   taken before the labelled items were merged, split or rejected; override
+   with `--snapshot STEP=PATH`) - labels describe the database as it was when
+   they were made, and most labelled items no longer exist as active events;
+2. works on a kept copy under `instance/recalibration/` into which the live
+   database's stored timelines and corroboration searches are carried (a live
+   search cannot be replayed);
+3. re-scores every labelled case with the **current readers** - the same
+   functions the pipeline calls - spending Jev and escalation calls only for
+   evidence whose input hash is new (answers are keyed on it, so a repeat run
+   or a resumed one buys nothing twice), and fails if any case cannot be
+   scored;
+4. recomputes the cut-off with the step's own calibration script, which
+   records the new fingerprint, and keeps the old file if far fewer labelled
+   cases were usable (`--min-coverage`, 90%).
+
+Limits: the snapshot holds the records, research and pages as they were at
+labelling time, scored by today's readers and questions. The new cut-off
+therefore certifies the *reader*, not the data it meets now (re-enrichment,
+re-scraped pages and corrected dates since labelling are not in the
+measurement); strata weights come from the original sample files and are not
+redrawn; the supplier-victim calibration is reported stale but recalibrated
+with `scripts/calibrate_supplier_victims.py`. The source-gate calibration was
+**attested** rather than re-measured (its reader is unchanged since
+measurement; `evidence_attestation` in its file) and is replaced by a measured
+value at its next recalibration. The refresh runs `recalibrate --if-stale`
+first (`--skip-recalibration` to opt out; with `--report-event-rejections` it
+only lists); a step whose calibration cannot be recomputed stays report-only
+and the run ends degraded.
 
 **Flagged victims are reassessed, and unresolved ones are marked.** When
 `check-victim-attribution` finds a recorded victim below the cut-off and
@@ -818,7 +875,8 @@ together. Labels are ground truth: `same` never leaves, `different` always does
 (all 25 labelled strays - WSU's WA Health records, UTas's University of Sydney
 and Canvas records, NT Health's Updoc record ... - leave on the first run).
 Guards kept from past wrong splits: same-organisation members never leave on a
-model score (misdated copies), an organisation named in the event's title stays
+model score *here* (misdated copies; see the next section for the separate,
+calibrated check), an organisation named in the event's title stays
 (youX / Vroom by YouX), a majority of strays naming one organisation means the
 event is mislabelled, and the question states the supplier-customer rule.
 Split-off records are re-homed by `check-duplicates`, which runs next. No
@@ -827,6 +885,58 @@ calibration file under `--apply` exit non-zero; a failed escalation leaves its
 member undecided (not acted on) and exits non-zero. Findings:
 `dedup_coherence_findings.json` beside the database. Details, including what the
 suspect gate misses: [docs/09-deduplication-v3.md section 8j](docs/09-deduplication-v3.md).
+
+### Separate incidents merged under one organisation
+
+The stray check cannot see the opposite defect: two real incidents at one
+organisation joined into one event, because every member names the same
+organisation. The 2026-10-28 recurrence check did exactly that to two pairs
+labelled *different* (Western Sydney University's August 2024 and January 2025
+breaches; youX's March 2025 S3 exposure and February 2026 MongoDB theft).
+
+```bash
+python scripts/dedup_admin.py check-same-organisation              # report
+python scripts/dedup_admin.py check-same-organisation --apply      # split (only once calibrated; labelled always)
+python scripts/calibrate_coherence_same_org.py --db <snapshot> sample | packet --out DIR | judge | calibrate
+```
+
+A member naming the event's own organisation becomes a *candidate* only on
+evidence of a different incident, **never a date gap by itself**: its incident
+date is verified (stated in the record or researched - not a publication or
+discovery date) and lies more than 90 days from the event's date interval, or
+it matches a different incident than the event does in the organisation's
+researched timeline. Jev judges each candidate with a versioned variant of the
+stray question (`member-coherence-sameorg-v1`) that states the flags are hints,
+not evidence, and that follow-ups and misdated copies are the same incident;
+0.1-0.7 is escalated to GPT-5.5. **Splitting needs its own calibrated cut-off**
+on labelled same-organisation cases (`evaluation/coherence_same_org_labels.csv`,
+`..._calibration.json`, with the evidence fingerprint); until those exist the
+step only reports (`dedup_coherence_same_org_findings.json`) and splits members
+labelled `different`. Guards: labelled `same` never leaves; the departing
+records must be fewer than those that stay (else the event is held for review);
+a split goes through the ledger (snapshotted, reversible, `different` rulings
+cached) with records leaving together when within 90 days of each other. On the
+2026-10-29 live copy it finds 196 candidates in 82 events, including both
+contradicted pairs' records above. Labelling convention: `different` only when
+the record's own content shows a separate incident, `same` for any first report,
+follow-up, notification, regulator statement or class action about the event's
+incident, even with a wrong date.
+
+**Labelled-different pairs are never merged, and merged ones are undone.**
+`DedupLedger.merge_events` now refuses (`ValueError`, like a cached ruling) to
+join two events when a pair labelled `different` in
+`evaluation/duplicate_labels.csv` resolves to one on each side, so the GPT
+recurrence check, `consolidate`, supplier merges and the rest respect labels
+(`merge --force` overrules). `resolve-label-contradictions` repairs the ones
+that were merged before (the quality gate's `labels.duplicates.contradictions`):
+it reads which records belonged to each labelled event from the labelling-time
+snapshot (`duplicates` in `evaluation/calibration_snapshots.json`), and the
+smaller side leaves together through the ledger, with `different` rulings
+between the two sides. A side with no active record left, or no snapshot, is
+listed as unresolved, not guessed. The refresh runs it after the merging steps.
+On the live copy it splits 2 records out of the WSU event and 11 out of the
+youX event; records misattributed to a labelled event travel with it and are
+re-homed by `check-same-organisation` and `check-duplicates`.
 
 ### Cluster-level adjudication
 

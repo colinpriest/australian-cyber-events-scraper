@@ -33,6 +33,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.dedup.event_reality import ROOT, build_state
 from cyber_data_collector.utils.llm_models import typesafe_model
 
@@ -52,6 +53,9 @@ ESCALATION_QUESTION_ID = "same_incident_escalated"
 ESCALATION_VERSION = "same-incident-escalation-v1"
 ESCALATE_BAND = (0.2, 0.8)
 RECORDS_PER_EVENT = 6
+#: Bump when what a pair's events show a model changes beyond event reality's evidence
+#: (``event_reality.EVIDENCE_VERSION``) and the date provenance (``date_provenance.EVIDENCE_VERSION``).
+EVIDENCE_VERSION = "duplicate-evidence-v1"
 
 LABELS_PATH = ROOT / "evaluation" / "duplicate_labels.csv"
 CALIBRATION_PATH = ROOT / "evaluation" / "duplicate_calibration.json"
@@ -165,10 +169,20 @@ def escalation_question() -> str:
             " Do event_a and event_b describe the same real-world cyber incident?")
 
 
+def evidence_fingerprint() -> str:
+    """A hash of the evidence a pair judgement sees: each event's reality evidence plus date provenance."""
+    from cyber_data_collector.dedup import date_provenance, event_reality
+
+    return calibration_guard.fingerprint(
+        "duplicates", version=EVIDENCE_VERSION, records_per_event=RECORDS_PER_EVENT,
+        escalate_band=list(ESCALATE_BAND), date_provenance=date_provenance.EVIDENCE_VERSION,
+        events=event_reality.evidence_fingerprint())
+
+
 def calibration_identity() -> Dict[str, str]:
     from cyber_data_collector.utils.llm_models import openai_model
     return {"question_version": f"{QUESTION_VERSION}+{ESCALATION_VERSION}",
-            "model": f"{typesafe_model()}+{openai_model()}"}
+            "model": f"{typesafe_model()}+{openai_model()}", "evidence": evidence_fingerprint()}
 
 
 def escalate_band(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], probabilities: Dict[str, float],
@@ -259,17 +273,16 @@ def labelled_pairs(path: Path = LABELS_PATH) -> Dict[str, str]:
 
 
 def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
-    """The merge calibration, only if measured on the current model and question."""
+    """The merge calibration, only if measured on the current model, question and evidence processing."""
     try:
         cal = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logger.error("Duplicate calibration unreadable (%s): %s - REPORT ONLY, nothing will be acted on",
                      path, exc)
         return None
-    want = calibration_identity()
-    if cal.get("question_version") != want["question_version"] or cal.get("model") != want["model"]:
-        logger.warning("Duplicate calibration is for %s / %s, not %s / %s: report only",
-                       cal.get("model"), cal.get("question_version"), want["model"], want["question_version"])
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning(calibration_guard.report_only_message("duplicate", cal, reason))
         return None
     return cal if cal.get("cutoff") is not None else None
 
