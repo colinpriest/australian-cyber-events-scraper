@@ -49,6 +49,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
+from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.dedup.event_reality import ROOT
 from cyber_data_collector.utils.llm_models import perplexity_model, typesafe_model
 
@@ -65,6 +66,8 @@ PAGE_CHARS = 3000
 MIN_PAGE_CHARS = 300
 REPLACEMENT_MIN_CONFIDENCE = 0.5
 COVERAGE_WINDOW_DAYS = 180
+#: Bump when what the gate shows a model changes (which text of the page, which fields).
+EVIDENCE_VERSION = "source-gate-evidence-v1"
 
 LABELS_PATH = ROOT / "evaluation" / "source_gate_labels.csv"
 CALIBRATION_PATH = ROOT / "evaluation" / "source_gate_calibration.json"
@@ -232,8 +235,14 @@ def labels(path: Path = LABELS_PATH, required: bool = False) -> Dict[str, str]:
     return out
 
 
+def evidence_fingerprint() -> str:
+    """A hash of what the gate shows Jev: the page's own text up to PAGE_CHARS, title, url and snippet."""
+    return calibration_guard.fingerprint("source-gate", version=EVIDENCE_VERSION, page_chars=PAGE_CHARS,
+                                         min_page_chars=MIN_PAGE_CHARS)
+
+
 def calibration_identity() -> Dict[str, str]:
-    return {"question_version": QUESTION_VERSION, "model": typesafe_model()}
+    return {"question_version": QUESTION_VERSION, "model": typesafe_model(), "evidence": evidence_fingerprint()}
 
 
 def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]]:
@@ -245,9 +254,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     if not isinstance(cal, dict):
         logger.error("Source gate calibration %s is not a JSON object: REPORT-ONLY, nothing is removed", path)
         return None
-    if {k: cal.get(k) for k in ("question_version", "model")} != calibration_identity():
-        logger.warning("Source gate calibration is for %s / %s, not %s: report only",
-                       cal.get("model"), cal.get("question_version"), calibration_identity())
+    reason = calibration_guard.mismatch(cal, calibration_identity())
+    if reason:
+        logger.warning(calibration_guard.report_only_message("source gate", cal, reason))
         return None
     if cal.get("cutoff") is None:
         logger.error("Source gate calibration %s has no cut-off: REPORT-ONLY, nothing is removed", path)

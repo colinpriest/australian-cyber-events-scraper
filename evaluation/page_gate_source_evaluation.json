@@ -64,5 +64,7 @@
       },
       "accepted": false
     }
-  }
+  },
+  "evidence": "source-gate:228eaa852bc7c565",
+  "evidence_attestation": "Attested, not re-measured: the source gate's evidence reader (google_records / page_state, PAGE_CHARS, MIN_PAGE_CHARS) is unchanged since this was measured at commit 525c323 (git diff 525c323..HEAD -- cyber_data_collector/dedup/source_gate.py touches neither); fingerprinting was added afterwards. Replaced by a measured value on the next recalibration."
 }
