@@ -1,0 +1,22 @@
+deduplicated_event_id,expectation,value,note,source
+439d69f3-b09d-480c-b6cb-748eca9516e8,victim,Services Australia,the OpenAI-agent Medicare Statistics Reporting Service incident (June 2026),user 2026-10-29
+ff9400aa-2979-4c8e-9f8c-3f6d65e01c56,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+1951bc25-521b-4f38-9e13-601a20516916,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+19f04d43-466f-47c4-9b97-f9ab72056842,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+28aaa48d-0823-4ca8-9da7-50b5e863ab3e,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+63b592dd-fa4e-406f-898b-7c7461c0c2f0,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+744f3f4d-52c9-4dfd-b9b0-219c059315ea,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+8500d9ae-7710-4d69-b637-8066d9343d66,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+f5eec2bc-2e88-409a-9d44-a4f1eace5c32,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+fbef8964-2df7-478b-a83a-5825cfdf2b64,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+a9d505af-a415-413e-a915-762e90d0fd2e,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+8e0e930c-bc85-45f2-bf67-45ab92c400b4,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+6b21606f-6391-4432-942e-713c52cdf1df,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,coverage of the OpenAI-agent Medicare incident,user 2026-10-29
+5e68edf1-b29a-487e-bdcd-3aaac241b4e7,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,victim is Medicare (Services Australia) not the Australian Parliament,user 2026-10-29
+357db488-9a8b-4dbf-9ac8-ba6931e09004,same_incident_as,e49b1330-921d-4e46-8563-3a4922149c71,the AI agent (Claude via OpenClaw) that exploited an Australian gym's booking system; not the Medicare incident,user 2026-10-29
+c5dea795-dac9-48ec-a8fc-1c764d900c22,same_incident_as,e49b1330-921d-4e46-8563-3a4922149c71,the AI agent (Claude via OpenClaw) that exploited an Australian gym's booking system; not the Medicare incident,user 2026-10-29
+69d6372d-b771-42a3-97f7-0f849d657187,same_incident_as,e49b1330-921d-4e46-8563-3a4922149c71,the AI agent (Claude via OpenClaw) that exploited an Australian gym's booking system; not the Medicare incident,user 2026-10-29
+6bb15642-455f-4180-b4b2-30a0ca9a4f7e,victim,NSW National Parks and Wildlife Service,the text names it (Fire History service); a second OpenAI-agent incident,user 2026-10-29
+e94eba13-5f43-4832-843c-04691d59775c,out_of_scope,,US agencies only (Education Department / SEC / Census Bureau),user 2026-10-29
+39d8a932-ede9-4fd9-aa61-c52a819f3432,out_of_scope,,OpenAI rogue-agent evaluation (Hugging Face and four services); no Australian victim,user 2026-10-29
+e9191236-4731-4d70-8338-ac86582a581f,out_of_scope,,Grok deepfakes; no Australian victim (Australian condemnation only),user 2026-10-29
