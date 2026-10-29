@@ -351,7 +351,7 @@ def test_an_ai_decision_is_stored_under_the_ai_route_and_a_stale_low_one_is_aske
     evidence neither counts as the pair's score nor vetoes, but is asked again where it could block a merge."""
     pair = next(p for p in ad.candidate_pairs(conn) if p["pair_id"] == "m1|m3")
     dj.score_pairs(conn, [pair], ad.ROUTE, judge=JevJudge(conn, client=FakeTypeSafe(default=0.05)))
-    assert tuple(conn.execute("SELECT route, final_score FROM PairDecisions").fetchone()) == ("ai", 0.05)
+    assert tuple(conn.execute("SELECT step, final_score FROM FinalDecisions").fetchone()) == ("duplicates-ai", 0.05)
     assert ad.stored_final_probabilities(conn, [pair]) == {"m1|m3": 0.05}
     conn.execute("UPDATE DeduplicatedEvents SET event_date = '2026-09-26' WHERE deduplicated_event_id = 'm3'")
     new_pair = next(p for p in ad.candidate_pairs(conn) if p["pair_id"] == "m1|m3")

@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from cyber_data_collector.dedup import calibration_guard
+from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.utils.llm_models import typesafe_model
 
 logger = logging.getLogger(__name__)
@@ -281,22 +281,32 @@ def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], cli
     return out
 
 
+STEP = final_decisions.Step(
+    name="event-reality", question_id=QUESTION_ID, version=QUESTION_VERSION, make_question=question,
+    escalation_id=ESCALATION_QUESTION_ID, escalation_version=ESCALATION_VERSION,
+    escalation_text=escalation_question, band=ESCALATE_BAND)
+
+
+def final_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
+    """The evidence an event's final judgement (Jev and the escalation alike) is made on."""
+    return build_state(conn, dedup_id, corroborated=True, with_timeline=True)
+
+
+def record_final(conn: sqlite3.Connection, jev: Dict[str, float], escalated: Dict[str, float],
+                 failed: Optional[Sequence[str]] = None) -> Dict[str, float]:
+    """Store each scored event's final decision against the evidence both answers were given; returns the final
+    scores (an event whose escalation failed has none)."""
+    return final_decisions.record_scores(conn, STEP, [(d, lambda d=d: final_state(conn, d)) for d in jev],
+                                         jev, escalated, failed or ())
+
+
 def stored_final_probabilities(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, float]:
-    """The final score per event from storage: the escalation's where there is one, else Jev's."""
-    from cyber_data_collector.utils.llm_models import openai_model
+    """The final score per event from its decision on the evidence it has **now** (:mod:`final_decisions`).
 
-    def latest(question_id: str, version: str, model: str) -> Dict[str, float]:
-        out: Dict[str, float] = {}
-        for sid, value in conn.execute(
-                "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, version, model)):
-            out[sid] = float(value)
-        return out
-
-    jev = latest(QUESTION_ID, QUESTION_VERSION, typesafe_model())
-    escalated = latest(ESCALATION_QUESTION_ID, ESCALATION_VERSION, openai_model())
-    lo, hi = ESCALATE_BAND
-    return {d: (escalated[d] if d in escalated and lo <= jev[d] < hi else jev[d]) for d in ids if d in jev}
+    It used to be the newest Jev answer and the newest escalation, each chosen alone, so an escalation given
+    before the event's evidence changed could be combined with a fresh Jev answer. An event with no decision on
+    its current evidence has no score here: it is judged (``check-events``) first."""
+    return final_decisions.read_current(conn, STEP, [(d, lambda d=d: final_state(conn, d)) for d in ids])
 
 
 def corroborate_low(conn: sqlite3.Connection, screen: Dict[str, float], search=None) -> int:
@@ -478,18 +488,20 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     """
     from cyber_data_collector.dedup.org_timeline import research_all
 
-    events = active_events(conn)
+    # Labels decide first: an event the labels say is real is never rejected, whatever it scores, so it is not
+    # (re-)asked about. Read first, so unreadable labels stop the run before anything is spent.
+    protected = protected_events(labels_path) if apply else set()
+    events = [d for d in active_events(conn) if d not in protected]
     screen = judge_events(conn, events, judge=judge, version=SCREEN_VERSION)
     corroborated = corroborate_low(conn, screen, search=search)
     research_all(conn, search=timeline_search)
     jev_scores = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
     escalation_failed: List[str] = []
     escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
-    probabilities = {d: escalated.get(d, p) for d, p in jev_scores.items() if d not in escalation_failed}
+    probabilities = record_final(conn, jev_scores, escalated, escalation_failed)
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
-    protected = protected_events(labels_path) if apply else set()
     below = [] if cutoff is None else [
         {"deduplicated_event_id": did, "title": titles.get(did), "p_real": p}
         for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
@@ -520,7 +532,7 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     if applied:
         reject_events(conn, below)
     restored = restore_protected(conn, protected) if apply else []
-    return {"judged": len(probabilities), "corroborated": corroborated, "escalated": len(escalated),
+    return {"judged": len(probabilities), "settled_by_label": len(protected), "corroborated": corroborated, "escalated": len(escalated),
             "escalation_failed": escalation_failed, "cutoff": cutoff,
             "labelled_rejections": labelled_out, "labelled_needing_review": needs_review,
             "calibrated": cal is not None, "applied": applied, "rejections": below,

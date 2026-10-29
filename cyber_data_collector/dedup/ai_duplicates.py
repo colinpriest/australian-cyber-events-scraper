@@ -443,7 +443,7 @@ def score_pairs(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge
     """``(final scores, escalated count, pairs whose escalation failed)``.
 
     A pair whose escalation failed has no final score: it is undecided, not scored on Jev's middle-band answer.
-    Each final score is stored against the evidence it was made on (``PairDecisions``).
+    Each final score is stored against the evidence it was made on (``FinalDecisions``).
     """
     scored = dj.score_pairs(conn, pairs, ROUTE, judge=judge, escalation_client=escalation_client)
     return scored.final, len(scored.escalated), scored.failed
@@ -519,16 +519,20 @@ def assess(conn: sqlite3.Connection, pairs: Sequence[Dict[str, Any]], judge=None
     labelled there is protected (or merged) the same way; where both files label
     a pair, this one's label wins.
     """
-    probabilities, escalated, failed = (score_pairs(conn, pairs, judge=judge, escalation_client=escalation_client)
-                                        if pairs else ({}, 0, []))
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     labels = {**(org_labels or {}), **labelled_pairs(labels_path, required=cal is not None)}
+    # Labels decide first (same merges, different never does), so a labelled pair is not (re-)asked about.
+    ask = [p for p in pairs if labels.get(p["pair_id"]) not in ("same", "different")]
+    probabilities, escalated, failed = (score_pairs(conn, ask, judge=judge, escalation_client=escalation_client)
+                                        if ask else ({}, 0, []))
     different = {p for p, label in labels.items() if label == "different"}
     by_id = {p["pair_id"]: p for p in pairs}
+    # A labelled-same pair is merged without a score; any other pair needs its score at the cut-off.
     chosen = [] if cutoff is None else [
-        pid for pid, p in probabilities.items()
-        if (p >= cutoff and pid not in different) or labels.get(pid) == "same"]
+        pid for pid in sorted({q["pair_id"] for q in pairs} | set(probabilities))
+        if labels.get(pid) == "same"
+        or (pid in probabilities and probabilities[pid] >= cutoff and pid not in different)]
     order = sorted(probabilities, key=lambda x: -probabilities[x])
     return {"pairs": len(pairs), "judged": len(probabilities), "escalated": escalated,
             "escalation_failed": failed, "cutoff": cutoff, "calibrated": cal is not None,

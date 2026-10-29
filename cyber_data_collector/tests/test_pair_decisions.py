@@ -3,7 +3,7 @@
 The final score used to be rebuilt by picking the newest Jev answer and the newest escalation for a pair
 independently, so an escalation made on old evidence could be combined with a fresh Jev answer, and a stale low
 score could veto a merge. The final decision is now stored with the hash of the evidence both models were shown
-(``PairDecisions``), read only when that evidence is the pair's evidence now, and a stale low score is asked again
+(``FinalDecisions``), read only when that evidence is the pair's evidence now, and a stale low score is asked again
 only where it could still block a proposed merge.
 """
 
@@ -103,8 +103,8 @@ def test_a_final_decision_is_stored_against_the_evidence_models_and_versions(con
     pair = _pair(conn)
     scored = dj.score_pairs(conn, [pair], dj.ORGANISATION, judge=JevJudge(conn, client=FakeJev(0.9)))
     assert scored.final == {"e1|e2": 0.9} and scored.failed == []
-    row = conn.execute("SELECT * FROM PairDecisions").fetchone()
-    assert row["route"] == "organisation" and row["pair_id"] == "e1|e2" and row["final_score"] == 0.9
+    row = conn.execute("SELECT * FROM FinalDecisions").fetchone()
+    assert row["step"] == "duplicates-organisation" and row["subject_id"] == "e1|e2" and row["final_score"] == 0.9
     assert row["basis"] == "jev" and row["escalation_input_hash"] is None
     assert row["evidence_hash"] == dj.state_hash(dj.build_pair_state(conn, pair)) == scored.evidence["e1|e2"]
     assert row["question_version"] == f"{dj.QUESTION_VERSION}+{dj.ESCALATION_VERSION}"
@@ -119,7 +119,7 @@ def test_an_escalated_decision_names_the_escalation_it_rests_on(conn):
     scored = dj.score_pairs(conn, [pair], dj.ORGANISATION, judge=JevJudge(conn, client=FakeJev(0.5)),
                             escalation_client=FakeReasoner(0.12))
     assert scored.final == {"e1|e2": 0.12} and scored.escalated == {"e1|e2": 0.12}
-    row = conn.execute("SELECT basis, escalation_input_hash FROM PairDecisions").fetchone()
+    row = conn.execute("SELECT basis, escalation_input_hash FROM FinalDecisions").fetchone()
     assert row["basis"] == "escalated"
     assert conn.execute("SELECT value FROM ModelJudgements WHERE question_id = ? AND input_hash = ?",
                         (dj.ESCALATION_QUESTION_ID, row["escalation_input_hash"])).fetchone()[0] == 0.12
@@ -131,7 +131,7 @@ def test_a_second_run_on_unchanged_evidence_asks_nothing(conn):
     dj.score_pairs(conn, [pair], dj.ORGANISATION, judge=JevJudge(conn, client=jev), escalation_client=reasoner)
     again = dj.score_pairs(conn, [pair], dj.ORGANISATION, judge=JevJudge(conn, client=jev), escalation_client=reasoner)
     assert again.final == {"e1|e2": 0.12} and (jev.requests, reasoner.calls) == (1, 1)
-    assert conn.execute("SELECT COUNT(*) FROM PairDecisions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM FinalDecisions").fetchone()[0] == 1
 
 
 def test_only_a_decision_on_the_current_evidence_is_read(conn):
@@ -242,12 +242,30 @@ def test_the_universe_ranks_by_retrieval_to_the_same_pairs_as_by_enumeration_on_
     corpus = ranking.load_corpus(conn)
     universe = dj.PairUniverse(conn)
     enumerated, e_stats = universe.ranked(corpus)
-    retrieved, r_stats = universe.ranked(corpus, exhaustive_max=0)           # force bounded retrieval
+    retrieved, r_stats = universe.ranked(corpus, exhaustive_max=0, uncapped_max=0)    # force bounded retrieval
     assert [p["pair_id"] for p in retrieved] == [p["pair_id"] for p in enumerated] == ["e1|e2", "e1|e3", "e2|e3"]
     assert e_stats["bounded_groups"] == 0 and r_stats["bounded_groups"] == 1
     assert r_stats["before"] == e_stats["before"] == 3
     assert [p["pair_id"] for p in universe.all_pairs()] == ["e1|e2", "e1|e3", "e2|e3"]
     assert universe.pair("e3", "e1")["pair_id"] == "e1|e3" and universe.pair("e1", "nope") is None
+
+
+def test_every_pair_of_a_small_organisation_group_is_a_candidate_however_far_apart(conn):
+    """The cap bounds a large group's cost; on a small one it dropped 6 of 17 labelled-same pairs (misdated copies
+    707 to 4,603 days apart with no strong evidence). Below the group-size threshold nothing is capped."""
+    from cyber_data_collector.dedup import candidate_ranking as ranking
+
+    _redate(conn, "e3", "2010-03-01")                                          # years from e1 and e2
+    conn.execute("UPDATE RawEvents SET source_url = 'https://other.example/z' WHERE raw_event_id = 'e3-r'")  # no shared source
+    corpus = ranking.load_corpus(conn)
+    universe = dj.PairUniverse(conn)
+    kept, stats = universe.ranked(corpus)
+    assert [p["pair_id"] for p in kept] == ["e1|e2", "e1|e3", "e2|e3"]          # all three, the far ones too
+    assert stats["uncapped_groups"] == 1 and stats["long_gap_after"] == 2
+    assert all("rank_score" in p and p["rank_kept_as"] == "partner" for p in kept)   # still ranked
+    capped, capped_stats = universe.ranked(corpus, uncapped_max=0)             # what the cap alone would keep
+    assert [p["pair_id"] for p in capped] == ["e1|e2"] and capped_stats["uncapped_groups"] == 0
+    assert universe.ranked(corpus, uncapped_max=2)[1]["uncapped_groups"] == 0   # a group over the threshold is capped
 
 
 def test_the_decisions_table_is_part_of_the_database_schema(tmp_path):
@@ -259,4 +277,4 @@ def test_the_decisions_table_is_part_of_the_database_schema(tmp_path):
         _module_schema_steps(c)
     except sqlite3.Error:
         pass            # other modules' tables are not under test; the decisions table is created before they fail
-    assert c.execute("SELECT name FROM sqlite_master WHERE name = 'PairDecisions'").fetchone() is not None
+    assert c.execute("SELECT name FROM sqlite_master WHERE name = 'FinalDecisions'").fetchone() is not None

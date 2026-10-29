@@ -1216,26 +1216,28 @@ vetoes a link (`duplicate_judgement.partition_without_conflicts`); a calibration
 | `ai_duplicate_labels.csv` | `pair_id,label,rationale,corroboration,labeller`; label `same`, `different` or `unsure` (the definitions of `duplicate_labels.csv`; see `ai_duplicate_labelling_guide.md`) |
 | `ai_duplicate_calibration.json` | the calibration-file fields above, plus `window_days`, `labels_sha256`, `sample_file`, `at_cutoff`, `min_merges`, `organisation_route_cutoff` (the organisation route's, for comparison) |
 
-#### `PairDecisions`, `EntityAliasDecisionHistory`
+#### `FinalDecisions`, `EntityAliasDecisionHistory`
 
-`PairDecisions` is the final duplicate score the pipeline acts on, per route and pair, tied to the evidence it was made on.
-Primary key (`route`, `pair_id`, `evidence_hash`, `question_version`, `jev_model`, `escalation_model`).
+`FinalDecisions` is the final score a judging step acts on, tied to the evidence it was made on (`dedup/final_decisions.py`).
+Primary key (`step`, `subject_id`, `evidence_hash`, `question_version`, `jev_model`, `escalation_model`).
 
 | Column | Type | Description |
 |---|---|---|
-| `route` | TEXT | `organisation` or `ai` |
-| `pair_id` | TEXT | the two event ids, sorted, joined by `\|` |
-| `evidence_hash` | TEXT | SHA-256 of the pair state exactly as Jev and the escalation were shown it (both events' records, date provenance, the gap, timeline, base rate for AI pairs) |
+| `step` | TEXT | `event-reality`, `event-scope`, `coherence`, `coherence-same-organisation`, `victim-attribution`, `duplicates-organisation` or `duplicates-ai` |
+| `subject_id` | TEXT | the event id; `event\|record` for a member; `event\|entity` for an event-victim pair; the two event ids, sorted, joined by `\|`, for a duplicate pair |
+| `evidence_hash` | TEXT | SHA-256 of the state exactly as Jev and the escalation were shown it (the subject's records, research, page text, timeline and whatever else the step shows) |
 | `question_version` | TEXT | Jev question version + `+` + escalation question version |
 | `jev_model`, `escalation_model` | TEXT | the requested models |
-| `final_score` | REAL | P(same incident) acted on: the escalation's inside the escalation band, else Jev's |
+| `final_score` | REAL | the probability acted on: the escalation's inside the step's escalation band, else Jev's |
 | `basis` | TEXT | `jev` or `escalated` |
 | `jev_input_hash`, `escalation_input_hash` | TEXT | the `ModelJudgements.input_hash` of the answers it rests on (the second NULL when `basis = 'jev'`) |
 | `decided_at` | TEXT | ISO time |
 
-A pair whose escalation failed has no row. A row is a pair's score only while its `evidence_hash` equals the hash of the
-pair's current state; otherwise it is stale and is asked again only where it could affect a merge
-(`duplicate_judgement.calibrated_negatives`). `EntityAliasDecisionHistory` has `EntityAliasDecisions`'s columns plus
+A subject whose escalation failed has no row. A row is a subject's score only while its `evidence_hash` equals the hash of the
+subject's current state; otherwise it is stale: every `stored_final_probabilities` ignores it, and the duplicate check asks a
+stale low pair again only where it could block a proposed merge (`duplicate_judgement.calibrated_negatives`). Replaces
+`PairDecisions` (introduced and replaced within 2026-10-29, never in a released database).
+`EntityAliasDecisionHistory` has `EntityAliasDecisions`'s columns plus
 `superseded_at` and `superseded_by` (the new verdict): the decision a re-ask on changed evidence replaced.
 
 `ModelJudgements` rows for these pairs: `subject_type = 'event_pair'`, `question_id = 'same_incident_ai'`

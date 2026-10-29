@@ -1817,19 +1817,28 @@ after `score` and before any AI merge (`ai-duplicates` in
 `evaluation/calibration_snapshots.json`). A pair is asked by one route only.
 Details: [docs/09-deduplication-v3.md section 8l](docs/09-deduplication-v3.md).
 
-**Candidates are ranked and capped.** Every pair sharing a victim was asked (229
-in a sample, 170 of them more than a year apart; large groups grew with the
-square of their size). Candidates are now ranked by source relationships, supplier
-clues, incident-specific details and date range (`dedup/candidate_ranking.py`),
-each event keeps its best 8 partners (16 for AI pairs), and a small reserved
-budget (5 per group) keeps strong long-gap or undated pairs; the rest are not
-asked. The cap is a parameter (`--partners-per-event`, `--long-gap-budget`,
-`--no-candidate-cap`) and the findings file reports the counts before and after.
+**Candidates are ranked, and capped only where a group is large.** Every pair
+sharing a victim was asked (229 in a sample, 170 of them more than a year apart;
+large groups grew with the square of their size). Candidates are ranked by source
+relationships, supplier clues, incident-specific details and date range
+(`dedup/candidate_ranking.py`); in a group of more than 60 events each event keeps
+its best 8 partners and a small reserved budget (5 per group) keeps strong
+long-gap or undated pairs, and the rest are not asked. **Up to 60 events every
+pair of an organisation is a candidate**, still ranked (2026-10-29): the cap
+bounds a large group's cost, but on the small organisation groups that exist
+(the largest has 7 events) it only lost recall - it dropped 6 of the 17
+labelled-`same` organisation pairs, misdated copies 707 to 4,603 days apart with no
+strong evidence (Qantas, Optus, Swinburne, Telstra, UWA, Elina), which the route
+used to judge. The AI route is one group by construction and keeps its cap (16
+partners per AI event). The parameters are `--partners-per-event`,
+`--long-gap-budget`, `--no-candidate-cap`; `bounded_candidates.UNCAPPED_GROUP_MAX`
+is the threshold, and the findings file reports the counts before and after and
+`uncapped_groups`.
 
 **Candidates are retrieved, not enumerated.** Ranking needed every pair of a group
 built first, so CPU and memory grew with the square of the largest group even
-though paid calls stayed bounded. A group of up to 60 events is still ranked
-exactly as before; a larger one (`dedup/bounded_candidates.py`) retrieves a
+though paid calls stayed bounded. A group of up to 60 events is ranked by
+enumeration (all its pairs, at most 1,770); a larger one (`dedup/bounded_candidates.py`) retrieves a
 limited set per event through indexes - the events citing the same non-hub
 source, naming the same vendor, sharing a corpus-rare word or the same
 records-affected figure, the nearest by date interval (sorted lists and
@@ -1842,25 +1851,44 @@ events the enumerated path built 1,999,000 pairs in 30 s and 1.24 GB at peak; th
 retrieved path built 31,721 in 1.1 s and 19 MB, and kept the identical 9,235
 pairs (20,000 events: 317,920 pairs built of 199,990,000, 12 s, 189 MB). On the
 2026-10-29 database the largest organisation group is 7 events and the AI group
-36, so nothing there is large enough to need it yet: the paths agree exactly and
-recall on the labelled pairs is unchanged: on the labelling-time snapshots the
-cap keeps 11 of the 17 labelled-`same` organisation pairs and 70 of 70 AI pairs,
-by every path. The 6 the cap does not ask are more than a year apart (707 to
-4,603 days) with no strong evidence - a limit of the existing ranking, not of
-retrieval, and still open.
+36, so nothing there is large enough to need retrieval yet: forced onto every
+group it keeps exactly what the capped enumeration keeps. Recall on the
+labelling-time snapshots, organisation route: the cap alone kept 11 of the 17
+labelled-`same` pairs and 36 of 138 labelled-`different`; with no cap below 60
+events all 17 and all 138 are candidates (49 -> 157 pairs on the snapshot; 75 ->
+236 on the live copy, of which 76 of the 234 not owned by the AI route have an
+answer on their current evidence already and about 158 need a new Jev call, with
+an escalation for those in the middle band). AI route: 70 of 70 `same` and 43 of
+43 `different`, by every path.
 
-**A duplicate decision is tied to the evidence that produced it.** The final
-score of a pair was rebuilt from the newest Jev answer and the newest escalation,
-each picked on its own, with no check that they saw the same evidence: an
-escalation made before an event's date was corrected could be combined with a
-fresh Jev answer, and a stale low score could veto a merge
+**A final decision is tied to the evidence that produced it (every judging step).**
+The final score of a pair - and of an event in event reality and event scope, a
+member in coherence and its same-organisation variant, an event-victim pair in
+victim attribution - was rebuilt from the newest Jev answer and the newest
+escalation, each picked on its own, with no check that they saw the same
+evidence: an escalation made before an event's date was corrected could be
+combined with a fresh Jev answer, and a stale low score could veto a merge
 (`partition_without_conflicts` held links on stored scores below
 `different_cutoff`). Now Jev and the escalation are shown one evidence state, and
-the final decision is stored in `PairDecisions` against the hash of that state,
-the Jev and escalation models and the question versions (both routes; `route` =
-`organisation` / `ai`). A score is read only from a decision made on the pair's
-**current** evidence (`dedup.duplicate_judgement.stored_final_probabilities` now
-takes the pairs). A stale low decision is asked again **only where it could
+the final decision is stored in `FinalDecisions` (`dedup/final_decisions.py`)
+against the hash of that state, the Jev and escalation models and the question
+versions, per `step` (`event-reality`, `event-scope`, `coherence`,
+`coherence-same-organisation`, `victim-attribution`, `duplicates-organisation`,
+`duplicates-ai`). A score is read only from a decision made on the subject's
+**current** evidence: every `stored_final_probabilities` now takes the subjects
+(events, `(event, member)` items, pairs) and returns nothing for one whose
+evidence changed - the calibration scripts and `recalibrate` therefore score the
+labelled cases first (the recalibration plans record as they score), and
+`reconcile-timelines` says "no judgement on its current evidence" instead of
+reporting an outdated score. The acting steps (`check-events`, `check-scope`,
+`check-coherence`, `check-same-organisation`, `check-victim-attribution`,
+`check-duplicates`) judge on the current evidence by construction; **labels
+decide first** and a subject a label settles is no longer asked about:
+`check-events --apply` skips events labelled real, `check-scope --apply` those
+labelled in or out of scope, the coherence checks members labelled
+same/different, `check-duplicates` pairs labelled same/different (each reports
+`settled_by_label`). Victim attribution still judges labelled pairs: its flag
+review needs the score of a pair labelled correct to confirm a flag. A stale low decision is asked again **only where it could
 affect a merge now**: the pair is a candidate this run (scored on its current
 state anyway), or it lies between events a proposed group joins and its old
 score was below the calibrated `different_cutoff` - then it is re-judged
@@ -1868,7 +1896,7 @@ score was below the calibrated `different_cutoff` - then it is re-judged
 outside the proposed events, or a stale high one, is left alone, and a
 pair whose escalation fails vetoes nothing. Stored Jev and escalation answers are
 still keyed on their own input hashes, so a run on unchanged evidence buys
-nothing, and a first run after this change fills `PairDecisions` from the stored
+nothing, and a first run after this change fills `FinalDecisions` from the stored
 answers without a paid call (on the 2026-10-29 copy 20 of the 73 organisation
 pairs; the other 53 and the 347 AI pairs have no stored answer on their current
 evidence and need asking, exactly as before this change). Nothing in the

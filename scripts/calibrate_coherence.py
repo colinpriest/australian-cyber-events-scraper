@@ -183,7 +183,11 @@ def cmd_calibrate(args) -> int:
     sample = {co.member_subject_id(r["deduplicated_event_id"], r["enriched_event_id"]): r for r in _sample()}
     labels = co.load_labels()
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    probs = co.stored_final_probabilities(conn)
+    events = _events(conn)
+    probs = co.stored_final_probabilities(
+        conn, [(events[r["deduplicated_event_id"]], r["enriched_event_id"]) for r in sample.values()
+               if r["deduplicated_event_id"] in events and r["enriched_event_id"] in
+               {m["id"] for m in events[r["deduplicated_event_id"]]["members"]}])
 
     rows, gate = [], []
     unsure = missing = 0

@@ -232,7 +232,7 @@ def _plan_event_reality(conn: sqlite3.Connection) -> Plan:
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        final = er.record_final(conn, jev, escalated)
         _require_agreement("event", final, er.stored_final_probabilities(conn, items))
 
     return Plan(items, len(wanted), run)
@@ -257,7 +257,7 @@ def _plan_event_scope(conn: sqlite3.Connection) -> Plan:
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = {d: escalated.get(d, p) for d, p in jev.items()}
+        final = es.record_final(conn, jev, escalated)
         _require_agreement("event", final, es.stored_final_probabilities(conn, items))
 
     return Plan(items, len(cases), run)
@@ -271,7 +271,7 @@ def _plan_duplicates(conn: sqlite3.Connection) -> Plan:
     items = [p for p in dj.candidate_pairs(conn) if p["pair_id"] in wanted]
 
     def run(conn, judge, client):
-        # Each final score is stored against the evidence it was made on (PairDecisions); the calibration
+        # Each final score is stored against the evidence it was made on (FinalDecisions); the calibration
         # script reads exactly those, so it cannot pick up an answer given on other evidence.
         scored = dj.score_pairs(conn, items, dj.ORGANISATION, judge=judge, escalation_client=client)
         _require_scored("pair", [p["pair_id"] for p in items], scored.jev)
@@ -320,7 +320,7 @@ def _plan_coherence(conn: sqlite3.Connection) -> Plan:
         if undecided:
             raise RecalibrationError(f"{len(undecided)} member(s) could not be escalated (first: {undecided[0]}); "
                                      "see the log. Nothing was calibrated.")
-        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, co.stored_final_probabilities(conn))
+        _require_agreement("member", {s: v["p"] for s, v in scores.items()}, co.stored_final_probabilities(conn, items))
 
     return Plan(items, len(sample), run)
 

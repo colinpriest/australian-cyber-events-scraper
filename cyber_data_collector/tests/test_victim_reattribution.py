@@ -354,6 +354,37 @@ def test_a_failed_escalation_fails_loudly(conn, tmp_path):
                        escalation_client=broken)
 
 
+class FakeReasoner:
+    """Stands in for the reasoning model: ``p`` for every case."""
+
+    def __init__(self, p):
+        from types import SimpleNamespace as NS
+        from cyber_data_collector.utils.escalation import EscalatedJudgement
+
+        self.chat = NS(completions=NS(create_with_completion=lambda **kw: (
+            EscalatedJudgement(rationale="r", probability=p), NS(usage=None, model="gpt-5.5"))))
+
+
+def test_a_victim_score_is_read_only_from_a_decision_on_the_pairs_current_evidence(conn):
+    """The final score was the newest Jev answer and the newest escalation, each chosen alone. It is now stored
+    against the evidence both were given, and a pair whose records changed has no score until it is judged again."""
+    from collections import defaultdict
+
+    _afp(conn)
+    _event(conn, "wbc1", ["Westpac"], [("Westpac breach", "PayID", "Westpac Banking Corporation")])
+    pairs = vj.pairs_to_check(conn)
+    afp = next(p for p in pairs if p["victim"] == "Australian Federal Police")
+    p_by_victim = defaultdict(lambda: 0.9, {"Australian Federal Police": 0.4})     # 0.4 is mid-band: escalated
+    scores = vj.judge_pairs(conn, pairs, judge=JevJudge(conn, client=FakeJev(p_by_victim)),
+                            escalation_client=FakeReasoner(0.07))
+    assert scores[afp["pair_id"]] == pytest.approx(0.07)
+    assert vj.stored_final_probabilities(conn, [afp])[afp["pair_id"]] == pytest.approx(0.07)
+    _add_record(conn, afp["deduplicated_event_id"], "A later report", "Later report text.", "Someone Else", "Someone Else")
+    assert vj.stored_final_probabilities(conn, [afp]) == {}                    # the old 0.07 is not this pair's score
+    others = [p for p in pairs if p["deduplicated_event_id"] != afp["deduplicated_event_id"]]
+    assert vj.stored_final_probabilities(conn, others)                         # unchanged pairs keep theirs
+
+
 # ------------------------------------------------------------------ flags are reassessed
 
 def _add_record(conn, did, title, body, org, victim):

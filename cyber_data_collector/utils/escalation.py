@@ -52,7 +52,7 @@ def input_hash(state: Mapping[str, Any], question: str, model: Optional[str] = N
     """The key an escalation of ``state`` and ``question`` is stored and reused under.
 
     Exposed so a caller can record which stored escalation a decision rests on (the duplicate checks'
-    ``PairDecisions``) without re-deriving the hash.
+    ``FinalDecisions``) without re-deriving the hash.
     """
     return _hash(state, question, model or openai_model())
 
