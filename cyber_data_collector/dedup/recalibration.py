@@ -81,6 +81,8 @@ SPECS: Dict[str, StepSpec] = {s.name: s for s in (
     StepSpec("coherence", "cyber_data_collector.dedup.coherence", escalates=True),
     StepSpec("coherence-same-organisation", "cyber_data_collector.dedup.coherence_same_org", escalates=True),
     StepSpec("duplicates", "cyber_data_collector.dedup.duplicate_judgement", escalates=True),
+    # AI-involved pairs (any victim) have their own question and cut-off; labelled apart from the above.
+    StepSpec("ai-duplicates", "cyber_data_collector.dedup.ai_duplicates", escalates=True),
     StepSpec("victim-attribution", "cyber_data_collector.dedup.victim_judgement", escalates=True),
     # Its scoring is the find-supplier-victims candidate generation; recalibrate it with
     # scripts/calibrate_supplier_victims.py on a snapshot. Staleness is still reported.
@@ -249,6 +251,27 @@ def _plan_duplicates(conn: sqlite3.Connection) -> Plan:
     return Plan(items, len(wanted), run)
 
 
+def _plan_ai_duplicates(conn: sqlite3.Connection) -> Plan:
+    from cyber_data_collector.dedup import ai_duplicates as ad
+
+    labels = ad.labelled_pairs(required=True)
+    wanted = {pid for pid, label in labels.items() if label in ("same", "different")}
+    items = [p for p in ad.candidate_pairs(conn) if p["pair_id"] in wanted]
+
+    def run(conn, judge, client):
+        jev = ad.judge_pairs(conn, items, judge=judge)
+        _require_scored("pair", [p["pair_id"] for p in items], jev)
+        failed: List[str] = []
+        escalated = ad.escalate_band(conn, items, jev, client=client, failed=failed)
+        if failed:
+            raise RecalibrationError(f"{len(failed)} pair(s) in the escalation band could not be escalated "
+                                     f"(first: {failed[0]}); see the log. Nothing was calibrated.")
+        final = {pid: escalated.get(pid, p) for pid, p in jev.items()}
+        _require_agreement("pair", final, ad.stored_final_probabilities(conn))
+
+    return Plan(items, len(wanted), run)
+
+
 def _plan_coherence(conn: sqlite3.Connection) -> Plan:
     from cyber_data_collector.dedup import coherence as co
     from scripts import calibrate_coherence as cal
@@ -321,7 +344,7 @@ def _rows(path: Path) -> List[Dict[str, str]]:
 PLANS: Dict[str, Callable[[sqlite3.Connection], Plan]] = {
     "source-gate": _plan_source_gate, "event-reality": _plan_event_reality, "coherence": _plan_coherence,
     "coherence-same-organisation": _plan_coherence_same_org, "duplicates": _plan_duplicates,
-    "victim-attribution": _plan_victim_attribution,
+    "ai-duplicates": _plan_ai_duplicates, "victim-attribution": _plan_victim_attribution,
 }
 
 #: argv for each step's calibration script (``--db`` and the model arguments are added by the caller).
@@ -331,6 +354,7 @@ CALIBRATE: Dict[str, Tuple[str, List[str]]] = {
     "coherence": ("scripts.calibrate_coherence", ["calibrate"]),
     "coherence-same-organisation": ("scripts.calibrate_coherence_same_org", ["calibrate"]),
     "duplicates": ("scripts.calibrate_duplicates", []),
+    "ai-duplicates": ("scripts.calibrate_ai_duplicates", ["calibrate"]),
     "victim-attribution": ("scripts.calibrate_victim_attribution", ["calibrate"]),
 }
 
