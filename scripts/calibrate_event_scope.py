@@ -25,8 +25,9 @@ database first; calibrate on the database as it was when labelled.
                ``evaluation/event_scope_calibration.json``. The cut-off is the largest at which the
                events it would reject are, weighted by stratum, at least ``--precision`` (0.95)
                labelled ``out_of_scope`` (and at least ``--min-rejections`` labelled events).
-               Labels come from the scope file; where it is silent the event-reality labels
-               ``real`` (= in scope) and ``out_of_scope`` count, and such a labelled event that
+               Labels come from the scope file; where it is silent the event-reality label
+               ``out_of_scope`` counts (``real`` means a real incident, not an Australian
+               one, so it says nothing about scope), and such a labelled event that
                is not in the sample joins as stratum ``X`` with weight 1. ``unsure`` is excluded
                and counted. A stratified bootstrap of the choose-then-test procedure is the
                out-of-sample estimate. The models, question versions and evidence fingerprint
