@@ -128,7 +128,9 @@ agreement.
 `regression.measure_synthetic` runs a fixed set of inputs through:
 
 * `DeduplicationEngine.merge_decision` - identical title/date/victim merges;
-  same victim same day merges; the 1st of a month is not a day; different
+  same victim same day merges only when corroborated (a shared record count),
+  and is left to the duplicate check when nothing or a conflict is found; the
+  1st of a month is not a day; different
   victims or no victims with a generic title do not merge; a cached `different`
   ruling vetoes; different dates do not merge;
 * `validate_records_affected` - a global vendor total on an Australian victim

@@ -58,6 +58,8 @@ from cyber_data_collector.utils.llm_models import (
     add_model_arguments,
     apply_model_arguments,
 )
+from cyber_data_collector.dedup import excerpts
+from cyber_data_collector.dedup.adjudication_cache import AdjudicationCache
 from cyber_data_collector.dedup.adjudicator import Adjudicator, EventRecord
 from cyber_data_collector.dedup.backfill import run_backfill
 from cyber_data_collector.dedup.cluster_adjudicator import ClusterAdjudicator
@@ -135,6 +137,20 @@ def _connect(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def attach_evidence(conn: sqlite3.Connection, records: List[EventRecord], budget: int) -> int:
+    """Give each record the incident-relevant excerpts of its members' sources (dedup/excerpts.py).
+
+    Only the given records are read, so a scoped run does not load every page.
+    Returns how many records received excerpts.
+    """
+    wanted = {r.enriched_event_id for r in records}
+    names = {r.enriched_event_id: r.all_entities() for r in records}
+    found = excerpts.load_event_excerpts(conn, names, budget=budget, only=wanted)
+    for record in records:
+        record.evidence = found.get(record.enriched_event_id)
+    return len(found)
 
 
 def load_dedup_records(conn: sqlite3.Connection,
@@ -285,6 +301,7 @@ def cmd_find_missed(args) -> int:
         adjudicator = Adjudicator(
             resolver=resolver,
             overrides=ledger.load_overrides(),
+            cache=AdjudicationCache(conn),
         )
 
         records = load_dedup_records(conn)
@@ -307,7 +324,11 @@ def cmd_find_missed(args) -> int:
             return 0
 
         if not args.no_llm:
-            adjudicator.embed_records(records)
+            # Only the events in the pairs about to be judged: the rest are never compared.
+            in_pairs = {r.enriched_event_id for pair in pairs for r in pair}
+            adjudicator.embed_records([r for r in records if r.enriched_event_id in in_pairs])
+            attach_evidence(conn, [r for r in records if r.enriched_event_id in in_pairs],
+                            excerpts.PAIR_EVIDENCE_CHARS)
 
         findings: List[Dict] = []
         for index, (left, right) in enumerate(pairs, start=1):
@@ -501,6 +522,7 @@ def cmd_review_legacy(args) -> int:
             resolver=resolver,
             overrides=ledger.load_overrides(),
             require_entity_match=False,
+            cache=AdjudicationCache(conn),
         )
 
         groups = load_legacy_merges(conn, limit=args.limit)
@@ -658,6 +680,7 @@ def cmd_resolve_band(args) -> int:
             resolver=resolver,
             overrides=ledger.load_overrides(),
             require_entity_match=False,
+            cache=AdjudicationCache(conn),
         )
 
         if not LEGACY_PATH.exists():
@@ -773,7 +796,7 @@ def cmd_recheck_splits(args) -> int:
         resolver = EntityResolver(conn)
         adjudicator = Adjudicator(
             resolver=resolver, overrides=ledger.load_overrides(),
-            require_entity_match=False,
+            require_entity_match=False, cache=AdjudicationCache(conn),
         )
 
         # Splits made by the band-resolve / legacy passes, with the group each
@@ -1019,7 +1042,7 @@ def cmd_adjudicate_clusters(args) -> int:
         ledger = DedupLedger(conn, role_refresher=refresher)
         resolver = EntityResolver(conn)
         adjudicator = ClusterAdjudicator(
-            resolver=resolver, max_cluster_size=args.max_cluster_size)
+            resolver=resolver, max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn))
 
         rows = conn.execute("""
             SELECT d.deduplicated_event_id AS did, d.title, d.summary,
@@ -1340,7 +1363,7 @@ def cmd_reconcile_entities(args) -> int:
         schema.migrate(conn)
         ledger = DedupLedger(conn, role_refresher=refresher)
         adjudicator = ClusterAdjudicator(
-            resolver=EntityResolver(conn), max_cluster_size=args.max_cluster_size)
+            resolver=EntityResolver(conn), max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn))
 
         rows = conn.execute("""
             SELECT v.entity_name AS entity, d.deduplicated_event_id AS did,
@@ -1733,18 +1756,27 @@ def cmd_adjudicate_candidates(args) -> int:
     skipped. Every proposal is written to instance/dedup_candidate_clusters.json.
     """
     from cyber_data_collector.dedup.adjudicator import EMBED_CANDIDATE_THRESHOLD
-    from cyber_data_collector.dedup.candidates import candidate_components
+    from cyber_data_collector.dedup.candidates import candidate_components, scope_ids
 
     conn = _connect(args.db)
     refresher = _make_refresher(args)
     try:
         ledger = DedupLedger(conn, role_refresher=refresher)
         resolver = EntityResolver(conn)
-        pair_judge = Adjudicator(resolver=resolver)
+        cache = AdjudicationCache(conn)
+        pair_judge = Adjudicator(resolver=resolver, cache=cache)
         records = load_dedup_records(conn)
         by_id = {r.enriched_event_id: r for r in records}
         pair_judge.candidate_pairs(records)
-        pair_judge.embed_records(records)
+        # Scope first: a group is kept only if it holds a recently changed event, and every
+        # member of such a group is linked to that event through candidate pairs, so only the
+        # events connected to a recent one need embeddings (all of them without --recent-days).
+        recent = recent_event_ids(conn, args.recent_days) if args.recent_days else None
+        in_scope = set(by_id) if recent is None else scope_ids(pair_judge.pair_reasons, recent)
+        pair_judge.embed_records([by_id[i] for i in sorted(in_scope) if i in by_id])
+        print(f"embeddings needed for {len(in_scope)} of {len(by_id)} event(s): "
+              f"{pair_judge.stats['embeddings_cached']} from the cache, "
+              f"{pair_judge.stats['embeddings_new']} new ({pair_judge.stats['embedding_calls']} call(s))")
 
         def strong(key, why) -> bool:
             if any(w.startswith(("shared source", "shared subject")) for w in why):
@@ -1765,11 +1797,11 @@ def cmd_adjudicate_candidates(args) -> int:
 
         groups = candidate_components(pair_judge.pair_reasons, strong, weight=weight,
                                       max_size=args.max_cluster_size)
-        if args.recent_days:
-            recent = recent_event_ids(conn, args.recent_days)
+        if recent is not None:
             groups = [g for g in groups if recent & set(g)]
         if args.limit:
             groups = groups[: args.limit]
+        attach_evidence(conn, [by_id[i] for g in groups for i in g], excerpts.CLUSTER_EVIDENCE_CHARS)
         print(f"{len(records)} active event(s) -> {len(groups)} candidate group(s) "
               f"covering {sum(len(g) for g in groups)} event(s)")
 
@@ -1779,7 +1811,7 @@ def cmd_adjudicate_candidates(args) -> int:
             "SELECT deduplicated_event_id, master_enriched_event_id FROM DeduplicatedEvents")}
         different = {key for key, same in ledger.load_overrides().items() if not same}
 
-        judge = ClusterAdjudicator(resolver=resolver, max_cluster_size=args.max_cluster_size)
+        judge = ClusterAdjudicator(resolver=resolver, max_cluster_size=args.max_cluster_size, cache=cache)
         findings: List[Dict] = []
         proposed = applied = vetoed = 0
         for index, ids in enumerate(groups, start=1):
@@ -1825,6 +1857,7 @@ def cmd_adjudicate_candidates(args) -> int:
               f"human 'different' override" + (" (DRY RUN)" if args.dry_run else
               f"; the rest were below certainty {args.min_certainty}"))
         print(f"cluster stats: {judge.stats}")
+        print(f"cache: {cache.stats}")
     finally:
         _flush_refresher(conn, refresher)
         conn.close()
