@@ -589,6 +589,39 @@ Log of individual processing stages for each raw event.
 
 ---
 
+#### RecordIdentityChecks
+
+Does a record's stored page, and the enrichment attached to it, describe the record's own article? One row per
+checked pairing; written by `processing/record_identity.py` (at ingest, and by `dedup_admin.py
+check-record-identity`). See [README: records linked to the wrong article](../README.md#records-linked-to-the-wrong-article).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_event_id` | TEXT | NOT NULL | — | The record. **PK part 1** |
+| `enriched_event_id` | TEXT | NOT NULL | `''` | The enrichment checked; `''` = a check of the record's page alone (before enrichment). **PK part 2** |
+| `stage` | TEXT | NOT NULL | — | `ingest` (after scraping / as the enrichment was stored) or `audit` (`check-record-identity`) |
+| `verdict` | TEXT | NOT NULL | — | `match` or `mismatch` |
+| `kind` | TEXT | Yes | NULL | `page_other_article` (the stored page is not the record's article) or `enrichment_other_article` (the enrichment describes another record) |
+| `reason` | TEXT | Yes | NULL | Why, in words (shared-word and page-identity findings) |
+| `owner_raw_event_id` | TEXT | Yes | NULL | The one stored record whose title is exactly the enrichment's title, when found |
+| `previous_raw_event_id` | TEXT | Yes | NULL | On a `repointed` match row: the record the enrichment was moved from (`check-record-identity --reverse` puts it back) |
+| `action` | TEXT | Yes | NULL | `repointed`, `requeued_for_enrichment`, `rescrape_queued`, `rescraped_still_mismatched`, `replacement_searched`, `covered_by_another_event`, `needs_review`, `reversed_by_hand` |
+| `action_detail` | TEXT | Yes | NULL | What was queued or why nothing was |
+| `checked_at` | TEXT | NOT NULL | — | When last checked |
+| `resolved_at` | TEXT | Yes | NULL | When the finding closed (re-attached, the page now belongs, or the pairing is sound); NULL = open |
+
+**Indexes:**
+- `idx_identity_open` on `(verdict, resolved_at)`
+
+`check-record-identity` also removes tracking and identity query parameters (`utm_*`, subscriber `token`s, mail ids)
+from every stored URL and from URLs quoted in stored text (`utils/url_clean.py`), and `RawEvents.source_url` is stored
+without them from ingest on.
+
+Open `page_other_article` rows with `action = 'rescrape_queued'` make the record a `rescrape-short-pages`
+candidate whatever the length of its stored text (`PageRescrapes` holds the attempts).
+
+---
+
 #### AuditLog
 
 General-purpose audit log for INSERT/UPDATE/DELETE operations across all tables.

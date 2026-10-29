@@ -684,7 +684,13 @@ class UnifiedPipeline:
         recovery = ["recover-evidence", "--limit", str(getattr(args, 'evidence_recovery_limit', 100))]
         if getattr(args, 'report_event_rejections', False):
             recovery.append("--dry-run")
-        steps = [evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
+        # check-record-identity first of all: records whose enrichment describes another record are
+        # re-attached to their own (free), and pages that are another article queue a re-fetch or a
+        # replacement search that the steps below pick up (capped per run). Idempotent.
+        identity = ["check-record-identity"]
+        if getattr(args, 'report_event_rejections', False):
+            identity.append("--dry-run")
+        steps = [identity, evidence, recovery, ["rescrape-short-pages"], ["publication-dates"], ["canonicalise-entities"],
                  ["research-timelines"],
                  ["classify-pages"], sources, check,
                  ["classify-entities", "--stale-only"], ["check-victims"], attribution,

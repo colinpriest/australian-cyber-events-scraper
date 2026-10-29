@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from cyber_data_collector.processing import record_identity
+
 logger = logging.getLogger(__name__)
 
 #: Scraped text shorter than this is not treated as the article.  Scraping
@@ -380,5 +382,15 @@ def prepare_records_for_processing(
         prepared = event.model_copy(deep=True)
         prepared.evidence_basis = evidence.basis
         prepared.evidence_text = evidence.article_text
+        if evidence.has_article and not evidence.is_alternative_source:
+            # The page must be about the record's incident. A page that is another article
+            # (a site root, a breach list, an unrelated story) is not passed on as this
+            # record's article: classification sees the snippet, the mismatch is recorded
+            # on the record and retrieval of the right page is queued.
+            mismatch = record_identity.check_ingest_page(db, raw_event_id, evidence.title, evidence.article_text,
+                                                         evidence.url)
+            if mismatch:
+                prepared.evidence_basis = BASIS_SNIPPET_ONLY
+                prepared.evidence_text = None
         accepted.append(prepared)
     return accepted

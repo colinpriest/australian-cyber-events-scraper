@@ -26,6 +26,11 @@ Records from other sources are re-fetched when something asks for them:
 incidents with no usable evidence, ``processing/evidence_recovery.py``), and
 from then on the record is a candidate like a short Google page.
 
+A page that is not the record's article (``RecordIdentityChecks``, kind
+``page_other_article``, action ``rescrape_queued``; ``processing/record_identity.py``)
+is a candidate however long its text: it counts as having no text of its own,
+so any real text the record's URL now gives replaces it, and is checked again.
+
 When real text is stored for a record whose Perplexity research is not
 validated, that research is queued again (attempts and quarantine reset): it
 failed or was never tried on the snippet the record held, and the page is new
@@ -119,16 +124,24 @@ def queue_pages(conn: sqlite3.Connection, raw_event_ids: Sequence[str]) -> List[
 def short_pages(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Active records with too little stored text, not yet given up on: every
     Google record, and records of other sources :func:`queue_pages` asked for."""
+    from cyber_data_collector.processing import record_identity
+
     ensure_schema(conn)
+    record_identity.ensure_schema(conn)
     sql = f"""
-        SELECT r.raw_event_id, r.source_url, LENGTH(TRIM(COALESCE(r.raw_content, ''))) AS chars,
+        SELECT r.raw_event_id, r.source_url,
+               CASE WHEN i.raw_event_id IS NOT NULL THEN 0
+                    ELSE LENGTH(TRIM(COALESCE(r.raw_content, ''))) END AS chars,
                COALESCE(p.attempts, 0) AS attempts
         FROM RawEvents r
         LEFT JOIN PageRescrapes p ON p.raw_event_id = r.raw_event_id
-        WHERE (r.source_type = ? OR p.raw_event_id IS NOT NULL)
+        LEFT JOIN (SELECT DISTINCT raw_event_id FROM RecordIdentityChecks
+                   WHERE kind = '{record_identity.KIND_PAGE}' AND resolved_at IS NULL
+                     AND action = '{record_identity.ACTION_RESCRAPE}') i ON i.raw_event_id = r.raw_event_id
+        WHERE (r.source_type = ? OR p.raw_event_id IS NOT NULL OR i.raw_event_id IS NOT NULL)
           AND EXISTS (SELECT 1 FROM EnrichedEvents e
                       WHERE e.raw_event_id = r.raw_event_id AND e.status = 'Active')
-          AND LENGTH(TRIM(COALESCE(r.raw_content, ''))) < ?
+          AND (i.raw_event_id IS NOT NULL OR LENGTH(TRIM(COALESCE(r.raw_content, ''))) < ?)
           AND COALESCE(r.source_url, '') != ''
           AND COALESCE(p.status, '') != '{STATUS_GAVE_UP}'
         ORDER BY COALESCE(p.attempts, 0), r.raw_event_id
@@ -204,6 +217,9 @@ def apply_result(conn: sqlite3.Connection, page: Dict[str, Any], text: Optional[
     if problem is None:
         report.requeued_research += _store_text(conn, page["raw_event_id"], text,
                                                 meta.get("content_origin") or ORIGIN_PAGE)
+        # New text may be the record's article now, or still another one (then a replacement search follows).
+        from cyber_data_collector.processing import record_identity
+        record_identity.recheck_page(conn, page["raw_event_id"])
         _record_attempt(conn, page, STATUS_STORED, None, chars, failed=False)
         report.stored.append({**page, "new_chars": chars})
         outcome = f"stored {chars} chars (was {page['chars']})"
