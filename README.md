@@ -195,10 +195,12 @@ python run_full_pipeline.py --skip-classification
 | `--skip-missed-merge-check` | Skip the multi-key search for duplicates incremental dedup missed | False |
 | `--missed-merge-apply` | Merge missed-duplicate findings automatically (default: report only) | False |
 | `--missed-merge-days N` | Only judge pairs touching events changed in the last N days | 120 |
+| `--missed-merge-call-budget N` | Most model calls the missed-duplicate search may make per run; groups too large to show whole are covered by overlapping neighbourhoods (see [Matching across large incident groups](#matching-across-large-incident-groups)); stored answers are free, and a spent budget is reported and continues next run | 250 |
 | `--missed-merge-min-certainty F` | Certainty required to merge a missed duplicate | 0.9 |
 | `--skip-entity-sizing` | Skip estimating size bands for new entities | False |
 | `--entity-size-limit N` | Cap entities sized per run | No limit |
 | `--evidence-recovery-limit N` | Incidents with no usable evidence given new retrieval work per run (see [Incidents with no usable evidence](docs/11-evidence-recovery.md)) | 100 |
+| `--cited-refresh-limit N` | Cited pages already read that are checked again per run, most depended-on first (see [Cited pages are checked again](#cited-pages-are-checked-again)); 0 = none | 25 |
 | `--continue-on-error` | Continue if a phase fails | False |
 | `--enrich-limit N` | Most records automatic Perplexity enrichment takes per run (0 = no limit); the rest waits for the next run | 500 |
 | `--api-budget P=N ...` | Requests allowed this run per paid API (`openai`, `perplexity`, `typesafe`); also `API_BUDGET_<PROVIDER>` | Unlimited |
@@ -344,6 +346,7 @@ australian-cyber-events-scraper/
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
 │   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
+│   ├── measure_neighbourhoods.py  # Neighbourhoods vs disjoint slices on a copy (no model)
 │   ├── evaluate_dedup.py          # Measure the dedup paths on labels and seeded cases (no paid calls by default)
 │   ├── publish_outputs.py         # Snapshot, gate and publish every output together; list/prune snapshots
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
@@ -1223,8 +1226,93 @@ python scripts/dedup_admin.py adjudicate-clusters --min-certainty 0.8
 ```
 
 Nothing is applied unless the partition covers every record exactly once;
-invalid partitions, LLM failures and oversized clusters all degrade to
-"change nothing". See [docs/09-deduplication-v3.md](docs/09-deduplication-v3.md).
+invalid partitions and LLM failures degrade to "change nothing" (an answer that
+was not obtained is never read as an answer that keeps records apart). See
+[docs/09-deduplication-v3.md](docs/09-deduplication-v3.md).
+
+### Matching across large incident groups
+
+The prompt loses track of indices past about 20 records, so a group of more
+than that cannot be shown whole. It used to be skipped (a bucket of more than
+twice the limit) or cut into **disjoint slices**, and two reports of one
+supplier incident on opposite sides of a cut were never judged together.
+`adjudicate-candidates` (the routine step), `adjudicate-clusters` and
+`reconcile-entities` now cover such a group with bounded, overlapping
+**neighbourhoods** (`dedup/neighbourhoods.py`):
+
+1. *Links.* Events are linked by what shows they are one incident, scored by the
+   duplicate ranking (`candidate_ranking.score_pair`): a shared non-hub article,
+   the same supplier (reports of one supplier breach name a different customer
+   each time, so events recording the same supplier are linked even with no
+   shared article or word), corpus-rare words they share, an equal record count
+   or attack method, and how close their date intervals are.
+2. *Neighbourhoods.* A linked group of at most `--max-cluster-size` (20) events
+   is one neighbourhood, as before. A larger one is covered by neighbourhoods
+   that each take an event, its `--neighbours` (8) strongest links, and the
+   events most strongly linked to those until the prompt is full, chosen
+   greedily so that every strong link is inside at least one of them. Nothing is
+   skipped for size.
+3. *Budget.* At most `--call-budget` (250) model calls are made a run; stored
+   answers (`AdjudicationCache`) are free and do not count. Neighbourhoods are
+   asked in order of the links they settle; what the budget cuts is counted and
+   printed (`CALL BUDGET SPENT: n neighbourhood(s) were not asked`) and the next
+   run continues with the cached answers free.
+4. *Reconciliation.* Two events are joined only when some neighbourhood shows
+   them together at the certainty bar, **no** neighbourhood showing both
+   separates them, and no human `different` ruling or `duplicate_labels.csv`
+   `different` label forbids it. Incidents are built strongest link first (most
+   neighbourhoods agreeing, then highest certainty) and two partial incidents
+   are unioned only if no pair across them is separated or forbidden, so a shared
+   event goes to the consistent side or stays out. An incident's certainty is the
+   lowest on the links that built it.
+5. *Victims.* A merge keeps every customer victim recorded on the event merged
+   away (`supplier_victims.carry_victims`, audited in
+   `SupplierVictimAttachments`): not the supplier itself, not a description, not
+   another name for a victim the incident already has.
+
+Victims are kept: applying the 35 merges the supplier-keyed stand-in proposes
+on a copy (1,090 -> 1,055 active events) left the active events with the same
+**910** distinct victim organisations (37 customer victims carried across),
+where the same merges without carrying left **878** - 32 customers dropped from
+every victim count.
+
+Nothing is calibrated here (a partition's certainty is the model's own number),
+so the routine step stays report-only (`--dry-run` unless `--missed-merge-apply`)
+and a human confirms with `dedup_admin.py merge`. `--grouping disjoint` restores
+the earlier slicing for comparison. The plan and the reconciliation (group sizes,
+neighbourhoods, links covered, contradicted and blocked links, refused unions)
+are written to `instance/dedup_candidate_neighbourhoods.json`.
+
+Measured on a copy of the 2026-10-29 database (1,090 active events; the 692
+strong candidate links that need no embeddings: a shared non-hub article or a
+corpus-rare shared subject word; no model - `scripts/measure_neighbourhoods.py`
+partitions what it is shown by a known key, so only the planning and
+reconciliation are measured):
+
+| | Disjoint slices (old) | Neighbourhoods |
+|---|---|---|
+| Linked groups | 81 over 637 events; one of **420** events (66%), the next 7 | the same |
+| Shown to the model | 127 slices of at most 20: 127 calls | 200 neighbourhoods (80 whole groups, 120 overlapping, largest 20): 200 calls, inside the 250 budget |
+| Strong links shown together | 541 of 692 (**151 cut**) | **692 of 692** |
+| Groups of events recording one supplier (10 with two or more linked events), fully recovered | 1 (0 of the 9 that cross a slice) | 3 (2 of the 9 that cross a slice) |
+| The same, with the supplier clue as a link (19 groups) | 0 | **19** |
+| Groups of events chained by shared articles (32) | 31 | 32 (the one that crosses a slice) |
+| Incidents joining events of different keys | - | 0 |
+
+Without the supplier clue 5 of the 10 supplier groups have members in different
+linked groups (nothing links them but the supplier), and 2 more sit three or
+more links apart inside the 420-event group, so no neighbourhood shows both;
+linking the events that record the same supplier (`supplier_pairs`, on by
+default, `--no-supplier-links` to drop it) adds 71 links and joins them. A
+full cover costs about 1.6 times the calls of the old slicing; the budget
+bounds it, not the group size.
+
+```bash
+python scripts/dedup_admin.py adjudicate-candidates --dry-run --verbose              # neighbourhoods (default)
+python scripts/dedup_admin.py adjudicate-candidates --dry-run --grouping disjoint    # the earlier slicing
+python scripts/dedup_admin.py adjudicate-candidates --call-budget 100 --neighbours 6
+python scripts/measure_neighbourhoods.py --db <copy.db> --key vendor|source [--supplier-links]
+```
 
 ### Repeat attacks inside 90 days, re-checked
 
@@ -1361,6 +1449,60 @@ Details: [docs/05-event-enrichment.md](docs/05-event-enrichment.md#citation-supp
 ```bash
 python scripts/perplexity_backfill_events.py --recompute-reliability --dry-run   # report
 python scripts/perplexity_backfill_events.py --recompute-reliability             # apply
+```
+
+#### Cited pages are checked again
+
+A page read once used to be treated as permanently fresh, so a corrected
+notice or an updated victim list at the same URL stayed invisible to every
+fact and event that rested on it. `refresh-cited-documents` (the third step of
+the refresh hygiene phase, after the short-page re-scrape; `--cited-refresh-limit`,
+default 25 pages a run, 0 for none) checks pages again:
+
+- **Which.** Only pages cited by a record of an *active* event. A page is due
+  when it was last checked longer ago than its interval: 14 days for a page that
+  changed before or was itself published in the last 60 days, 45 days for a quiet
+  one, doubling with each consecutive check that found nothing (to 180 days).
+  Due pages are ranked by what depends on them - a citing record has a withheld
+  fact (a correction may now support it) +4, an unresolved victim attribution +3,
+  partial or unsupported evidence +3, an incident in the last 180 days +2, the
+  page changed before +2, how overdue, how many events cite it - and the first
+  `--limit` are checked.
+- **How.** A conditional request with the stored `ETag` / `Last-Modified`
+  (`If-None-Match` / `If-Modified-Since`; a 304 changes nothing). A server that
+  sends no validators, or ignores them, sends the page again and its content
+  fingerprint (SHA-256 of the extracted text, whitespace-insensitive) is compared
+  with the stored one.
+- **Versions.** A changed page replaces the current row in `CitedDocuments`
+  (`version` + 1, new text, fingerprint, validators, fetch time) and the old
+  version moves to `CitedDocumentVersions` with its fingerprint and fetch time. A
+  check that fails (network error, HTTP error, no usable text) records the
+  failure and keeps the page that was read: an outage must not remove the
+  support facts rest on.
+- **What reruns.** The records that cite a changed page are judged again by the
+  acceptance gate against the cached pages (no fetching, no model): fact support
+  (`EnrichmentFactSupport`), typed columns and enrichment JSON are rewritten
+  through the same path as `--recompute-reliability`. A record whose enrichment
+  changed then changes its fingerprint (`RecordFingerprints`), which refreshes
+  the events built on it (title, date, master-copied fields, facts; roles marked
+  outdated), and Jev judgements keyed on a hash of their evidence are asked again
+  only for those events. A page that changed in a way that alters no fact costs
+  nothing downstream. A record citing a page that was never cached is deferred,
+  not judged on a missing page.
+
+Measured on a copy of the 2026-10-29 database: 1,484 cached pages, 1,225 read,
+**1,171 cited by an active event's record** (54 read pages nothing live rests on
+are never checked). All were fetched on 2026-10-28, so 0 are due at 13 days, 94
+(those published in the last 60 days) at 14 days, and all 1,171 at 46 days; the
+25-page budget cycles them in 47 runs, withheld-fact, flagged-attribution and
+weak-evidence pages first (the first 25 at day 46: 25 withheld-fact, 25
+weak-evidence, 16 flagged, 12 recent-incident). No page stores validators yet;
+they are recorded on the first check.
+
+```bash
+python scripts/dedup_admin.py refresh-cited-documents --dry-run --verbose      # what is due, and why
+python scripts/dedup_admin.py refresh-cited-documents --dry-run --as-of 2026-12-15
+python scripts/dedup_admin.py refresh-cited-documents --limit 25              # check, store, rejudge
 ```
 
 ### Discovery filter and retry queue

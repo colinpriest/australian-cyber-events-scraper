@@ -167,18 +167,27 @@ def test_single_record_cluster_needs_no_call():
     assert fake.calls == 0
 
 
-def test_oversized_cluster_is_chunked():
+def test_oversized_cluster_is_covered_by_overlapping_neighbourhoods_not_cut_into_slices():
+    """Records that share rare words are shown together in overlapping groups of at most the limit."""
     response = ClusterPartition(incidents=[
         IncidentGroup(label="all", member_indices=[1, 2], certainty=0.9, reasoning="x")])
     fake = _FakeClient(response)
-    adj = ClusterAdjudicator(openai_client=fake, max_cluster_size=2)
-    records = [_rec(str(i), f"Title {i}") for i in range(6)]
+    adj = ClusterAdjudicator(openai_client=fake, max_cluster_size=4)
+    records = [_rec(str(i), f"word{i:02d} word{i + 1:02d} report") for i in range(10)]
 
     part = adj.adjudicate_cluster(records)
 
-    assert adj.stats["chunked"] == 1
-    assert fake.calls == 3, "six records in chunks of two"
-    assert part.validate_covers(6) == []
+    assert adj.stats["oversized"] == 1
+    assert fake.calls >= 3, "ten records in overlapping groups of at most four"
+    assert fake.calls == adj.stats["llm_calls"] == adj.last_plan["asked"]
+    assert part.validate_covers(10) == []
+
+
+def test_oversized_cluster_with_nothing_linking_its_records_asks_nothing():
+    fake = _FakeClient(None)
+    adj = ClusterAdjudicator(openai_client=fake, max_cluster_size=2)
+    part = adj.adjudicate_cluster([_rec(str(i), f"Title {i}", date=None) for i in range(6)])
+    assert fake.calls == 0 and len(part.incidents) == 6
 
 
 # --------------------------------------------------------------------------
@@ -227,10 +236,18 @@ def test_clusters_do_not_chain_transitively():
     assert biggest <= 5, f"transitive chaining produced a cluster of {biggest}"
 
 
-def test_cluster_size_is_capped():
+def test_a_large_bucket_is_kept_for_neighbourhood_adjudication():
     adj = ClusterAdjudicator(resolver=EntityResolver(), max_cluster_size=5)
     records = [_rec(f"r{i}", "sharedtoken incident report", "Same Org Pty Ltd")
                for i in range(40)]
     clusters = adj.build_clusters(records)
-    assert all(len(c) <= 10 for c in clusters), \
-        f"oversized cluster survived: {[len(c) for c in clusters]}"
+    assert [len(c) for c in clusters] == [40], "no longer skipped for being larger than twice the limit"
+    assert adj.stats["buckets_too_diffuse"] == 0
+
+
+def test_a_bucket_too_diffuse_to_be_one_incident_is_counted_not_silently_dropped():
+    adj = ClusterAdjudicator(resolver=EntityResolver(), max_cluster_size=5, max_bucket_size=30)
+    records = [_rec(f"r{i}", "sharedtoken incident report", "Same Org Pty Ltd")
+               for i in range(40)]
+    assert adj.build_clusters(records) == []
+    assert adj.stats["buckets_too_diffuse"] >= 1

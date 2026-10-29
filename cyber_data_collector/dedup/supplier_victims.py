@@ -986,6 +986,49 @@ def _components(edges: Iterable[Tuple[str, str]]) -> List[List[str]]:
     return [sorted(g) for g in groups.values() if len(g) > 1]
 
 
+def event_victims(conn: sqlite3.Connection, dedup_id: str) -> List[Tuple[int, str, Optional[str]]]:
+    """``(entity_id, name, kind)`` of each organisation recorded as a victim of the event."""
+    return conn.execute(
+        """SELECT dee.entity_id, v.entity_name, v.entity_kind FROM DeduplicatedEventEntities dee
+           JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""",
+        (dedup_id,)).fetchall()
+
+
+def carry_victims(conn: sqlite3.Connection, target: str, source: str,
+                  carried: Sequence[Tuple[int, str, Optional[str]]], vendors: Sequence[str],
+                  resolver: EntityResolver, *, subject_id: Optional[str] = None,
+                  probability: Optional[float] = None, cutoff: Optional[float] = None,
+                  question_version: str = PAIR_VERSION) -> Dict[str, List[str]]:
+    """Make each victim of a merged-away event a victim of the event it was merged into.
+
+    A supplier incident has several co-equal victims, and merging two reports of it must not lose the customers
+    only one of them named. ``carried`` is read with :func:`event_victims` *before* the merge. Not carried: the
+    supplier itself, a description rather than an organisation ("Sydney radiologist"), and another name for a
+    victim the target already has (it would count one organisation twice). Each attachment is audited in
+    ``SupplierVictimAttachments`` with the event it came from.
+
+    Returns:
+        ``{"carried_victims": [...], "not_carried": ["name (why)", ...]}``.
+    """
+    entry: Dict[str, List[str]] = {"carried_victims": [], "not_carried": []}
+    for entity_id, name, kind in carried:
+        if any(same_org(resolver, name, v) or name == v for v in vendors):
+            entry["not_carried"].append(f"{name} (the supplier)")
+            continue
+        if not is_candidate_organisation(name, kind):
+            entry["not_carried"].append(f"{name} (not an organisation)")
+            continue
+        variant = variant_of_victim(conn, target, entity_id, name, resolver)
+        if variant:
+            entry["not_carried"].append(f"{name} (another name for {variant})")
+            continue
+        if attach_victim(conn, target, entity_id, "merge", subject_id=subject_id, probability=probability,
+                         cutoff=cutoff, question_version=question_version, merged_from=source):
+            entry["carried_victims"].append(name)
+    return entry
+
+
 def merge_pairs(conn: sqlite3.Connection, pairs: Sequence[PairCandidate], incidents: Dict[str, SupplierIncident],
                 resolver: EntityResolver, different: Set[str], role_refresher=None,
                 scores: Optional[Dict[str, float]] = None, cutoff: Optional[float] = None,
@@ -1010,11 +1053,7 @@ def merge_pairs(conn: sqlite3.Connection, pairs: Sequence[PairCandidate], incide
         for source in sorted(d for d in group if d != target):
             if any("|".join(sorted((source, k))) in different for k in kept):
                 continue
-            carried = conn.execute(
-                """SELECT dee.entity_id, v.entity_name, v.entity_kind FROM DeduplicatedEventEntities dee
-                   JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-                   WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""",
-                (source,)).fetchall()
+            carried = event_victims(conn, source)
             if source in incidents:
                 vendors += [v for v in incidents[source].vendors if v not in vendors]
             try:
@@ -1027,24 +1066,10 @@ def merge_pairs(conn: sqlite3.Connection, pairs: Sequence[PairCandidate], incide
                 continue
             kept.append(source)
             pid = "|".join(sorted((source, target)))
-            entry = {"target": target, "source": source, "carried_victims": [], "not_carried": []}
-            for entity_id, name, kind in carried:
-                # Not the supplier itself, not a description ("Sydney radiologist"),
-                # and not another name for a victim the incident already has.
-                if any(same_org(resolver, name, v) or name == v for v in vendors):
-                    entry["not_carried"].append(f"{name} (the supplier)")
-                    continue
-                if not is_candidate_organisation(name, kind):
-                    entry["not_carried"].append(f"{name} (not an organisation)")
-                    continue
-                variant = variant_of_victim(conn, target, entity_id, name, resolver)
-                if variant:
-                    entry["not_carried"].append(f"{name} (another name for {variant})")
-                    continue
-                if attach_victim(conn, target, entity_id, "merge", subject_id=pid,
-                                 probability=(scores or {}).get(pid), cutoff=cutoff,
-                                 question_version=PAIR_VERSION, merged_from=source):
-                    entry["carried_victims"].append(name)
+            entry = {"target": target, "source": source,
+                     **carry_victims(conn, target, source, carried, vendors, resolver, subject_id=pid,
+                                     probability=(scores or {}).get(pid), cutoff=cutoff,
+                                     question_version=PAIR_VERSION)}
             merged.append(entry)
     conn.commit()
     return merged
