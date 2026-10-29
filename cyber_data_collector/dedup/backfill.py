@@ -180,7 +180,7 @@ def backfill_event_entities(conn: sqlite3.Connection) -> int:
         """
         SELECT m.deduplicated_event_id AS did, ee.entity_id AS eid,
                ee.relationship_type AS role,
-               MAX(COALESCE(ee.confidence_score, 0.5)) AS conf,
+               MAX(ee.confidence_score) AS conf,   -- NULL when no record scored it: unknown, not 0.5
                COUNT(*) AS n
         FROM EventDeduplicationMap m
         JOIN EnrichedEventEntities ee
