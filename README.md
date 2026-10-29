@@ -773,12 +773,20 @@ is decided by whether that pair has been *ruled on*: ruled the **same** incident
 (a pair label, a `same` override, or the calibrated same-incident judgement at
 its cut-off) it is merged into the supplier incident through the ledger, which
 carries the customer across; ruled a **different** incident (a label, a
-`different` override, or the calibrated judgement below the cut-off) the
-customer is attached as a victim of the supplier incident as well, and the
+`different` override, or the calibrated judgement below its own `different_cutoff`)
+the customer is attached as a victim of the supplier incident as well, and the
 findings record which ruling allowed it; only an **unresolved** pair is held,
 and the report says why (no judgement of the pair, a failed or un-escalated
 one, no cut-off, or a label and an override that disagree). A label or override
-outranks the model; two that disagree are held, never picked between.
+outranks the model; two that disagree are held, never picked between. The
+merge cut-off measured only the precision of merging, so a score just under it
+is not evidence of "different": the calibration records a separate
+`different_cutoff` (the largest score below which at least 95% of labelled
+pairs, weighted, are labelled different and none is labelled the same), and a
+pair scoring between the two, or any model-only pair when a calibration has no
+such bound, is held with the band named. On 2026-10-29 it is 0.78 against a
+0.87 merge cut-off (`calibrate_supplier_victims.py calibrate --different-only`
+adds it to an existing calibration from the stored judgements, no API calls).
 
 ```bash
 python scripts/dedup_admin.py find-supplier-victims --research            # report

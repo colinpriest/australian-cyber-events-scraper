@@ -52,7 +52,10 @@ always is. With a calibration, :func:`find_supplier_victims` with ``apply``:
   ledger, which carries the customer across; ruled a **different** incident (a
   label, a ``different`` override, or a calibrated judgement below the cut-off)
   the customer is attached as a victim of the supplier incident as well; only
-  an **unresolved** pair is held, with the reason it is unresolved.
+  an **unresolved** pair is held, with the reason it is unresolved. The model
+  rules "different" only below its own calibrated ``different_cutoff``; a score
+  between that and the merge cut-off is held, because the merge cut-off measured
+  only the precision of merging.
 
 Every attachment is recorded in ``SupplierVictimAttachments`` (who, which
 judgement, probability, cut-off, question version) after a ledger snapshot.
@@ -1100,13 +1103,17 @@ def override_verdicts(conn: sqlite3.Connection, left_dedup_id: str, right_dedup_
 
 def rule_on_own_event(conn: sqlite3.Connection, incident_id: str, own_id: str,
                       labels: Dict[Tuple[str, str], str], pair_scores: Optional[Scores],
-                      cutoff: Optional[float], known_pairs: Iterable[str] = ()) -> OwnEventRuling:
+                      cutoff: Optional[float], known_pairs: Iterable[str] = (),
+                      different_cutoff: Optional[float] = None) -> OwnEventRuling:
     """Has the candidate's own event been ruled the same incident as the supplier incident, or a different one?
 
     In order of authority: a pair label or an active ``DedupOverrides`` ruling (ground truth;
     two that disagree leave it unresolved, never a pick), then the calibrated same-incident
-    judgement - at or above its cut-off the same incident, below it a different one. Anything
-    else (no judgement, a failed or un-escalated one, no cut-off) is UNRESOLVED, with the reason.
+    judgement: at or above the merge ``cutoff`` the same incident, below ``different_cutoff``
+    a different one. The merge cut-off was calibrated for the precision of merging only, so a
+    score just under it is not evidence of "different": the band between the two bounds, and
+    every score when there is no ``different_cutoff``, is UNRESOLVED. So is anything else (no
+    judgement, a failed or un-escalated one, no cut-off), with the reason.
     """
     pid = "|".join(sorted((incident_id, own_id)))
     signals: List[Tuple[str, str]] = []
@@ -1122,11 +1129,20 @@ def rule_on_own_event(conn: sqlite3.Connection, incident_id: str, own_id: str,
         return OwnEventRuling(own_id, signals[0][1], signals[0][0])
     scores = pair_scores
     if scores is not None and pid in scores.final:
-        if cutoff is None:
-            return OwnEventRuling(own_id, UNRESOLVED, "no calibrated same-incident cut-off to read the judgement against",
-                                  scores.final[pid])
         p = scores.final[pid]
-        return OwnEventRuling(own_id, RULED_SAME if p >= cutoff else RULED_DIFFERENT, "model", p)
+        if cutoff is not None and p >= cutoff:
+            return OwnEventRuling(own_id, RULED_SAME, "model", p)
+        if different_cutoff is not None and p < different_cutoff:
+            return OwnEventRuling(own_id, RULED_DIFFERENT, "model", p)
+        if cutoff is None:
+            why = "no calibrated same-incident cut-off to read the judgement against"
+        elif different_cutoff is None:
+            why = (f"score {p:.2f} is below the merge cut-off {cutoff:.2f}, and no calibrated bound for "
+                   "'different' exists (recalibrate: scripts/calibrate_supplier_victims.py calibrate)")
+        else:
+            why = (f"score {p:.2f} is in the band between the calibrated 'different' bound "
+                   f"({different_cutoff:.2f}) and the merge cut-off ({cutoff:.2f}): neither is calibrated")
+        return OwnEventRuling(own_id, UNRESOLVED, why, p)
     if scores is not None and pid in scores.failed:
         reason = "Jev failed on the pair"
     elif scores is not None and pid in scores.undecided:
@@ -1245,7 +1261,9 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
 
     vcut = (cal.get("victim") or {}).get("cutoff")
     pcut = (cal.get("same_incident") or {}).get("cutoff")
-    result.update({"applied": True, "cutoffs": {"victim": vcut, "same_incident": pcut}})
+    dcut = (cal.get("same_incident") or {}).get("different_cutoff")
+    result.update({"applied": True, "cutoffs": {"victim": vcut, "same_incident": pcut,
+                                                          "different": dcut}})
     known_pairs = {p.pair_id for p in pairs}
     pair_ok = {sid: how for sid, how in accepted(pscores.final, labels, KIND_PAIR, pcut).items()
                if sid in known_pairs}
@@ -1264,7 +1282,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         inc = by_id[cand.dedup_id]
         for own_id in nearby_own_events(cand, inc, own_now):
             ruling = rulings[(sid, own_id)] = rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
-                                                                pcut, known_pairs)
+                                                                pcut, known_pairs, dcut)
             pid = "|".join(sorted((inc.dedup_id, own_id)))
             if ruling.verdict == RULED_SAME and pid not in queued:
                 # Ruled the same by a label or override (a model ruling is already in pair_ok).
@@ -1294,7 +1312,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         unresolved: List[OwnEventRuling] = []
         for own_id in nearby_own_events(cand, inc, own):
             ruling = rulings.get((sid, own_id)) or rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
-                                                                     pcut, known_pairs)
+                                                                     pcut, known_pairs, dcut)
             if ruling.verdict == RULED_DIFFERENT:
                 ruled_different.append(ruling)
             elif ruling.verdict == RULED_SAME:
