@@ -3,14 +3,20 @@
 Steps, each reproducible from committed files (see ``cyber_data_collector/dedup/coherence_same_org.py``):
 
 ``sample``     Writes ``evaluation/coherence_same_org_sample.csv`` - (event, member)
-               pairs from active multi-member events, drawn without looking at any score:
-               * Stratum ``C`` - every *candidate* member (named the event's own organisation,
-                 but a verified date far from the event's or a different incident in the
-                 organisation's timeline): a census, weight 1. Only candidates can be split by
-                 the model, so any cut-off acts here and is calibrated here.
-               * Stratum ``N`` - a seeded sample of the other same-organisation members, weighted
-                 up to its population. It measures the incidents the candidate selection keeps
-                 (reported, never acted on).
+               pairs from active multi-member events. Candidates (members naming the event's
+               own organisation, but with a verified date far from the event's or a different
+               incident in the organisation's timeline) are stratified on the *stored final
+               score* (``check-same-organisation`` must have judged them first). Labellers are
+               never shown the score; stratifying on it only decides who is labelled, and the
+               weights undo it:
+               * Stratum ``A`` - every candidate scoring below ``--census-below`` (0.5): a
+                 census, weight 1, because any cut-off lies here.
+               * Stratum ``B`` - a seeded sample of those scoring 0.5-0.8; ``C`` - 0.8 and above.
+                 Weighted up to their bands; they measure recall.
+               * Stratum ``N`` - a seeded sample of the other same-organisation members
+                 (not candidates), weighted up to its population. It measures the incidents
+                 the candidate selection keeps (reported, never acted on).
+               Only candidates can be split by the model, so any cut-off acts on A-C.
 ``packet``     Writes a blind labelling packet per sampled pair (JSON lines): the event, its
                records and the record under review - no score, no stratum, no candidate reasons.
 ``judge``      Asks Jev (and the escalation model in its band) about every sampled candidate.
@@ -20,8 +26,9 @@ Steps, each reproducible from committed files (see ``cyber_data_collector/dedup/
                label ``same`` - the record reports the event's incident - ``different`` - a separate
                incident at the same organisation - or ``unsure``) and the stored final scores, and
                writes ``evaluation/coherence_same_org_calibration.json``: the largest cut-off at which
-               the stratum-C members it would split are at least ``--precision`` (0.95) labelled
-               ``different``, with a bootstrap of the whole choose-then-test procedure, and the
+               the stratum A-C members it would split are, weighted, at least ``--precision`` (0.95)
+               labelled ``different``, with a stratified bootstrap of the whole choose-then-test
+               procedure, and the
                identity (models, question versions, evidence fingerprint) the pipeline checks.
 
 Labelling convention (fix it before any score is seen): a record is ``different`` only when its own
@@ -64,8 +71,7 @@ from cyber_data_collector.dedup import coherence as co  # noqa: E402
 from cyber_data_collector.dedup import coherence_same_org as so  # noqa: E402
 from cyber_data_collector.dedup.entity_resolution import EntityResolver  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
-from scripts.calibrate_coherence import bootstrap  # noqa: E402
-from scripts.calibrate_event_reality import choose_cutoff, wilson  # noqa: E402
+from scripts.calibrate_event_reality import bootstrap, choose_cutoff, wilson  # noqa: E402
 
 SAMPLE_PATH = so.ROOT / "evaluation" / "coherence_same_org_sample.csv"
 
@@ -77,17 +83,31 @@ def _events(conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
     return {e["id"]: e for e in so.find_candidate_events(conn, resolver, include=all_ids)}
 
 
+CANDIDATE_STRATA = ("A", "B", "C")
+
+
 def cmd_sample(args) -> int:
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     events = _events(conn)
-    bands: Dict[str, List[tuple]] = {"C": [], "N": []}
+    probs = so.stored_final_probabilities(conn)
+    bands: Dict[str, List[tuple]] = {"A": [], "B": [], "C": [], "N": []}
+    unjudged = 0
     for did, e in sorted(events.items()):
         for m in e["members"]:
             if m["id"] in e["suspect_ids"]:
                 continue          # other-organisation members belong to the stray check
-            bands["C" if m["id"] in e["candidates"] else "N"].append((did, m["id"]))
+            if m["id"] not in e["candidates"]:
+                bands["N"].append((did, m["id"]))
+                continue
+            p = probs.get(co.member_subject_id(did, m["id"]))
+            if p is None:
+                unjudged += 1
+                continue
+            bands["A" if p < args.census_below else "B" if p < 0.8 else "C"].append((did, m["id"]))
     rng = random.Random(args.seed)
-    chosen = {"C": sorted(bands["C"]),
+    chosen = {"A": sorted(bands["A"]),
+              "B": sorted(rng.sample(sorted(bands["B"]), min(args.sample_mid, len(bands["B"])))),
+              "C": sorted(rng.sample(sorted(bands["C"]), min(args.sample_high, len(bands["C"])))),
               "N": sorted(rng.sample(sorted(bands["N"]), min(args.sample_other, len(bands["N"]))))}
     SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with SAMPLE_PATH.open("w", newline="", encoding="utf-8") as fh:
@@ -97,8 +117,9 @@ def cmd_sample(args) -> int:
             weight = len(bands[stratum]) / len(pairs) if pairs else 0.0
             w.writerows([(d, m, stratum, round(weight, 4)) for d, m in pairs])
             print(f"Stratum {stratum}: {len(pairs)} of {len(bands[stratum])} members (weight {weight:.2f})")
-    print(f"Seed {args.seed}; snapshot {Path(args.db).name}. Written {SAMPLE_PATH}")
-    return 0
+    print(f"Seed {args.seed}; snapshot {Path(args.db).name}; {unjudged} candidate(s) had no stored final "
+          f"score (run check-same-organisation on the snapshot first). Written {SAMPLE_PATH}")
+    return 1 if unjudged else 0
 
 
 def _sample() -> List[Dict[str, str]]:
@@ -138,7 +159,7 @@ def cmd_judge(args) -> int:
     conn = sqlite3.connect(args.db)
     events = _events(conn)
     items = [(events[r["deduplicated_event_id"]], r["enriched_event_id"]) for r in _sample()
-             if r["deduplicated_event_id"] in events and r["stratum"] == "C"
+             if r["deduplicated_event_id"] in events and r["stratum"] in CANDIDATE_STRATA
              and r["enriched_event_id"] in events[r["deduplicated_event_id"]]["candidates"]]
     scores = so.judge_members(conn, items)
     print(f"Judged {len(scores)} sampled candidate(s); "
@@ -162,7 +183,7 @@ def cmd_calibrate(args) -> int:
             continue
         row = {"id": sid, "stratum": s["stratum"], "weight": float(s["weight"]), "p": probs.get(sid),
                "not_incident": label == "different"}
-        if s["stratum"] == "C":
+        if s["stratum"] in CANDIDATE_STRATA:
             if row["p"] is None:
                 missing += 1
                 continue
@@ -211,11 +232,11 @@ def cmd_calibrate(args) -> int:
 
 
 def plan(conn: sqlite3.Connection, module) -> "object":
-    """The recalibration plan (``dedup/recalibration.py``): labelled stratum-C candidates the snapshot holds."""
+    """The recalibration plan (``dedup/recalibration.py``): labelled stratum A-C candidates the snapshot holds."""
     from cyber_data_collector.dedup.recalibration import Plan, RecalibrationError, _require_agreement
 
     labels = co.load_labels(module.LABELS_PATH)
-    sample = [r for r in _sample() if r["stratum"] == "C"
+    sample = [r for r in _sample() if r["stratum"] in CANDIDATE_STRATA
               and labels.get(co.member_subject_id(r["deduplicated_event_id"], r["enriched_event_id"]))
               in ("same", "different")]
     events = _events(conn)
@@ -240,6 +261,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     add_model_arguments(parser)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("sample")
+    p.add_argument("--census-below", type=float, default=0.5)
+    p.add_argument("--sample-mid", type=int, default=25)
+    p.add_argument("--sample-high", type=int, default=25)
     p.add_argument("--sample-other", type=int, default=40)
     p.add_argument("--seed", type=int, default=20261029)
     p.set_defaults(func=cmd_sample)
