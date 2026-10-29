@@ -366,3 +366,108 @@ def test_source_urls_are_attached(conn):
     events = load_recurrence_events(conn)
     attach_source_urls(conn, events)
     assert events[0].source_urls == ["https://news.test/story"]
+
+
+# ----------------------------------------------------------------------
+# Gaps are measured between date intervals, not point dates
+# ----------------------------------------------------------------------
+
+def month_event(dedup_id, first_of_month, entity_id=1, **kwargs):
+    """An event dated by a verified month: stored as its 1st, any day in the month is possible."""
+    start = date.fromisoformat(first_of_month)
+    import calendar
+    end = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
+    return RecurrenceEvent(dedup_id=dedup_id, entity_id=entity_id, entity_name="Acme Ltd", title=f"Event {dedup_id}",
+                           event_date=start, date_precision="month", date_earliest=start, date_latest=end, **kwargs)
+
+
+def day_event(dedup_id, day, entity_id=1):
+    d = date.fromisoformat(day)
+    return RecurrenceEvent(dedup_id=dedup_id, entity_id=entity_id, entity_name="Acme Ltd", title=f"Event {dedup_id}",
+                           event_date=d, date_precision="day", date_earliest=d, date_latest=d)
+
+
+def test_the_gap_between_overlapping_intervals_is_zero():
+    june, also_june = month_event("a", "2024-06-01"), month_event("b", "2024-06-01")
+    assert june.gap_to(also_june) == 0
+    assert month_event("a", "2024-06-01").gap_to(day_event("b", "2024-06-20")) == 0   # a day inside the month
+
+
+def test_the_gap_between_disjoint_intervals_is_the_distance_between_them():
+    assert month_event("a", "2024-06-01").gap_to(day_event("b", "2024-07-20")) == 20      # 30 June to 20 July
+    assert day_event("a", "2024-06-01").gap_to(day_event("b", "2024-07-20")) == 49
+    assert day_event("b", "2024-07-20").gap_to(month_event("a", "2024-06-01")) == 20      # symmetric
+
+
+def test_an_undated_event_has_no_gap():
+    undated = RecurrenceEvent(dedup_id="x", entity_id=1, entity_name="Acme Ltd", title="x", event_date=None)
+    assert undated.gap_to(day_event("a", "2024-06-01")) is None
+    assert undated.interval is None
+
+
+def test_two_events_in_one_verified_month_are_always_a_candidate_pair():
+    runs = build_runs([month_event("a", "2024-06-01"), month_event("b", "2024-06-01")])
+    assert [e.dedup_id for e in runs[0]] == ["a", "b"]
+
+
+def test_a_month_is_not_measured_from_its_first_day():
+    """1 June (month) and 20 July (day): 49 days from the 1st, but possibly only 20 apart; and a pair a
+    point-date gap puts beyond the window can fall inside it."""
+    events = [month_event("a", "2024-04-01"), day_event("b", "2024-07-20")]
+    # 1 April to 20 July is 110 days between point dates, 81 days between the intervals (30 April to 20 July)
+    assert build_runs(events, window_days=90)
+    assert not build_runs([day_event("a", "2024-04-01"), day_event("b", "2024-07-20")], window_days=90)
+
+
+def test_overlapping_long_intervals_keep_a_run_chained():
+    year = RecurrenceEvent(dedup_id="y", entity_id=1, entity_name="Acme Ltd", title="y",
+                           event_date=date(2022, 1, 1), date_precision="year",
+                           date_earliest=date(2022, 1, 1), date_latest=date(2022, 12, 31))
+    runs = build_runs([year, day_event("a", "2022-02-01"), day_event("b", "2022-11-01")])
+    assert [e.dedup_id for e in runs[0]] == ["y", "a", "b"]
+
+
+def test_unverified_dates_stand_in_as_stored_dates_only_when_allowed():
+    unverified = event("u", "2024-06-01")                 # precision unverified: no interval
+    assert unverified.interval is None and unverified.span("exclude") is None
+    pair = [unverified, day_event("d", "2024-06-20")]
+    assert build_runs(pair)                                # default 'stored': the stored date is used
+    assert build_runs(pair, unverified_dates="exclude") == []   # 'exclude': unknown stays unknown
+    assert unverified.gap_to(day_event("d", "2024-06-20"), unverified_dates="exclude") is None
+    with pytest.raises(ValueError):
+        build_runs(pair, unverified_dates="guess")
+
+
+def test_a_run_says_how_many_of_its_dates_are_unverified():
+    from cyber_data_collector.dedup.recurrence_check import unverified_in_run
+    run = build_runs([event("u", "2024-06-01"), day_event("d", "2024-06-20")])[0]
+    assert unverified_in_run(run) == 1
+
+
+def test_the_prompt_never_presents_a_month_as_a_day():
+    run = [month_event("a", "2024-06-01"), day_event("b", "2024-06-20"), event("c", "2024-07-01")]
+    body = RecurrenceAuditor(openai_client=object()).render_run(run)
+    assert "month precision: any day from 2024-06-01 to 2024-06-30" in body
+    assert "exact day" in body and "precision unverified" in body
+    assert "0 days after record 1, the dates' intervals overlap" in body
+
+
+def test_findings_measure_gaps_between_intervals():
+    run = [month_event("a", "2024-06-01", members=3), day_event("b", "2024-06-20")]
+    partition = ClusterPartition(incidents=[IncidentGroup(label="x", member_indices=[1, 2], certainty=0.9, reasoning="r")])
+    finding = findings_from_partition(run, partition)[0]
+    assert finding["max_gap_days"] == 0 and finding["unverified_dates"] == 0
+
+
+def test_load_carries_the_stored_interval(conn):
+    conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN event_date_precision TEXT")
+    conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN event_date_earliest TEXT")
+    conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN event_date_latest TEXT")
+    _insert_event(conn, "d1", "2023-04-01")
+    _insert_event(conn, "d2", "2023-05-10")
+    conn.execute("UPDATE DeduplicatedEvents SET event_date_precision = 'month', event_date_earliest = '2023-04-01', "
+                 "event_date_latest = '2023-04-30' WHERE deduplicated_event_id = 'd1'")
+    first, second = load_recurrence_events(conn)
+    assert (first.date_precision, first.date_earliest, first.date_latest) == ("month", date(2023, 4, 1), date(2023, 4, 30))
+    assert second.date_precision is None and second.interval is None       # unverified: no interval invented
+    assert first.gap_to(second) == 10                                      # 30 April to 10 May
