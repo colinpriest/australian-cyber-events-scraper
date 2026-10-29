@@ -222,3 +222,30 @@ def candidate_components(
     for node in list(parent):
         groups[find(node)].append(node)
     return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=len, reverse=True)
+
+
+def scope_ids(pair_reasons: PairReasons, recent: Iterable[str]) -> Set[str]:
+    """Events that can share a candidate group with a recent event: everything linked to one.
+
+    A group is built from candidate edges and kept only when it holds a recent
+    event, so only events connected to a recent one through candidate pairs
+    (of any reason) can matter. Working this out costs nothing; embedding,
+    which does, can then be limited to these events instead of every active
+    event. Without ``recent`` pass every id instead - there is nothing to scope.
+    """
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for key in pair_reasons:
+        left, right = (find(x) for x in sorted(key))
+        if left != right:
+            parent[left] = right
+    recent_set = set(recent)
+    roots = {find(x) for x in recent_set}
+    return recent_set | {x for x in list(parent) if find(x) in roots}

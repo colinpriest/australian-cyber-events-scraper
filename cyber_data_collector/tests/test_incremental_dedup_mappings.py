@@ -171,10 +171,13 @@ def test_whole_new_group_joins_the_matched_event(real_schema_db, monkeypatch):
     monkeypatch.setattr(backfill, "run_backfill", lambda c: SimpleNamespace(summary=lambda: "stub"))
 
     day = date(2026, 2, 10)
-    new = [CyberEvent(event_id="enr-new", title="Optus breach", event_date=day, victim_organization_name="Optus"),
-           CyberEvent(event_id="enr-new2", title="Optus hack", event_date=day, victim_organization_name="Optus")]
+    count = 9_800_000      # the incident-specific fact the records agree on
+    new = [CyberEvent(event_id="enr-new", title="Optus breach", event_date=day, victim_organization_name="Optus",
+                      records_affected=count),
+           CyberEvent(event_id="enr-new2", title="Optus hack", event_date=day, victim_organization_name="Optus",
+                      records_affected=count)]
     existing = [CyberEvent(event_id="dedup-uuid-1", title="Existing", event_date=day,
-                           victim_organization_name="Singtel Optus Pty Limited")]
+                           victim_organization_name="Singtel Optus Pty Limited", record_counts=[count])]
 
     assert _incremental_migration(db_path)._run_incremental_deduplication(
         new, existing, {"dedup-uuid-1": "enr-existing"})

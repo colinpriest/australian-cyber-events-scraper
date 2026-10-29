@@ -15,8 +15,11 @@ MERGED into ONE event. We are tracking security INCIDENTS, not news ARTICLES.
 
 **DEDUPLICATION RULES (in order of priority):**
 
-1. **RULE 1: Same Entity + Same Date → MERGE**
-   - If victim_organization_name matches AND event_date matches → ALWAYS merge
+1. **RULE 1: Same Entity + Same Exact Day + Corroboration → MERGE**
+   - If victim_organization_name matches AND event_date matches (a day, not the 1st of a
+     month) AND the records agree on something specific to the incident (a shared source
+     article, record count, attacker or attack method) → merge. A shared day alone is only
+     a candidate: the calibrated Jev duplicate check decides it (dedup/merge_corroboration.py)
    - Different titles are OK (e.g., "Ticketmaster hacked" vs "Live Nation breach")
 
 2. **RULE 2: Same Entity + Similar Descriptions → MERGE**
@@ -113,14 +116,27 @@ class CyberEvent:
     data_sources: List[str] = None
     urls: List[str] = None
     confidence: float = 0.5
+    # Incident-specific facts (dedup/merge_corroboration.py). Each is a list because
+    # an event of several records carries every record's value; empty means unknown.
+    attack_methods: List[str] = None
+    threat_actors: List[str] = None
+    record_counts: List[int] = None
 
     def __post_init__(self):
         if self.data_sources is None:
             self.data_sources = []
         if self.urls is None:
             self.urls = []
+        if self.attack_methods is None:
+            self.attack_methods = []
+        if self.threat_actors is None:
+            self.threat_actors = []
+        if self.record_counts is None:
+            self.record_counts = []
 
 from .entity_extractor import EntityExtractor
+from ..dedup import merge_corroboration
+from ..dedup.merge_corroboration import CorpusStats
 from ..utils.llm_models import chat_params, openai_fast_model
 from ..utils.validation import llm_validate_records_affected, validate_records_affected
 
@@ -715,7 +731,23 @@ class DeduplicationEngine:
         # enriched_event_id pairs). Every merge path consults them through
         # merge_decision, so a split cannot be undone by grouping or rebuild.
         self.different_pairs: Set[frozenset] = set()
-    
+        # What is common across the events being deduplicated (hub URLs, common
+        # method words); see learn_corpus. Empty until a corpus is learned.
+        self.corpus = CorpusStats()
+        # Pairs the shared day alone could not merge: (id, id, why). They reach
+        # the calibrated check-duplicates judgement as ordinary same-organisation
+        # candidates; this list is for reporting and measurement only.
+        self.deferred: List[Tuple[str, str, str]] = []
+
+    def learn_corpus(self, events: Iterable[CyberEvent]) -> None:
+        """Measure the hub URLs and common attack-method words of ``events``.
+
+        Called by :meth:`deduplicate` for its input; incremental matching calls
+        it for the new and the existing events together, so a URL cited by
+        several existing events is a hub when a new record is compared.
+        """
+        self.corpus = CorpusStats.from_events(list(events))
+
     def deduplicate(self, events: List[CyberEvent]) -> DeduplicationResult:
         """Perform comprehensive deduplication with validation"""
         start_time = datetime.now()
@@ -735,6 +767,8 @@ class DeduplicationEngine:
             )
         
         # Group similar events
+        self.learn_corpus(events)
+        self.deferred = []
         event_groups = self._group_similar_events(events)
         
         # Merge each group
@@ -1030,28 +1064,36 @@ class DeduplicationEngine:
                        members2: Optional[Iterable[str]] = None) -> Optional[str]:
         """Why two events are certainly one incident, or None when that is not certain.
 
-        Only two deterministic rules remain: an identical title on the same
-        date, and the same organisation (by identity, not by shared words) on
-        the same exact day. The fuzzy rules that used to run here merged events
-        whose titles were 15% alike or whose descriptions were 20-35% alike - a
-        reviewer reproduced different organisations merged because both titles
-        contained "university", and one organisation's incidents years apart
-        merged on title overlap. Uncertain pairs are now kept apart and decided
-        by the calibrated Jev duplicate check, which sees both events'
-        evidence, how each date was determined and the organisation's
-        researched incident timeline.
+        Two deterministic rules remain, both needing the same date:
+
+        * an identical title that names something (``victim`` agreeing, or no
+          victim recorded on either side);
+        * the same organisation (by identity, not by shared words) on the same
+          exact day **with incident-specific corroboration** - a shared source
+          article, an agreeing record count, attacker or attack method
+          (:mod:`dedup.merge_corroboration`) - and no conflict on those facts.
+
+        A shared day alone is a strong candidate signal, not evidence of one
+        incident: dates are often publication dates, and a roundup or the
+        report of a second attack carries the same day. Without corroboration
+        the pair is left separate (and recorded in :attr:`deferred`); the
+        calibrated Jev duplicate check pairs every two events of one
+        organisation and decides it with both events' evidence, how each date
+        was determined and the organisation's researched incident timeline. The
+        fuzzy rules that used to run here (titles 15% alike, descriptions
+        20-35% alike) merged different organisations on a shared "university".
 
         The 1st of a month is not treated as an exact day: it is how a date
         known only to the month is stored.
 
         The one decision every merge path uses (grouping new records, the full
-        rebuild, attaching to existing events), with three vetoes first:
-        a cached 'different' ruling between any record of either side
-        (``members1`` / ``members2``, enriched_event_ids; default the events
-        themselves), and conflicting victims. An identical title merges only
-        when the victims agree, or neither is known and the title names
-        something - two universities' events both titled "Data breach" on one
-        day used to merge.
+        rebuild, attaching to existing events), with two vetoes first: a cached
+        'different' ruling between any record of either side (``members1`` /
+        ``members2``, enriched_event_ids; default the events themselves), and
+        conflicting victims. An identical title merges outright only when the
+        victims agree and the title names something, or neither victim is known
+        and it does - a title such as "Data breach" is the same words for any
+        incident, so it is corroborated like a bare shared day.
         """
         if not event1.event_date or event1.event_date != event2.event_date:
             return None
@@ -1060,15 +1102,20 @@ class DeduplicationEngine:
         victims = self.victim_compatibility(event1, event2)
         if victims == "conflict":
             return None
-        if (event1.title and event2.title
-                and event1.title.lower().strip() == event2.title.lower().strip()):
+        identical = bool(event1.title and event2.title
+                         and event1.title.lower().strip() == event2.title.lower().strip())
+        specific = identical and self._title_identifies_something(event1.title)
+        if specific:
             if victims == "same":
                 return "identical title, date and victim"
-            if (not event1.victim_organization_name and not event2.victim_organization_name
-                    and self._title_identifies_something(event1.title)):
+            if not event1.victim_organization_name and not event2.victim_organization_name:
                 return "identical specific title and date, no victim recorded"
         if event1.event_date.day != 1 and victims == "same":
-            return "same organisation on the same day"
+            corroboration = merge_corroboration.assess(event1, event2, self.corpus)
+            if corroboration.verdict == merge_corroboration.CORROBORATED:
+                return f"same organisation on the same day, corroborated ({', '.join(corroboration.agreements)})"
+            self.deferred.append((event1.event_id, event2.event_id,
+                                  f"{corroboration.verdict}: {corroboration.describe()}"))
         return None
 
     def _same_entity(self, event1: CyberEvent, event2: CyberEvent) -> bool:
@@ -1318,7 +1365,13 @@ class DeduplicationEngine:
             victim_organization_name=best_org_name,
             victim_organization_industry=best_org_industry,
             data_sources=list(all_sources) if all_sources else master.data_sources,
-            urls=list(all_urls) if all_urls else master.urls
+            urls=list(all_urls) if all_urls else master.urls,
+            # Every member's incident facts travel with the merged event, so the
+            # corroboration check sees them when it is matched against others.
+            attack_methods=sorted({m for e in events for m in e.attack_methods}),
+            threat_actors=sorted({a for e in events for a in e.threat_actors}),
+            record_counts=sorted({c for e in events for c in [*e.record_counts, e.records_affected]
+                                  if isinstance(c, int) and c > 0}),
         )
 
         return merged_event

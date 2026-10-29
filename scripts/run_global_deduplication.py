@@ -355,7 +355,7 @@ class DeduplicationMigration:
                 base_query = """
                     SELECT e.enriched_event_id, e.title, e.summary, e.event_date, e.event_type, e.severity,
                            e.records_affected, e.confidence_score, e.perplexity_enrichment_data,
-                           r.raw_description
+                           r.raw_description, r.source_url, e.attack_method, e.attacking_entity_name
                     FROM EnrichedEvents e
                     LEFT JOIN RawEvents r ON e.raw_event_id = r.raw_event_id
                     WHERE e.status = 'Active'
@@ -377,11 +377,15 @@ class DeduplicationMigration:
                 # Extract victim organization name and industry from Perplexity enrichment JSON
                 victim_org_name = None
                 victim_org_industry = None
+                attack_method = row[11]
+                threat_actor = row[12]
                 if row[8]:  # perplexity_enrichment_data
                     try:
                         enrichment_data = json.loads(row[8])
                         victim_org_name = enrichment_data.get('formal_entity_name')
                         victim_org_industry = enrichment_data.get('victim_industry')
+                        attack_method = enrichment_data.get('attack_method') or attack_method
+                        threat_actor = enrichment_data.get('threat_actor') or threat_actor
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.debug(f"Could not parse enrichment data for event {row[0]}: {e}")
 
@@ -397,8 +401,10 @@ class DeduplicationMigration:
                     victim_organization_name=victim_org_name,
                     victim_organization_industry=victim_org_industry,
                     data_sources=[],
-                    urls=[],
-                    confidence=row[7] if row[7] else 0.5
+                    urls=[row[10]] if row[10] else [],
+                    confidence=row[7] if row[7] else 0.5,
+                    attack_methods=[attack_method] if attack_method else [],
+                    threat_actors=[threat_actor] if threat_actor else [],
                 )
                 enriched_events.append(event)
 
@@ -472,6 +478,7 @@ class DeduplicationMigration:
                     WHERE status = 'Active'
                 """)
                 rows = cursor.fetchall()
+                facts = self._load_member_facts(cursor)
 
             events = []
             dedup_to_master = {}
@@ -479,6 +486,7 @@ class DeduplicationMigration:
                 dedup_id = row[0]
                 master_id = row[1]
                 dedup_to_master[dedup_id] = master_id
+                member = facts.get(dedup_id, {})
                 event = CyberEvent(
                     event_id=dedup_id,
                     title=row[2],
@@ -490,8 +498,13 @@ class DeduplicationMigration:
                     victim_organization_name=row[9],
                     victim_organization_industry=row[10],
                     data_sources=[],
-                    urls=[],
-                    confidence=row[8] if row[8] else 0.5
+                    # Every member record's article, method, attacker and count, so
+                    # a new record is corroborated against the whole event.
+                    urls=sorted(member.get('urls', ())),
+                    confidence=row[8] if row[8] else 0.5,
+                    attack_methods=sorted(member.get('methods', ())),
+                    threat_actors=sorted(member.get('actors', ())),
+                    record_counts=sorted(member.get('counts', ())),
                 )
                 events.append(event)
 
@@ -502,6 +515,43 @@ class DeduplicationMigration:
             # An empty list here would let every new record become a duplicate incident.
             logger.error(f"❌ Failed to load existing dedup events: {e}")
             raise RuntimeError(f"could not load existing incidents: {e}") from e
+
+    @staticmethod
+    def _load_member_facts(cursor: sqlite3.Cursor) -> Dict[str, Dict[str, Set]]:
+        """Per deduplicated event: the source URLs, attack methods, attackers and
+        record counts of its active member records (and its stored sources)."""
+        facts: Dict[str, Dict[str, Set]] = {}
+
+        def entry(dedup_id: str) -> Dict[str, Set]:
+            return facts.setdefault(dedup_id, {'urls': set(), 'methods': set(), 'actors': set(), 'counts': set()})
+
+        for dedup_id, url, method, actor, count, enrichment in cursor.execute("""
+                SELECT m.deduplicated_event_id, r.source_url, e.attack_method, e.attacking_entity_name,
+                       e.records_affected, e.perplexity_enrichment_data
+                FROM EventDeduplicationMap m
+                JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+                                         AND d.status = 'Active'
+                JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id AND e.status = 'Active'
+                LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id"""):
+            try:
+                research = json.loads(enrichment) if enrichment else {}
+            except (json.JSONDecodeError, TypeError):
+                research = {}
+            method = research.get('attack_method') or method
+            actor = research.get('threat_actor') or actor
+            record = entry(dedup_id)
+            if url:
+                record['urls'].add(url)
+            if method:
+                record['methods'].add(method)
+            if actor:
+                record['actors'].add(actor)
+            if isinstance(count, int) and count > 0:
+                record['counts'].add(count)
+        for dedup_id, url in cursor.execute("SELECT deduplicated_event_id, source_url FROM DeduplicatedEventSources"):
+            if url and dedup_id in facts:
+                facts[dedup_id]['urls'].add(url)
+        return facts
 
     def _run_incremental_deduplication(self, new_events: List[CyberEvent],
                                        existing_dedup_events: List[CyberEvent],
@@ -529,6 +579,8 @@ class DeduplicationMigration:
                 # Step 2: Match each new unique event against existing deduplicated events
                 logger.info(f"🔄 Step 2/2: Matching {len(new_result.unique_events)} unique new events "
                             f"against {len(existing_dedup_events)} existing events...")
+                # Hub URLs and common method words are measured over both sides.
+                engine.learn_corpus(list(new_result.unique_events) + list(existing_dedup_events))
 
                 matched_ids = set()
                 cursor = conn.cursor()
@@ -610,12 +662,15 @@ class DeduplicationMigration:
 
                 logger.info(f"✅ Incremental dedup complete: {len(matched_ids)} merged into existing, "
                             f"{len(truly_new)} new events added")
+                logger.info(f"📊 {len(engine.deferred)} same-organisation same-day pair(s) lacked incident-specific "
+                            "corroboration and were left to the check-duplicates judgement")
                 self.migration_report['steps_completed'].append('incremental_dedup_completed')
                 self.migration_report['statistics'].update({
                     'mode': 'incremental',
                     'new_events_processed': len(new_events),
                     'merged_into_existing': len(matched_ids),
                     'new_events_added': len(truly_new),
+                    'deferred_same_day_pairs': len(engine.deferred),
                     'input_events': len(new_events),
                     'output_events': len(truly_new),
                 })
@@ -789,6 +844,8 @@ class DeduplicationMigration:
                 logger.info(f"📊 Merge groups: {stats.merge_groups}, Total merges: {stats.total_merges}")
                 logger.info(f"📊 Average confidence: {stats.avg_confidence:.2f}")
                 logger.info(f"⏱️ Processing time: {stats.processing_time_seconds:.1f}s")
+                logger.info(f"📊 {len(engine.deferred)} same-organisation same-day pair(s) lacked incident-specific "
+                            "corroboration and were left to the check-duplicates judgement")
 
                 # Store statistics
                 self.migration_report['statistics'].update({
@@ -797,6 +854,7 @@ class DeduplicationMigration:
                     'merge_groups': stats.merge_groups,
                     'total_merges': stats.total_merges,
                     'avg_confidence': stats.avg_confidence,
+                    'deferred_same_day_pairs': len(engine.deferred),
                     'processing_time_seconds': stats.processing_time_seconds
                 })
 
