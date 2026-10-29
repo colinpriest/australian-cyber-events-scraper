@@ -72,6 +72,20 @@ def labelled_different_pairs(path: Optional[Path] = None) -> List[Tuple[str, str
     return pairs
 
 
+def ai_labelled_different_pairs() -> List[Tuple[str, str]]:
+    """The labelled-different pairs of AI-involved events (``evaluation/ai_duplicate_labels.csv``).
+
+    Not labelled yet (no file) reads as none. Prevention only: the ledger refuses a merge that joins such a
+    pair, whichever route proposes it; repairing an existing contradiction needs the labelling snapshot of
+    that file and is not done here.
+    """
+    from cyber_data_collector.dedup import ai_duplicates
+
+    if not Path(ai_duplicates.LABELS_PATH).exists():
+        return []
+    return labelled_different_pairs(ai_duplicates.LABELS_PATH)
+
+
 def _resolver(conn: sqlite3.Connection):
     from cyber_data_collector.quality.regression import EventResolver
 
@@ -89,17 +103,21 @@ def conflict(conn: sqlite3.Connection, target: str, source: str, path: Optional[
     A labelled-different pair conflicts when one of its events resolves to
     ``target`` and the other to ``source`` (through merges already made).
     """
+    explicit = path is not None
     path = Path(path or LABELS_PATH)
-    pairs = labelled_different_pairs(path)
+    pairs = [(a, b, path.name) for a, b in labelled_different_pairs(path)]
+    if not explicit:
+        from cyber_data_collector.dedup import ai_duplicates
+        pairs += [(a, b, ai_duplicates.LABELS_PATH.name) for a, b in ai_labelled_different_pairs()]
     if not pairs:
         return None
     resolver = _resolver(conn)
-    for a, b in pairs:
+    for a, b, name in pairs:
         (a_now, a_status), (b_now, b_status) = resolver.resolve(a), resolver.resolve(b)
         if a_status != "Active" or b_status != "Active":
             continue
         if {a_now, b_now} == {target, source} and a_now != b_now:
-            return f"labelled different: {a[:8]} vs {b[:8]} ({path.name})"
+            return f"labelled different: {a[:8]} vs {b[:8]} ({name})"
     return None
 
 

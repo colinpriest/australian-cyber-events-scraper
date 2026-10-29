@@ -274,8 +274,20 @@ class Adjudicator:
             for name in record.all_entities():
                 for key in self.resolver.blocks_for(name) or ():
                     blocks.setdefault(key, set()).add(record.enriched_event_id)
+        corpus = None
         for key, members in blocks.items():
-            if len(members) < 2 or len(members) > self.MAX_ENTITY_BUCKET:
+            if len(members) < 2:
+                continue
+            if len(members) > self.MAX_ENTITY_BUCKET:
+                # A generic bucket ("government") is not an organisation, but skipping it lost every
+                # duplicate inside it: keep each member's best-ranked partners instead (candidate_ranking).
+                from cyber_data_collector.dedup import candidate_ranking as ranking
+
+                corpus = corpus or ranking.corpus_from_records(records)
+                for left_id, right_id in ranking.subdivide(
+                        corpus, [by_id[m] for m in members], lambda l, r: date_gap_days(l, r)):
+                    reasons.setdefault(frozenset((left_id, right_id)), set()).add(
+                        f"entity '{key}' (large bucket, ranked)")
                 continue
             ordered = sorted(members)
             for i, left_id in enumerate(ordered):

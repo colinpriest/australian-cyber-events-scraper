@@ -1,5 +1,5 @@
 {
-  "note": "Per calibrated step, the database as it was when its labels were made: a backup beside the live database (instance/) taken before the labelled events were merged, split or rejected. `dedup_admin.py recalibrate` re-scores the labelled cases on it with the current evidence readers. A step is listed once its labels exist; each entry was checked to hold the labelled cases (event reality 162/162, duplicates 155/155, coherence 147/147, victim attribution 145/145, source gate 132/132 judgeable pages; supplier victims 139/174 - all 72 pairs, but the 33 victim candidates named only by the unstored 2026-10-27 supplier searches cannot be rebuilt); event-scope names the database to copy once its sample is labelled (scripts/calibrate_event_scope.py) and is not checked until then. Replace an entry, or pass --snapshot STEP=PATH, if the file is lost. coherence-same-organisation: cyber_events.db.backup.20261029_before_review_fixes (taken before any repair), copied to calibration_coherence_same_org.db and judged there (196 candidates).",
+  "note": "Per calibrated step, the database as it was when its labels were made: a backup beside the live database (instance/) taken before the labelled events were merged, split or rejected. `dedup_admin.py recalibrate` re-scores the labelled cases on it with the current evidence readers. A step is listed once its labels exist; each entry was checked to hold the labelled cases (event reality 162/162, duplicates 155/155, coherence 147/147, victim attribution 145/145, source gate 132/132 judgeable pages; supplier victims 139/174 - all 72 pairs, but the 33 victim candidates named only by the unstored 2026-10-27 supplier searches cannot be rebuilt); event-scope names the database to copy once its sample is labelled (scripts/calibrate_event_scope.py) and is not checked until then. Replace an entry, or pass --snapshot STEP=PATH, if the file is lost. coherence-same-organisation: cyber_events.db.backup.20261029_before_review_fixes (taken before any repair), copied to calibration_coherence_same_org.db and judged there (196 candidates). ai-duplicates names a file that does not exist until the AI pairs are labelled: after `scripts/calibrate_ai_duplicates.py score`, copy the live database to instance/calibration_ai_duplicates.db (before any AI merge is applied - merging removes the labelled pairs) and label the sampled pairs against it.",
   "snapshots": {
     "source-gate": "cyber_events.db.backup.20261027_pre_source_gate",
     "event-reality": "calibration_event_reality.db",
@@ -8,6 +8,7 @@
     "duplicates": "calibration_duplicates.db",
     "victim-attribution": "calibration_event_reality.db",
     "coherence-same-organisation": "calibration_coherence_same_org.db",
-    "supplier-victims": "calibration_supplier_victims.db"
+    "supplier-victims": "calibration_supplier_victims.db",
+    "ai-duplicates": "calibration_ai_duplicates.db"
   }
 }

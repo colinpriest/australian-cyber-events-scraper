@@ -589,6 +589,7 @@ removed and the event kept for its replacement evidence.
 | 3b | `check-coherence --apply` (not yet wired into `run_full_pipeline.py`) | Is each suspect record about its event's incident? (splits strays out) | Jev + escalation | split below **0.15** | 1.00 (17/17) | 0.94 | 0.98 |
 | 3c | `check-same-organisation --apply` | Is a member that may be a *separate incident at the same organisation* (verified far date, or another incident in the timeline) the event's incident? | Jev + escalation | none yet: report-only until labelled and calibrated | - | - | - |
 | 4 | `check-duplicates --apply` | Are two events about one organisation the same incident? | Jev + escalation | merge at **0.81** | 1.00 (16/16) | 0.94 | 0.97 |
+| 4b | `check-duplicates --apply` (AI pairs) | Are two AI-involved events, whatever their victim, the same incident? | Jev + escalation (AI-pair question with the base rate) | its own cut-off from `evaluation/ai_duplicate_calibration.json`; **report-only until labelled and calibrated** | - | - | - |
 | 3b | `check-victim-attribution --apply` | Is the recorded victim really the affected organisation? Demote / replace from the evidence / flag | Jev + escalation | act below **0.15**; replace at choice **0.84** | 0.956 (43/45); replacements 23/25 | 0.38 | 0.94 |
 | 5 | `reconcile-timelines --queue-gaps` | Do events agree with the organisation's researched timeline? Resolved by steps 2 and 3b; re-dating report only (2 eligible conflicts, too few to calibrate) | Jev | - | - | - | - |
 
@@ -1590,6 +1591,62 @@ of guessing from every 1st.
 events sharing a victim, dated or not (`gap_days` is then "unknown"); undated
 events used to be left out, so 35 undated reports of the OpenAI agent's
 Medicare incident were never compared.
+
+### AI-involved events are duplicate candidates of each other
+
+Coverage of one AI incident defeats pairing by victim: the OpenAI agent that
+reached Services Australia's Medicare statistics portal was spread over about 15
+active events whose victims were missing, vague ("Australian health") or wrong
+("Australian Parliament", "Data USA", "OpenAI"), and the one pair that was
+compared scored 0.80 against the 0.81 cut-off. AI incidents are rare (a few per
+half-year), so two AI events a few months apart are far more likely one incident
+than two. `check-duplicates` therefore also pairs **every two AI-involved events
+within 365 days** (date intervals, undated events included), whatever their
+victim, and asks a question variant that is shown the AI base rate (AI incidents
+and all incidents per completed half-year, computed from the data) and each
+event's AI category and description. The merge cut-off is calibrated separately
+on blind labels of AI pairs - the principled form of "merge AI events more
+aggressively": if the model is conservative on these pairs the calibrated cut-off
+comes out below 0.81. Until it is calibrated (and while its evidence fingerprint
+matches) AI pairs are **reported, not merged**.
+
+```bash
+python scripts/dedup_admin.py check-duplicates [--apply] [--skip-ai-pairs]   # both routes; AI pairs report-only until calibrated
+python scripts/calibrate_ai_duplicates.py --db <snapshot> score              # PAID: judge every candidate AI pair
+python scripts/calibrate_ai_duplicates.py --db <snapshot> sample             # census 0.30-0.90, weighted tails
+python scripts/calibrate_ai_duplicates.py --db <snapshot> packet --out DIR   # blind labelling packet
+python scripts/calibrate_ai_duplicates.py --db <snapshot> calibrate          # evaluation/ai_duplicate_calibration.json
+python scripts/dedup_admin.py recalibrate --step ai-duplicates               # after the evidence changes
+```
+
+Labels go in `evaluation/ai_duplicate_labels.csv`
+(`pair_id,label,rationale,corroboration,labeller`; `same` / `different` /
+`unsure`; guide: `evaluation/ai_duplicate_labelling_guide.md`) and protect pairs
+in both directions. The labelling snapshot is a copy of the live database taken
+after `score` and before any AI merge (`ai-duplicates` in
+`evaluation/calibration_snapshots.json`). A pair is asked by one route only.
+Details: [docs/09-deduplication-v3.md section 8l](docs/09-deduplication-v3.md).
+
+**Candidates are ranked and capped.** Every pair sharing a victim was asked (229
+in a sample, 170 of them more than a year apart; large groups grew with the
+square of their size). Candidates are now ranked by source relationships, supplier
+clues, incident-specific details and date range (`dedup/candidate_ranking.py`),
+each event keeps its best 8 partners (16 for AI pairs), and a small reserved
+budget (5 per group) keeps strong long-gap or undated pairs; the rest are not
+asked. The cap is a parameter (`--partners-per-event`, `--long-gap-budget`,
+`--no-candidate-cap`) and the findings file reports the counts before and after.
+
+**Contradictory links do not join a group.** If A=B and B=C but A and C are
+labelled different, ruled different, or scored below the calibration's
+`different_cutoff`, the weaker link is held (`held_conflicts` in the findings)
+instead of merging all three.
+
+**Date provenance is joined to records by id.** The duplicate check used to pair
+two independently ordered lists by position, so a record could be shown another
+record's date and basis (331 of 1,190 displayed records on a 407-event sample).
+The duplicate evidence version was bumped, so the duplicate calibration is stale
+until `dedup_admin.py recalibrate --step duplicates` has re-scored the labelled
+pairs.
 
 ### Which records and pages may drive event decisions
 

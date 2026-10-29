@@ -122,14 +122,17 @@ def _perplexity(pe: Optional[str]) -> Dict[str, Any]:
 
 
 def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = False,
-                max_records: int = MAX_RECORDS, with_timeline: bool = False) -> Dict[str, Any]:
+                max_records: int = MAX_RECORDS, with_timeline: bool = False,
+                with_record_ids: bool = False) -> Dict[str, Any]:
     """Everything Jev sees about one event. Deterministic, so the input hash is stable.
 
     With ``corroborated``, a stored web search for the event is added when one
     exists; with ``with_timeline``, the victim organisation's stored incident
-    timeline.
+    timeline. With ``with_record_ids`` each record carries its ``enriched_event_id``
+    so a caller can join other per-record facts (date provenance) **by id, never by
+    position**; the caller removes it before the state goes to a model.
     """
-    state = _evidence_state(conn, dedup_id, max_records)
+    state = _evidence_state(conn, dedup_id, max_records, with_record_ids)
     if corroborated:
         from cyber_data_collector.dedup.corroboration import stored
         found = stored(conn, dedup_id)
@@ -145,7 +148,8 @@ def build_state(conn: sqlite3.Connection, dedup_id: str, corroborated: bool = Fa
     return state
 
 
-def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = MAX_RECORDS) -> Dict[str, Any]:
+def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = MAX_RECORDS,
+                    with_record_ids: bool = False) -> Dict[str, Any]:
     event = conn.execute(
         "SELECT title, event_date, victim_organization_name FROM DeduplicatedEvents "
         "WHERE deduplicated_event_id = ?", (dedup_id,)).fetchone()
@@ -174,6 +178,8 @@ def _evidence_state(conn: sqlite3.Connection, dedup_id: str, max_records: int = 
                   "perplexity": _perplexity(r[5])}
         if r[4]:
             record["page_withheld"] = r[4]
+        if with_record_ids:
+            record["enriched_event_id"] = r[0]
         records.append(record)
     return {
         "event": {"title": event[0] if event else "", "date": event[1] if event else None,
