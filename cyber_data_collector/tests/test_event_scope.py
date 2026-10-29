@@ -565,7 +565,7 @@ def test_recalibrating_rescores_the_labelled_cases_and_writes_a_matching_calibra
                                              "cutoff": 0.3, "labelled_used": 20}))
     live = world.db.parent / "live.db"
     _build(live, {}).close()
-    monkeypatch.setattr(rc, "work_database", lambda step, live_db, snapshot, fresh=False: _copy(snapshot, live_db))
+    monkeypatch.setattr(rc, "work_database", lambda step, live_db, snapshot, fresh=False, extra_tables=(): _copy(snapshot, live_db))
     fake = FakeTypeSafe({t: p for t, p in world.events.values()})
     result = rc.recalibrate_step("event-scope", live, world.db, judge_factory=lambda c: JevJudge(c, client=fake),
                                  escalation_client=NO_ESCALATION, verify_keys=False,
