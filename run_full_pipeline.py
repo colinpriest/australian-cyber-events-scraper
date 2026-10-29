@@ -792,7 +792,8 @@ class UnifiedPipeline:
             ledger = DedupLedger(conn)
             auditor = RecurrenceAuditor(window_days=args.recurrence_window)
             runs = build_runs(load_recurrence_events(conn),
-                              window_days=args.recurrence_window)
+                              window_days=args.recurrence_window,
+                              unverified_dates=args.recurrence_unverified_dates)
             if not runs:
                 logger.info("No repeat attacks inside the window")
                 return
@@ -1284,6 +1285,10 @@ Examples:
     parser.add_argument('--recurrence-window', type=int, default=90,
                         help='Inter-event gap in days below which a repeat attack '
                              'is re-checked as possible re-reporting (default: 90)')
+    parser.add_argument('--recurrence-unverified-dates', choices=('stored', 'exclude'), default='stored',
+                        help="Events whose date precision is unverified have no interval: 'stored' "
+                             "(default) lets their stored date stand in; 'exclude' leaves them out "
+                             "of the recurrence check")
     parser.add_argument('--recurrence-min-certainty', type=float, default=0.85,
                         help='Merge a suspected re-report only at or above this '
                              'certainty (default: 0.85)')

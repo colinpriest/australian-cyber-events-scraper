@@ -190,7 +190,8 @@ python run_full_pipeline.py --skip-classification
 | `--classify-limit N` | Limit classification count | No limit |
 | `--force-dedup` | Force full deduplication rebuild (skip incremental mode) | False |
 | `--skip-recurrence-check` | Skip re-checking short-gap repeat attacks | False |
-| `--recurrence-window N` | Gap in days below which a repeat is re-checked | 90 |
+| `--recurrence-window N` | Gap in days (between the events' date intervals) below which a repeat is re-checked | 90 |
+| `--recurrence-unverified-dates stored\|exclude` | Events whose date precision is unverified have no interval: let their stored date stand in (reported as unverified), or leave them out of the recurrence check | stored |
 | `--recurrence-min-certainty F` | Certainty required to merge a suspected re-report | 0.85 |
 | `--skip-missed-merge-check` | Skip the multi-key search for duplicates incremental dedup missed | False |
 | `--missed-merge-apply` | Merge missed-duplicate findings automatically (default: report only) | False |
@@ -1263,6 +1264,26 @@ including Optus's September and December 2022 events, 86 days apart. Findings
 are written to `instance/recurrence_findings.json`; the check runs
 automatically after every deduplication (`--skip-recurrence-check` to opt out).
 
+**Gaps are measured between date intervals, not point dates.** An event stored on
+the 1st of a month may have happened on any day of it. Each event carries its
+verified `event_date_earliest` / `event_date_latest`; the gap between two events
+is the distance between their intervals and is **0 when they overlap** (two
+events in one verified month, or a month and a day inside it), a run is chained
+on that gap, and the prompt shows each date with its precision ("month
+precision: any day from 2024-06-01 to 2024-06-30", "exact day", "precision
+unverified") instead of presenting a month as a day. Findings report the
+interval gap and how many of a run's dates are unverified. An event whose
+precision is unverified has no interval: by default (`--unverified-dates stored`
+/ `--recurrence-unverified-dates stored`) its stored date stands in as the one
+date held for it and is reported as unverified, because most events are in that
+state (752 of 1,090 active events on 2026-10-29) and excluding them would drop 10 of the 12
+consecutive short-gap pairs; `exclude` leaves them out. An undated event never
+takes part. `RecurrenceEvent.gap_to` is the same interval gap, so the duplicate
+check's `gap_days` follows. Measured on the 2026-10-29 copy: of 211 dated
+same-organisation pairs the gap differs (is smaller) for 43, none of them across
+the 90-day window, so the candidate runs are unchanged at 90, 120 and 180 days
+(11, 15 and 22 runs).
+
 ### Entity size: SMALL, MEDIUM, LARGE, HUGE, UNKNOWN
 
 `EntitiesV2.employee_count` and `turnover` have existed since v1 and were NULL
@@ -1751,12 +1772,23 @@ publication date. `publication-dates` repairs stored Webber records
 to the incident (20 of 765 on the 2026-10-29 copy; the rest keep their month) and
 returns a day the old parser took from a byline to the heading month (it reads
 the live list for that, only when such records exist; none on that copy). Each event's
-`event_date_precision` is set only when the records carrying its date agree on
-a verified precision (a source-stated one, or a citation-checked Perplexity
-date), with `event_date_earliest` / `event_date_latest` as the interval; NULL
-means unverified. The recurrence analyses read it (`date_precision`), so the
-extended analysis's date scenarios treat verified months as intervals instead
-of guessing from every 1st.
+`event_date_precision` is set only from verified evidence (a source-stated
+precision, or a citation-checked Perplexity date), with `event_date_earliest` /
+`event_date_latest` as the interval; NULL means unverified. Calendar intervals
+are nested or disjoint, so sources that give a month and a day inside it are
+**compatible**: the event takes the narrower (a Webber "June 2025" heading and a
+researched 12 June is a day, no longer a "conflict"; `PrecisionReport.reconciled`
+counts them). A more exact day elsewhere in the same month leaves the month
+interval, the one that still holds the stored date. Verified evidence that is
+**incompatible** - a different month, or an interval that excludes the event's
+date - leaves the event `conflicting` with no precision. On the 2026-10-29 copy
+(`refresh_event_precision`, 1,090 active events) the precision or interval of
+**74** events changed: 13 reconciled to the day (9 that had been conflicts, 4 that
+kept only the month), 1 more gained a month, and 60 that held a verified
+precision *and* verified evidence for a different date went to `conflicting`
+(40 month, 20 day). Verified events fell from 388 to 338 (166 day, 172 month);
+201 are `conflicting` and 551 unverified. The recurrence check and the analyses
+read the interval, never a point date rebuilt from the 1st (below).
 
 **Undated events are still deduplicated.** The duplicate check pairs every two
 events sharing a victim, dated or not (`gap_days` is then "unknown"); undated
@@ -2132,6 +2164,53 @@ controlled by size. The main model assumes equal log-rate steps between size
 categories. Unadjusted tables and plots are descriptive diagnostics; use the
 size-adjusted results for comparisons of recurrence.
 
+**Same-date ties and unknown ordering.** Spells are built in one place,
+`scripts/recurrence_extended/spells.py`, used by the main analysis
+(`build_spells`), the timing and date-precision runs, the order/transition runs
+and the linkage runs, so they cannot disagree about a tie. A *tie* is two or more
+distinct incidents of one organisation with the same stored date; nothing orders
+them, and a month-precision date is stored as the 1st, so some ties are month
+placeholders rather than simultaneous incidents. Each tie policy says what the
+model does with unknown ordering:
+
+| Policy | A tie is | Effect on the models | Bias |
+|---|---|---|---|
+| `collapse` (**primary**, `--ties collapse`) | one time point; every incident id and the count are kept (`prior_event_ids`, `prior_event_count`, `next_event_count`) | no order or gap is invented; the tie can start or end a spell but is never a repeat of its own; prior-event numbers count time points | can understate repeats |
+| `zero_gap` (`--ties zero_gap`) | separate incidents, ordered arbitrarily by id, each one day after the previous (`tie_gap = 1`; an exact zero would give a spell no exposure) | each extra incident is a repeat in the first elapsed-time band; prior-event numbers count incidents | can overstate repeats (a tie may be one incident filed twice, or a month placeholder) |
+
+Both are always run and compared: the main report has a "Same-Date Ties And
+Unknown Ordering" section, `tie_policy_sensitivity.csv` (repeats in total and
+per band, the adjusted constant-hazard test, the 0-90 / 91-180 banding test
+and the directional delayed-peak test under each policy, all adjusted for
+organisation size like the primary model), and `entity_date_ties.csv` lists every tie
+with its incident ids and kind: `month_precision_first_of_month` (every incident
+verified as month precision, so order and spacing are unknown by construction),
+`first_of_month_not_month_verified`, or `other_day`. The data-quality summary
+counts the ties by kind and the consecutive incidents on *different* stored dates whose
+verified intervals overlap (no tie, yet not ordered by their dates either). The
+extended analyses take `collapse` as primary and report both in
+`timing_tie_policy_sensitivity.csv` (unadjusted and size-standardized rates for every
+band scheme) and `timing_entity_date_ties.csv`. Under `zero_gap` a tied
+incident's attack type is its own and a transition between tied incidents
+depends on the arbitrary order (a bound, not a finding). The underlying
+incidents are never changed. On the 2026-10-29 copy the same-organisation
+same-day merge rule leaves **one** tie (two incidents of one hotel group, a 1st of
+the month whose precision is unverified, none month-verified): `zero_gap` adds one
+repeat (126 to 127), and moves the adjusted constant-hazard `p` from 0.635 to 0.632,
+the 0-90 / 91-180 banding `p` from 0.696 to 0.727 and the directional delayed-peak
+`p` from 0.299 to 0.308.
+
+**Dates in the sensitivity analysis are intervals.** `timing_precision.py` takes
+an event's verified `date_precision` with its stored `event_date_earliest` /
+`event_date_latest`; a month or year is drawn uniformly within that stored
+interval, not within one rebuilt from the 1st. A date whose precision is
+unverified has no interval - it is unknown, not a day - and the
+`verified_intervals_complete_histories` scenario (organisations all of whose dates
+are verified, imputed within their intervals) and
+`explicit_day_only_complete_histories` leave other organisations out instead of
+reading their dates as days. The two `ambiguous_firsts_*` scenarios remain
+hypothetical assumptions about unverified 1sts and are labelled so.
+
 ```bash
 # Main report with broad elapsed-time bands
 python scripts/analyze_recurrent_timing.py --bootstrap 500
@@ -2152,6 +2231,10 @@ python scripts/analyze_recurrent_timing.py --extended --bootstrap 500 --date-dra
 # Sensitivity: without victim attributions left unresolved by the attribution check
 python scripts/analyze_recurrent_timing.py --unresolved-attributions exclude \
   --out-dir analysis/recurrent_timing_resolved_only --bootstrap 500
+
+# Sensitivity: every incident of a same-date tie a separate repeat (default: collapse)
+python scripts/analyze_recurrent_timing.py --ties zero_gap \
+  --out-dir analysis/recurrent_timing_zero_gap_ties --bootstrap 500
 ```
 
 **Unresolved victim attributions.** Victim rows that the calibrated attribution
@@ -2276,6 +2359,8 @@ Main outputs are written under `analysis/recurrent_timing/`:
 | `u_shape_adjusted_contrasts.csv` | U-shape phase contrasts |
 | `u_shape_covariate_variant_contrasts.csv` | Sensitivity checks dropping size and/or sector |
 | `delayed_peak_sensitivity_adjusted_contrasts.csv` | Formal 91-180 day delayed-peak contrasts |
+| `entity_date_ties.csv` | Every organisation-date with several incidents: ids, titles, kind (replaces `same_day_entity_events_collapsed.csv`) |
+| `tie_policy_sensitivity.csv` | Repeats and the headline adjusted tests with ties collapsed (primary) and as zero-gap repeats |
 | `piecewise_hazard.png`, `survival_curve.png`, `parametric_hazards.png` | Diagnostic plots |
 
 **`dashboard/recurrence.html`** is published with the other dashboards (see

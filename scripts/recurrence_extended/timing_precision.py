@@ -3,7 +3,12 @@
 All quantities describe *recorded* events among observed victims, not attacks
 in the Australian population.  A first-of-month date is ambiguous, not proof
 of a missing day.  Explicit precision is accepted only from a matching record's
-metadata (or an input ``date_precision`` column); everything else is unknown.
+metadata or the event's stored, verified ``date_precision`` with its stored
+interval (``event_date_earliest`` / ``event_date_latest``); everything else has
+no interval and is unknown - never read as a single day by a scenario that
+depends on precision.  Spells (and what happens to several incidents of one
+organisation on one date) come from ``recurrence_extended.spells``, the same
+code the main analysis uses.
 
 The prospective protocol was defined on 27 October 2026.  A frozen cohort is
 recorded on that date, even if the latest data snapshot is older; its cutoff
@@ -26,6 +31,16 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.special import ndtr
+
+from scripts.recurrence_extended.spells import (
+    DEFAULT_TIE_POLICY,
+    TIE_POLICIES,
+    make_spells as shared_make_spells,
+    occurrences,
+    overlapping_interval_pairs,
+    tie_summary,
+    tie_table,
+)
 
 REGISTERED_ON = date(2026, 10, 27)
 VALIDATION_END = date(2028, 10, 27)
@@ -150,44 +165,74 @@ def _read_evidence(db_path: Path, as_of: Optional[date] = None) -> tuple[dict[st
     return evidence, seen
 
 
+#: Narrowest first: compatible sources (a month and a day inside it) reconcile to the narrower interval.
+PRECISION_ORDER = ("day", "month", "year")
+
+
+def _stored_interval(row: pd.Series) -> Optional[tuple[date, date]]:
+    start, end = _as_date(row.get("event_date_earliest")), _as_date(row.get("event_date_latest"))
+    return (start, end) if start is not None and end is not None else None
+
+
 def annotate_precision(events: pd.DataFrame, evidence: dict[str, set[str]]) -> pd.DataFrame:
+    """Label each event's date by what is *verified* about it, and attach its interval.
+
+    ``explicit_day`` / ``explicit_month`` / ``explicit_year``: a verified precision (the stored
+    ``date_precision``, or matching record metadata); the interval is the stored one
+    (``event_date_earliest`` / ``event_date_latest``, from ``processing/incident_dates.py``), else the same
+    rule applied to the date.  Sources that give different but compatible precisions reconcile to the
+    narrower.  Unverified dates have *no interval*: ``ambiguous_first_of_month`` (a 1st may be a month
+    placeholder) and ``unknown`` (any other stated date of unverified precision) - the date is unknown,
+    not a day.  Adds ``date_precision_basis``, ``date_earliest`` and ``date_latest``.
+    """
+    from cyber_data_collector.processing.incident_dates import interval as canonical_interval
+
     out = events.copy()
     out["event_date"] = [_as_date(v) for v in out["event_date"]]
-    labels = []
+    labels, earliest, latest = [], [], []
     for _, row in out.iterrows():
         explicit = set(evidence.get(str(row["deduplicated_event_id"]), set()))
         provided = _normalise_precision(row.get("date_precision"))
         if provided:
             explicit.add(provided)
-        if len(explicit) == 1:
-            labels.append("explicit_" + next(iter(explicit)))
-        elif len(explicit) > 1:
-            labels.append("conflicting_metadata")
+        start = end = None
+        if explicit and row["event_date"]:
+            precision = next(p for p in PRECISION_ORDER if p in explicit)
+            labels.append("explicit_" + precision)
+            stored = _stored_interval(row) if precision == provided else None
+            if stored is None:
+                low, high = canonical_interval(row["event_date"], precision)
+                stored = (_as_date(low), _as_date(high))
+            start, end = stored
         elif row["event_date"] and row["event_date"].day == 1:
             labels.append("ambiguous_first_of_month")
         else:
             labels.append("unknown")
+        earliest.append(start)
+        latest.append(end)
     out["date_precision_basis"] = labels
+    out["date_earliest"] = earliest
+    out["date_latest"] = latest
     return out
 
 
-def make_spells(events: pd.DataFrame, censor: date) -> pd.DataFrame:
-    """Build spells with right censoring and same-day event collapse.
+def make_spells(events: pd.DataFrame, censor: date, tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
+    """Build spells with right censoring; incidents of one organisation on one date follow ``tie_policy``.
 
-    Excluding future rows before pairing is essential: a later event must not
-    be treated as observed beyond the censor date.
+    The shared builder (``recurrence_extended.spells``) is used, so these rates and the main analysis
+    treat ties identically: ``collapse`` (default) is one time point, ``zero_gap`` makes each incident its
+    own point one day after the previous.  Excluding future rows before pairing is essential: a later
+    event must not be treated as observed beyond the censor date.
     """
     clean = events.copy()
     clean["size"] = clean["_analysis_size"] if "_analysis_size" in clean else size_labels(clean)
-    clean["event_date"] = pd.to_datetime(clean["event_date"], errors="coerce")
-    clean = clean[clean["event_date"].notna() & (clean["event_date"] <= pd.Timestamp(censor))]
-    clean = clean.drop_duplicates(["entity_id", "event_date"]).sort_values(["entity_id", "event_date"])
-    next_date = clean.groupby("entity_id", sort=False)["event_date"].shift(-1)
-    end = next_date.fillna(pd.Timestamp(censor))
-    result = pd.DataFrame({"entity_id": clean["entity_id"].astype(str), "size": clean["size"], "start": clean["event_date"],
-                           "end": end, "duration_days": (end - clean["event_date"]).dt.days,
-                           "event": next_date.notna().astype(int)})
-    return result[result["duration_days"] > 0].reset_index(drop=True)
+    points = occurrences(clean, tie_policy, {"size": ("size", "first")})
+    spells = shared_make_spells(points, censor, tie_policy)
+    start = pd.to_datetime(spells["event_date"])
+    return pd.DataFrame({"entity_id": spells["entity_id"].astype(str), "size": spells["size"], "start": start,
+                         "end": pd.to_datetime(spells["spell_end_date"]),
+                         "duration_days": spells["duration_days"].astype(int),
+                         "event": spells["event"].astype(int)}).reset_index(drop=True)
 
 
 def size_adjusted_bands(spells: pd.DataFrame, bounds: tuple[float, ...],
@@ -318,7 +363,14 @@ def size_adjusted_smooth(spells: pd.DataFrame, weights: dict[str, float], seed: 
 
 def impute_dates(events: pd.DataFrame, rng: np.random.Generator,
                  ambiguous_scenario: str = "keep", censor: Optional[date] = None) -> pd.DataFrame:
-    """Draw once per incident, so all victims of that incident share a date."""
+    """Draw once per incident, so all victims of that incident share a date.
+
+    Verified month and year dates are drawn uniformly from their *stored interval*
+    (``date_earliest`` / ``date_latest``), never from an interval rebuilt around the point date.  Only
+    under the hypothetical scenarios (``month`` / ``month_or_year``) is an interval assumed for a 1st of
+    the month whose precision is unverified; otherwise unverified dates stay as stored, and the
+    scenarios that must not rely on them (:func:`complete_histories`) leave them out instead.
+    """
     out = events.copy()
     kinds = {"explicit_month", "explicit_year"}
     if ambiguous_scenario != "keep":
@@ -327,10 +379,14 @@ def impute_dates(events: pd.DataFrame, rng: np.random.Generator,
     if unique.empty:
         return out
     days = pd.to_datetime(unique["event_date"], errors="coerce")
-    yearly = unique["date_precision_basis"].eq("explicit_year") | (
-        unique["date_precision_basis"].eq("ambiguous_first_of_month") & (ambiguous_scenario == "month_or_year") & days.dt.month.eq(1))
-    first = days.dt.to_period("M").dt.start_time.where(~yearly, days.dt.to_period("Y").dt.start_time)
-    last = days.dt.to_period("M").dt.end_time.dt.normalize().where(~yearly, days.dt.to_period("Y").dt.end_time.dt.normalize())
+    assumed = unique["date_precision_basis"].eq("ambiguous_first_of_month")
+    yearly = assumed & (ambiguous_scenario == "month_or_year") & days.dt.month.eq(1)
+    first_assumed = days.dt.to_period("M").dt.start_time.where(~yearly, days.dt.to_period("Y").dt.start_time)
+    last_assumed = days.dt.to_period("M").dt.end_time.dt.normalize().where(~yearly, days.dt.to_period("Y").dt.end_time.dt.normalize())
+    first = pd.to_datetime(unique["date_earliest"], errors="coerce").where(~assumed, first_assumed)
+    last = pd.to_datetime(unique["date_latest"], errors="coerce").where(~assumed, last_assumed)
+    if first.isna().any() or last.isna().any():
+        raise ValueError("a verified month or year date has no stored interval to draw from")
     if censor:
         last = last.clip(upper=pd.Timestamp(censor))
     lengths = (last - first).dt.days.to_numpy() + 1
@@ -341,59 +397,76 @@ def impute_dates(events: pd.DataFrame, rng: np.random.Generator,
     return out
 
 
-def date_sensitivity(events: pd.DataFrame, censor: date, seed: int, draws: int = 100) -> pd.DataFrame:
-    scenarios = [("stored_dates", "baseline"), ("known_intervals", "keep"),
-                 ("ambiguous_firsts_as_month", "month"),
-                 ("ambiguous_firsts_as_month_or_year", "month_or_year")]
+def complete_histories(events: pd.DataFrame, verified: str) -> pd.DataFrame:
+    """Organisations every one of whose dates is verified; the rest are left out, never read as days.
+
+    Dropping only an organisation's uncertain events would fabricate a gap between the ones left, so a
+    history is kept whole or not at all. ``verified='day'`` needs exact verified days; ``'interval'``
+    needs a verified precision (day, month or year) - and thus a stored interval - on every event.
+    """
+    accepted = {"explicit_day"} if verified == "day" else {"explicit_day", "explicit_month", "explicit_year"}
+    mask = events.groupby("entity_id")["date_precision_basis"].transform(lambda s: s.isin(accepted).all()).astype(bool)
+    return events[mask]
+
+
+def _scenario_events(events: pd.DataFrame, scenario: str, rng: np.random.Generator, censor: date) -> pd.DataFrame:
+    if scenario == "baseline":
+        return events
+    if scenario == "exact":
+        return complete_histories(events, "day")
+    if scenario == "verified":
+        return impute_dates(complete_histories(events, "interval"), rng, "keep", censor)
+    return impute_dates(events, rng, scenario, censor)
+
+
+#: ``(label, scenario)``: how each date-uncertainty scenario treats the dates it cannot verify.
+DATE_SCENARIOS = [("stored_dates", "baseline"), ("known_intervals", "keep"),
+                  ("ambiguous_firsts_as_month", "month"),
+                  ("ambiguous_firsts_as_month_or_year", "month_or_year"),
+                  ("explicit_day_only_complete_histories", "exact"),
+                  ("verified_intervals_complete_histories", "verified")]
+
+
+def date_sensitivity(events: pd.DataFrame, censor: date, seed: int, draws: int = 100,
+                     tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
+    """Band rates under each date-uncertainty scenario (``DATE_SCENARIOS``).
+
+    ``stored_dates`` and ``known_intervals`` keep the dates they cannot verify as stored; the two
+    ``ambiguous_firsts`` scenarios add a hypothetical month or year around unverified 1sts; the two
+    ``complete_histories`` scenarios restrict to organisations whose dates are all verified (as exact
+    days, or as a verified day / month / year drawn within its stored interval).
+    """
     rows = []
-    for label, scenario in scenarios:
+    for label, scenario in DATE_SCENARIOS:
         rng = np.random.default_rng(seed)
-        n = 1 if label == "stored_dates" else draws
+        n = 1 if scenario in {"baseline", "exact"} else draws
         samples = []
         for _ in range(n):
-            shifted = events if label == "stored_dates" else impute_dates(events, rng, scenario, censor)
-            rate = band_rates(make_spells(shifted, censor), PEAK_BOUNDS)
+            shifted = _scenario_events(events, scenario, rng, censor)
+            rate = band_rates(make_spells(shifted, censor, tie_policy), PEAK_BOUNDS)
             samples.append(rate.set_index("band"))
         for band in samples[0].index:
             vals = np.array([float(s.loc[band, "rate_per_100_entity_years"]) if pd.notna(s.loc[band, "rate_per_100_entity_years"]) else np.nan for s in samples])
             valid = vals[np.isfinite(vals)]
             rows.append({"scenario": label, "band": band, "draws": n,
                          "median_rate_per_100_entity_years": float(np.median(valid)) if len(valid) else None,
-                         "imputation_2_5_pct": float(np.percentile(valid, 2.5)) if len(valid) else None,
-                         "imputation_97_5_pct": float(np.percentile(valid, 97.5)) if len(valid) else None})
-    # Restrict entire entity histories, not just individual dates: deleting an
-    # uncertain intermediate event would fabricate a first-to-third gap.
-    fully_precise = events.groupby("entity_id")["date_precision_basis"].transform(lambda s: s.eq("explicit_day").all()).astype(bool)
-    exact_events = events[fully_precise]
-    rate = band_rates(make_spells(exact_events, censor), PEAK_BOUNDS)
-    for _, r in rate.iterrows():
-        rows.append({"scenario": "explicit_day_only_complete_histories", "band": r["band"], "draws": 1,
-                     "median_rate_per_100_entity_years": r["rate_per_100_entity_years"],
-                     "imputation_2_5_pct": None, "imputation_97_5_pct": None})
+                         "imputation_2_5_pct": float(np.percentile(valid, 2.5)) if len(valid) and scenario != "exact" else None,
+                         "imputation_97_5_pct": float(np.percentile(valid, 97.5)) if len(valid) and scenario != "exact" else None})
     return pd.DataFrame(rows)
 
 
 def size_adjusted_date_sensitivity(events: pd.DataFrame, censor: date, seed: int,
-                                   weights: dict[str, float], draws: int = 100) -> pd.DataFrame:
+                                   weights: dict[str, float], draws: int = 100,
+                                   tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
     """Keep the baseline standard population fixed for every date draw."""
-    scenarios = [("stored_dates", "baseline"), ("known_intervals", "keep"),
-                 ("ambiguous_firsts_as_month", "month"),
-                 ("ambiguous_firsts_as_month_or_year", "month_or_year"),
-                 ("explicit_day_only_complete_histories", "exact")]
     rows = []
-    for label, scenario in scenarios:
+    for label, scenario in DATE_SCENARIOS:
         rng = np.random.default_rng(seed)
         n = 1 if scenario in {"baseline", "exact"} else draws
         samples = []
         for _ in range(n):
-            if scenario == "exact":
-                mask = events.groupby("entity_id")["date_precision_basis"].transform(lambda s: s.eq("explicit_day").all()).astype(bool)
-                shifted = events[mask]
-            elif scenario == "baseline":
-                shifted = events
-            else:
-                shifted = impute_dates(events, rng, scenario, censor)
-            rate, _ = size_adjusted_bands(make_spells(shifted, censor), PEAK_BOUNDS, weights)
+            shifted = _scenario_events(events, scenario, rng, censor)
+            rate, _ = size_adjusted_bands(make_spells(shifted, censor, tie_policy), PEAK_BOUNDS, weights)
             samples.append(rate.set_index("band"))
         for band in samples[0].index:
             values = np.array([float(s.loc[band, "size_adjusted_rate_per_100_entity_years"]) if pd.notna(s.loc[band, "size_adjusted_rate_per_100_entity_years"]) else np.nan for s in samples])
@@ -405,6 +478,26 @@ def size_adjusted_date_sensitivity(events: pd.DataFrame, censor: date, seed: int
                          "imputation_97_5_pct": float(np.percentile(valid, 97.5)) if len(valid) else None,
                          "unsupported_size_strata": "|".join(missing)})
     return pd.DataFrame(rows)
+
+
+def tie_policy_sensitivity(events: pd.DataFrame, censor: date, weights: dict[str, float]) -> pd.DataFrame:
+    """Band rates with several incidents of one organisation on one date as one point and as repeats.
+
+    For every tie policy (``spells.TIE_POLICIES``) and band scheme: repeats, exposure, the unadjusted rate
+    and the size-standardized rate. ``collapse`` is the primary treatment; ``zero_gap`` counts each tied
+    incident as a repeat one day after the previous, an upper bound on what ties contribute.
+    """
+    frames = []
+    for policy in TIE_POLICIES:
+        spells = make_spells(events, censor, policy)
+        for scheme, bounds in SCHEMES.items():
+            unadjusted = band_rates(spells, bounds)[["band", "events", "exposure_days", "rate_per_100_entity_years"]]
+            adjusted, _ = size_adjusted_bands(spells, bounds, weights)
+            merged = unadjusted.merge(adjusted, on="band", how="left")
+            merged.insert(0, "scheme", scheme)
+            merged.insert(0, "tie_policy", policy)
+            frames.append(merged)
+    return pd.concat(frames, ignore_index=True)
 
 
 def prospective_validation(events: pd.DataFrame, seen: dict[str, date], censor: date,
@@ -623,6 +716,10 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     adjusted_dates.to_csv(out_dir / "timing_date_precision_size_adjusted.csv", index=False)
     precision = annotated.groupby("date_precision_basis").size().rename("victim_event_attributions").reset_index()
     precision.to_csv(out_dir / "timing_date_precision_coverage.csv", index=False)
+    ties = tie_table(annotated)
+    ties.to_csv(out_dir / "timing_entity_date_ties.csv", index=False)
+    tie_rates = tie_policy_sensitivity(annotated, censor, weights)
+    tie_rates.to_csv(out_dir / "timing_tie_policy_sensitivity.csv", index=False)
     validation = prospective_validation(annotated, seen, censor, out_dir)
     (out_dir / "timing_peak_validation.json").write_text(json.dumps(validation, indent=2), encoding="utf-8")
     size_validation = prospective_size_validation(annotated, seen, censor, out_dir)
@@ -659,6 +756,23 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     date_table = "| Date scenario | 91–180-day size-standardized median rate | 2.5–97.5% of date draws | Valid draws |\n|---|---:|---:|---:|\n" + "\n".join(
         f"| {row.scenario.replace('_', ' ')} | {fmt(row.median_size_adjusted_rate)} | {fmt(row.imputation_2_5_pct)}–{fmt(row.imputation_97_5_pct)} | {row.valid_draws}/{row.draws} |"
         for row in date_rows.itertuples())
+    tie_summary_counts = tie_summary(ties)
+    tie_bands = tie_rates[(tie_rates["scheme"] == "pre_specified") & tie_rates["band"].isin(["1-90", "91-180", "181-270"])]
+    tie_table_text = "| Tie policy | Days | Repeat events | Unadjusted rate | Size-standardized rate |\n|---|---|---:|---:|---:|\n" + "\n".join(
+        f"| {row.tie_policy} | {row.band} | {row.events} | {fmt(row.rate_per_100_entity_years)} | "
+        f"{fmt(row.size_adjusted_rate_per_100_entity_years)} |" for row in tie_bands.itertuples())
+    tie_text = (
+        "### Same-date ties and unknown ordering\n\n"
+        "Several distinct incidents of one organisation can share a stored date, and nothing orders them; a "
+        "1st of the month may be only a month placeholder. The primary treatment (`collapse`) makes them one "
+        "time point (no order or gap invented, ids kept in `timing_entity_date_ties.csv`), which can understate "
+        "repeats; `zero_gap` counts each as a repeat one day after the previous, which can overstate them. "
+        f"Ties found: {tie_summary_counts}. Incidents on different stored dates whose verified intervals "
+        f"overlap are no tie, but their dates do not order them either: "
+        f"{overlapping_interval_pairs(annotated, 'date_earliest', 'date_latest')}; the `known_intervals` "
+        "scenario varies those dates within their intervals.\n\n"
+        f"{tie_table_text}"
+    )
     section = (
         "## Timing-band and date-precision sensitivity\n\n"
         "Rates are per 100 entity-years. Four band schemes, size-specific rates, and a kernel-smoothed rate "
@@ -669,13 +783,18 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
         f"Baseline size weights: {weights}. Recorded current size is an imperfect proxy, not a direct adjustment for "
         "visibility, attack surface or target value; size estimates may be stale or missing.\n\n"
         f"{main_table}\n\n"
-        f"Precision evidence among victim-event attributions: {counts}. An initial day of a month is "
-        "ambiguous, not proof that the date was imputed. `timing_date_precision_size_adjusted.csv` "
-        "compares explicit month/year intervals, two separately labelled ambiguous-first scenarios, "
-        f"and complete histories with explicitly day-precise metadata ({precise_entities} entities, "
-        f"{precise_repeating} with observed repeats). {precision_note}Imputation percentiles show "
+        f"Precision evidence among victim-event attributions: {counts}. Verified month and year dates are "
+        "drawn within their stored interval (`event_date_earliest` / `event_date_latest`); a date whose "
+        "precision is unverified has no interval - it is unknown, not a day, and is kept as stored only in "
+        "the scenarios that say so. An initial day of a month is ambiguous, not proof that the date was "
+        "imputed. `timing_date_precision_size_adjusted.csv` compares verified month/year intervals, two "
+        "separately labelled hypothetical ambiguous-first scenarios, complete histories with explicitly "
+        f"day-precise metadata ({precise_entities} entities, {precise_repeating} with observed repeats), and "
+        "complete histories in which every date has a verified interval (unverified organisations left out, "
+        f"never read as days). {precision_note}Imputation percentiles show "
         "sensitivity to date assumptions, not confidence intervals for incidence.\n\n"
         f"{date_table}\n\n"
+        f"{tie_text}\n\n"
         "A separate prospective size-adjusted protocol freezes the cohort and recorded size at registration, "
         "and compares 91–180 days with the adjacent 1–90 and 181–270 days using a conditional test within size strata. "
         "The fixed end is 2028-10-27 and at least 20 comparison events in supported strata are required. "
@@ -688,10 +807,12 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     outputs = ["timing_band_sensitivity.csv", "timing_smooth_hazard.csv", "timing_band_size_adjusted.csv",
                "timing_band_size_strata.csv", "timing_smooth_size_adjusted.csv", "timing_date_precision_size_adjusted.csv",
                "timing_date_precision_sensitivity.csv", "timing_date_precision_coverage.csv", "timing_peak_validation.json",
-               "timing_peak_size_adjusted_validation.json"]
+               "timing_peak_size_adjusted_validation.json", "timing_entity_date_ties.csv",
+               "timing_tie_policy_sensitivity.csv"]
     if not smooth.empty:
         outputs.append("timing_smooth_hazard.png")
     return {"section": section, "precision_counts": counts, "precise_entities": precise_entities,
+            "ties": tie_summary_counts, "tie_policies": list(TIE_POLICIES),
             "precise_repeating_entities": precise_repeating, "validation": validation, "size_validation": size_validation,
             "size_weights": weights, "size_reference_weights": weights,
             "band_schemes": list(SCHEMES), "date_imputations": draws,

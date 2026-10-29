@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.recurrence_extended.spells import DEFAULT_TIE_POLICY, make_spells, occurrences
+
 SIZE_GROUPS = ('SMALL', 'MEDIUM', 'LARGE', 'HUGE', 'UNKNOWN')
 TOTAL_COLUMNS = ['early_days', 'late_days', 'early_events', 'late_events']
 
@@ -50,26 +52,28 @@ def _prepare(events, censor_date):
     return frame.sort_values('event_date').drop_duplicates(['entity_id', 'deduplicated_event_id'])
 
 
-def _entity_totals(frame, censor_date):
-    """Same-day events are one observation, matching the original spell analysis."""
-    totals = []
-    end = pd.Timestamp(censor_date)
-    for entity, group in frame.groupby('entity_id', sort=True):
-        dates = sorted(group.event_date.unique())
-        early_days = late_days = early_events = late_events = 0
-        for i, d in enumerate(dates):
-            start = pd.Timestamp(d)
-            if start >= end:
-                continue
-            observed = i + 1 < len(dates)
-            stop = pd.Timestamp(dates[i + 1]) if observed else end
-            duration = (stop - start).days
-            early_days += min(duration, 90)
-            late_days += max(0, min(duration - 90, 90))
-            early_events += int(observed and duration <= 90)
-            late_events += int(observed and 90 < duration <= 180)
-        totals.append((entity, group['size_group'].iloc[0], early_days, late_days, early_events, late_events))
-    return pd.DataFrame(totals, columns=['entity_id', 'size_group'] + TOTAL_COLUMNS)
+def _entity_totals(frame, censor_date, tie_policy=DEFAULT_TIE_POLICY):
+    """Early (0-90 days) and late (91-180 days) exposure and repeats per organisation.
+
+    Spells come from the shared builder (``spells.py``), which also decides what happens to several
+    incidents of one organisation on the same date (``tie_policy``: one time point, the default, as
+    in the main analysis, or repeats one day apart).
+    """
+    points = occurrences(frame, tie_policy)
+    spells = make_spells(points, censor_date, tie_policy)
+    duration = spells['duration_days'].to_numpy(dtype=float)
+    observed = spells['event'].to_numpy(dtype=bool)
+    spells = spells.assign(
+        early_days=np.minimum(duration, 90),
+        late_days=np.maximum(0, np.minimum(duration - 90, 90)),
+        early_events=(observed & (duration <= 90)).astype(int),
+        late_events=(observed & (duration > 90) & (duration <= 180)).astype(int))
+    sums = spells.groupby('entity_id')[TOTAL_COLUMNS].sum()
+    sizes = frame.groupby('entity_id')['size_group'].first()
+    totals = sums.reindex(sizes.index, fill_value=0)
+    totals.insert(0, 'size_group', sizes)
+    return totals.rename_axis('entity_id').reset_index().sort_values('entity_id').reset_index(drop=True)[
+        ['entity_id', 'size_group'] + TOTAL_COLUMNS]
 
 
 def _rates(values):

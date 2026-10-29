@@ -10,11 +10,14 @@ treats every 1st as ambiguous. Precision is recorded where it is known instead:
   month; a date stated in the source's page is a day.
 * Perplexity's ``date_precision`` counts only for a date the citation check
   accepted (``EnrichmentFactSupport`` fact ``date`` = ``supported``).
-* ``DeduplicatedEvents.event_date_precision`` is set only when the records
-  carrying the event's date agree on a verified precision, else NULL
-  (unverified); ``event_date_earliest`` / ``event_date_latest`` give the
-  interval (a month runs from its 1st to its last day; a year from 1 January
-  to 31 December; a day is itself; unverified gives no interval).
+* ``DeduplicatedEvents.event_date_precision`` is set only from verified
+  evidence, reconciled by :func:`reconcile_precision`: sources that give a
+  month and a day inside it are compatible and the event takes the narrower;
+  verified evidence for a different date is a conflict (NULL), as is no
+  verified evidence (unverified). ``event_date_earliest`` /
+  ``event_date_latest`` give the interval (a month runs from its 1st to its
+  last day; a year from 1 January to 31 December; a day is itself; unverified
+  gives no interval - the date is unknown, not a day).
 
 Webber records were stored on the 15th of the heading month - a day nobody
 reported - and the heading month outranked any date the article stated. All
@@ -83,22 +86,55 @@ def interval(value: Any, precision: Optional[str]) -> Tuple[Optional[str], Optio
     return date(day.year, 1, 1).isoformat(), date(day.year, 12, 31).isoformat()
 
 
-def _record_precision(event_day: date, raw_date: Any, raw_precision: Optional[str], enriched_date: Any,
-                      enrichment_json: Optional[str], date_supported: bool) -> Optional[str]:
-    """The verified precision a record gives the event's date, or None."""
+def _record_evidence(raw_date: Any, raw_precision: Optional[str], enriched_date: Any,
+                     enrichment_json: Optional[str], date_supported: bool) -> List[Tuple[str, str, str]]:
+    """``(precision, earliest, latest)`` for each verified date a record gives, wherever the date falls.
+
+    A record's own source-stated precision, and the precision Perplexity reported for a date the
+    citation check accepted. Evidence that disagrees with the event's date is returned too:
+    :func:`reconcile_precision` decides whether it is compatible, rather than dropping it here.
+    """
+    found: List[Tuple[str, str, str]] = []
     if raw_precision in PRECISIONS and _day(raw_date) is not None:
         start, end = interval(raw_date, raw_precision)
-        if start <= event_day.isoformat() <= end:
-            return raw_precision
-    if date_supported and _day(enriched_date) == event_day:
+        found.append((raw_precision, start, end))
+    if date_supported and _day(enriched_date) is not None:
         try:
             data = json.loads(enrichment_json or "{}")
         except (TypeError, ValueError):
             data = {}
         precision = data.get("date_precision") if isinstance(data, dict) else None
         if precision in PRECISIONS:
-            return precision
-    return None
+            start, end = interval(enriched_date, precision)
+            found.append((precision, start, end))
+    return found
+
+
+def reconcile_precision(event_day: date, evidence: Iterable[Tuple[str, str, str]]) -> Tuple[Optional[str], str]:
+    """The precision the evidence establishes for an event's date, and the status of that finding.
+
+    Calendar intervals are nested or disjoint: a day lies inside its month and a month inside its
+    year. Evidence whose interval contains the event's date is about that date, and the sources that
+    give a year, a month and a day are *compatible*: the narrowest of them is the event's precision
+    (a month and a day inside it reconcile to the day, not to a conflict). Evidence that does not
+    contain the event's date is compatible only if it lies inside that narrowest interval (a more
+    exact day elsewhere in the month; the interval stays the one holding the event's stored date);
+    evidence disjoint from it is *incompatible* - verified sources disagree about when the incident
+    happened - and the event is ``conflicting`` with no precision. Returns ``(precision, status)``;
+    status is ``verified``, ``conflicting`` or ``unverified`` (no verified evidence at all).
+    """
+    evidence = list(evidence)
+    if not evidence:
+        return None, "unverified"
+    day = event_day.isoformat()
+    inside = [item for item in evidence if item[1] <= day <= item[2]]
+    if not inside:
+        return None, "conflicting"
+    narrowest = min(inside, key=lambda item: (date.fromisoformat(item[2]) - date.fromisoformat(item[1])).days)
+    for _, start, end in evidence:
+        if not (start <= day <= end) and (end < narrowest[1] or start > narrowest[2]):
+            return None, "conflicting"
+    return narrowest[0], "verified"
 
 
 @dataclass
@@ -107,11 +143,14 @@ class PrecisionReport:
     verified: Dict[str, int] = field(default_factory=dict)
     conflicting: List[str] = field(default_factory=list)
     unverified: int = 0
+    #: Events whose sources gave different but compatible precisions, reconciled to the narrower.
+    reconciled: int = 0
 
     def summary(self) -> str:
         parts = ", ".join(f"{n} {p}" for p, n in sorted(self.verified.items()))
         return (f"incident-date precision verified for {sum(self.verified.values())} of {self.events} active "
-                f"event(s) ({parts or 'none'}); {len(self.conflicting)} conflicting; {self.unverified} unverified")
+                f"event(s) ({parts or 'none'}; {self.reconciled} reconciled from compatible month/day evidence); "
+                f"{len(self.conflicting)} conflicting; {self.unverified} unverified")
 
 
 def refresh_event_precision(conn: sqlite3.Connection) -> PrecisionReport:
@@ -126,7 +165,7 @@ def refresh_event_precision(conn: sqlite3.Connection) -> PrecisionReport:
     for dedup_id, event_date, old_precision, old_start, old_end in events:
         report.events += 1
         event_day = _day(event_date)
-        found = set()
+        evidence: List[Tuple[str, str, str]] = []
         if event_day is not None:
             for enriched_id, raw_date, raw_precision, enriched_date, blob in conn.execute(
                     """SELECT e.enriched_event_id, r.event_date, r.event_date_precision, e.event_date,
@@ -136,19 +175,19 @@ def refresh_event_precision(conn: sqlite3.Connection) -> PrecisionReport:
                        JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
                        WHERE m.deduplicated_event_id = ? AND COALESCE(e.status, 'Active') = 'Active'""",
                     (dedup_id,)):
-                precision = _record_precision(event_day, raw_date, raw_precision, enriched_date, blob,
-                                              enriched_id in supported)
-                if precision:
-                    found.add(precision)
-        if len(found) == 1:
-            precision = found.pop()
-            report.verified[precision] = report.verified.get(precision, 0) + 1
+                evidence.extend(_record_evidence(raw_date, raw_precision, enriched_date, blob,
+                                                 enriched_id in supported))
+            precision, status = reconcile_precision(event_day, evidence)
         else:
-            precision = None
-            if found:
-                report.conflicting.append(dedup_id)
-            else:
-                report.unverified += 1
+            precision, status = None, "unverified"
+        if status == "verified":
+            report.verified[precision] = report.verified.get(precision, 0) + 1
+            if len({p for p, start, end in evidence if start <= event_day.isoformat() <= end}) > 1:
+                report.reconciled += 1
+        elif status == "conflicting":
+            report.conflicting.append(dedup_id)
+        else:
+            report.unverified += 1
         start, end = interval(event_date, precision)
         if (old_precision, old_start, old_end) != (precision, start, end):
             conn.execute("UPDATE DeduplicatedEvents SET event_date_precision = ?, event_date_earliest = ?, "

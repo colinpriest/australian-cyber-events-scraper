@@ -15,6 +15,12 @@ import numpy as np
 import pandas as pd
 from scipy.stats import chi2
 
+from scripts.recurrence_extended.spells import (
+    DEFAULT_TIE_POLICY,
+    make_spells as shared_make_spells,
+    occurrences,
+)
+
 YEAR_DAYS = 365.25
 UNKNOWN = "Unknown"
 AMBIGUOUS = "Multiple or ambiguous"
@@ -96,8 +102,13 @@ def _first_nonempty(values: pd.Series) -> str:
 
 
 def prepare_events(events: pd.DataFrame, censor_date: date, labels: dict[str, str] | None = None,
-                   future_only: set[str] | None = None) -> pd.DataFrame:
-    """Collapse same-day events without inventing their order or attack type."""
+                   future_only: set[str] | None = None, tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
+    """An organisation's incidents as time points, without inventing the order or attack type of ties.
+
+    Under ``collapse`` (default) incidents on one stored date are one point: their attack types, if they
+    differ, become ``AMBIGUOUS``. Under ``zero_gap`` each is a point of its own, ordered arbitrarily by id,
+    so a transition between two tied incidents depends on that arbitrary order (a sensitivity bound only).
+    """
     required = {"entity_id", "deduplicated_event_id", "event_date"}
     missing = required - set(events.columns)
     if missing:
@@ -119,31 +130,26 @@ def prepare_events(events: pd.DataFrame, censor_date: date, labels: dict[str, st
     sizes = df.groupby("entity_id")["size_label"].agg(lambda s: s.iloc[0] if s.nunique() == 1 else "UNKNOWN")
     df["size_label"] = df["entity_id"].map(sizes)
     if df.empty:
-        return pd.DataFrame(columns=["entity_id", "event_date", "event_type", "event_ids", "source", "size"])
-    grouped = df.groupby(["entity_id", "event_date"], sort=True, as_index=False).agg(
-        event_type=("event_type", _type_label),
-        event_ids=("deduplicated_event_id", lambda x: "|".join(sorted(set(map(str, x))))),
-        source=("source_label", lambda x: _first_nonempty(x) if len(set(x)) == 1 else "Multiple sources"),
-        size=("size_label", _first_nonempty),
-    )
-    return grouped.sort_values(["entity_id", "event_date", "event_ids"]).reset_index(drop=True)
+        return pd.DataFrame(columns=["entity_id", "event_date", "event_type", "event_ids", "event_count",
+                                     "tie_size", "source", "size"])
+    return occurrences(df, tie_policy, {
+        "event_type": ("event_type", _type_label),
+        "source": ("source_label", lambda x: _first_nonempty(x) if len(set(x)) == 1 else "Multiple sources"),
+        "size": ("size_label", _first_nonempty),
+    })
 
 
-def make_spells(days: pd.DataFrame, censor_date: date, order_shift: dict[Any, int] | None = None) -> pd.DataFrame:
-    """Build one right-censored gap after each observed event day."""
+def make_spells(days: pd.DataFrame, censor_date: date, order_shift: dict[Any, int] | None = None,
+                tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
+    """Build one right-censored gap after each observed event point (the shared ``spells.make_spells``)."""
     cols = ["entity_id", "event_date", "event_type", "event_ids", "source", "size"]
     if days.empty:
         return pd.DataFrame(columns=cols + ["prior_event_number", "end_date", "next_type", "event", "exposure_days"])
-    frame = days.sort_values(["entity_id", "event_date", "event_ids"]).copy()
-    frame["prior_event_number"] = frame.groupby("entity_id").cumcount() + 1
+    frame = shared_make_spells(days, censor_date, tie_policy, carry_next=("event_type",))
     if order_shift:
         frame["prior_event_number"] += frame["entity_id"].map(order_shift).fillna(0).astype(int)
-    frame["end_date"] = frame.groupby("entity_id")["event_date"].shift(-1)
-    frame["next_type"] = frame.groupby("entity_id")["event_type"].shift(-1)
-    frame["event"] = frame["end_date"].notna().astype(int)
-    frame["end_date"] = frame["end_date"].fillna(censor_date)
-    frame["exposure_days"] = (pd.to_datetime(frame["end_date"]) - pd.to_datetime(frame["event_date"])).dt.days
-    return frame[frame["exposure_days"] > 0].copy()
+    return frame.rename(columns={"spell_end_date": "end_date", "next_event_type": "next_type",
+                                 "duration_days": "exposure_days"})
 
 
 def _rate(count: int, days: float) -> tuple[float | None, float | None, float | None]:

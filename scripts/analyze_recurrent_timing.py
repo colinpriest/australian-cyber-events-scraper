@@ -55,6 +55,15 @@ from scripts.recurrence_conclusions import (
     describe_joint_test,
     describe_lrt,
 )
+from scripts.recurrence_extended.spells import (
+    DEFAULT_TIE_POLICY,
+    TIE_POLICIES,
+    make_spells as shared_make_spells,
+    occurrences,
+    overlapping_interval_pairs,
+    tie_summary,
+    tie_table,
+)
 
 
 DEFAULT_DB = "instance/cyber_events.db"
@@ -520,7 +529,8 @@ def _unresolved_flags(events: pd.DataFrame) -> pd.Series:
 
 
 def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
-                            bounds: tuple[float, ...]) -> dict[str, Any]:
+                            bounds: tuple[float, ...],
+                            tie_policy: str = DEFAULT_TIE_POLICY) -> dict[str, Any]:
     """Observed repeats per elapsed-time band with unresolved attributions included and excluded.
 
     ``events`` must still hold the unresolved rows. A repeat involves an
@@ -532,7 +542,7 @@ def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
     out: dict[str, Any] = {}
     for name, cohort in (("included", events), ("excluded", events.loc[~flags])):
         try:
-            spells, _ = build_spells(cohort, censor_date)
+            spells, _ = build_spells(cohort, censor_date, tie_policy)
         except RuntimeError:     # no spell at all
             out[name] = {"observed repeats": 0, "entities with a repeat": 0,
                          "repeats by elapsed band": {label: 0 for label in labels}}
@@ -546,7 +556,7 @@ def attribution_sensitivity(events: pd.DataFrame, censor_date: date,
                      "repeats by elapsed band": by_band}
     involved = 0
     if flags.any() and out["included"]["observed repeats"]:
-        spells, _ = build_spells(events, censor_date)
+        spells, _ = build_spells(events, censor_date, tie_policy)
         involved = repeats_involving_unresolved(events, spells[spells["event"] == 1])
     out["repeats involving an unresolved attribution"] = int(involved)
     return out
@@ -570,107 +580,118 @@ def repeats_involving_unresolved(events: pd.DataFrame, repeats: pd.DataFrame) ->
                                                    repeats["next_event_ids"]))
 
 
-def collapse_entity_same_day_events(events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Collapse multiple same-day events for one entity into one recurrence time point."""
-    grouped = (
-        events.groupby(["entity_id", "entity_name", "event_date"], as_index=False)
-        .agg(
-            event_ids=("deduplicated_event_id", lambda s: "|".join(sorted(map(str, s)))),
-            titles=("title", lambda s: " | ".join(str(v) for v in s.dropna().head(5))),
-            event_count=("deduplicated_event_id", "nunique"),
-            industry=("industry", first_present),
-            entity_kind=("entity_kind", first_present),
-            org_size=("org_size", first_present),
-            org_size_score=("org_size_score", "max"),
-            org_size_unknown=("org_size_unknown", "max"),
-            size_confidence=("size_confidence", "max"),
-            employee_size=("employee_size", first_present),
-            turnover_size=("turnover_size", first_present),
-            entity_kind_group=("entity_kind_group", first_present),
-            sector_proxy=("sector_proxy", first_present),
-            records_affected=("records_affected", lambda s: pd.to_numeric(s, errors="coerce").max()),
-            records_bucket=("records_bucket", first_present),
-        )
-    )
-    same_day = grouped[grouped["event_count"] > 1].copy()
-    return grouped, same_day
+#: Per-time-point summaries carried from the incidents at that point (see ``recurrence_extended.spells``).
+_POINT_AGGREGATIONS = {
+    "entity_name": ("entity_name", first_present),
+    "titles": ("title", lambda s: " | ".join(str(v) for v in s.dropna().head(5))),
+    "industry": ("industry", first_present),
+    "entity_kind": ("entity_kind", first_present),
+    "org_size": ("org_size", first_present),
+    "org_size_score": ("org_size_score", "max"),
+    "org_size_unknown": ("org_size_unknown", "max"),
+    "size_confidence": ("size_confidence", "max"),
+    "employee_size": ("employee_size", first_present),
+    "turnover_size": ("turnover_size", first_present),
+    "entity_kind_group": ("entity_kind_group", first_present),
+    "sector_proxy": ("sector_proxy", first_present),
+    "records_affected": ("records_affected", lambda s: pd.to_numeric(s, errors="coerce").max()),
+    "records_bucket": ("records_bucket", first_present),
+}
 
 
-def build_spells(events: pd.DataFrame, censor_date: date) -> tuple[pd.DataFrame, pd.DataFrame]:
-    collapsed, same_day = collapse_entity_same_day_events(events)
+def entity_time_points(events: pd.DataFrame, tie_policy: str = DEFAULT_TIE_POLICY) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """An organisation's incidents as time points, and its ties.
+
+    Incidents of one organisation on the same stored date are a *tie*. Under ``collapse`` (the primary
+    analysis) they are one time point whose ``event_ids`` / ``event_count`` keep every incident, so no
+    order or gap is invented between them; under ``zero_gap`` each is its own point, one day after the
+    previous. The tie table lists every tie either way. See ``recurrence_extended.spells``.
+    """
+    return occurrences(events, tie_policy, _POINT_AGGREGATIONS), tie_table(events)
+
+
+def build_spells(events: pd.DataFrame, censor_date: date,
+                 tie_policy: str = DEFAULT_TIE_POLICY) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Right-censored post-event spells for every victim organisation, and the ties found.
+
+    Built by the shared ``recurrence_extended.spells`` code (the same as the extended analyses use).
+    ``tie_policy`` is how the incidents of an organisation on one stored date are treated: ``collapse``
+    (one time point) or ``zero_gap`` (separate incidents one day apart) - see that module.
+    """
+    points, ties = entity_time_points(events, tie_policy)
+    raw = shared_make_spells(points, censor_date, tie_policy, carry_next=("titles",))
+    first = points.drop_duplicates("entity_id").set_index("entity_id")
     rows: list[dict[str, Any]] = []
-
-    for entity_id, group in collapsed.groupby("entity_id", sort=False):
-        group = group.sort_values(["event_date", "event_ids"]).reset_index(drop=True)
-        entity_name = str(group.loc[0, "entity_name"])
-        industry = group.loc[0, "industry"]
-        entity_kind = group.loc[0, "entity_kind"] or "unknown"
-        entity_kind_group = group.loc[0, "entity_kind_group"] or "other_or_unknown"
-        org_size = group.loc[0, "org_size"] or "UNKNOWN"
-        org_size_score = float(group.loc[0, "org_size_score"])
-        org_size_unknown = int(group.loc[0, "org_size_unknown"])
-        size_confidence = group.loc[0, "size_confidence"]
-        employee_size = group.loc[0, "employee_size"] or "unknown"
-        turnover_size = group.loc[0, "turnover_size"] or "unknown"
-        entity_sector = group.loc[0, "sector_proxy"] or "other"
-
-        for i in range(len(group)):
-            start = parse_date(group.loc[i, "event_date"])
-            if start >= censor_date:
-                continue
-
-            # A later incident is not observable if it falls after the chosen
-            # censor date.  In particular, retrospective runs must never use
-            # a future event as the end of an observed repeat spell.
-            has_next = (
-                i + 1 < len(group)
-                and parse_date(group.loc[i + 1, "event_date"]) <= censor_date
-            )
-            if has_next:
-                end = parse_date(group.loc[i + 1, "event_date"])
-                next_event_ids = group.loc[i + 1, "event_ids"]
-                next_titles = group.loc[i + 1, "titles"]
-            else:
-                end = censor_date
-                next_event_ids = ""
-                next_titles = ""
-
-            duration = (end - start).days
-            if duration <= 0:
-                continue
-
-            rows.append(
-                {
-                    "entity_id": entity_id,
-                    "entity_name": entity_name,
-                    "industry": industry,
-                    "entity_kind": entity_kind,
-                    "entity_kind_group": entity_kind_group,
-                    "org_size": org_size,
-                    "org_size_score": org_size_score,
-                    "org_size_unknown": org_size_unknown,
-                    "size_confidence": size_confidence,
-                    "employee_size": employee_size,
-                    "turnover_size": turnover_size,
-                    "sector_proxy": entity_sector,
-                    "prior_records_band": group.loc[i, "records_bucket"] or "unknown",
-                    "prior_event_number": i + 1,
-                    "prior_event_date": start.isoformat(),
-                    "prior_event_ids": group.loc[i, "event_ids"],
-                    "prior_titles": group.loc[i, "titles"],
-                    "spell_end_date": end.isoformat(),
-                    "next_event_ids": next_event_ids,
-                    "next_titles": next_titles,
-                    "duration_days": duration,
-                    "event": int(has_next),
-                    "event_number_cat": "3+" if i + 1 >= 3 else str(i + 1),
-                }
-            )
+    for spell in raw.itertuples(index=False):
+        entity = first.loc[spell.entity_id]
+        rows.append(
+            {
+                "entity_id": spell.entity_id,
+                "entity_name": str(entity["entity_name"]),
+                "industry": entity["industry"],
+                "entity_kind": entity["entity_kind"] or "unknown",
+                "entity_kind_group": entity["entity_kind_group"] or "other_or_unknown",
+                "org_size": entity["org_size"] or "UNKNOWN",
+                "org_size_score": float(entity["org_size_score"]),
+                "org_size_unknown": int(entity["org_size_unknown"]),
+                "size_confidence": entity["size_confidence"],
+                "employee_size": entity["employee_size"] or "unknown",
+                "turnover_size": entity["turnover_size"] or "unknown",
+                "sector_proxy": entity["sector_proxy"] or "other",
+                "prior_records_band": spell.records_bucket or "unknown",
+                "prior_event_number": spell.prior_event_number,
+                "prior_event_date": spell.event_date.isoformat(),
+                "prior_event_ids": spell.event_ids,
+                "prior_event_count": spell.event_count,
+                "prior_titles": spell.titles,
+                "spell_end_date": spell.spell_end_date.isoformat(),
+                "next_event_ids": spell.next_event_ids,
+                "next_event_count": spell.next_event_count,
+                "next_titles": "" if pd.isna(spell.next_titles) else spell.next_titles,
+                "duration_days": spell.duration_days,
+                "event": int(spell.event),
+                "tie_gap": int(spell.tie_gap),
+                "event_number_cat": "3+" if spell.prior_event_number >= 3 else str(spell.prior_event_number),
+            }
+        )
 
     spells = pd.DataFrame(rows)
     if spells.empty:
         raise RuntimeError("No positive-duration post-event spells could be built.")
-    return spells, same_day
+    return spells, ties
+
+
+def tie_policy_sensitivity(events: pd.DataFrame, censor_date: date, bounds: tuple[float, ...]) -> pd.DataFrame:
+    """The headline results under each tie policy: separate incidents on one date as one point or as repeats.
+
+    One row per policy in ``recurrence_extended.spells.TIE_POLICIES`` with the observed repeats (in total
+    and per elapsed-time band of the run) and the adjusted headline tests - the constant-hazard test
+    for the run's bands and for the 0-90 / 91-180 banding, and the directional delayed-peak test. Both
+    adjust for organisation size like the primary model; ``collapse`` is the primary analysis.
+    """
+    labels = band_labels(bounds)
+    rows = []
+    for policy in TIE_POLICIES:
+        spells, _ = build_spells(events, censor_date, policy)
+        repeats = spells[spells["event"] == 1]
+        by_band = {label: 0 for label in labels}
+        for duration in repeats["duration_days"]:
+            by_band[labels[elapsed_band_index(duration, bounds)]] += 1
+        adjusted_split, _, adjusted_lrt = fit_adjusted_elapsed_model(spells, bounds, censor_date)
+        peak_split, _, peak_elapsed_lrt = fit_adjusted_elapsed_model(spells, DELAYED_PEAK_ELAPSED_BOUNDS, censor_date)
+        _, _, peak_lrt = fit_delayed_peak_model(peak_split)
+        row: dict[str, Any] = {
+            "tie_policy": policy,
+            "observed_repeats": int(len(repeats)),
+            "repeats_from_ties": int(spells["tie_gap"].sum()),
+            "post_event_spells": int(len(spells)),
+        }
+        row.update({f"repeats_{label}": count for label, count in by_band.items()})
+        row["adjusted_constant_hazard_p"] = float(adjusted_lrt["p_value"])
+        row["adjusted_0_90_91_180_banding_p"] = float(peak_elapsed_lrt["p_value"])
+        row["delayed_peak_directional_p"] = float(peak_lrt.get("delayed_peak_intersection_p_value", float("nan")))
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def split_by_elapsed(spells: pd.DataFrame, bounds: tuple[float, ...]) -> pd.DataFrame:
@@ -1626,6 +1647,7 @@ def write_report(
     model_table: pd.DataFrame,
     weibull_lrt: dict[str, float],
     plot_paths: dict[str, Path],
+    tie_sensitivity: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Write the Markdown report; return its generated conclusion sentences by topic."""
     best = model_table.sort_values("aic").iloc[0]
@@ -1729,6 +1751,26 @@ def write_report(
     ]
     for key, value in data_quality.items():
         lines.append(f"- {key}: {value}")
+
+    if tie_sensitivity is not None and not tie_sensitivity.empty:
+        lines.extend(
+            [
+                "",
+                "## Same-Date Ties And Unknown Ordering",
+                "",
+                "Several distinct incidents of one organisation can carry the same stored date; nothing orders "
+                "them, and a date stored as the 1st of a month may only mean that month. The primary analysis "
+                "(`collapse`) makes the tied incidents one time point - their ids and count are kept in "
+                "`entity_date_ties.csv`, and no order or gap between them is invented - which can understate "
+                "repeats. The `zero_gap` sensitivity counts each as its own incident one day after the "
+                "previous, a repeat in the first band, which can overstate them (a tie may be one incident "
+                "filed twice or a month placeholder). The truth lies between; both are adjusted for organisation "
+                "size like the primary model.",
+                "",
+                tie_sensitivity.to_markdown(index=False, floatfmt=".4g"),
+                "",
+            ]
+        )
 
     lines.extend(
         [
@@ -2149,6 +2191,15 @@ def main() -> int:
              "(default) or drop them. Repeats with and without them are reported either way.",
     )
     parser.add_argument(
+        "--ties",
+        choices=TIE_POLICIES,
+        default=DEFAULT_TIE_POLICY,
+        help="How incidents of one organisation on the same stored date are treated: 'collapse' "
+             "(default) is one time point with every incident id kept and no order invented; "
+             "'zero_gap' makes each its own point, one day after the previous (a repeat in the first "
+             "band). Both are always reported in tie_policy_sensitivity.csv.",
+    )
+    parser.add_argument(
         "--dashboard-out",
         default="",
         help="Write the HTML page combining every run under the output's parent folder to this path "
@@ -2189,11 +2240,12 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     events = events[events["event_date"] <= censor_date].copy()
     if events.empty:
         raise RuntimeError("No victim events are dated on or before the censor date.")
-    unresolved_sensitivity = attribution_sensitivity(events, censor_date, elapsed_bounds)
+    unresolved_sensitivity = attribution_sensitivity(events, censor_date, elapsed_bounds, args.ties)
     events, unresolved_info = apply_attribution_policy(events, args.unresolved_attributions)
     if events.empty:
         raise RuntimeError("No victim events remain after excluding unresolved attributions.")
-    spells, same_day = build_spells(events, censor_date)
+    spells, ties = build_spells(events, censor_date, args.ties)
+    tie_sensitivity = tie_policy_sensitivity(events, censor_date, elapsed_bounds)
     spells["elapsed_band"] = [
         band_labels(elapsed_bounds)[elapsed_band_index(v, elapsed_bounds)]
         for v in spells["duration_days"]
@@ -2234,7 +2286,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
 
     events.to_csv(out_dir / "victim_events.csv", index=False)
     spells.to_csv(out_dir / "recurrent_event_spells.csv", index=False)
-    same_day.to_csv(out_dir / "same_day_entity_events_collapsed.csv", index=False)
+    ties.to_csv(out_dir / "entity_date_ties.csv", index=False)
+    tie_sensitivity.to_csv(out_dir / "tie_policy_sensitivity.csv", index=False)
     piecewise.to_csv(out_dir / "piecewise_elapsed_hazard.csv", index=False)
     adjusted_split.to_csv(out_dir / "adjusted_piecewise_exposure.csv", index=False)
     adjusted_coef.to_csv(out_dir / "adjusted_piecewise_coefficients.csv", index=False)
@@ -2293,7 +2346,10 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         "verified incident-date precision": {
             str(k): int(v) for k, v in events.get("date_precision", pd.Series(dtype=object))
             .fillna("unverified").value_counts().items()},
-        "same-day entity-event groups collapsed": int(len(same_day)),
+        "tie policy (several incidents of one organisation on one date)": args.ties,
+        "same-date ties": {**tie_summary(ties), "repeats added by the zero_gap policy in this run": int(spells["tie_gap"].sum())},
+        "incidents not ordered by their dates (different stored dates, overlapping verified intervals)":
+            overlapping_interval_pairs(events),
         "covariate coverage": covariate_coverage,
         "unresolved victim attributions": {**unresolved_info, "repeats": unresolved_sensitivity},
     }
@@ -2321,6 +2377,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         "delayed_peak_phase_rates": records_for_json(delayed_peak_summary_table),
         "delayed_peak_sensitivity_phase_rates": records_for_json(delayed_peak_sensitivity_summary),
         "weibull_vs_exponential_lrt": weibull_lrt,
+        "tie_policy": args.ties,
+        "tie_policy_sensitivity": records_for_json(tie_sensitivity),
         "best_aic_model": str(model_table.iloc[0]["model"]),
         "outputs": {key: str(value) for key, value in plot_paths.items()},
     }
@@ -2347,6 +2405,7 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         model_table,
         weibull_lrt,
         plot_paths,
+        tie_sensitivity,
     )
     summary["conclusions"] = conclusions
     (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

@@ -652,9 +652,17 @@ short-gap pairs.
 
 ### Runs, not pairs
 
-Within one entity, events are sorted by date and chained while each
-*consecutive* gap is under the window — the inter-event time, which is what the
-question is about. Three records six weeks apart form one run rather than three
+Within one entity, events are ordered by their date *interval* and chained while
+the gap between each event's interval and the run so far is under the window — the
+inter-event time, which is what the question is about. The gap between intervals
+is 0 when they overlap (two events in one verified month, or a month and a day
+inside it, may be the same day), so a verified month is never measured from its 1st
+(`RecurrenceEvent.gap_to`; the intervals are `event_date_earliest` /
+`event_date_latest`). An event whose precision is unverified has no interval; with
+`--unverified-dates stored` (the default) its stored date stands in and is reported
+as unverified, `exclude` leaves it out, and an undated event never takes part. The
+prompt shows each date with its precision ("month precision: any day from ... to
+...", "exact day", "precision unverified") and the interval gap. Three records six weeks apart form one run rather than three
 pairs, and the run is partitioned in a single call. A partition is internally
 consistent by construction; three pairwise verdicts can contradict each other
 (A~B, B~C, A!~C).
@@ -682,6 +690,7 @@ is a human answer to precisely this question.
 python scripts/dedup_admin.py check-recurrences --dry-run --verbose
 python scripts/dedup_admin.py check-recurrences --window-days 120
 python scripts/dedup_admin.py check-recurrences --entity "Optus"
+python scripts/dedup_admin.py check-recurrences --unverified-dates exclude
 ```
 
 ### Verified on the live database
