@@ -2119,6 +2119,12 @@ def main() -> int:
         help="Right-censoring date, YYYY-MM-DD (default: date of the last ingest in RawEvents).",
     )
     parser.add_argument(
+        "--as-known-at",
+        default=None,
+        help="Reconstruct incident links, victims, dates, size bands and record membership as recorded by this date "
+             "(YYYY-MM-DD, end of that UTC day) instead of reading today's. The censor date defaults to it.",
+    )
+    parser.add_argument(
         "--elapsed-bounds",
         type=parse_elapsed_bounds,
         default=DEFAULT_ELAPSED_BOUNDS,
@@ -2160,6 +2166,8 @@ def main() -> int:
     # change while the analysis runs, and the exact input must be restorable afterwards.
     analysis_input = AnalysisInput.open(source_db, args.snapshot_id)
     try:
+        if args.as_known_at:
+            analysis_input.reconstruct(args.as_known_at)
         return _run(args, source_db, out_dir, analysis_input)
     finally:
         analysis_input.close()
@@ -2170,7 +2178,11 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     print(f"Data snapshot {analysis_input.snapshot.snapshot_id} "
           f"({'restored' if analysis_input.reused else 'taken from ' + str(source_db)}); "
           f"rerun other bandings with --snapshot-id {analysis_input.snapshot.snapshot_id}")
-    censor_date = parse_date(args.censor_date) if args.censor_date else last_ingest_date(db_path)
+    reconstruction = analysis_input.reconstruction
+    censor_date = (parse_date(args.censor_date) if args.censor_date
+                   else reconstruction.cutoff_date if reconstruction else last_ingest_date(db_path))
+    if reconstruction is not None and censor_date > reconstruction.cutoff_date:
+        raise ValueError(f"the censor date {censor_date} is later than --as-known-at {reconstruction.as_known_at}")
     elapsed_bounds = args.elapsed_bounds
 
     events = load_victim_events(db_path)
@@ -2289,6 +2301,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     summary = {
         "snapshot_id": analysis_input.snapshot.snapshot_id,
         "snapshot_sha256": analysis_input.snapshot.sha256,
+        "as_known_at": reconstruction.as_known_at if reconstruction else None,
+        "history_reconstruction": reconstruction.to_dict() if reconstruction else None,
         "data_quality": data_quality,
         "elapsed_bounds": ["inf" if math.isinf(v) else int(v) for v in elapsed_bounds],
         "unadjusted_piecewise_lrt": unadjusted_lrt,
@@ -2349,7 +2363,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         extended_out = Path(args.extended_out_dir or EXTENDED_OUT)
         run_analysis(source_db, extended_out, censor_date,
                      bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed,
-                     unresolved_attributions=args.unresolved_attributions, analysis_input=analysis_input)
+                     unresolved_attributions=args.unresolved_attributions, analysis_input=analysis_input,
+                     as_known_at=args.as_known_at)
         print(f"Wrote extended recurrence analyses to {extended_out}")
 
     if args.dashboard_out:

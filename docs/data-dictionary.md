@@ -738,6 +738,31 @@ researched_at)`: one lookup per organisation, again when `evidence_hash` (its in
   `victim_fill_labels.csv` (`deduplicated_event_id,label,correct_victim,rationale,labeller`; `named` /
   `none_named` / `unsure`); `review_acceptance_cases.csv` (`deduplicated_event_id,expectation,value,note,source`).
 
+### Input History (what was known when) (`dedup/input_history.py`)
+
+Append-only, written by SQLite triggers on the four watched tables (so every writer is covered), read by
+`--as-known-at` (README, "Inputs as known at a date"). `known_at` is UTC `YYYY-MM-DD HH:MM:SS` from the database
+clock. Column types are undeclared: a value is stored exactly as the watched table held it.
+
+| Table | Watches | Key columns | Tracked columns |
+|---|---|---|---|
+| `EventStateHistory` | `DeduplicatedEvents` | `deduplicated_event_id` | `master_enriched_event_id`, `title`, `status`, `event_date`, `event_date_precision`, `event_date_earliest`, `event_date_latest`, `date_precision`, `date_basis`, `date_confidence`, `is_australian_event`, `is_specific_event`, `event_type`, `records_affected`, `victim_organization_name`, `vendor_organization_name`, `victim_organization_industry`, `confidence_score`, `total_data_sources` |
+| `EventMembershipHistory` | `EventDeduplicationMap` | `map_id` | `raw_event_id`, `enriched_event_id`, `deduplicated_event_id` |
+| `EventEntityLinkHistory` | `DeduplicatedEventEntities` | `deduplicated_event_id`, `entity_id` | `relationship_type`, `confidence_score`, `source_count` |
+| `EntityStateHistory` | `EntitiesV2` | `entity_id` | `entity_name`, `entity_type`, `entity_kind`, `industry`, `is_australian`, `employee_count`, `turnover`, `size_estimate`, `size_confidence`, `size_employees`, `size_revenue_aud` |
+
+Every history table also has `history_id` (INTEGER PK AUTOINCREMENT; the order of events), `change`
+(`baseline` / `insert` / `update` / `delete`), `known_at` and `backfilled` (1 for `baseline` rows: the state was
+already there when tracking began, so when it began to hold is unknown). A key's state at a time is its last row
+with `known_at` at or before it; a `delete` row means it did not exist. A key that existed before tracking and is
+first changed or deleted has its old state written as a `baseline` row first. Changing a key column (a link moved
+to another entity) is a `delete` of the old key and an `insert` of the new.
+
+`InputHistoryStatus(source PK, table_name, tracking_since, baselined_at, columns_json)`: one row per watched table;
+`tracking_since` is when the triggers were first installed (a cutoff before it is reconstructed from the baseline),
+`columns_json` maps each tracked column to when it began to be tracked (a column added later has no value for
+earlier rows; the reconstruction uses the current value for them and reports it).
+
 ### Configuration Tables
 
 #### DataSourcesV2

@@ -293,6 +293,7 @@ class AnalysisInput:
         self.store = store
         self.reused = reused
         self._workdir = workdir
+        self.reconstruction = None          # HistoryReconstruction once reconstruct() has rewound the working copy
 
     @classmethod
     def open(cls, db_path: Path, snapshot_id: Optional[str] = None,
@@ -314,16 +315,38 @@ class AnalysisInput:
             workdir.cleanup()
             raise
 
+    def reconstruct(self, as_known_at: Any) -> Any:
+        """Rewind the working copy to what was known at ``as_known_at`` (``dedup/input_history.py``).
+
+        Only the working copy changes; the retained snapshot is untouched, so the snapshot id plus this date
+        reproduce the reconstruction. Returns the :class:`HistoryReconstruction` (also kept as
+        ``self.reconstruction`` and written by :meth:`record`). Raises ``HistoryError`` when the snapshot holds
+        no history to reconstruct from.
+        """
+        from cyber_data_collector.dedup import input_history
+
+        if self.reconstruction is not None:
+            raise SnapshotError("this analysis input has already been reconstructed to "
+                                f"{self.reconstruction.as_known_at}")
+        self.reconstruction = input_history.rewind_database(self.path, as_known_at)
+        return self.reconstruction
+
     def record(self, out_dir: Path, **extra: Any) -> Path:
         """Write ``analysis_inputs.json`` beside an analysis's outputs and keep this snapshot pinned."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / ANALYSIS_INPUTS
+        reproduce = f"--snapshot-id {self.snapshot.snapshot_id}"
+        reconstruction = {}
+        if self.reconstruction is not None:
+            reproduce += f" --as-known-at {self.reconstruction.as_known_at}"
+            reconstruction = {"as_known_at": self.reconstruction.as_known_at,
+                              "history_reconstruction": self.reconstruction.to_dict()}
         payload = {"snapshot_id": self.snapshot.snapshot_id, "snapshot_sha256": self.snapshot.sha256,
                    "snapshot_taken_at": self.snapshot.taken_at, "source_database": self.snapshot.source,
                    "retained_copy": f"{self.store.root.name}/{self.manifest.get('file')}",
-                   "reproduce": f"--snapshot-id {self.snapshot.snapshot_id}", "recorded_at": datetime.now().isoformat(
-                       timespec="seconds"), **extra}
+                   "reproduce": reproduce, "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                   **reconstruction, **extra}
         path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
         return path
 

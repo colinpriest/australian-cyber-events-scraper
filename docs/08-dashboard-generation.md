@@ -216,7 +216,9 @@ analyse it. `python scripts/publish_outputs.py --list` shows what is retained.
 (100 MB for 435 MB; 8 seconds to write). Kept: the last 5 published snapshots, the last 2 of
 each other kind (blocked, failed, analysis), and any snapshot named by an
 `analysis_inputs.json` under `analysis/` (those results are committed; they are
-reproducible only while their input exists). Older copies are deleted, their manifests stay
+reproducible only while their input exists). An analysis run with `--as-known-at DATE` reconstructs a
+*working copy* of its snapshot from the input history (`dedup/input_history.py`); the retained snapshot is the
+database as it was, so the snapshot id plus the date (`reproduce` in `analysis_inputs.json`) reproduce it. Older copies are deleted, their manifests stay
 (`status: expired`, with the sha-256), so an id in an old output still names its data.
 Disk use is therefore about 0.8 to 1.2 GB; `publish_outputs.py --prune` applies the policy
 on demand, and it runs after every publication.

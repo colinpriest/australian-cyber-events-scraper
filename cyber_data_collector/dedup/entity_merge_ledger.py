@@ -270,8 +270,13 @@ def merge_pair(conn: sqlite3.Connection, keep_id: int, drop_id: int, source: str
         except sqlite3.Error:
             mentions = []
         references: Dict[str, List[Dict[str, Any]]] = {}
+        from cyber_data_collector.dedup.input_history import SOURCES as history_sources
+
+        # The input history is an append-only record of past states, not a live reference to the entity.
+        history_tables = {s.history for s in history_sources}
         for table in _tables(conn):
-            if table in LINK_SUBJECTS or table == "EntitiesV2" or "entity_id" not in _columns(conn, table):
+            if (table in LINK_SUBJECTS or table == "EntitiesV2" or table in history_tables
+                    or "entity_id" not in _columns(conn, table)):
                 continue
             held = _rows(conn, f"SELECT * FROM {table} WHERE entity_id = ?", (drop_id,))
             if held:

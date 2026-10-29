@@ -121,6 +121,8 @@ class CyberEventDataV2:
         from cyber_data_collector.processing.incident_dates import ensure_schema as ensure_incident_schema
         ensure_incident_schema(self._conn)
         self._conn.commit()
+        from cyber_data_collector.dedup.input_history import ensure_schema as ensure_input_history
+        ensure_input_history(self._conn)
         if added:
             self._logger.info("Added Perplexity enrichment tracking columns to EnrichedEvents")
 
