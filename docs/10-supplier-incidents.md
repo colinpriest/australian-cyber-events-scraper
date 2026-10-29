@@ -161,6 +161,23 @@ The same-incident cut-off is solid; its one labelled error above the cut-off is
 a contaminated event (the NSW Department of Education's July 2021 attack
 holding NSW Health Accellion records).
 
+**The bound for "different" (added 2026-10-29).** The merge cut-off measured only
+the precision of merging, so a score just under it is not evidence that two
+events are different incidents (the labelled pairs between 0.78 and 0.87 are 3
+the same incident, 3 different). `calibrate` therefore also records
+`same_incident.different_cutoff`: the largest score below which, weighted,
+at least 95% of the labelled pairs are labelled `different`, with at least 5 of
+them **and none labelled `same`** (a label is never acted on the other way; the
+weighted precision alone ran to 0.91, past the merge cut-off, because the many
+low-scoring pairs outweigh the few near it). Measured on the same stored
+judgements and labels: **0.78** (27 of 27 labelled pairs below it are
+different, weighted recall 0.98, bootstrap out-of-sample precision mean 0.995 /
+p05 0.979). A model score between 0.78 and 0.87, or any model score when a
+calibration has no `different_cutoff`, leaves the pair unresolved. `python
+scripts/calibrate_supplier_victims.py calibrate --different-only` adds the field
+to an existing calibration, after checking the stored judgements still
+reproduce its merge cut-off.
+
 ## 5. Applying
 
 In order:
@@ -193,7 +210,8 @@ In order:
       ruling between any member records of the two events; a label and an
       override that disagree leave the pair **unresolved**;
    2. the calibrated **same-incident judgement** of the pair: at or above the
-      cut-off the same incident, below it a different one.
+      merge cut-off the same incident, below the calibrated `different_cutoff`
+      a different one, and in between neither (held, the band named).
 
    *Same incident:* the own event is merged into the supplier incident in step 1
    (also when only a label or override says so, and the pair was not a model
