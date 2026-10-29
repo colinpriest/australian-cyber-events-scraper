@@ -260,6 +260,8 @@ def test_label_contradictions(db, tmp_path):
         ("E2", "unsure", "")])
     _write(tmp_path / "duplicate_labels.csv", ["pair_id", "label"], [
         ("E1|E2", "same"), ("E1|E7", "different"), ("E1|E3", "different"), ("E1|nope", "same")])
+    _write(tmp_path / "event_scope_labels.csv", ["deduplicated_event_id", "label", "rationale"], [
+        ("E1", "in_scope", ""), ("E4", "out_of_scope", "still active")])
     _write(tmp_path / "source_gate_labels.csv", ["enriched_event_id", "label"], [
         ("enr-E3", "not_incident"), ("enr-E6", "not_incident"), ("enr-E1", "reports_incident")])
 
@@ -270,7 +272,8 @@ def test_label_contradictions(db, tmp_path):
     assert found["labels.duplicates.contradictions"].value == 2                # E1/E2 apart, E1/E7 together
     assert found["labels.duplicates.unchecked"].value == 1
     assert found["labels.source_gate.contradictions"].value == 1               # enr-E3 evidence of active E3
-    assert found["labels.contradictions_total"].value == 5
+    assert found["labels.event_scope.contradictions"].value == 1               # E4 labelled out of scope, still Active
+    assert found["labels.contradictions_total"].value == 6
 
 
 def test_missing_label_file_is_not_measured(db, tmp_path):

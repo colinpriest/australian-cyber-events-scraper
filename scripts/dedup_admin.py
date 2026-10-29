@@ -2846,6 +2846,66 @@ def cmd_check_events(args) -> int:
     return _escalation_failures(result)
 
 
+def cmd_check_scope(args) -> int:
+    """Judge whether each active event affects Australia; reject the out-of-scope below the calibrated cut-off.
+
+    See :mod:`cyber_data_collector.dedup.event_scope`. Jev answers P(in scope) over the event's
+    evidence and the victim's timeline (the middle band escalated). With ``--apply`` and a
+    calibration for the current models, questions and evidence, events below the cut-off and events
+    labelled out of scope are rejected (ledger, reversible); events labelled in scope never are.
+    Otherwise it reports. Findings: ``event_scope_findings.json`` beside the database.
+
+    No fallback: a missing TypeSafe or OpenAI key exits 2 before anything is judged; repeated Jev
+    failures or an unreadable labels file under ``--apply`` exit 1 before anything is rejected; a
+    failed judgement or escalation leaves that event undecided (not acted on) and exits 1.
+    """
+    from cyber_data_collector.dedup import event_scope
+    from cyber_data_collector.utils import jev
+
+    missing = []
+    if not os.getenv("TYPESAFE_API_KEY"):
+        missing.append("TYPESAFE_API_KEY")
+    elif not jev.available():
+        missing.append("the typesafe-sdk package")
+    if not os.getenv("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY (escalation model)")
+    if missing:
+        print(f"check-scope cannot run: {', '.join(missing)} missing. Nothing judged or rejected.", file=sys.stderr)
+        return 2
+    conn = _connect(args.db)
+    try:
+        try:
+            result = event_scope.check_scope(conn, apply=args.apply, only=args.event or None)
+        except (event_scope.ScopeJudgementError, event_scope.ScopeConfigError) as exc:
+            print(f"check-scope failed: {exc}. Nothing rejected; stored judgements are kept.", file=sys.stderr)
+            return 1
+    finally:
+        conn.close()
+    out = Path(args.db).parent / "event_scope_findings.json"
+    out.write_text(json.dumps({"generated": datetime.now().isoformat(), "apply": args.apply, **result},
+                              indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"Judged {result['judged']} of {result['events']} event(s) ({result['escalated']} escalated).")
+    if not result["calibrated"]:
+        print("REPORT ONLY: no scope calibration for this model, question and evidence "
+              "(label a sample and run scripts/calibrate_event_scope.py). Lowest P(in scope):")
+        for f in result["lowest_scoring"][:15]:
+            print(f"  {f['p_in_scope']:.3f}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
+        print(f"Findings in {out}")
+    else:
+        for f in result["rejections"]:
+            score = "label" if f.get("label") else f"{f['p_in_scope']:.3f}"
+            print(f"  {score:>6}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
+        verb = "Rejected" if result["applied"] else "Would reject"
+        print(f"{verb} {len(result['rejections'])} of {result['events']} event(s) as out of scope "
+              f"(cut-off {result['cutoff']}, {len(result['labelled_rejections'])} by label); findings in {out}")
+    failed = result["judgement_failed"] + result["escalation_failed"]
+    if failed:
+        print(f"check-scope: {len(failed)} event(s) UNDECIDED - a judgement or escalation failed; they were "
+              "not acted on and will be retried next run.", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_check_sources(args) -> int:
     """Google source gate; see cyber_data_collector.dedup.source_gate."""
     from cyber_data_collector.dedup.source_gate import check_sources
@@ -3635,7 +3695,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                        help="Re-score the labelled cases on current evidence and recompute every cut-off "
                             "whose evidence processing changed (spends Jev/escalation calls)")
     p.add_argument("--step", action="append", default=None,
-                   help="Only this step (source-gate, event-reality, coherence, "
+                   help="Only this step (source-gate, event-reality, event-scope, coherence, "
                         "coherence-same-organisation, duplicates, victim-attribution, supplier-victims); "
                         "repeatable. Default: all.")
     p.add_argument("--status", action="store_true", help="Print each calibration's state; spend nothing")
@@ -3710,6 +3770,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Reject below the cut-off (only with a calibration matching the "
                         "current model and question; otherwise report only)")
     p.set_defaults(func=cmd_check_events)
+
+    p = sub.add_parser("check-scope",
+                       help="Ask Jev whether each active event affects Australia and reject those "
+                            "below the calibrated cut-off (report only without a calibration)")
+    p.add_argument("--event", action="append", default=None,
+                   help="Only this event (dedup id or prefix); repeatable.")
+    p.add_argument("--apply", action="store_true",
+                   help="Reject below the cut-off and the events labelled out of scope (only with a "
+                        "calibration matching the current models, questions and evidence; otherwise report only)")
+    p.set_defaults(func=cmd_check_scope)
 
     p = sub.add_parser("check-sources",
                        help="Ask Jev whether each Google-sourced page itself reports an incident; "
