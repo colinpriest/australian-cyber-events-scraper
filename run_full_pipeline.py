@@ -976,16 +976,10 @@ class UnifiedPipeline:
                 logger.info(f"  Cache hits: {cache_hits}")
                 logger.info(f"  Total tokens used: {classifier.total_tokens}")
 
-                # Export risk matrices
-                logger.info("\nExporting risk matrices...")
-                output_path = Path('risk_matrix')
-                excel_files = classifier.compile_risk_matrix(output_path)
-
-                if excel_files:
-                    logger.info(f"Risk matrices exported to:")
-                    for excel_file in excel_files:
-                        logger.info(f"  - {excel_file}")
-
+                # The risk matrices are not written here: they are built from the publication
+                # snapshot with the dashboards, and only after the quality gate passes.
+                logger.info("Risk matrices are written at publication (dashboard phase), from the "
+                            "published snapshot, after the quality gate")
                 return True
 
             finally:
@@ -1019,40 +1013,21 @@ class UnifiedPipeline:
             except Exception as e:
                 raise RuntimeError(f"Database schema validation failed: {e}")
 
-            # Build into a staging folder, validate, and only then replace the
-            # published files: a failed or truncated build used to overwrite the
-            # last good dashboard and still report success.
-            out_dir = Path(args.out_dir)
-            staging = Path(tempfile.mkdtemp(prefix="dashboard_staging_", dir=out_dir.parent if out_dir.parent.exists() else None))
-            try:
-                logger.info("Generating static HTML dashboard...")
-                built = build_dashboard_file(db_path=self.db_path, out_dir=str(staging))
-                problems = self._validate_dashboard(built)
-                if problems:
-                    raise RuntimeError("Dashboard failed validation, last published version kept: "
-                                       + "; ".join(problems))
-                # Data-quality gate (cyber_data_collector.quality): blocking
-                # checks - integrity, label contradictions, synthetic cases,
-                # invalid dates, stale classifications - stop publication. The
-                # report is written to instance/quality_report.{json,md,html}.
-                if getattr(args, 'skip_quality_gate', False):
-                    logger.warning("Quality gate SKIPPED (--skip-quality-gate): publishing unchecked")
-                else:
-                    from cyber_data_collector.quality import publication_allowed
-                    with sqlite3.connect(self.db_path) as qconn:
-                        allowed, reasons = publication_allowed(
-                            qconn, report_dir=str(Path(self.db_path).parent))
-                    if not allowed:
-                        raise RuntimeError("Quality gate blocked publication, last published version kept: "
-                                           + "; ".join(str(r) for r in reasons)[:2000])
-                out_dir.mkdir(parents=True, exist_ok=True)
-                published = []
-                for staged in staging.iterdir():
-                    target = out_dir / staged.name
-                    os.replace(staged, target)
-                    published.append(str(target))
-            finally:
-                shutil.rmtree(staging, ignore_errors=True)
+            # One consistent snapshot of the database; the quality gate and every output (the
+            # dashboards, the AI incident report, the recurrence page, the risk matrices) are
+            # built from it into staging and moved into place together, only if the gate passes.
+            # A blocked or failed publication leaves the previous outputs untouched.
+            from cyber_data_collector.publication.outputs import publish
+            if getattr(args, 'skip_quality_gate', False):
+                logger.warning("Quality gate SKIPPED (--skip-quality-gate): publishing unchecked")
+            result = publish(Path(self.db_path), Path(args.out_dir),
+                             Path(getattr(args, 'risk_matrix_dir', 'risk_matrix')),
+                             skip_gate=getattr(args, 'skip_quality_gate', False))
+            published = result.files
+            logger.info("Published %d file(s) from snapshot %s (quality gate: %s)", len(published),
+                        result.snapshot_id, result.gate)
+            for warning in result.warnings:
+                self.results['dashboard'].setdefault('warnings', []).append(warning)
 
             self.results['dashboard']['success'] = True
             self.results['dashboard']['files_created'] = published
@@ -1067,21 +1042,11 @@ class UnifiedPipeline:
     def _validate_dashboard(path: Optional[str]) -> List[str]:
         """Reasons a built dashboard must not be published; empty when it is fine.
 
-        Uses build_static_dashboard.build_dashboard_file, so the pipeline and the
-        standalone CLI build the same page (a drifted in-line copy once shipped
-        empty plots). A real dashboard with all its chart data is at least
-        ~50 KB; a smaller file means a query failed silently.
+        The check lives in ``cyber_data_collector.publication.outputs.validate_dashboard``,
+        which the publication step runs on the staged page before anything is moved.
         """
-        if not path or not Path(path).exists():
-            return ["no dashboard file was produced"]
-        problems = []
-        size = Path(path).stat().st_size
-        if size < 50 * 1024:
-            problems.append(f"{Path(path).name} is only {size:,} bytes (< 50 KB): a query probably returned no rows")
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-        if "</html>" not in text.lower():
-            problems.append(f"{Path(path).name} is truncated (no closing </html>)")
-        return problems
+        from cyber_data_collector.publication.outputs import validate_dashboard
+        return validate_dashboard(path)
 
 
     def outcome(self, failed_phases) -> str:
@@ -1326,6 +1291,9 @@ Examples:
     # Dashboard parameters
     parser.add_argument('--out-dir', default='dashboard',
                         help='Output directory for static dashboard (default: dashboard)')
+    parser.add_argument('--risk-matrix-dir', default='risk_matrix',
+                        help='Output directory for the ASD risk-matrix workbooks (default: risk_matrix); '
+                             'published with the dashboards from the same snapshot')
 
     # Database
     parser.add_argument('--db-path', default=None,

@@ -43,6 +43,8 @@ from scripts.recurrence_conclusions import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUT = "dashboard/recurrence.html"
+#: The one folder of extended-analysis results (the run folders above hold the elapsed-time bandings).
+EXTENDED_DIR = "recurrent_timing_extended"
 
 # (folder under analysis/, tab label). Order is the reading order on the page.
 RUNS = (
@@ -118,6 +120,36 @@ def delayed_peak_conclusions(summary: Dict[str, Any]) -> List[str]:
     ]
 
 
+def run_snapshot(run_dir: Path) -> Optional[str]:
+    """The database snapshot id a run was computed on (``analysis_inputs.json``), None if not recorded."""
+    path = run_dir / "analysis_inputs.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("snapshot_id")
+    except ValueError:
+        return None
+
+
+def snapshot_notes(analysis_dir: Path, published_snapshot_id: Optional[str]) -> List[str]:
+    """Warnings about which data each analysis used: unrecorded, mixed, or not the published snapshot."""
+    used = {folder: run_snapshot(analysis_dir / folder) for folder, _ in RUNS if (analysis_dir / folder).exists()}
+    if (analysis_dir / EXTENDED_DIR).exists():
+        used[EXTENDED_DIR] = run_snapshot(analysis_dir / EXTENDED_DIR)
+    notes = [f"{folder}: no analysis_inputs.json, so the data it was computed on is not recorded"
+             for folder, sid in used.items() if sid is None]
+    distinct = {sid for sid in used.values() if sid}
+    if len(distinct) > 1:
+        notes.append("the runs were computed on different snapshots (" + ", ".join(sorted(distinct))
+                     + "); rerun them with the same --snapshot-id to compare like with like")
+    if published_snapshot_id:
+        behind = sorted(f for f, sid in used.items() if sid and sid != published_snapshot_id)
+        if behind:
+            notes.append(f"{', '.join(behind)} not computed on the published snapshot {published_snapshot_id}; "
+                         "rerun the analyses with --snapshot-id latest-published")
+    return notes
+
+
 def overview_rows(analysis_dir: Path) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     for folder, label in RUNS:
@@ -134,11 +166,12 @@ def overview_rows(analysis_dir: Path) -> List[Dict[str, str]]:
             "adjusted": _p((summary.get("adjusted_piecewise_lrt") or {}).get("p_value")),
             "weibull": _p((summary.get("weibull_vs_exponential_lrt") or {}).get("p_value")),
             "best_aic": str(summary.get("best_aic_model", "")),
+            "snapshot": run_snapshot(analysis_dir / folder) or "not recorded",
         })
     return rows
 
 
-def build_html(analysis_dir: Path) -> str:
+def build_html(analysis_dir: Path, published_snapshot_id: Optional[str] = None) -> str:
     runs = [(f, label) for f, label in RUNS if (analysis_dir / f / "recurrent_timing_report.md").exists()]
     if not runs:
         raise FileNotFoundError(f"No recurrent timing reports under {analysis_dir}; run analyze_recurrent_timing.py first.")
@@ -148,7 +181,8 @@ def build_html(analysis_dir: Path) -> str:
 
     overview = "".join(
         "<tr>" + "".join(f"<td>{html.escape(r[k])}</td>" for k in
-                         ("run", "censor", "repeats", "unadjusted", "adjusted", "weibull", "best_aic")) + "</tr>"
+                         ("run", "censor", "repeats", "unadjusted", "adjusted", "weibull", "best_aic", "snapshot"))
+        + "</tr>"
         for r in overview_rows(analysis_dir)
     )
     tabs = "".join(
@@ -161,6 +195,11 @@ def build_html(analysis_dir: Path) -> str:
     )
     peak = "".join(f"<li>{html.escape(line)}</li>" for line in delayed_peak_conclusions(main_summary))
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    notes = "".join(f"<li>{html.escape(n)}</li>" for n in snapshot_notes(analysis_dir, published_snapshot_id))
+    notes_block = f'<ul class="warn">{notes}</ul>' if notes else ""
+    extended = run_snapshot(analysis_dir / EXTENDED_DIR)
+    extended_line = (f"Extended analyses (<code>{EXTENDED_DIR}</code>): data snapshot "
+                     f"<code>{html.escape(extended or 'not recorded')}</code>.")
 
     return f"""<!doctype html>
 <html lang="en">
@@ -193,6 +232,7 @@ figure {{ margin:16px 0; }}
 figure img {{ max-width:100%; height:auto; background:#fff; border:1px solid var(--line); }}
 figcaption {{ color:var(--muted); font-size:13px; }}
 code {{ font-size:0.9em; }}
+.warn {{ color:#b42318; }}
 </style>
 </head>
 <body>
@@ -205,9 +245,11 @@ Generated {generated} from <code>{html.escape(str(analysis_dir))}</code>.</p>
 <p class="muted">p-values test constant elapsed-time risk; the adjusted model controls for calendar period, prior event
 number, organisation size, sector, entity kind and records affected.</p>
 <div class="scroll"><table>
-<thead><tr><th>Run</th><th>Censor date</th><th>Repeats</th><th>Unadjusted p</th><th>Adjusted p</th><th>Weibull vs exponential p</th><th>Best AIC</th></tr></thead>
+<thead><tr><th>Run</th><th>Censor date</th><th>Repeats</th><th>Unadjusted p</th><th>Adjusted p</th><th>Weibull vs exponential p</th><th>Best AIC</th><th>Data snapshot</th></tr></thead>
 <tbody>{overview}</tbody>
 </table></div>
+{notes_block}
+<p class="muted">{extended_line}</p>
 <p class="muted">Delayed 91-180 day peak, adjusted model with 0-90 / 91-180 / post-180 day phases (main run):</p>
 <ul class="muted">{peak}</ul>
 

@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-28.1",
+  "version": "2026-10-29.1",
   "description": "Quality thresholds and the publication gate. Rules are matched in order (first match wins, fnmatch patterns). A blocking rule whose metric fails or cannot be measured blocks publication. A rule no check produced a metric for is reported as not measured. See docs/10-quality-gate.md.",
   "settings": {
     "coverage": {
@@ -70,6 +70,10 @@
      "why": "Exports and dashboards show the stored evidence_status; it must match the evidence."},
     {"match": "evidence.recovery.exhausted", "blocking": false,
      "why": "Unsupported events no retrieval route can reach any more: review or reject by hand."},
+    {"match": "recovery.route.*.oldest_queued_days", "max": 14, "blocking": false,
+     "why": "An item waiting for its first attempt for more than two weeks means the route is not being run (or is capped far below its queue): `discovery_queue.py refetch-cyberdaily --until-empty`, `dedup_admin.py recover-evidence --until-empty`."},
+    {"match": "recovery.route.*", "blocking": false,
+     "why": "Per-route queue progress (queued, attempted, succeeded, failing by failure type, exhausted), recorded every run for the trend table."},
     {"match": "backlog.raw_unprocessed_stale", "max": 0, "blocking": false,
      "why": "Unprocessed records older than 30 days are retries that keep failing."},
     {"match": "backlog.raw_unprocessed", "blocking": false, "why": "Trend only."},

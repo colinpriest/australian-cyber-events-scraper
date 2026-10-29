@@ -541,7 +541,7 @@ Each field serves a specific audit purpose:
 
 ### 8.1 Risk Matrix Excel Files
 
-After classification, risk matrices are compiled into formatted Excel workbooks in the `risk_matrix/` directory:
+After classification, risk matrices are compiled into formatted Excel workbooks in the `risk_matrix/` directory (by `scripts/asd_risk_classifier.py` when run on its own; in the pipeline, by the publication step from the quality-gated snapshot, together with the dashboards - see docs/08):
 
 | File | Contents |
 |------|----------|

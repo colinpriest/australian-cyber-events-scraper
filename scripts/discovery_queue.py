@@ -16,6 +16,9 @@ handles the cases a run does not:
     python scripts/discovery_queue.py backfill --source CyberDaily --since 2020-01 [--force]
     python scripts/discovery_queue.py refetch-cyberdaily [--days 90 | --all] [--repair-limit N] [--dry-run]
                                                         # fetch stored Cyber Daily stories again
+    python scripts/discovery_queue.py refetch-cyberdaily --until-empty [--max-minutes N] [--concurrency N]
+                                                        # keep going in batches until none is left, the
+                                                        # time budget is spent or the site throttles
 
 See ``cyber_data_collector/processing/retry_queue.py``.
 """
@@ -168,6 +171,30 @@ def _backfill(db_path: str, source: str, months: list[tuple[int, int]], max_even
     return 2 if result["failed"] or result["gave_up"] else 0
 
 
+def _drain_refetch(db_path: str, days: int | None, batch_size: int | None, max_minutes: float | None,
+                   concurrency: int) -> int:
+    """Re-fetch in batches until the queue is empty. Exit 0 drained or out of time (resume later),
+    2 when the site throttled (wait, then resume) or a story left the queue."""
+    from cyber_data_collector.processing import cyberdaily_refetch as cr
+
+    conn = sqlite3.connect(db_path)
+    try:
+        report = cr.drain(conn, days=days, batch_size=batch_size, max_minutes=max_minutes, concurrency=concurrency)
+    finally:
+        conn.close()
+    print("Cyber Daily drain: " + report.summary())
+    if report.ended == cr.THROTTLED_STOP:
+        print("The site is throttling: stopped rather than ask again. Run the same command later; it resumes "
+              "where it stopped.")
+        return 2
+    if report.ended == cr.TIME_STOP:
+        print("Time budget spent; run the same command again to continue.")
+    if report.ended == cr.NO_PROGRESS:
+        print("A batch fetched nothing; stopped.")
+        return 2
+    return 2 if report.missing or report.gave_up else 0
+
+
 def _refetch(db_path: str, days: int | None, limit: int | None, repair_limit: int | None, dry_run: bool) -> int:
     from cyber_data_collector.processing import cyberdaily_refetch
 
@@ -224,6 +251,13 @@ def main(argv: list[str] | None = None) -> int:
                          help="Incomplete (cut-off or short) stories to fetch this run; 0 = no limit "
                               "(default: cyberdaily_refetch.DEFAULT_REPAIR_LIMIT)")
     refetch.add_argument("--dry-run", action="store_true", help="Count the candidates; fetch nothing")
+    refetch.add_argument("--until-empty", action="store_true",
+                         help="Drain: fetch batches until no incomplete story is left, --max-minutes pass or the "
+                              "site throttles (resumable; stories fetched within 24 hours are not fetched again)")
+    refetch.add_argument("--max-minutes", type=float, default=None,
+                         help="Drain time budget in minutes (default: cyberdaily_refetch.DEFAULT_DRAIN_MINUTES)")
+    refetch.add_argument("--concurrency", type=int, default=None,
+                         help="Pages fetched at once by a drain (default: cyberdaily_refetch.DRAIN_CONCURRENCY)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     db_path = resolve_db_path(args.db_path)
@@ -238,6 +272,14 @@ def main(argv: list[str] | None = None) -> int:
         from cyber_data_collector.processing.cyberdaily_refetch import DEFAULT_REPAIR_LIMIT
 
         repair_limit = DEFAULT_REPAIR_LIMIT if args.repair_limit is None else (args.repair_limit or None)
+        if args.until_empty:
+            from cyber_data_collector.processing.cyberdaily_refetch import DEFAULT_DRAIN_MINUTES, DRAIN_CONCURRENCY
+
+            if args.dry_run:
+                parser.error("--until-empty cannot be combined with --dry-run")
+            return _drain_refetch(db_path, None if args.all else args.days, repair_limit,
+                                  DEFAULT_DRAIN_MINUTES if args.max_minutes is None else (args.max_minutes or None),
+                                  args.concurrency or DRAIN_CONCURRENCY)
         return _refetch(db_path, None if args.all else args.days, args.limit, repair_limit, args.dry_run)
     return _drain(db_path, args.limit)
 
