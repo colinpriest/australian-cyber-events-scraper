@@ -62,7 +62,7 @@ from cyber_data_collector.dedup import excerpts
 from cyber_data_collector.dedup.adjudication_cache import AdjudicationCache
 from cyber_data_collector.dedup.adjudicator import Adjudicator, EventRecord
 from cyber_data_collector.dedup.backfill import run_backfill
-from cyber_data_collector.dedup.cluster_adjudicator import ClusterAdjudicator
+from cyber_data_collector.dedup.cluster_adjudicator import CLUSTER_PROMPT_VERSION, ClusterAdjudicator
 from cyber_data_collector.dedup.entity_classification import (
     ClassificationFailed,
     EntityRole,
@@ -1049,7 +1049,8 @@ def cmd_adjudicate_clusters(args) -> int:
         ledger = DedupLedger(conn, role_refresher=refresher)
         resolver = EntityResolver(conn)
         adjudicator = ClusterAdjudicator(
-            resolver=resolver, max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn))
+            resolver=resolver, max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn),
+            call_budget=args.call_budget, neighbours=args.neighbours, blocked=_merge_blocker(conn, ledger))
 
         rows = conn.execute("""
             SELECT d.deduplicated_event_id AS did, d.title, d.summary,
@@ -1112,12 +1113,12 @@ def cmd_adjudicate_clusters(args) -> int:
                 target, sources = ids[0], ids[1:]
                 for source in sources:
                     try:
-                        ledger.merge_events(
-                            target, source,
+                        _merge_carrying_victims(
+                            conn, ledger, target, source,
                             reason=(f"[cluster {group.certainty:.2f}] {group.label}: "
                                     f"{group.reasoning}"),
-                            actor="pipeline",
-                        )
+                            certainty=group.certainty, cutoff=args.min_certainty,
+                            question_version=CLUSTER_PROMPT_VERSION)
                     except (sqlite3.Error, ValueError) as exc:
                         logger.warning("Cluster merge %s -> %s failed: %s",
                                        source, target, exc)
@@ -1370,7 +1371,8 @@ def cmd_reconcile_entities(args) -> int:
         schema.migrate(conn)
         ledger = DedupLedger(conn, role_refresher=refresher)
         adjudicator = ClusterAdjudicator(
-            resolver=EntityResolver(conn), max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn))
+            resolver=EntityResolver(conn), max_cluster_size=args.max_cluster_size, cache=AdjudicationCache(conn),
+            call_budget=args.call_budget, neighbours=args.neighbours, blocked=_merge_blocker(conn, ledger))
 
         rows = conn.execute("""
             SELECT v.entity_name AS entity, d.deduplicated_event_id AS did,
@@ -1440,11 +1442,12 @@ def cmd_reconcile_entities(args) -> int:
                 target, sources = ids[0], ids[1:]
                 for source in sources:
                     try:
-                        ledger.merge_events(
-                            target, source,
+                        _merge_carrying_victims(
+                            conn, ledger, target, source,
                             reason=(f"[entity reconcile {group.certainty:.2f}] "
                                     f"{group.label}: {group.reasoning}"),
-                            actor="pipeline")
+                            certainty=group.certainty, cutoff=args.min_certainty,
+                            question_version=CLUSTER_PROMPT_VERSION)
                         settled.add(source)
                         applied += 1
                     except (sqlite3.Error, ValueError) as exc:
@@ -1752,19 +1755,120 @@ def cmd_resolve_label_contradictions(args) -> int:
     return 2 if snapshot is None else (1 if unresolved else 0)
 
 
+NEIGHBOURHOOD_SUMMARY = Path("instance/dedup_candidate_neighbourhoods.json")
+
+
+def _date_intervals(conn: sqlite3.Connection, ids) -> Dict[str, Any]:
+    """Each event's incident date interval ``(earliest, latest)``: the verified interval when the event has one,
+    else its single date; None when it has no date."""
+    from datetime import date as _date
+
+    have = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+    early = "event_date_earliest" if "event_date_earliest" in have else "NULL"
+    late = "event_date_latest" if "event_date_latest" in have else "NULL"
+    wanted = set(ids)
+
+    def day(value) -> Optional[_date]:
+        try:
+            return _date.fromisoformat(str(value)[:10]) if value else None
+        except ValueError:
+            return None
+
+    out: Dict[str, Any] = {}
+    for did, event_date, lo, hi in conn.execute(
+            f"SELECT deduplicated_event_id, event_date, {early}, {late} FROM DeduplicatedEvents"):
+        if did not in wanted:
+            continue
+        point, start, end = day(event_date), day(lo), day(hi)
+        if start and end and start <= end:
+            out[did] = (start, end)
+        else:
+            out[did] = (point, point) if point else None
+    return out
+
+
+def _event_vendors(conn: sqlite3.Connection, dedup_ids) -> List[str]:
+    """The supplier organisations recorded for these events (scalar vendor and vendor roles)."""
+    names: List[str] = []
+    for did in dict.fromkeys(dedup_ids):
+        row = conn.execute("SELECT vendor_organization_name FROM DeduplicatedEvents "
+                           "WHERE deduplicated_event_id = ?", (did,)).fetchone()
+        if row and row[0]:
+            names.append(row[0])
+        names.extend(r[0] for r in conn.execute(
+            """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (did,)))
+    return list(dict.fromkeys(n for n in names if n))
+
+
+def _merge_carrying_victims(conn: sqlite3.Connection, ledger: DedupLedger, target: str, source: str, *,
+                            reason: str, certainty: float, cutoff: float, question_version: str) -> List[str]:
+    """Merge ``source`` into ``target`` and keep every customer victim recorded on ``source``.
+
+    A supplier incident has several co-equal victims, stored as ``victim`` roles of the event. The ledger's merge
+    moves the records but leaves those roles on the merged-away event, where nothing counts them; they are made
+    victims of ``target`` (not the supplier itself, not a description, not another name for a victim it has),
+    each audited in ``SupplierVictimAttachments``. Raises what the merge raises (a refused merge carries nothing).
+
+    Returns:
+        The names of the victims carried across.
+    """
+    from cyber_data_collector.dedup.supplier_victims import carry_victims, event_victims
+    from cyber_data_collector.dedup.victim_counting import with_acronym_policy
+
+    victims = event_victims(conn, source)
+    vendors = _event_vendors(conn, (target, source))
+    ledger.merge_events(target, source, reason=reason, actor="pipeline")
+    kept = carry_victims(conn, target, source, victims, vendors, with_acronym_policy(conn, EntityResolver(conn)),
+                         subject_id=f"{source}|{target}", probability=certainty, cutoff=cutoff,
+                         question_version=question_version)
+    return kept["carried_victims"]
+
+
+def _merge_blocker(conn: sqlite3.Connection, ledger: DedupLedger):
+    """``(a, b) -> reason or None`` for two deduplicated events a ``different`` ruling or a label forbids joining.
+
+    The ledger refuses such a merge anyway; this lets reconciliation keep them apart *before* a union is built on
+    a link that could not be applied. Labels are resolved once, to the events they name now.
+    """
+    from cyber_data_collector.dedup import label_contradictions
+
+    labelled = label_contradictions.blocked_pairs(conn)
+
+    def blocked(a: str, b: str) -> Optional[str]:
+        reason = labelled.get(frozenset((a, b)))
+        if reason:
+            return reason
+        ruling = ledger.override_conflict(a, b)
+        return f"'different' ruling {ruling}" if ruling else None
+
+    return blocked
+
+
 def cmd_adjudicate_candidates(args) -> int:
     """Find missed duplicates by judging whole groups of candidates.
 
     Builds the multi-key candidate graph (shared article, rare shared subject,
-    or a linked organisation backed by semantic similarity), takes its
-    connected groups, and asks the model to partition each group into
-    incidents. Groups at or above --min-certainty are merged into their
-    best-sourced event; a merge contradicting a human 'different' override is
-    skipped. Every proposal is written to instance/dedup_candidate_clusters.json.
+    or a linked organisation backed by semantic similarity) and asks the model
+    to partition groups of candidates into incidents. A group that fits one
+    prompt (``--max-cluster-size``) is asked whole. A larger group is covered by
+    bounded, overlapping neighbourhoods - each event with its strongest links
+    by shared source, supplier, distinctive terms and date interval - whose
+    answers are reconciled: events are joined only where no neighbourhood
+    separates them and no ``different`` ruling or label forbids it
+    (``--grouping disjoint`` is the earlier behaviour: the group is cut into
+    disjoint slices). At most ``--call-budget`` model calls are made (stored
+    answers are free); what the budget cut is reported and continues next run.
+    Incidents at or above --min-certainty are merged into their best-sourced
+    event, carrying every customer victim recorded on the merged-away events;
+    a merge contradicting a human 'different' override or a label is skipped.
+    Every proposal is written to instance/dedup_candidate_clusters.json and the
+    plan to instance/dedup_candidate_neighbourhoods.json.
     """
+    from cyber_data_collector.dedup import candidate_ranking as ranking
+    from cyber_data_collector.dedup import neighbourhoods as nb
     from cyber_data_collector.dedup.adjudicator import EMBED_CANDIDATE_THRESHOLD
     from cyber_data_collector.dedup.candidates import candidate_components, scope_ids
-
     conn = _connect(args.db)
     refresher = _make_refresher(args)
     try:
@@ -1792,78 +1896,137 @@ def cmd_adjudicate_candidates(args) -> int:
             sim = pair_judge.similarity(by_id[left], by_id[right])
             return sim is not None and sim >= EMBED_CANDIDATE_THRESHOLD
 
-        def weight(key, why) -> float:
-            # Shared article > shared subject > semantic similarity alone.
-            left, right = sorted(key)
-            sim = pair_judge.similarity(by_id[left], by_id[right]) or 0.0
-            if any(w.startswith("shared source") for w in why):
-                return 2.0 + sim
-            if any(w.startswith("shared subject") for w in why):
-                return 1.0 + sim
-            return sim
+        def similarity(left: str, right: str) -> float:
+            return pair_judge.similarity(by_id[left], by_id[right]) or 0.0
 
-        groups = candidate_components(pair_judge.pair_reasons, strong, weight=weight,
-                                      max_size=args.max_cluster_size)
-        if recent is not None:
-            groups = [g for g in groups if recent & set(g)]
-        if args.limit:
-            groups = groups[: args.limit]
-        attach_evidence(conn, [by_id[i] for g in groups for i in g], excerpts.CLUSTER_EVIDENCE_CHARS)
-        print(f"{len(records)} active event(s) -> {len(groups)} candidate group(s) "
-              f"covering {sum(len(g) for g in groups)} event(s)")
+        different = {key for key, same in ledger.load_overrides().items() if not same}
+        blocked = _merge_blocker(conn, ledger)
+        judge = ClusterAdjudicator(resolver=resolver, max_cluster_size=args.max_cluster_size, cache=cache,
+                                   call_budget=args.call_budget, neighbours=args.neighbours, blocked=blocked)
+        summary: Dict[str, Any] = {"grouping": args.grouping, "call_budget": args.call_budget}
+
+        # (members, label, certainty, reasoning) per proposed incident, in a form both groupings share.
+        incidents: List[Dict[str, Any]] = []
+        if args.grouping == "disjoint":
+            def weight(key, why) -> float:
+                # Shared article > shared subject > semantic similarity alone.
+                left, right = sorted(key)
+                sim = pair_judge.similarity(by_id[left], by_id[right]) or 0.0
+                if any(w.startswith("shared source") for w in why):
+                    return 2.0 + sim
+                if any(w.startswith("shared subject") for w in why):
+                    return 1.0 + sim
+                return sim
+
+            groups = candidate_components(pair_judge.pair_reasons, strong, weight=weight,
+                                          max_size=args.max_cluster_size)
+            if recent is not None:
+                groups = [g for g in groups if recent & set(g)]
+            if args.limit:
+                groups = groups[: args.limit]
+            attach_evidence(conn, [by_id[i] for g in groups for i in g], excerpts.CLUSTER_EVIDENCE_CHARS)
+            print(f"{len(records)} active event(s) -> {len(groups)} disjoint candidate group(s) "
+                  f"covering {sum(len(g) for g in groups)} event(s)")
+            for ids in groups:
+                cluster = sorted((by_id[i] for i in ids), key=lambda r: r.event_date or "9999")
+                partition = judge.adjudicate_cluster(cluster)
+                for group, member_ids in partition.groups_as_ids(cluster):
+                    if len(member_ids) >= 2:
+                        incidents.append({"ids": member_ids, "label": group.label, "certainty": group.certainty,
+                                          "reasoning": group.reasoning})
+        else:
+            edges = [tuple(sorted(key)) for key, why in pair_judge.pair_reasons.items() if strong(key, why)]
+            corpus = ranking.load_corpus(conn)
+            if not args.no_supplier_links:
+                # The supplier clue: reports of one supplier breach name a different customer each time and
+                # may share no article or rare word, so the keys above never pair them.
+                supplier_edges, skipped_suppliers = nb.supplier_pairs(corpus)
+                edges = sorted(set(edges) | {tuple(sorted(e)) for e in supplier_edges})
+                summary["supplier_links"] = {"pairs": len(supplier_edges), "suppliers_too_common": skipped_suppliers}
+            linked = {i for edge in edges for i in edge}
+            intervals = _date_intervals(conn, linked)
+            links = nb.build_links(edges, corpus,
+                                   lambda a, b: nb.interval_gap(intervals.get(a), intervals.get(b)),
+                                   bonus=similarity, keep_all=True)
+            plan = nb.plan(links, max_size=args.max_cluster_size, neighbours=args.neighbours, focus=recent)
+            if args.limit:
+                plan.neighbourhoods = plan.neighbourhoods[: args.limit]
+            wanted = {i for n in plan.neighbourhoods for i in n.members}
+            attach_evidence(conn, [by_id[i] for i in sorted(wanted)], excerpts.CLUSTER_EVIDENCE_CHARS)
+            stats = plan.stats()
+            print(f"{len(records)} active event(s) -> {stats['groups']} linked group(s) "
+                  f"(largest {stats['group_sizes_top'][:5]}); {stats['large_groups']} larger than "
+                  f"{args.max_cluster_size} ({stats['events_in_large_groups']} events) -> "
+                  f"{stats['neighbourhoods']} neighbourhood(s) ({stats['whole_group_neighbourhoods']} whole group, "
+                  f"{stats['overlapping_neighbourhoods']} overlapping, largest {stats['largest_neighbourhood']}); "
+                  f"{stats['links_shown']} of {stats['links_total']} link(s) shown together; "
+                  f"call budget {args.call_budget}")
+            result = judge.adjudicate_plan(plan, by_id, links)
+            summary.update(plan=stats, reconciliation=result.stats(),
+                           contradicted_links=[list(c) for c in result.contradicted_links[:50]],
+                           blocked_links=[list(b) for b in result.blocked_links[:50]])
+            incidents = [{"ids": list(i.ids), "label": i.label, "certainty": i.certainty,
+                          "reasoning": i.reasoning, "support": i.support, "representative": i.representative}
+                         for i in result.incidents]
 
         sources = {r[0]: r[1] or 0 for r in conn.execute(
             "SELECT deduplicated_event_id, total_data_sources FROM DeduplicatedEvents")}
         masters = {r[0]: r[1] for r in conn.execute(
             "SELECT deduplicated_event_id, master_enriched_event_id FROM DeduplicatedEvents")}
-        different = {key for key, same in ledger.load_overrides().items() if not same}
-
-        judge = ClusterAdjudicator(resolver=resolver, max_cluster_size=args.max_cluster_size, cache=cache)
         findings: List[Dict] = []
         proposed = applied = vetoed = 0
-        for index, ids in enumerate(groups, start=1):
-            cluster = sorted((by_id[i] for i in ids), key=lambda r: r.event_date or "9999")
-            partition = judge.adjudicate_cluster(cluster)
-            for group, member_ids in partition.groups_as_ids(cluster):
-                if len(member_ids) < 2:
+        carried_total = 0
+        for index, incident in enumerate(incidents, start=1):
+            ordered = sorted(incident["ids"], key=lambda i: (-sources.get(i, 0), by_id[i].event_date or "9999"))
+            findings.append({
+                "label": incident["label"], "certainty": incident["certainty"], "reasoning": incident["reasoning"],
+                "target": ordered[0], "members": [{"id": i, "title": by_id[i].title, "date": by_id[i].event_date}
+                                                  for i in ordered],
+                **({"support": incident["support"]} if "support" in incident else {})})
+            proposed += len(ordered) - 1
+            print(f"[{index}] {incident['label'][:70]} ({len(ordered)} events, certainty {incident['certainty']:.2f})")
+            if args.verbose:
+                for i in ordered:
+                    print(f"      - [{by_id[i].event_date or 'no date'}] {by_id[i].title[:70]}")
+            if args.dry_run or incident["certainty"] < args.min_certainty:
+                continue
+            target = ordered[0]
+            for source in ordered[1:]:
+                if frozenset((masters.get(target), masters.get(source))) in different:
+                    vetoed += 1
                     continue
-                ordered = sorted(member_ids, key=lambda i: (-sources.get(i, 0), by_id[i].event_date or "9999"))
-                findings.append({
-                    "label": group.label, "certainty": group.certainty,
-                    "reasoning": group.reasoning, "target": ordered[0],
-                    "members": [{"id": i, "title": by_id[i].title, "date": by_id[i].event_date}
-                                for i in ordered],
-                })
-                proposed += len(ordered) - 1
-                print(f"[{index}] {group.label[:70]} ({len(ordered)} events, "
-                      f"certainty {group.certainty:.2f})")
-                if args.verbose:
-                    for i in ordered:
-                        print(f"      - [{by_id[i].event_date or 'no date'}] {by_id[i].title[:70]}")
-                if args.dry_run or group.certainty < args.min_certainty:
+                try:
+                    carried = _merge_carrying_victims(
+                        conn, ledger, target, source,
+                        reason=f"[candidate cluster {incident['certainty']:.2f}] {incident['label']}: "
+                               f"{incident['reasoning']}",
+                        certainty=incident["certainty"], cutoff=args.min_certainty,
+                        question_version=CLUSTER_PROMPT_VERSION)
+                except (sqlite3.Error, ValueError) as exc:
+                    logger.warning("Candidate-cluster merge %s -> %s failed: %s", source, target, exc)
                     continue
-                target = ordered[0]
-                for source in ordered[1:]:
-                    if frozenset((masters.get(target), masters.get(source))) in different:
-                        vetoed += 1
-                        continue
-                    try:
-                        ledger.merge_events(
-                            target, source,
-                            reason=f"[candidate cluster {group.certainty:.2f}] {group.label}: {group.reasoning}",
-                            actor="pipeline")
-                        applied += 1
-                    except (sqlite3.Error, ValueError) as exc:
-                        logger.warning("Candidate-cluster merge %s -> %s failed: %s", source, target, exc)
+                applied += 1
+                carried_total += len(carried)
+                if carried and args.verbose:
+                    print(f"      victims carried from {source[:8]}: {', '.join(carried)}")
             conn.commit()
 
         CANDIDATE_CLUSTER_FINDINGS.parent.mkdir(parents=True, exist_ok=True)
         CANDIDATE_CLUSTER_FINDINGS.write_text(
             json.dumps(findings, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        summary["adjudicator"] = dict(judge.stats)
+        summary["plan_run"] = judge.last_plan
+        NEIGHBOURHOOD_SUMMARY.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         print(f"\n{proposed} merge(s) proposed; {applied} applied; {vetoed} vetoed by a "
               f"human 'different' override" + (" (DRY RUN)" if args.dry_run else
-              f"; the rest were below certainty {args.min_certainty}"))
+              f"; the rest were below certainty {args.min_certainty}")
+              + (f"; {carried_total} customer victim(s) carried across" if applied else ""))
         print(f"cluster stats: {judge.stats}")
+        if judge.stats["budget_skipped"]:
+            print(f"CALL BUDGET SPENT: {judge.stats['budget_skipped']} neighbourhood(s) were not asked "
+                  f"(budget {args.call_budget}); stored answers were used and the next run continues with "
+                  "the rest - raise --call-budget to ask more now.")
         print(f"cache: {cache.stats}")
     finally:
         _flush_refresher(conn, refresher)
@@ -3648,6 +3811,37 @@ def cmd_rescrape_short_pages(args) -> int:
     return 0
 
 
+def cmd_refresh_cited_documents(args) -> int:
+    """Check cited pages already read, and rerun the decisions a changed page affects.
+
+    See :mod:`cyber_data_collector.processing.cited_refresh`: due pages cited by
+    active events are ranked by what depends on them and the first ``--limit``
+    are fetched with their stored validators (ETag / Last-Modified) or compared
+    by content fingerprint; the records citing a changed page are judged again
+    by the acceptance gate against the cached pages, and the events built on a
+    record whose enrichment changed are refreshed. A page whose check fails
+    keeps the version already read. No model and no paid API is involved.
+    """
+    from cyber_data_collector.processing.cited_documents import CitedDocumentStore
+    from cyber_data_collector.processing.cited_refresh import refresh_cited_documents
+
+    conn = _connect(args.db)
+    try:
+        store = CitedDocumentStore(conn, max_workers=args.fetch_workers)
+        as_of = datetime.fromisoformat(args.as_of) if args.as_of else None
+        report = refresh_cited_documents(conn, store, limit=args.limit, dry_run=args.dry_run, now=as_of,
+                                         refresh_events=not args.no_event_refresh)
+    finally:
+        conn.close()
+    for line in report.lines():
+        print(line)
+    if args.verbose:
+        for due in report.plan.selected:
+            print(f"  {due.priority:6.2f}  every {due.interval_days:.0f}d, {due.age_days:.0f}d since the last "
+                  f"check  [{', '.join(due.reasons)}]  {due.url}")
+    return 0
+
+
 def cmd_publication_dates(args) -> int:
     """Store every record's publication date and each event's first report; see publication_dates."""
     from cyber_data_collector.processing.incident_dates import (
@@ -3815,6 +4009,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--entity", default=None, help="Only clusters matching this name.")
     p.add_argument("--min-certainty", type=float, default=0.75)
     p.add_argument("--max-cluster-size", type=int, default=20)
+    p.add_argument("--call-budget", type=int, default=250,
+                   help="Most model calls this run may make for cluster/neighbourhood partitions (default 250; stored answers are free and do not count; 0 = stored answers only)")
+    p.add_argument("--neighbours", type=int, default=8,
+                   help="Strongest links kept per event when a group is too large to show whole (default 8)")
+    p.add_argument("--verbose", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_adjudicate_clusters)
 
@@ -3884,6 +4083,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--entity")
     p.add_argument("--min-certainty", type=float, default=0.8)
     p.add_argument("--max-cluster-size", type=int, default=25)
+    p.add_argument("--call-budget", type=int, default=250,
+                   help="Most model calls this run may make for cluster/neighbourhood partitions (default 250; stored answers are free and do not count; 0 = stored answers only)")
+    p.add_argument("--neighbours", type=int, default=8,
+                   help="Strongest links kept per event when a group is too large to show whole (default 8)")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_reconcile_entities)
@@ -4044,8 +4247,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--recent-days", type=int, default=None,
                    help="Only groups containing an event changed in the last N days.")
     p.add_argument("--min-certainty", type=float, default=0.9)
-    p.add_argument("--max-cluster-size", type=int, default=20)
-    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--max-cluster-size", type=int, default=20,
+                   help="Most events shown to the model together")
+    p.add_argument("--grouping", choices=("neighbourhoods", "disjoint"), default="neighbourhoods",
+                   help="neighbourhoods (default): a group too large to show whole is covered by overlapping "
+                        "neighbourhoods of each event's strongest links, answers reconciled; disjoint: the "
+                        "earlier behaviour, a large group cut into disjoint slices")
+    p.add_argument("--call-budget", type=int, default=250,
+                   help="Most model calls this run may make for cluster/neighbourhood partitions (default 250; stored answers are free and do not count; 0 = stored answers only)")
+    p.add_argument("--neighbours", type=int, default=8,
+                   help="Strongest links kept per event when a group is too large to show whole (default 8)")
+    p.add_argument("--no-supplier-links", action="store_true",
+                   help="Do not link events that record the same supplier (the supplier clue)")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Ask at most this many groups / neighbourhoods")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_adjudicate_candidates)
@@ -4237,6 +4452,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--concurrency", type=int, default=3)
     p.add_argument("--dry-run", action="store_true", help="Count the pages; fetch nothing")
     p.set_defaults(func=cmd_rescrape_short_pages)
+
+    p = sub.add_parser("refresh-cited-documents",
+                       help="Check cited pages already read (ETag / Last-Modified, else a content "
+                            "fingerprint), keep the old version of a changed page, and rejudge the "
+                            "facts and events a changed page affects; bounded by --limit")
+    p.add_argument("--limit", type=int, default=25,
+                   help="Most pages checked per run (the budget; default 25)")
+    p.add_argument("--fetch-workers", type=int, default=2)
+    p.add_argument("--no-event-refresh", action="store_true",
+                   help="Do not refresh the events built on a record whose enrichment changed")
+    p.add_argument("--as-of", default=None, metavar="YYYY-MM-DD",
+                   help="Plan as if run on this day (with --dry-run: how many pages would be due then)")
+    p.add_argument("--verbose", action="store_true", help="List the pages selected, with why")
+    p.add_argument("--dry-run", action="store_true", help="Choose and count; fetch nothing, change no data")
+    p.set_defaults(func=cmd_refresh_cited_documents)
 
     p = sub.add_parser("publication-dates",
                        help="Store each record's publication date (the source's own, else the page's "

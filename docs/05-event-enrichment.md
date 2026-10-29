@@ -478,11 +478,48 @@ navigation, headers, footers and forms dropped; PDFs via pdfplumber, first 40
 pages; 200,000-character cap) and its own publication date read from page
 metadata (`article:published_time`, `datePublished`, `<time datetime>`).
 Results are cached in `CitedDocuments(url PK, fetched_at, status, http_status,
-content_type, final_url, text, error, published_date)`. Failures (`http_error`,
-`fetch_error`, `unsupported_type`, `empty`) are cached too and retried after 7
-days; a page read successfully is never fetched again. Fetching public pages
-is not a paid API and is not counted by the API budget. A dry run still caches
-the pages it reads (a copy of the web, not enrichment data).
+content_type, final_url, text, error, published_date, etag, last_modified,
+content_hash, version, first_fetched_at, last_checked_at, last_changed_at,
+change_count, unchanged_streak, last_check_status, last_check_error)`. Failures
+(`http_error`, `fetch_error`, `unsupported_type`, `empty`) are cached too and
+retried after 7 days. Fetching public pages is not a paid API and is not
+counted by the API budget. A dry run still caches the pages it reads (a copy
+of the web, not enrichment data).
+
+**Refreshing pages that were read** (`processing/cited_refresh.py`,
+`dedup_admin.py refresh-cited-documents`, a step of the refresh hygiene phase).
+`get_documents` never fetches a page it has read, so a corrected notice or an
+updated victim list at the same URL was invisible to the facts and events that
+rested on it. Each run now checks a bounded number of read pages that an
+*active* event's record cites (`--cited-refresh-limit`, default 25):
+
+- *Due.* Last checked longer ago than its interval: 14 days for a page that
+  changed within 180 days or was published in the last 60, 45 days otherwise,
+  doubling for each consecutive check that found nothing (to 180).
+- *Order.* Withheld fact among the citing records +4, unresolved victim
+  attribution +3, partial / unsupported evidence status +3, an incident in the
+  last 180 days +2, changed before +2, how overdue (0 to 2), how many active
+  events cite it (0.5 each, up to 3).
+- *Check.* Conditional request with the stored `ETag` / `Last-Modified`
+  (`If-None-Match` / `If-Modified-Since`): a 304 is recorded and changes
+  nothing. Otherwise the page is fetched and its `content_hash` (SHA-256 of the
+  whitespace-normalised extracted text) compared with the stored one. Changed:
+  the previous row is copied to `CitedDocumentVersions(url, version, fetched_at,
+  content_hash, etag, last_modified, ..., text, superseded_at)` and
+  `CitedDocuments` takes the new text, hash, validators and fetch time with
+  `version` + 1, `change_count` + 1. A check that fails (network, HTTP error, no
+  usable text) is recorded in `last_check_status` / `last_check_error` and the
+  page that was read stays the evidence.
+- *Rerun.* Only the records citing a changed page (`sources_consulted`, or the
+  source of a supported `EnrichmentFactSupport` row) are judged again, by the same
+  acceptance gate against the **cached** pages - nothing is fetched and no model
+  is called; a record citing a page that is not cached is deferred. Fact support,
+  typed columns and enrichment JSON are rewritten as `--recompute-reliability`
+  does (a claim withheld on the old text is supported again when the correction
+  states it, and the reverse). A record whose enrichment changed changes its
+  `RecordFingerprints` fingerprint, so `refresh_changed_events` refreshes the
+  events built on it and marks their roles outdated; Jev judgements are keyed on
+  a hash of their evidence, so only those events are asked again.
 
 **Which pages count.** A cited page is *about the incident* only if it names
 an organisation the record itself names - the claimed victim name or an

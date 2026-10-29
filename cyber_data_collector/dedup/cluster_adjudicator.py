@@ -18,18 +18,28 @@ cannot.
 
 Cost also improves: one call per cluster instead of N(N-1)/2 pairwise calls.
 A 13-member cluster goes from 78 calls to 1.
+
+**Clusters too big to show whole.** The prompt loses track of indices past
+``MAX_CLUSTER_SIZE`` records. Such a cluster used to be skipped (a bucket of
+more than twice the limit) or cut into disjoint slices, so two reports of one
+supplier incident on opposite sides of a cut were never judged together. It is
+now covered by bounded, overlapping neighbourhoods of strongly linked events
+whose answers are reconciled (:mod:`cyber_data_collector.dedup.neighbourhoods`),
+within an explicit ``call_budget``.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from pydantic import BaseModel, Field, model_validator
 
 from cyber_data_collector.dedup import adjudication_cache as stored
+from cyber_data_collector.dedup import candidate_ranking as ranking
 from cyber_data_collector.dedup import excerpts
+from cyber_data_collector.dedup import neighbourhoods as nb
 from cyber_data_collector.dedup.adjudicator import EventRecord
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.utils.llm_models import chat_params, openai_model
@@ -37,8 +47,12 @@ from cyber_data_collector.utils.llm_models import chat_params, openai_model
 logger = logging.getLogger(__name__)
 
 # Above this many members the prompt gets unwieldy and the model starts losing
-# track of indices. Larger clusters are chunked.
+# track of indices. Larger clusters are covered by overlapping neighbourhoods (dedup/neighbourhoods.py).
 MAX_CLUSTER_SIZE = 20
+# A bucket larger than this is too diffuse to be one incident's coverage (a surname, a country). Below it, a
+# bucket bigger than MAX_CLUSTER_SIZE is covered by overlapping neighbourhoods instead of being skipped or
+# cut into disjoint slices; above it the bucket is counted in ``stats["buckets_too_diffuse"]`` and logged.
+MAX_BUCKET_SIZE = 400
 #: Bumped when the cluster prompt or what it shows changes (v2: excerpts instead of an opening).
 CLUSTER_PROMPT_VERSION = "cluster-partition-v2"
 
@@ -133,6 +147,29 @@ def singleton_partition(size: int, label: str = "ungrouped") -> ClusterPartition
     ])
 
 
+def partition_from_incidents(records: Sequence[EventRecord], incidents: Sequence[nb.Incident]) -> ClusterPartition:
+    """A full partition of ``records``: each reconciled incident as one group, every other record on its own."""
+    index = {r.enriched_event_id: i for i, r in enumerate(records, start=1)}
+    groups: List[IncidentGroup] = []
+    placed: Set[str] = set()
+    for incident in incidents:
+        members = [i for i in incident.ids if i in index]
+        if len(members) < 2:
+            continue
+        groups.append(IncidentGroup(
+            label=incident.label or "reconciled incident", member_indices=sorted(index[i] for i in members),
+            certainty=incident.certainty,
+            reasoning=incident.reasoning or "Reconciled from overlapping neighbourhoods."))
+        placed.update(members)
+    for record in records:
+        if record.enriched_event_id not in placed:
+            groups.append(IncidentGroup(
+                label=f"ungrouped #{index[record.enriched_event_id]}",
+                member_indices=[index[record.enriched_event_id]],
+                certainty=0.0, reasoning="No neighbourhood placed this record with another."))
+    return ClusterPartition(incidents=groups)
+
+
 class ClusterAdjudicator:
     """Partitions a cluster of records into distinct real-world incidents."""
 
@@ -143,6 +180,11 @@ class ClusterAdjudicator:
         model: Optional[str] = None,
         max_cluster_size: int = MAX_CLUSTER_SIZE,
         cache: Optional["stored.AdjudicationCache"] = None,
+        call_budget: Optional[int] = None,
+        neighbours: int = nb.NEIGHBOURS_PER_EVENT,
+        link_min_certainty: float = nb.LINK_MIN_CERTAINTY,
+        blocked: Optional[nb.Blocked] = None,
+        max_bucket_size: int = MAX_BUCKET_SIZE,
     ):
         self.resolver = resolver or EntityResolver()
         self._client = openai_client
@@ -151,10 +193,20 @@ class ClusterAdjudicator:
         self.max_cluster_size = max_cluster_size
         # Persisted answers (None: every cluster is asked, as before).
         self.cache = cache
+        # Model calls this adjudicator may make (cached answers do not count); None = no bound.
+        self.call_budget = call_budget
+        self.neighbours = neighbours
+        self.link_min_certainty = link_min_certainty
+        # ``(a, b) -> reason`` for a pair a ``different`` ruling or label forbids joining.
+        self.blocked = blocked
+        self.max_bucket_size = max_bucket_size
         self.stats: Dict[str, int] = {
             "clusters": 0, "llm_calls": 0, "llm_failures": 0,
-            "invalid_partitions": 0, "chunked": 0, "llm_cached": 0,
+            "invalid_partitions": 0, "oversized": 0, "llm_cached": 0,
+            "budget_skipped": 0, "buckets_too_diffuse": 0,
         }
+        #: Plan and reconciliation figures of the last oversized cluster / candidate group planned.
+        self.last_plan: Dict[str, Any] = {}
 
     def _get_client(self):
         if self._client_ready:
@@ -199,8 +251,11 @@ class ClusterAdjudicator:
 
         Rarity is measured from corpus frequency, so "data" or "breach" never
         form a bucket. Buckets that are duplicates or subsets of another are
-        dropped, and anything larger than twice the adjudication limit is
-        discarded as too diffuse to be one incident.
+        dropped. A bucket larger than the adjudication limit is kept - it is
+        covered by overlapping neighbourhoods when adjudicated - unless it is
+        larger than ``max_bucket_size``, which is too diffuse to be one
+        incident's coverage; those are counted and logged, never dropped
+        silently.
         """
         self.resolver.fit([r.entity_name for r in records])
 
@@ -238,7 +293,12 @@ class ClusterAdjudicator:
         clusters: List[List[EventRecord]] = []
         for members in sorted(buckets.values(), key=len, reverse=True):
             unique = list({m.enriched_event_id: m for m in members}.values())
-            if len(unique) < 2 or len(unique) > self.max_cluster_size * 2:
+            if len(unique) < 2:
+                continue
+            if len(unique) > self.max_bucket_size:
+                self.stats["buckets_too_diffuse"] += 1
+                logger.warning("Cluster bucket of %d events is larger than %d: too diffuse to be one "
+                               "incident, not adjudicated", len(unique), self.max_bucket_size)
                 continue
             key = frozenset(m.enriched_event_id for m in unique)
             if key in seen or any(key <= existing for existing in seen):
@@ -268,9 +328,26 @@ class ClusterAdjudicator:
             return singleton_partition(size)
 
         if size > self.max_cluster_size:
-            self.stats["chunked"] += 1
-            return self._adjudicate_chunked(records)
+            self.stats["oversized"] += 1
+            return self._adjudicate_oversized(records)
 
+        partition = self.answer(records)
+        return partition if partition is not None else singleton_partition(size)
+
+    def calls_remaining(self) -> Optional[int]:
+        """Model calls left in the budget (None: unbounded)."""
+        if self.call_budget is None:
+            return None
+        return max(self.call_budget - self.stats["llm_calls"], 0)
+
+    def answer(self, records: Sequence[EventRecord]) -> Optional[ClusterPartition]:
+        """The valid partition of ``records`` (at most ``max_cluster_size``), or None when there is no answer.
+
+        None means nothing was learned - no API client, a failed call, an invalid partition, or the call budget
+        spent - and is *not* the same as an answer that keeps every record apart. A stored answer is returned
+        whatever the budget (it costs nothing).
+        """
+        size = len(records)
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": self._render_cluster(records)},
@@ -287,7 +364,10 @@ class ClusterAdjudicator:
         if partition is None:
             client = self._get_client()
             if client is None:
-                return singleton_partition(size)
+                return None
+            if self.call_budget is not None and self.stats["llm_calls"] >= self.call_budget:
+                self.stats["budget_skipped"] += 1
+                return None
 
             try:
                 self.stats["llm_calls"] += 1
@@ -299,7 +379,7 @@ class ClusterAdjudicator:
             except Exception as exc:  # noqa: BLE001 - a failed cluster must not abort a run
                 self.stats["llm_failures"] += 1
                 logger.warning("Cluster adjudication failed (%s); leaving unchanged", exc)
-                return singleton_partition(size)
+                return None
 
         problems = partition.validate_covers(size)
         if problems:
@@ -307,31 +387,68 @@ class ClusterAdjudicator:
             logger.warning(
                 "Cluster partition invalid (%s); leaving unchanged", "; ".join(problems)
             )
-            return singleton_partition(size)
+            return None
         if self.cache is not None and not was_cached:
             # Only a valid partition is kept: an invalid one is asked again next run.
             self.cache.store_decision(key, "cluster", CLUSTER_PROMPT_VERSION, excerpts.EXCERPT_VERSION, self.model,
                                       [r.enriched_event_id for r in records], partition.model_dump())
         return partition
 
-    def _adjudicate_chunked(self, records: Sequence[EventRecord]) -> ClusterPartition:
-        """Adjudicate an oversized cluster in slices, then renumber.
+    # ------------------------------------------------------------------
+    # Clusters too big to show whole
+    # ------------------------------------------------------------------
 
-        Chunking loses some cross-chunk context, so it is a fallback for very
-        large clusters rather than the normal path.
+    def adjudicate_plan(
+        self,
+        plan: nb.Plan,
+        records_by_id: Dict[str, EventRecord],
+        links: Optional[Dict[nb.Pair, nb.Link]] = None,
+        prepare: Optional[Callable[[List[EventRecord]], None]] = None,
+        order: Callable[[EventRecord], Any] = lambda r: (r.event_date or "9999", r.enriched_event_id),
+    ) -> nb.Reconciliation:
+        """Ask each planned neighbourhood for a partition and reconcile the answers.
+
+        Neighbourhoods are asked in plan order (most links settled first). Once the call budget is spent the rest
+        are answered only from stored answers; what could not be asked is counted in ``stats["budget_skipped"]``
+        and the next run continues. Only valid partitions take part in reconciliation.
+
+        Args:
+            plan: From :func:`neighbourhoods.plan`.
+            records_by_id: Every record named by the plan.
+            links: The evidence links, for choosing each incident's representative.
+            prepare: Called with a neighbourhood's records before they are rendered (attach evidence excerpts).
+            order: How a neighbourhood's records are ordered in the prompt (the answer cache keys on it).
         """
-        incidents: List[IncidentGroup] = []
-        for start in range(0, len(records), self.max_cluster_size):
-            chunk = records[start:start + self.max_cluster_size]
-            part = self.adjudicate_cluster(chunk)
-            for group in part.incidents:
-                incidents.append(IncidentGroup(
-                    label=group.label,
-                    member_indices=[start + i for i in group.member_indices],
-                    certainty=group.certainty,
-                    reasoning=group.reasoning,
-                ))
-        return ClusterPartition(incidents=incidents)
+        answers: List[nb.NeighbourhoodAnswer] = []
+        for neighbourhood in plan.neighbourhoods:
+            records = sorted((records_by_id[i] for i in neighbourhood.members), key=order)
+            if prepare is not None:
+                prepare(records)
+            partition = self.answer(records)
+            if partition is None:
+                continue
+            groups = tuple(
+                nb.GroupAnswer(tuple(ids), group.certainty, group.label, group.reasoning)
+                for group, ids in partition.groups_as_ids(records))
+            answers.append(nb.NeighbourhoodAnswer(tuple(r.enriched_event_id for r in records), groups))
+        result = nb.reconcile(answers, min_certainty=self.link_min_certainty, blocked=self.blocked, links=links)
+        self.last_plan = {**plan.stats(), "asked": len(plan.neighbourhoods), "answered": len(answers),
+                          **{f"reconciled_{k}": v for k, v in result.stats().items()}}
+        return result
+
+    def _adjudicate_oversized(self, records: Sequence[EventRecord]) -> ClusterPartition:
+        """Partition a cluster of more than ``max_cluster_size`` records through overlapping neighbourhoods."""
+        by_id = {r.enriched_event_id: r for r in records}
+
+        def gap_of(a: str, b: str) -> Optional[int]:
+            left, right = by_id[a].parsed_date(), by_id[b].parsed_date()
+            return abs((left - right).days) if left and right else None
+
+        corpus = ranking.corpus_from_records(records)
+        links = nb.links_within(list(by_id), corpus, gap_of)
+        plan = nb.plan(links, max_size=self.max_cluster_size, neighbours=self.neighbours)
+        result = self.adjudicate_plan(plan, by_id, links)
+        return partition_from_incidents(records, result.incidents)
 
     @staticmethod
     def _system_prompt() -> str:
