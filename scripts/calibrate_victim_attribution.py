@@ -10,11 +10,31 @@ Three steps, each reproducible from committed files:
                * ``B`` - a seeded sample of 0.5-0.9; ``C`` - of 0.9 and above.
                B and C are weighted up to their bands and measure recall.
 
+               ``sample --extend-below P --extend-stratum NAME`` instead **adds
+               a census** to the existing sample file: every pair whose final
+               score on ``--db``'s *current* evidence is below ``P`` and that
+               is not yet sampled becomes a row of stratum ``NAME``, weight 1,
+               and a sampled pair in that region whose weight was above 1
+               moves into it with weight 1 (it is now included with
+               certainty). Every other row keeps its stratum and weight: a
+               row outside the region keeps its inclusion probability, so its
+               weight (1/probability) still estimates its stratum's pairs
+               outside the region without bias. Every pair must have a score on
+               its current evidence (run ``dedup_admin.py check-victim-attribution``
+               on the database first); otherwise nothing is written. With
+               ``--frame-db`` the census is limited to the pairs of the
+               database the sample was drawn on (its weights describe that
+               population); pairs of ``--db`` outside it are left out and
+               counted.
+
 ``packets``    Writes one JSON labelling packet per sampled pair to
                ``--out`` (not committed): the event, its records' page text and
                Perplexity research, the corroboration search, the recorded
-               victim's timeline and the candidate organisations - and **no
-               score**. Labellers work from the packet plus web search.
+               victim's timeline and the candidate organisations (the same
+               candidates a replacement is chosen among, including those the
+               event's text names) - and **no score**. Labellers work from the
+               packet plus web search. ``--unlabelled-only`` writes packets only
+               for sampled pairs with no label yet (an extension).
 
 ``calibrate``  Reads ``evaluation/victim_attribution_labels.csv``
                (``pair_id,deduplicated_event_id,recorded_victim,label,
@@ -40,7 +60,8 @@ pairs); the snapshot name is recorded.
 
 Usage (from the project root):
     python scripts/calibrate_victim_attribution.py --db <snapshot> sample
-    python scripts/calibrate_victim_attribution.py --db <snapshot> packets --out <dir>
+    python scripts/calibrate_victim_attribution.py --db <snapshot> sample --extend-below 0.5 --extend-stratum D \n        --frame-db <database the sample was drawn on>
+    python scripts/calibrate_victim_attribution.py --db <snapshot> packets --out <dir> [--unlabelled-only]
     python scripts/calibrate_victim_attribution.py --db <snapshot> calibrate
 """
 
@@ -52,6 +73,7 @@ import json
 import random
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -67,7 +89,97 @@ from scripts.calibrate_event_reality import bootstrap, choose_cutoff, wilson  # 
 SAMPLE_PATH = vj.ROOT / "evaluation" / "victim_attribution_sample.csv"
 
 
+class ExtensionError(ValueError):
+    """The sample cannot be extended as asked; nothing is written."""
+
+
+def extend_sample(rows: List[Dict[str, str]], probs: Dict[str, float], population: List[str],
+                  below: float, stratum: str) -> Dict:
+    """The sample with a census of every pair of ``population`` scoring below ``below`` added as ``stratum``.
+
+    ``rows`` are the sample file's rows (``pair_id``, ``stratum``, ``weight``); ``probs`` the final score of
+    each pair on its current evidence. Returns ``{"rows", "added", "moved", "region"}``. A sampled pair in
+    the region with weight above 1 moves into ``stratum`` with weight 1; every other row is unchanged.
+    Raises :class:`ExtensionError` when a pair of ``population`` has no score (a census needs every one),
+    when ``stratum`` is already used, or when a pair is sampled twice.
+    """
+    seen = [r["pair_id"] for r in rows]
+    if len(set(seen)) != len(seen):
+        raise ExtensionError("the sample file lists a pair more than once")
+    if any(r["stratum"] == stratum for r in rows):
+        raise ExtensionError(f"stratum {stratum!r} is already in the sample; choose a new --extend-stratum")
+    unscored = [pid for pid in population if pid not in probs]
+    if unscored:
+        raise ExtensionError(f"{len(unscored)} pair(s) have no final score on their current evidence (e.g. "
+                             f"{unscored[0]}); run dedup_admin.py check-victim-attribution on this database first")
+    region = sorted(pid for pid in population if probs[pid] < below)
+    in_region = set(region)
+    out, moved = [], []
+    for r in rows:
+        if r["pair_id"] in in_region and float(r["weight"]) > 1.0:
+            moved.append({"pair_id": r["pair_id"], "from_stratum": r["stratum"], "from_weight": r["weight"]})
+            out.append({"pair_id": r["pair_id"], "stratum": stratum, "weight": 1.0})
+        else:
+            out.append(dict(r))
+    added = [pid for pid in region if pid not in set(seen)]
+    out += [{"pair_id": pid, "stratum": stratum, "weight": 1.0} for pid in added]
+    return {"rows": out, "added": added, "moved": moved, "region": region}
+
+
+def frame_pairs(path: str) -> List[str]:
+    """The pairs of the database a sample was drawn on (read-only): the population its weights describe."""
+    if not Path(path).is_file():
+        raise ExtensionError(f"frame database {path} not found")
+    conn = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+    try:
+        return [p["pair_id"] for p in vj.pairs_to_check(conn)]
+    finally:
+        conn.close()
+
+
+def cmd_extend(args) -> int:
+    rows = list(csv.DictReader(SAMPLE_PATH.open(encoding="utf-8")))
+    conn = sqlite3.connect(args.db)
+    pairs = vj.pairs_to_check(conn)
+    population = [p["pair_id"] for p in pairs]
+    outside = 0
+    try:
+        if args.frame_db:
+            # The census covers the population the existing weights describe, not pairs the sample could never
+            # have drawn (on a pre-rejection snapshot: events rejected before the sample was drawn).
+            frame = set(frame_pairs(args.frame_db))
+            missing = [r["pair_id"] for r in rows if r["pair_id"] not in frame]
+            if missing:
+                raise ExtensionError(f"{len(missing)} sampled pair(s) are not in the frame database (e.g. "
+                                     f"{missing[0]}): it is not the database the sample was drawn on")
+            outside = sum(pid not in frame for pid in population)
+            population = [pid for pid in population if pid in frame]
+        probs = vj.stored_final_probabilities(conn, [p for p in pairs if p["pair_id"] in set(population)])
+        ext = extend_sample(rows, probs, population, args.extend_below, args.extend_stratum)
+    except ExtensionError as exc:
+        print(f"ERROR: {exc}. Nothing written.", file=sys.stderr)
+        return 2
+    if args.frame_db:
+        print(f"Frame {Path(args.frame_db).name}: {len(population)} pair(s) of {Path(args.db).name} in it, "
+              f"{outside} outside it left out of the census.")
+    with SAMPLE_PATH.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["pair_id", "stratum", "weight"])
+        w.writerows([(r["pair_id"], r["stratum"], r["weight"]) for r in ext["rows"]])
+    print(f"Census of the {len(ext['region'])} pair(s) of {Path(args.db).name} scoring below {args.extend_below} "
+          f"on current evidence, as stratum {args.extend_stratum} (weight 1): {len(ext['added'])} added, "
+          f"{len(ext['moved'])} sampled pair(s) moved in from "
+          f"{dict(sorted(Counter(m['from_stratum'] for m in ext['moved']).items()))}; "
+          f"other rows unchanged. Written {SAMPLE_PATH}")
+    return 0
+
+
 def cmd_sample(args) -> int:
+    if args.extend_below is not None:
+        if not args.extend_stratum:
+            print("ERROR: --extend-below needs --extend-stratum (a new stratum name)", file=sys.stderr)
+            return 2
+        return cmd_extend(args)
     conn = sqlite3.connect(args.db)
     pairs = vj.pairs_to_check(conn)
     probs = vj.stored_final_probabilities(conn, pairs)      # decisions on each pair's current evidence
@@ -92,7 +204,14 @@ def cmd_sample(args) -> int:
 
 
 def packet(conn: sqlite3.Connection, pair_id: str) -> Dict:
-    """Everything a labeller sees for one pair - never a score."""
+    """Everything a labeller sees for one pair - never a score.
+
+    The candidates are those a replacement is chosen among (:func:`vj.choose_replacement`), including the
+    organisations the event's text names (one stored extraction per event, reused by ``calibrate``), so a
+    labeller who copies a candidate string names exactly what the choice can return. A failed extraction
+    raises: a packet is never written with fewer candidates than the choice would see.
+    """
+    from cyber_data_collector.dedup import event_organisations
     from cyber_data_collector.dedup.org_timeline import stored
 
     did, entity_id = pair_id.split("|")
@@ -103,8 +222,10 @@ def packet(conn: sqlite3.Connection, pair_id: str) -> Dict:
     if timeline:
         state["organisation_timeline"]["researched_at"] = timeline["researched_at"][:10]
     others = [n for _, n in vj._victims(conn, did) if n != victim]
+    organisations = event_organisations.named_organisations(conn, did)
+    conn.commit()   # the extraction is stored once
     state["candidate_organisations_from_evidence"] = [
-        c["name"] for c in vj.replacement_candidates(conn, did, [victim] + others)]
+        c["name"] for c in vj.replacement_candidates(conn, did, [victim] + others, organisations=organisations)]
     return {"pair_id": pair_id, "deduplicated_event_id": did, **state}
 
 
@@ -113,6 +234,9 @@ def cmd_packets(args) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rows = list(csv.DictReader(SAMPLE_PATH.open(encoding="utf-8")))
+    if args.unlabelled_only:
+        labelled = set(vj.load_labels())
+        rows = [r for r in rows if r["pair_id"] not in labelled]
     rng = random.Random(args.seed)
     rng.shuffle(rows)   # labellers see no stratum order either
     index = []
@@ -261,9 +385,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--sample-mid", type=int, default=40)
     p.add_argument("--sample-high", type=int, default=40)
     p.add_argument("--seed", type=int, default=20261027)
+    p.add_argument("--extend-below", type=float, default=None,
+                   help="add a census of every unsampled pair scoring below this on current evidence")
+    p.add_argument("--extend-stratum", default=None, help="the new stratum's name (with --extend-below)")
+    p.add_argument("--frame-db", default=None,
+                   help="with --extend-below: only pairs also in this database (the one the sample was drawn on)")
     p.set_defaults(func=cmd_sample)
     p = sub.add_parser("packets")
     p.add_argument("--out", required=True)
+    p.add_argument("--unlabelled-only", action="store_true",
+                   help="only sampled pairs that have no label yet")
     p.add_argument("--seed", type=int, default=7)
     p.set_defaults(func=cmd_packets)
     p = sub.add_parser("calibrate")
