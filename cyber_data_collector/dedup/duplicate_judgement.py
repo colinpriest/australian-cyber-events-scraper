@@ -454,7 +454,7 @@ def unvalidated_final_probabilities(conn: sqlite3.Connection, *, question_id: st
         out: Dict[str, float] = {}
         for sid, value in conn.execute(
                 "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (qid, ver, model)):
+                "AND model_requested = ? ORDER BY rowid", (qid, ver, model)):
             out[sid] = float(value)
         return out
 

@@ -135,7 +135,7 @@ def stored_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
     try:
         rows = conn.execute(
             "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-            "AND model_requested = ? ORDER BY created_at, rowid", (QUESTION_ID, QUESTION_VERSION, typesafe_model()))
+            "AND model_requested = ? ORDER BY rowid", (QUESTION_ID, QUESTION_VERSION, typesafe_model()))
         return {sid.strip().lower(): float(v) for sid, v in rows}
     except sqlite3.OperationalError:
         return {}

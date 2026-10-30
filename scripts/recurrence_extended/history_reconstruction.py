@@ -2,8 +2,9 @@
 
 ``--as-known-at DATE`` rewinds the working copy of the snapshot (``cyber_data_collector/dedup/input_history.py``)
 before any analysis reads it, so the incident links, victims, dates, size bands and record membership are those
-recorded as known by DATE. Where the history does not reach back that far the earliest recorded (current) state
-stands in and the report says which inputs those are.
+recorded as known by DATE. A row the history does not reach back to has unknown state at DATE: the state recorded
+when tracking began stands in, the row is listed in ``InputHistoryUnknown`` and the report counts it (and
+``--history-unknown exclude`` drops the victim rows resting on it).
 
 The registered prospective protocol is not changed by this. The two frozen cohorts
 (``timing_peak_registration.json``, ``timing_size_adjusted_registration.json``) keep their meaning; a follow-up
@@ -31,8 +32,8 @@ LIMITATION_WITHOUT_RECONSTRUCTION = (
 
 LIMITATION_WITH_RECONSTRUCTION = (
     "Incident links, victims, dates, size bands and record membership were reconstructed from the recorded history "
-    "of when each became known (see the section above for which inputs came from history and which fall back to "
-    "the earliest recorded state). Other fields the analyses read (for example the attack type and records-affected "
+    "of when each became known (see the section above for which rows came from history and which are unknown at "
+    "that date, holding the state recorded when tracking began as a stand-in). Other fields the analyses read (for example the attack type and records-affected "
     "band of an incident, the sector, and the text of the source records) are recorded only where listed there; "
     "the rest are present-day values. Retrospective and prospective interpretations must account for that.")
 

@@ -24,15 +24,25 @@ or re-sizing therefore leaves a history row whichever code path made it.
 **Decision ledgers that already hold their own history are reused, not copied.** ``VictimAttributionActions``,
 ``VictimFillActions``, ``EntityAliases``, ``ContextualEntityAliases``, ``EntityMentionResolutions``,
 ``DedupOverrides`` and ``ModelJudgements`` carry a timestamp per row; the reconstruction drops the rows
-dated after the cutoff (:data:`TIMESTAMPED_LEDGERS`). ``EntityMerges`` and ``DedupSnapshots`` hold the state
-immediately *before* one change but not since when it held, and not every change writes one, so they cannot
-date a state; their effects are in the history tables from the moment tracking began.
+dated after the cutoff (:data:`LEDGERS`), always - a cutoff before a ledger's first row drops every row, and what
+the ledger held then is recorded as unknown. ``EntityMerges`` and ``DedupSnapshots`` hold the state immediately
+*before* one change but not since when it held, and not every change writes one, so they cannot date a state;
+their effects are in the history tables from the moment tracking began.
 
-**History before tracking began cannot be invented.** The first time a source is tracked its current state is
-written as ``baseline`` rows (``backfilled = 1``, ``known_at`` = that moment) and ``InputHistoryStatus`` records
-``tracking_since``. A cutoff earlier than that is *reconstructed from current state*: each key takes its
-earliest recorded state, and the reconstruction says so, per source and column, with counts. A key whose first
-row is a genuine ``insert`` did not exist before it, whatever the cutoff.
+**Everything is compared in UTC.** ``known_at`` is UTC from the database clock. Ledger writers now stamp
+``utils.timestamps.utc_now_iso()`` (explicit ``+00:00``); older ledger stamps have no offset and were written
+either by ``CURRENT_TIMESTAMP`` (UTC) or by ``datetime.now()`` (local time), which :data:`LEDGERS` declares per
+table. An explicit offset is always honoured; a naive stamp is read by its table's convention, local time being
+converted with the local-time rules for that date. Stored values are never rewritten.
+
+**History before tracking began cannot be invented, and is not stood in for silently.** The first time a source
+is tracked its current state is written as ``baseline`` rows (``backfilled = 1``, ``known_at`` = that moment) and
+``InputHistoryStatus`` records ``tracking_since``. A key with no record at or before the cutoff whose first row is
+a baseline has *unknown* state at the cutoff: it keeps the baseline state as a stand-in, and the reconstruction
+lists it in ``InputHistoryUnknown`` in the working copy (so do keys never recorded, columns tracked only later,
+and ledger rows that cannot be dated), so an analysis can exclude or flag what rests on it
+(:func:`unknown_victim_rows`). A key whose first row is a genuine ``insert`` did not exist before it, whatever
+the cutoff.
 
 Ledger tables and the four history tables are created, and the triggers (re)installed, by
 :func:`ensure_schema` - idempotent, cheap when nothing changed, and safe on a database without these tables.
@@ -45,9 +55,11 @@ import logging
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+
+from cyber_data_collector.utils.timestamps import NAIVE_LOCAL, NAIVE_UTC, local_zone_label, parse_stamp, to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -92,18 +104,70 @@ SOURCES: Tuple[Source, ...] = (
 )
 SOURCE_BY_NAME = {s.name: s for s in SOURCES}
 
-#: Decision ledgers with a timestamp per row: table -> timestamp column. Rows dated after the cutoff were not
-#: known at it. A ledger is trusted as history only from its first row; before that it says nothing, so a cutoff
-#: earlier than its first row leaves the table as it is, and says so.
-TIMESTAMPED_LEDGERS: Dict[str, str] = {
-    "VictimAttributionActions": "created_at",
-    "VictimFillActions": "created_at",
-    "EntityAliases": "created_at",
-    "ContextualEntityAliases": "created_at",
-    "EntityMentionResolutions": "decided_at",
-    "DedupOverrides": "created_at",
-    "ModelJudgements": "created_at",
-}
+@dataclass(frozen=True)
+class Ledger:
+    """A decision ledger with a timestamp per row, and how its stamps were written.
+
+    ``naive``: how a stamp WITHOUT an offset is read - ``'utc'``, ``'local'`` (the writing machine's local time)
+    or ``'ambiguous'`` (writers of both kinds; a stamp is known only if both readings fall on one side of the
+    cutoff). Every writer now stamps ``utils.timestamps.utc_now_iso()`` (explicit ``+00:00``), which is honoured
+    whatever ``naive`` says. ``replaces``: rows are replaced or updated in place, so a row dated after the cutoff
+    may have replaced a decision that held at it, which is then unknown.
+    """
+
+    table: str
+    column: str
+    naive: str
+    replaces: bool
+    why: str
+
+
+#: The one place the timestamp convention of each ledger is declared. Rows dated after the cutoff were not known
+#: at it and are dropped. A ledger is trusted as history only from its first row: a cutoff earlier than that drops
+#: every row, and what the ledger held then is recorded as unknown.
+LEDGERS: Tuple[Ledger, ...] = (
+    Ledger("VictimAttributionActions", "created_at", NAIVE_LOCAL, False,
+           "victim_judgement.apply_actions wrote datetime.now().isoformat() (local, microseconds)"),
+    Ledger("VictimFillActions", "created_at", NAIVE_LOCAL, False,
+           "victim_fill.apply_fills wrote datetime.now().isoformat() (local, microseconds)"),
+    Ledger("EntityAliases", "created_at", NAIVE_UTC, True,
+           "written by the column's DEFAULT CURRENT_TIMESTAMP (UTC); learned aliases are upserted, rule aliases "
+           "re-sourced or deleted in place"),
+    Ledger("ContextualEntityAliases", "created_at", NAIVE_LOCAL, False,
+           "contextual_aliases.add_contextual_alias wrote datetime.now().isoformat(timespec='seconds') (local)"),
+    Ledger("EntityMentionResolutions", "decided_at", NAIVE_LOCAL, True,
+           "contextual_aliases._record wrote datetime.now() (local) with INSERT OR REPLACE"),
+    Ledger("DedupOverrides", "created_at", NAIVE_UTC, True,
+           "DEFAULT CURRENT_TIMESTAMP and an upsert setting CURRENT_TIMESTAMP (UTC); a new ruling replaces the old"),
+    Ledger("ModelJudgements", "created_at", NAIVE_LOCAL, False,
+           "jev, escalation and event_organisations wrote datetime.now().isoformat() (local, microseconds)"),
+)
+LEDGER_BY_TABLE = {l.table: l for l in LEDGERS}
+#: table -> timestamp column (kept for callers that only need the column).
+TIMESTAMPED_LEDGERS: Dict[str, str] = {l.table: l.column for l in LEDGERS}
+
+#: Unknown at the cutoff: recorded in the reconstructed copy (``InputHistoryUnknown``) for the analyses to
+#: exclude or flag, never passed off as known.
+UNKNOWN_SCHEMA = """
+CREATE TABLE InputHistoryUnknown (
+    unknown_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    source       TEXT NOT NULL,      -- history source ('events', 'membership', 'links', 'entities') or 'ledger'
+    table_name   TEXT NOT NULL,
+    key_json     TEXT,               -- the row's key, {column: value}; NULL = the table as a whole
+    columns_json TEXT,               -- the columns whose value is unknown; NULL = the row's existence and state
+    reason       TEXT NOT NULL
+)
+"""
+REASON_BEFORE_FIRST_RECORD = ("predates its first record: existence and state at the cutoff unknown; "
+                              "the state recorded when tracking began stands in")
+REASON_NEVER_RECORDED = "never recorded in the history: existence and state at the cutoff unknown; the current state stands in"
+REASON_COLUMN_LATER = "column tracked only after this state was recorded: value at the cutoff unknown; the current value stands in"
+REASON_LEDGER_BEFORE_FIRST_ROW = "cutoff before the ledger's first row: what it held at the cutoff is unknown (every row dropped)"
+REASON_REPLACED = ("dated after the cutoff in a ledger that replaces rows in place: dropped; an earlier decision for "
+                   "this key may have held at the cutoff and is unknown")
+REASON_AMBIGUOUS_STAMP = ("stamp without an offset in a ledger with mixed writers reads as before the cutoff one way "
+                          "and after it the other: dropped")
+REASON_UNREADABLE_STAMP = "stamp missing or unreadable: when it became known is unknown (dropped)"
 
 STATUS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS InputHistoryStatus (
@@ -296,31 +360,50 @@ def _baseline(conn: sqlite3.Connection, src: Source, present: set, only_missing:
 # --- cutoffs -----------------------------------------------------------------------------------------------------
 
 def parse_as_known_at(value: Union[str, date, datetime]) -> Tuple[str, date]:
-    """``(cutoff stamp, cutoff date)`` for a date or datetime, read as UTC.
+    """``(cutoff stamp, cutoff date)``, both UTC, for a date, a datetime or their text.
 
-    A date means the end of that day (everything stamped on it is known); a datetime is taken exactly.
-    Stamps compare as strings in ``YYYY-MM-DD HH:MM:SS``.
+    A date means the end of that UTC day (everything stamped on it is known). A datetime is taken exactly: one
+    with an offset (``2026-06-30T08:30+10:00``, ``...Z``) is converted to UTC, one without is read as UTC. The
+    stamp is ``YYYY-MM-DD HH:MM:SS`` (how ``known_at`` is stamped); the date is the cutoff's UTC date.
     """
     if isinstance(value, datetime):
-        moment = value
+        moment: Optional[datetime] = value
     elif isinstance(value, date):
         moment = datetime(value.year, value.month, value.day, 23, 59, 59)
     else:
-        text = str(value).strip().replace("T", " ")
-        try:
-            if len(text) == 10:
-                parsed = datetime.strptime(text, "%Y-%m-%d")
-                moment = parsed.replace(hour=23, minute=59, second=59)
-            else:
-                moment = datetime.fromisoformat(text[:19])
-        except ValueError as exc:
-            raise ValueError(f"--as-known-at must be YYYY-MM-DD or YYYY-MM-DD HH:MM[:SS] (UTC), got {value!r}") from exc
+        text = str(value).strip()
+        if len(text) == 10:
+            try:
+                moment = datetime.strptime(text, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            except ValueError:
+                moment = None
+        else:
+            moment = parse_stamp(text)
+        if moment is None:
+            raise ValueError("--as-known-at must be YYYY-MM-DD (end of that UTC day) or YYYY-MM-DD HH:MM[:SS] "
+                             f"(UTC, or with an offset such as +10:00), got {value!r}")
+    moment = to_utc(moment, NAIVE_UTC).replace(tzinfo=None, microsecond=0)
     return moment.strftime(STAMP_FORMAT), moment.date()
 
 
-def _norm(column: str) -> str:
-    """SQL turning a stored timestamp (``T`` or space separated, any precision) into ``YYYY-MM-DD HH:MM:SS``."""
-    return f"replace(substr({column}, 1, 19), 'T', ' ')"
+def _cutoff_moment(cutoff: str) -> datetime:
+    return datetime.strptime(cutoff, STAMP_FORMAT).replace(tzinfo=timezone.utc)
+
+
+def _readings(moment: Optional[datetime], naive: str, local_zone: Optional[tzinfo]) -> Optional[List[datetime]]:
+    """Every UTC moment a parsed ledger stamp can mean (one, or two for an ambiguous one); ``None``: unreadable.
+
+    Compared at second resolution, as the history tables stamp ``known_at``.
+    """
+    if moment is None:
+        return None
+    if moment.tzinfo is not None:
+        readings = [to_utc(moment, NAIVE_UTC)]
+    elif naive == "ambiguous":
+        readings = [to_utc(moment, NAIVE_UTC), to_utc(moment, NAIVE_LOCAL, local_zone)]
+    else:
+        readings = [to_utc(moment, naive, local_zone)]
+    return [r.replace(microsecond=0) for r in readings]
 
 
 # --- reconstruction ----------------------------------------------------------------------------------------------
@@ -331,39 +414,50 @@ class SourceReport:
     table: str
     label: str
     tracking_since: str
-    mode: str                                   # 'history' | 'current-state fallback'
+    mode: str                                   # 'history' | 'before tracking began'
     keys_in_history: int = 0
     unchanged: int = 0
     changed: int = 0                            # rows whose reconstructed state differs from the working copy
     removed: int = 0                            # rows that did not exist yet and were removed
     restored: int = 0                           # rows deleted since, put back
-    fallback_keys: int = 0                      # state taken from the earliest recorded (baseline) state
-    untracked_keys: int = 0                     # present now, never recorded: left as they are
-    fallback_columns: Dict[str, int] = field(default_factory=dict)   # tracked later than the row: current value used
+    fallback_keys: int = 0                      # predate their first record: unknown, the baseline state stands in
+    untracked_keys: int = 0                     # present now, never recorded: unknown, the current state stands in
+    fallback_columns: Dict[str, int] = field(default_factory=dict)   # tracked later than the row: unknown value
+
+    @property
+    def unknown_rows(self) -> int:
+        """Rows whose existence and state at the cutoff are unknown (columns tracked later not counted)."""
+        return self.fallback_keys + self.untracked_keys
 
     @property
     def exact(self) -> bool:
-        """True when every row and column came from recorded history, none from an earlier or current state."""
-        return self.mode == "history" and not self.fallback_keys and not self.fallback_columns
+        """True when every row and column came from recorded history and nothing is unknown at the cutoff."""
+        return self.mode == "history" and not self.unknown_rows and not self.fallback_columns
 
     def verdict(self) -> str:
-        if self.mode == "history" and self.exact:
+        if self.exact:
             return f"reconstructed from history (recorded since {self.tracking_since} UTC)"
+        unknown = (f"{self.unknown_rows} of {self.keys_in_history + self.untracked_keys} row(s) have unknown state at "
+                   "the cutoff (marked in `InputHistoryUnknown`")
+        stand_in = "; the state recorded when tracking began, or the current state, stands in)"
         if self.mode == "history":
-            return (f"reconstructed from history (recorded since {self.tracking_since} UTC); {self.fallback_keys} row(s) "
-                    "predate their first record and take that state")
-        return (f"reconstructed from current state: history is recorded only since {self.tracking_since} UTC; "
-                f"{self.fallback_keys} of {self.keys_in_history} rows take the state recorded when tracking began "
-                "(the current state at backfill; later changes are undone)")
+            return f"reconstructed from history (recorded since {self.tracking_since} UTC); {unknown}{stand_in}"
+        return f"history is recorded only since {self.tracking_since} UTC: {unknown}{stand_in}"
 
 
 @dataclass
 class LedgerReport:
     table: str
-    first_row: Optional[str]
-    mode: str                                   # 'filtered' | 'not filtered (cutoff before first row)' | 'absent'
-    rows_dropped: int = 0
+    naive: str                                  # how a stamp without an offset was read (see LEDGERS)
+    first_row: Optional[str]                    # earliest stamp, UTC
+    mode: str                                   # 'filtered' | 'filtered; cutoff before the first row ...' | 'empty' | 'absent'
+    rows_dropped: int = 0                       # dated after the cutoff, or not datable (below)
     rows_kept: int = 0
+    rows_unknown: int = 0                       # dropped because the stamp is unreadable or ambiguous at the cutoff
+    rows_replaced_unknown: int = 0              # dropped from a ledger that replaces rows in place (see REASON_REPLACED)
+    rows_with_offset: int = 0                   # stamps carrying an explicit offset (honoured)
+    cutoff_before_first_row: bool = False
+    note: str = ""
 
 
 @dataclass
@@ -373,43 +467,63 @@ class HistoryReconstruction:
     as_known_at: str
     cutoff: str
     cutoff_date: date
+    local_zone: str = ""
     sources: List[SourceReport] = field(default_factory=list)
     ledgers: List[LedgerReport] = field(default_factory=list)
+    unknown: Dict[str, Dict[str, int]] = field(default_factory=dict)   # table -> reason -> rows (InputHistoryUnknown)
 
     @property
     def fallback_fields(self) -> List[str]:
-        """Labels of the inputs reconstructed from current state (history did not reach the cutoff)."""
+        """Labels of the inputs with state unknown at the cutoff (history did not reach it for every row)."""
         return [s.label for s in self.sources if not s.exact]
+
+    @property
+    def unknown_total(self) -> int:
+        return sum(sum(v.values()) for v in self.unknown.values())
 
     def to_dict(self) -> Dict[str, Any]:
         return {"as_known_at": self.as_known_at, "cutoff_utc": self.cutoff,
+                "naive_local_stamps_read_as": self.local_zone,
                 "reconstructed_from_current_state": self.fallback_fields,
-                "sources": [{**s.__dict__, "verdict": s.verdict()} for s in self.sources],
+                "unknown_at_cutoff": self.unknown, "unknown_rows_table": "InputHistoryUnknown",
+                "sources": [{**s.__dict__, "unknown_rows": s.unknown_rows, "verdict": s.verdict()}
+                            for s in self.sources],
                 "ledgers": [l.__dict__ for l in self.ledgers]}
 
     def markdown(self) -> str:
         lines = [f"## Inputs as known at {self.as_known_at}", "",
                  f"The incident links, dates, victims and size bands below were reconstructed from the recorded history "
-                 f"of what was known by {self.cutoff} UTC (`--as-known-at`; `InputHistoryStatus`). Where the history "
-                 "does not reach back that far the field is the state recorded when tracking began (the current state at backfill), and is marked so.", "",
-                 "| Input | Basis | Rows reconstructed | Removed (not yet known) | Restored | Changed |",
-                 "|---|---|---:|---:|---:|---:|"]
+                 f"of what was known by {self.cutoff} UTC (`--as-known-at`; `InputHistoryStatus`). A row the history "
+                 "cannot place at that moment (it predates its first record, or a column was tracked only later) is "
+                 "**unknown**, not known: it holds the state recorded when tracking began (or the current value) as a "
+                 "stand-in and is listed in `InputHistoryUnknown` in the reconstructed copy, so an analysis can flag "
+                 "or exclude it.", "",
+                 "| Input | Basis | Rows reconstructed | Unknown at the cutoff | Removed (not yet known) | Restored | Changed |",
+                 "|---|---|---:|---:|---:|---:|---:|"]
         for s in self.sources:
-            basis = "history" if s.exact else "**current state (backfilled)**"
-            lines.append(f"| {s.label} (`{s.table}`) | {basis}; {s.verdict()} | {s.keys_in_history} | {s.removed} | "
-                         f"{s.restored} | {s.changed} |")
-        lines += ["", "| Decision ledger | Basis | Rows dropped (dated after the cutoff) | Rows kept |", "|---|---|---:|---:|"]
+            basis = "history" if s.exact else "**partly unknown**"
+            lines.append(f"| {s.label} (`{s.table}`) | {basis}; {s.verdict()} | {s.keys_in_history} | {s.unknown_rows} | "
+                         f"{s.removed} | {s.restored} | {s.changed} |")
+        lines += ["", f"Decision ledgers are filtered by their own timestamps, compared in UTC. A stamp with an offset is "
+                  f"honoured; one without is read by the convention its writer used (UTC for `CURRENT_TIMESTAMP` "
+                  f"defaults, local time - here {self.local_zone} - for `datetime.now()`).", "",
+                  "| Decision ledger | Stamps without offset | Basis | Rows dropped | of which unknown | Kept |",
+                  "|---|---|---|---:|---:|---:|"]
         for l in self.ledgers:
-            lines.append(f"| `{l.table}` | {l.mode}{'' if l.first_row is None else f' (first row {l.first_row})'} | "
-                         f"{l.rows_dropped} | {l.rows_kept} |")
+            first = "" if l.first_row is None else f" (first row {l.first_row} UTC)"
+            lines.append(f"| `{l.table}` | {l.naive} | {l.mode}{first} | {l.rows_dropped} | "
+                         f"{l.rows_unknown + l.rows_replaced_unknown} | {l.rows_kept} |")
         columns = {f"{s.table}.{c}": n for s in self.sources for c, n in s.fallback_columns.items()}
         if columns:
-            lines += ["", "Columns tracked only after some rows were recorded take their current value for those rows: "
-                      + ", ".join(f"`{c}` ({n})" for c, n in sorted(columns.items())) + "."]
+            lines += ["", "Columns tracked only after some rows were recorded are unknown for those rows (the current "
+                      "value stands in): " + ", ".join(f"`{c}` ({n})" for c, n in sorted(columns.items())) + "."]
+        if self.unknown:
+            lines += ["", f"**Unknown at the cutoff: {self.unknown_total} row(s)** (`InputHistoryUnknown`): "
+                      + "; ".join(f"`{t}` {sum(r.values())}" for t, r in sorted(self.unknown.items())) + "."]
         if self.fallback_fields:
-            lines += ["", "**Limitation.** Reconstructed from current state, not from history: "
-                      + "; ".join(self.fallback_fields) + ". A cutoff before the history began cannot be reconstructed "
-                      "more precisely than the earliest recorded state; this is a narrowing of the limitation, not its removal."]
+            lines += ["", "**Limitation.** History does not reach the cutoff for every row of: "
+                      + "; ".join(self.fallback_fields) + ". Their state then cannot be reconstructed; it is marked "
+                      "unknown rather than inferred."]
         return "\n".join(lines) + "\n"
 
 
@@ -418,7 +532,7 @@ def _state_at(rows: List[sqlite3.Row], cutoff: str) -> Tuple[Optional[sqlite3.Ro
 
     basis: 'recorded' (a row at or before the cutoff decides it), 'absent' (first row is a genuine insert after
     the cutoff: it did not exist), 'earliest' (only later rows exist and the first is a baseline: the state
-    before it is unknown, so the earliest recorded state stands in).
+    before it is unknown; the earliest recorded state stands in and the key is recorded as unknown).
     """
     latest = None
     for row in rows:
@@ -434,11 +548,19 @@ def _state_at(rows: List[sqlite3.Row], cutoff: str) -> Tuple[Optional[sqlite3.Ro
     return None, "absent"
 
 
-def _rewind_source(conn: sqlite3.Connection, src: Source, cutoff: str, status: sqlite3.Row) -> SourceReport:
+def _key_json(columns: Iterable[str], values: Iterable[Any]) -> str:
+    return json.dumps(dict(zip(columns, values)), sort_keys=True, default=str)
+
+
+UnknownRow = Tuple[str, str, Optional[str], Optional[str], str]
+
+
+def _rewind_source(conn: sqlite3.Connection, src: Source, cutoff: str, status: sqlite3.Row,
+                   unknown: List[UnknownRow]) -> SourceReport:
     since = status["tracking_since"]
     columns_since = json.loads(status["columns_json"])
     report = SourceReport(src.name, src.table, src.label, since, "history" if cutoff >= since else
-                          "current-state fallback")
+                          "before tracking began")
     present = set(_columns(conn, src.table))
     tracked = [c for c in src.columns if c in present and c in columns_since]
     cols = ", ".join(list(src.key) + [c for c in tracked])
@@ -457,6 +579,7 @@ def _rewind_source(conn: sqlite3.Connection, src: Source, cutoff: str, status: s
         state, basis = _state_at(rows, cutoff)
         if basis == "earliest":
             report.fallback_keys += 1
+            unknown.append((src.name, src.table, _key_json(src.key, key), None, REASON_BEFORE_FIRST_RECORD))
         now = current.get(key)
         if state is None:
             if now is not None:
@@ -464,13 +587,17 @@ def _rewind_source(conn: sqlite3.Connection, src: Source, cutoff: str, status: s
                 report.removed += 1
             continue
         values = []
+        later: List[str] = []
         for index, column in enumerate(tracked):
             if state["known_at"] < columns_since[column]:
                 # The column was not tracked yet when this row was written: its value is unknown then.
                 values.append(now[index] if now is not None else None)
                 fallback_columns[column] = fallback_columns.get(column, 0) + 1
+                later.append(column)
             else:
                 values.append(state[column])
+        if later and basis != "earliest":       # an 'earliest' key is unknown as a whole already
+            unknown.append((src.name, src.table, _key_json(src.key, key), json.dumps(later), REASON_COLUMN_LATER))
         values_t = tuple(values)
         if now is None:
             inserts.append(key + values_t)
@@ -480,13 +607,29 @@ def _rewind_source(conn: sqlite3.Connection, src: Source, cutoff: str, status: s
             report.changed += 1
         else:
             report.unchanged += 1
-    report.untracked_keys = sum(1 for key in current if key not in history)
+    untracked = [key for key in current if key not in history]
+    report.untracked_keys = len(untracked)
+    unknown.extend((src.name, src.table, _key_json(src.key, key), None, REASON_NEVER_RECORDED) for key in untracked)
     report.fallback_columns = fallback_columns
     where = " AND ".join(f"{k} = ?" for k in src.key)
     if deletes:
         conn.executemany(f"DELETE FROM {src.table} WHERE {where}", deletes)
     if updates and tracked:
-        conn.executemany(f"UPDATE {src.table} SET {', '.join(f'{c} = ?' for c in tracked)} WHERE {where}", updates)
+        # Rows are taken out and put back with their reconstructed values rather than updated one at a time: a
+        # chain of moves (a record moved between events and another into its place) passes through states a
+        # UNIQUE index forbids, though the state at the cutoff satisfies it. Untracked columns keep their values.
+        all_columns = _columns(conn, src.table)
+        changed = {u[len(tracked):]: u[:len(tracked)] for u in updates}
+        rows_out = []
+        for row in conn.execute(f"SELECT {', '.join(all_columns)} FROM {src.table}"):
+            key = tuple(row[k] for k in src.key)
+            if key in changed:
+                values = dict(zip(all_columns, tuple(row)))
+                values.update(zip(tracked, changed[key]))
+                rows_out.append(tuple(values[c] for c in all_columns))
+        conn.executemany(f"DELETE FROM {src.table} WHERE {where}", list(changed))
+        conn.executemany(f"INSERT INTO {src.table} ({', '.join(all_columns)}) "
+                         f"VALUES ({', '.join('?' * len(all_columns))})", rows_out)
     if inserts:
         conn.executemany(f"INSERT INTO {src.table} ({cols}) VALUES ({', '.join('?' * (keys + len(tracked)))})", inserts)
     return report
@@ -496,22 +639,72 @@ def _column_list_plain(src: Source) -> str:
     return ", ".join(list(src.key) + list(src.columns))
 
 
-def _rewind_ledger(conn: sqlite3.Connection, table: str, column: str, cutoff: str) -> LedgerReport:
+def _primary_key(conn: sqlite3.Connection, table: str) -> List[str]:
+    pk = sorted((r[5], r[1]) for r in conn.execute(f"PRAGMA table_info({table})") if r[5])
+    return [name for _, name in pk] or ["rowid"]
+
+
+def _rewind_ledger(conn: sqlite3.Connection, ledger: Ledger, cutoff: datetime, local_zone: Optional[tzinfo],
+                   unknown: List[UnknownRow]) -> LedgerReport:
+    """Drop the rows of ``ledger`` not known at ``cutoff`` (UTC) and record what it cannot say."""
+    table, column = ledger.table, ledger.column
     if table not in _tables(conn) or column not in _columns(conn, table):
-        return LedgerReport(table, None, "absent")
-    first = conn.execute(f"SELECT MIN({_norm(column)}) FROM {table} WHERE {column} IS NOT NULL").fetchone()[0]
-    total = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    if first is None or cutoff < first:
-        return LedgerReport(table, first, "not filtered (cutoff before the first row)", 0, total)
-    dropped = conn.execute(f"DELETE FROM {table} WHERE {column} IS NOT NULL AND {_norm(column)} > ?", (cutoff,)).rowcount
-    return LedgerReport(table, first, "filtered", dropped, total - dropped)
+        return LedgerReport(table, ledger.naive, None, "absent", note=ledger.why)
+    keys = _primary_key(conn, table)
+    rows = conn.execute(f"SELECT rowid, {column}, {', '.join(keys)} FROM {table}").fetchall()
+    report = LedgerReport(table, ledger.naive, None, "filtered", note=ledger.why)
+    if not rows:
+        report.mode = "empty"
+        return report
+    verdicts: List[Tuple[int, str, Optional[str]]] = []      # (rowid, key_json, why dropped: None = known)
+    first: Optional[datetime] = None
+    for row in rows:
+        moment = parse_stamp(row[1])
+        readings = _readings(moment, ledger.naive, local_zone)
+        key = _key_json(keys, tuple(row)[2:])
+        if readings is None:
+            verdicts.append((row[0], key, REASON_UNREADABLE_STAMP))
+            continue
+        report.rows_with_offset += int(moment.tzinfo is not None)
+        first = min(readings) if first is None else min(first, *readings)
+        if all(r <= cutoff for r in readings):
+            verdicts.append((row[0], key, None))
+        elif all(r > cutoff for r in readings):
+            verdicts.append((row[0], key, "later"))
+        else:
+            verdicts.append((row[0], key, REASON_AMBIGUOUS_STAMP))
+    report.first_row = None if first is None else first.strftime(STAMP_FORMAT)
+    report.cutoff_before_first_row = first is not None and cutoff < first
+    drop = []
+    for rowid, key, why in verdicts:
+        if why is None:
+            continue
+        drop.append((rowid,))
+        if why != "later":
+            report.rows_unknown += 1
+            unknown.append(("ledger", table, key, None, why))
+        elif ledger.replaces and not report.cutoff_before_first_row:
+            report.rows_replaced_unknown += 1
+            unknown.append(("ledger", table, key, None, REASON_REPLACED))
+    if report.cutoff_before_first_row:
+        # Every row is dated after the cutoff; what the ledger held before it began recording cannot be said.
+        report.mode = "filtered; cutoff before the first row: what the ledger held then is unknown"
+        unknown.append(("ledger", table, None, None, REASON_LEDGER_BEFORE_FIRST_ROW))
+    conn.executemany(f"DELETE FROM {table} WHERE rowid = ?", drop)
+    report.rows_dropped = len(drop)
+    report.rows_kept = len(rows) - len(drop)
+    return report
 
 
-def rewind(conn: sqlite3.Connection, as_known_at: Union[str, date, datetime]) -> HistoryReconstruction:
+def rewind(conn: sqlite3.Connection, as_known_at: Union[str, date, datetime],
+           local_zone: Optional[tzinfo] = None) -> HistoryReconstruction:
     """Rewrite ``conn``'s database in place to the state known at ``as_known_at``. Use a COPY.
 
-    Raises :class:`HistoryError` when no history was ever recorded (run ``dedup_admin.py input-history``).
-    The caller commits (or rolls back); nothing is committed here.
+    What cannot be placed at the cutoff is written to ``InputHistoryUnknown`` (see :data:`UNKNOWN_SCHEMA`;
+    :func:`unknown_victim_rows` and :func:`unknown_summary` read it). Ledger stamps written in local time without
+    an offset are converted with ``local_zone`` (default: the system's local-time rules). Raises
+    :class:`HistoryError` when no history was ever recorded (run ``dedup_admin.py input-history``). The caller
+    commits (or rolls back); nothing is committed here.
     """
     cutoff, cutoff_date = parse_as_known_at(as_known_at)
     conn.row_factory = sqlite3.Row
@@ -519,28 +712,103 @@ def rewind(conn: sqlite3.Connection, as_known_at: Union[str, date, datetime]) ->
         raise HistoryError("this database has no input history; run `python scripts/dedup_admin.py input-history` "
                            "(or `python pipeline.py init`) to start recording it")
     statuses = {r["source"]: r for r in conn.execute("SELECT * FROM InputHistoryStatus")}
-    result = HistoryReconstruction(str(as_known_at), cutoff, cutoff_date)
+    result = HistoryReconstruction(str(as_known_at), cutoff, cutoff_date, local_zone_label(local_zone))
+    unknown: List[UnknownRow] = []
     for src in SOURCES:
         if src.table not in _tables(conn):
             continue
         if src.name not in statuses:
             raise HistoryError(f"{src.table} has no recorded history; run `python scripts/dedup_admin.py input-history`")
-        result.sources.append(_rewind_source(conn, src, cutoff, statuses[src.name]))
-    for table, column in TIMESTAMPED_LEDGERS.items():
-        result.ledgers.append(_rewind_ledger(conn, table, column, cutoff))
+        result.sources.append(_rewind_source(conn, src, cutoff, statuses[src.name], unknown))
+    moment = _cutoff_moment(cutoff)
+    for ledger in LEDGERS:
+        result.ledgers.append(_rewind_ledger(conn, ledger, moment, local_zone, unknown))
+    conn.execute("DROP TABLE IF EXISTS InputHistoryUnknown")
+    conn.execute(UNKNOWN_SCHEMA)
+    conn.executemany("INSERT INTO InputHistoryUnknown (source, table_name, key_json, columns_json, reason) "
+                     "VALUES (?, ?, ?, ?, ?)", unknown)
+    result.unknown = unknown_summary(conn)
     return result
 
 
-def rewind_database(path: Path, as_known_at: Union[str, date, datetime]) -> HistoryReconstruction:
+def rewind_database(path: Path, as_known_at: Union[str, date, datetime],
+                    local_zone: Optional[tzinfo] = None) -> HistoryReconstruction:
     """:func:`rewind` on the database file ``path`` (a working copy), committed."""
     with closing(sqlite3.connect(str(path))) as conn:
         try:
-            result = rewind(conn, as_known_at)
+            result = rewind(conn, as_known_at, local_zone)
             conn.commit()
         except BaseException:
             conn.rollback()
             raise
     return result
+
+
+# --- reading what is unknown -----------------------------------------------------------------------------------
+
+def is_reconstruction(conn: sqlite3.Connection) -> bool:
+    """True when ``conn`` is a working copy :func:`rewind` reconstructed (it holds ``InputHistoryUnknown``)."""
+    return "InputHistoryUnknown" in _tables(conn)
+
+
+def unknown_summary(conn: sqlite3.Connection) -> Dict[str, Dict[str, int]]:
+    """``{table: {reason: rows}}`` from ``InputHistoryUnknown``; empty when ``conn`` is not a reconstruction."""
+    if not is_reconstruction(conn):
+        return {}
+    out: Dict[str, Dict[str, int]] = {}
+    for table, reason, n in conn.execute("SELECT table_name, reason, COUNT(*) FROM InputHistoryUnknown "
+                                         "GROUP BY table_name, reason ORDER BY table_name, reason"):
+        out.setdefault(table, {})[reason] = n
+    return out
+
+
+def _as_entity(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def unknown_victim_rows(conn: sqlite3.Connection,
+                        victims: Iterable[Tuple[Any, Any]]) -> Dict[Tuple[Any, str], List[str]]:
+    """Which ``(entity_id, deduplicated_event_id)`` victim rows rest on an input unknown at the cutoff, and why.
+
+    A row is unknown when its incident's state, its victim link, its organisation's state or any of its
+    incident's records (membership) is listed in ``InputHistoryUnknown``. Empty when ``conn`` is not a
+    reconstruction. Ledger-level unknowns (a whole table, a dropped row) are not tied to a victim row; they are
+    in :func:`unknown_summary`.
+    """
+    wanted = {(_as_entity(e), str(d)) for e, d in victims}
+    if not wanted or not is_reconstruction(conn):
+        return {}
+    events: Set[str] = set()
+    links: Set[Tuple[str, Any]] = set()
+    entities: Set[Any] = set()
+    maps: Set[str] = set()
+    for source, key_json in conn.execute("SELECT source, key_json FROM InputHistoryUnknown "
+                                         "WHERE source != 'ledger' AND key_json IS NOT NULL"):
+        key = json.loads(key_json)
+        if source == "events":
+            events.add(str(key["deduplicated_event_id"]))
+        elif source == "links":
+            links.add((str(key["deduplicated_event_id"]), _as_entity(key["entity_id"])))
+        elif source == "entities":
+            entities.add(_as_entity(key["entity_id"]))
+        elif source == "membership":
+            maps.add(str(key["map_id"]))
+    membership: Set[str] = set()
+    if maps and "EventDeduplicationMap" in _tables(conn):
+        membership = {str(r[1]) for r in conn.execute("SELECT map_id, deduplicated_event_id FROM EventDeduplicationMap")
+                      if str(r[0]) in maps and r[1] is not None}
+    out: Dict[Tuple[Any, str], List[str]] = {}
+    for entity, event in wanted:
+        why = [label for label, hit in (("incident state", event in events),
+                                        ("victim link", (event, entity) in links),
+                                        ("organisation state", entity in entities),
+                                        ("incident membership", event in membership)) if hit]
+        if why:
+            out[(entity, event)] = why
+    return out
 
 
 def status(conn: sqlite3.Connection) -> List[Dict[str, Any]]:

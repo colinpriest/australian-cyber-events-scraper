@@ -33,6 +33,8 @@ import sqlite3
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from cyber_data_collector.utils.timestamps import utc_now_iso
+
 logger = logging.getLogger(__name__)
 
 # Legal-form suffixes, longest-first so "pty ltd" is consumed before "ltd".
@@ -405,15 +407,20 @@ class EntityResolver:
         conn.execute(
             """
             INSERT INTO EntityAliases (raw_name, canonical_name, canonical_key,
-                                       source, confidence)
-            VALUES (?, ?, ?, ?, ?)
+                                       source, confidence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(raw_name) DO UPDATE SET
                 canonical_name = excluded.canonical_name,
                 canonical_key  = excluded.canonical_key,
                 source         = excluded.source,
-                confidence     = excluded.confidence
+                confidence     = excluded.confidence,
+                -- dated when the alias last changed, so an --as-known-at reconstruction never
+                -- passes a later decision off as known at an earlier date
+                created_at     = CASE WHEN EntityAliases.canonical_name IS excluded.canonical_name
+                                       AND EntityAliases.source IS excluded.source
+                                      THEN EntityAliases.created_at ELSE excluded.created_at END
             """,
-            (raw_name, canonical_name, key, source, confidence),
+            (raw_name, canonical_name, key, source, confidence, utc_now_iso()),
         )
         self._aliases[normalize_name(raw_name)] = key
         self._canonical_names[key] = canonical_name

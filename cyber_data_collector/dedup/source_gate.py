@@ -205,7 +205,7 @@ def stored_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
     out: Dict[str, float] = {}
     for sid, value in conn.execute(
             "SELECT subject_id, value FROM ModelJudgements WHERE question_id = ? AND question_version = ? "
-            "AND model_requested = ? ORDER BY created_at, rowid", (QUESTION_ID, QUESTION_VERSION, typesafe_model())):
+            "AND model_requested = ? ORDER BY rowid", (QUESTION_ID, QUESTION_VERSION, typesafe_model())):
         out[sid] = float(value)
     return out
 

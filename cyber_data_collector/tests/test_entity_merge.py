@@ -226,8 +226,9 @@ def test_an_unreadable_answer_leaves_the_pair_undecided_and_unfolded():
 def _alias_db(aliases):
     conn = _entities(["National Australia Bank", "Services Australia"])
     conn.execute("CREATE TABLE EntityAliases (raw_name TEXT UNIQUE, canonical_name TEXT, canonical_key TEXT, "
-                 "source TEXT, confidence REAL)")
-    conn.executemany("INSERT INTO EntityAliases VALUES (?, ?, '', ?, 1.0)", aliases)
+                 "source TEXT, confidence REAL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    conn.executemany("INSERT INTO EntityAliases (raw_name, canonical_name, canonical_key, source, confidence) "
+                     "VALUES (?, ?, '', ?, 1.0)", aliases)
     return conn
 
 

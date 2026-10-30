@@ -78,6 +78,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.utils.llm_models import openai_fast_model, typesafe_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -824,7 +825,7 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
     ensure_actions_schema(conn)
     ledger = DedupLedger(conn)
     batch_id = f"victim-attribution-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     cal_json = json.dumps({k: cal.get(k) for k in ("question_version", "model", "cutoff", "replacement_threshold",
                                                    "calibrated_on_database", "generated")})
     try:

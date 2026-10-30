@@ -824,7 +824,20 @@ to another entity) is a `delete` of the old key and an `insert` of the new.
 `InputHistoryStatus(source PK, table_name, tracking_since, baselined_at, columns_json)`: one row per watched table;
 `tracking_since` is when the triggers were first installed (a cutoff before it is reconstructed from the baseline),
 `columns_json` maps each tracked column to when it began to be tracked (a column added later has no value for
-earlier rows; the reconstruction uses the current value for them and reports it).
+earlier rows; the reconstruction uses the current value for them and marks it unknown).
+
+`InputHistoryUnknown(unknown_id PK, source, table_name, key_json, columns_json, reason)`: written by the
+reconstruction into its **working copy only** (never the live database): what cannot be placed at the cutoff.
+`source` is the history source (`events`, `membership`, `links`, `entities`) or `ledger`; `key_json` the row's key
+as `{column: value}` (NULL: the table as a whole, e.g. a ledger whose first row is after the cutoff);
+`columns_json` the columns whose value is unknown (NULL: the row's existence and state). `reason` is one of the
+`REASON_*` constants in `input_history.py`. `unknown_victim_rows()` turns it into the victim rows an analysis can
+flag or exclude.
+
+Ledger timestamps: written as UTC with an explicit offset (`utils/timestamps.utc_now_iso()`); rows written before
+2026-10-30 have no offset and follow their writer's convention, declared in `input_history.LEDGERS` (UTC for
+`EntityAliases.created_at` and `DedupOverrides.created_at`, local time for `ModelJudgements`,
+`VictimAttributionActions`, `VictimFillActions`, `ContextualEntityAliases` and `EntityMentionResolutions`).
 
 ### Configuration Tables
 
