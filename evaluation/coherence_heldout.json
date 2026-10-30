@@ -1,0 +1,739 @@
+{
+  "version": 1,
+  "step": "coherence",
+  "generated": "2026-10-30T16:48:24.845479",
+  "calibration": {
+    "question_version": "member-coherence-v2+member-coherence-escalation-v2",
+    "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+    "evidence": "coherence:701f756ab3d6a89e",
+    "generated": "2026-10-29T19:14:30.160193"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {
+    "split": "extracted from coherence.db (stored scores, no API calls)"
+  },
+  "actions": {
+    "split": {
+      "cutoff": 0.120001,
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 92,
+      "full": {
+        "acted": 17,
+        "correct": 17,
+        "weighted_precision": 1.0,
+        "effective_n": 17.0,
+        "lower_bound_unweighted": 0.83843388873926,
+        "lower_bound_effective": 0.83843388873926
+      },
+      "reselected_cutoff": 0.120001,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 16,
+        "correct": 16,
+        "weighted_precision": 1.0,
+        "effective_n": 16.0,
+        "lower_bound_unweighted": 0.8292502770175191,
+        "lower_bound_effective": 0.8292502770175191,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 74,
+            "test": 18,
+            "cutoff": 0.100001,
+            "acted": 1,
+            "correct": 1
+          },
+          {
+            "fold": 1,
+            "train": 72,
+            "test": 20,
+            "cutoff": 0.120001,
+            "acted": 4,
+            "correct": 4
+          },
+          {
+            "fold": 2,
+            "train": 71,
+            "test": 21,
+            "cutoff": 0.120001,
+            "acted": 4,
+            "correct": 4
+          },
+          {
+            "fold": 3,
+            "train": 73,
+            "test": 19,
+            "cutoff": 0.120001,
+            "acted": 4,
+            "correct": 4
+          },
+          {
+            "fold": 4,
+            "train": 78,
+            "test": 14,
+            "cutoff": 0.120001,
+            "acted": 3,
+            "correct": 3
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    }
+  },
+  "rows": {
+    "split": [
+      {
+        "id": "0f7ac689-884a-4057-9f72-7fd9f70e03e4|012b61d5-5e08-4bef-9522-fe51d7c1e384",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "10e6e8be-d9f9-4778-afb0-a787409d7e95|6675cdf8-87b1-4a2c-baae-e3bab55a85e1",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "1206b2b3-5450-41d8-a5e5-f9186d6c4ca1|2e423db5-b619-48fb-86d3-e70ba9efe448",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "1206b2b3-5450-41d8-a5e5-f9186d6c4ca1|73b9daa9-e28d-4c45-ae8b-dc82fd9bda86",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "1206b2b3-5450-41d8-a5e5-f9186d6c4ca1|8d5ef88b-35eb-4e68-95d8-b79d9f74b422",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "1206b2b3-5450-41d8-a5e5-f9186d6c4ca1|cc9f0267-54c1-4bc7-ab89-405223d466d8",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "1e9a1cfe-8599-46c9-beda-c7c9f18100eb|8f92b024-0267-415f-bb4c-c16bf55f2a51",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "1f6e48e7-04d9-46af-b1ab-8393d6d96430|d240dfee-611b-4951-9fb7-3757733a9f6d",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "2096b8e3-6fc7-476f-ac08-9a8dbfc1639c|232bc88f-e605-48c0-9e0f-02b806219697",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|d5486006-6165-4ce0-ba91-d5c921cefc95",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.1,
+        "positive": true
+      },
+      {
+        "id": "29b68226-573d-4cb2-896a-5466f70db71a|11b6bfea-38cd-4f87-a7a9-bcc07897fbaf",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": false
+      },
+      {
+        "id": "33e52830-eede-48ae-890b-241785ed192b|28d7f6e8-b9c6-4e78-b15d-15ad27cbf21a",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "33e52830-eede-48ae-890b-241785ed192b|9858331b-7719-4702-a2cc-b73c9ac505ca",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "33e52830-eede-48ae-890b-241785ed192b|ee13f87b-e44e-42bc-b999-955d1835eb98",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|33e973a5-b434-40dc-8de0-b345890158a6",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|3fded177-be0f-480c-97be-6d1ab24e4376",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|8cf9e569-8fa8-436b-b517-e1a9eb3f6ca4",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|a34192a2-ddf6-4f12-96d0-16af5b0280a0",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|cfa6bffb-74f0-41bf-b99f-3b77183e99de",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "4821fce6-dba8-4ade-a70d-a0ccf226bbdf|907873aa-7a12-4f35-8e8d-6bb82d701f82",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|068cb384-ac51-459e-9c7a-eec477d73a35",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|1ee761d3-b3e0-4757-b843-5050d3c450a0",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|21037f6f-d977-4b55-ae83-f39fe378b61d",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|4bf8ff3f-9446-4761-aa4e-14a19ef01d0e",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|c1479c09-103d-4b19-9f10-d6e54554a14d",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|f4b513ae-23fe-417a-b234-ea4667dce4d5",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|0029a0d7-7284-4754-828f-b13f75741691",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|07efea16-ff71-4e12-ac24-4f1036c09eb9",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "559da594-19c5-46f9-a6c9-fed1c5c19886|03511406-3030-4a24-9e11-d435e5b72ada",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "6069f32f-e657-43aa-a3a7-520a00699c51|bad13529-7d60-4c81-9ac2-63a0adb556f2",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "61bdc563-e6ad-4946-b625-c7fef4e2fdef|ef471216-1a5a-4b1f-b12a-808b220c47ec",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|074742cd-8a7c-4a09-8971-ad7c3b1b9cd2",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|2f4ba49b-3088-4998-8fd1-3265f6db1854",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|453c8bf3-77fe-4f60-bd4e-616e745b22e9",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|560606ed-a679-4739-a776-d381c2369bb1",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|5654b360-7c68-4406-92ac-6fc8f1d33291",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|79e5711f-0a0a-4f3b-b5ca-b152d661e881",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|8fe6bc99-6a22-4f9f-a765-4ed4f532f11f",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|b70cbbde-3be5-4d21-9d49-ff7f68244c3c",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.87,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|e41ebc60-2643-4a40-a664-9c0aef358478",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "732bd12d-c226-4fdd-89a9-3d338f94a15d|f9638ab8-f91a-428e-8bf9-05955cc6b44e",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "79481f07-ff94-4b50-a9ba-f6711778f9c8|cc0be610-7e68-4e27-af8d-00c127be3dee",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "8fdc1318-f448-458b-ba9b-04b391fdf71c|a99a3d75-e4f4-423e-bff8-b67b67c25722",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "907a8b68-cb73-4ad0-ae6b-de4747eedaed|40b6b52b-28a5-40a4-84f4-cb766d6589bd",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "907a8b68-cb73-4ad0-ae6b-de4747eedaed|afeb1433-498b-4616-90fc-f798d178a410",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "907a8b68-cb73-4ad0-ae6b-de4747eedaed|b49a0d1d-2ac4-4302-a770-e974bdd21d8e",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "907a8b68-cb73-4ad0-ae6b-de4747eedaed|de39bba8-a515-40dc-89a8-ddccb1a14e91",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|0867e8de-89b2-4fa3-b581-548c73041837",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|5fa9d6cf-436d-446e-bf91-d755878e3be7",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|c5ce177e-76d6-4aca-991d-efd93bcbdc75",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|d02c8c30-55c9-47b8-b39f-baf3a3dfc751",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|d2fcceb5-9baa-4cc8-be5a-ab02bf8998d5",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.83,
+        "positive": false
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|e211ff89-e4f8-4fe4-93af-11468b98fabf",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": false
+      },
+      {
+        "id": "92297337-b19a-43a2-b9e7-eb42032dc57c|297b4d42-ceae-49cc-b216-6e586bcc520b",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209|3e048603-aaff-4420-99b8-d2a222eb7e46",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209|657292ce-b904-4d5e-9c7f-f00327b6f910",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209|845db59e-d854-4d52-9642-a7d9724dbc5c",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.91,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209|ecb10de6-e214-4fdf-b914-5b96880a142f",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209|f75ceb94-a799-4c21-aa10-3072710fe34c",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "9a001bce-19a2-4fec-8965-5e9e20405db0|8ac09c69-d143-4418-8ffd-d72e0a0a76cb",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "9a001bce-19a2-4fec-8965-5e9e20405db0|997869a2-efb8-4d40-84fd-8b4abe5ab5bf",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "a2d8ef12-d2d9-4e26-8a7f-94d6eaff1a35|aef09f03-21b3-4857-9819-55e85c70b1c7",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "ac3b7148-5cae-40a4-8628-421941b2b8bf|c0d01ddf-a383-4775-b5e3-6fe5fa6eed18",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "ac6c5fd0-1c98-4dca-9e16-aa8758ba8e83|7b1b621d-b81f-4534-bf7e-72b0bb71f3b4",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "b54cf97a-c3e9-4352-bddd-c38b3b618176|02f90cc5-d3e3-4ba9-8d81-459e6fe1bb00",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|3f8ab28b-8d00-48bb-a7c3-81676d4b9539",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.75,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|4dda2acc-da82-4f4a-bd7c-24d78a1f4e38",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|66a90b8d-ce64-49fe-b18f-2796ab092a23",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|72832951-c7ab-4575-8865-028f50c5a4e3",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|79b988c3-7c5d-4fd7-abb7-0cd964c4c876",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.75,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|8925a863-47d5-438c-a609-8c68c73e5a72",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|a24d8aad-fcc0-425c-adb7-f9ccfc1b0337",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|a36908ec-8e7d-4e3d-8a9e-d9ee064a40d7",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|af662930-b350-412b-af0e-b90612ee409c",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|dfbcf316-9e76-4916-9999-c81859c3bc33",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "b7eb9cae-c633-4797-8f2b-a3467f0c66f8|86dcff35-0ab3-480e-88af-5a83fc93d878",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da|4ad5ba8b-eb54-4b8e-9315-3d2febd09039",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da|a961caf7-dc4e-4fbd-8895-17475d25fa2a",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "c4a6aa3c-8d10-4e2c-9304-52a3a1f9fbcb|e15912d3-ae66-4cac-996e-255dd6bbd140",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "cbcb0131-ad31-43b9-ad77-5dc2f6d2f0e9|38f78c58-b277-47d2-8bbe-bba9ef99b852",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "cbcb0131-ad31-43b9-ad77-5dc2f6d2f0e9|67b2dd4c-e269-4ad5-93fd-46e1f0fb448d",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "cc94aab4-4415-4f9a-b4b5-73ddbc98a8ac|26a7c915-cdb9-4731-ab9f-fdda6509f2d4",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "cdccd4d5-0060-484f-8003-b9c40bcbac51|0e8388e5-02b0-412c-bb1d-92cacdac9882",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "cdccd4d5-0060-484f-8003-b9c40bcbac51|aacb45f0-c524-405f-a363-284a253241d6",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "cdccd4d5-0060-484f-8003-b9c40bcbac51|e280fbc3-cda1-47e4-b7fc-93701af3941b",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "dfa1f7be-bc7a-4b84-8643-0e8b381a1311|137bce5f-68b3-43e4-94d8-2e56f7db2a6d",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "dfa1f7be-bc7a-4b84-8643-0e8b381a1311|2fee0e43-ae93-447e-84a0-3a553e6d936b",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "dfa1f7be-bc7a-4b84-8643-0e8b381a1311|6cc68e93-1b3c-444a-9619-0e8692710e2b",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "eae47143-1331-4d52-a739-aebf01874ec9|aa09cf9e-9603-42cd-9342-c33c6c8635bb",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "eed92698-bd74-4d98-9936-77e0ec9e17d6|07166668-eafc-4c52-b66c-3b76a2d487c8",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "eed92698-bd74-4d98-9936-77e0ec9e17d6|a7bb1b89-7d29-48f3-83b9-fafb8860a9f9",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "f26b70cc-a442-4c88-abb9-54d67e004ab3|54f7000b-4762-4e31-bf76-78cd18ef3d80",
+        "stratum": "S",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": false
+      }
+    ]
+  },
+  "reproduces_calibration": true,
+  "reproduction_note": ""
+}

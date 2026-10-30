@@ -61,6 +61,8 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 try:  # the project's .env, explicitly (cwd-independent)
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -221,7 +223,9 @@ def cmd_calibrate(args) -> int:
                    "recall": t["weighted_recall"], "precision_ci95": t["unweighted_precision_ci95"]}
                   for t in table],
     }
+    result["labelled_rows"] = {"split": deployment.standard_rows(rows, "not_incident")}
     so.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("coherence-same-organisation")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: splits {chosen['rejected_labelled']} labelled candidates, "
               f"{chosen['correct_labelled']} truly separate incidents; precision {chosen['weighted_precision']:.3f}, "

@@ -364,6 +364,7 @@ australian-cyber-events-scraper/
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
 │   ├── measure_neighbourhoods.py  # Neighbourhoods vs disjoint slices on a copy (no model)
 │   ├── evaluate_dedup.py          # Measure the dedup paths on labels and seeded cases (no paid calls by default)
+│   ├── evaluate_calibrations.py   # Held-out evaluation of every calibrated cut-off; the deployment decisions
 │   ├── publish_outputs.py         # Snapshot, gate and publish every output together; list/prune snapshots
 │   ├── perplexity_backfill_events.py  # Backfill Perplexity enrichment
 │   ├── project_status.py          # Pipeline status reporter
@@ -799,6 +800,101 @@ value at its next recalibration. The refresh runs `recalibrate --if-stale`
 first (`--skip-recalibration` to opt out; with `--report-event-rejections` it
 only lists); a step whose calibration cannot be recomputed stays report-only
 and the run ends degraded.
+
+#### A calibration acts only on enough labels: the deployment rule
+
+A cut-off is chosen where the labelled precision reaches 0.95, but 10 of 10
+correct is also what a true precision of 0.74 produces now and then. So a
+current calibration licenses its automatic actions (rejections, merges, splits,
+fills, attachments, AI labels, re-datings) only when they pass one rule, applied
+by every step's `active_calibration` through `dedup/deployment.py` before it
+acts:
+
+- the **exact one-sided Clopper-Pearson lower bound** on the action's precision,
+  from the unweighted labelled counts at the cut-off, clears the floor;
+- for a weighted calibration, the bound from **Kish's effective sample size**
+  of the acted-on labelled items (weighted precision as the rate) clears it too,
+  so weighting cannot inflate n;
+- the labelled actions, and their effective number, reach the minimum;
+- the **held-out evaluation** of this very calibration (same identity and
+  `generated` time) exists and its bound clears the floor as well.
+
+The thresholds are in one committed file, `evaluation/deployment_policy.json`,
+with the reasoning for each; a missing, unreadable or invalid policy raises - it
+never defaults to acting. Defaults (for the project owner to review): **95%
+one-sided confidence, floor 0.80, at least 15 labelled actions, held-out
+evaluation required, 5 folds.** At 0.80 every automatic action (logged and
+reversible through the ledger) is shown, not hoped, to be right at least 4 times
+in 5; it takes 14 all-correct labelled actions, 22 with one wrong, 30 with two.
+The bootstrap out-of-sample figures in the calibration files are reported, not
+gated: on 10-20 acted items their 5th percentile moves by 0.05-0.10 per item, and
+the held-out folds measure the same optimism with an exact bound.
+
+A failing step is **report-only exactly as a stale calibration is**, logged as
+`REPORT ONLY (deployment rule): ...` with the counts, the bounds and what would
+satisfy the rule ("5 more labelled fills, all correct"). A failing secondary
+action is switched off alone: a victim-attribution replacement threshold (those
+pairs are flagged instead), each supplier kind, the supplier `different` bound
+(the pair stays held). The duplicate checks' `different_cutoff` only holds links
+back, so it is reported and never gated.
+
+**Held-out evaluation** (`scripts/evaluate_calibrations.py`, stored scores only).
+The labels are split into folds by `sha256(step|subject id)`; for each fold the
+cut-off is re-chosen on the others by the step's own selection function
+(`choose_cutoff`, `merge_cutoff`, `accept_cutoff`, `replacement_threshold`,
+`choose_different`) and applied to the fold, so every label is judged once by a
+cut-off it did not help choose. The result, with the full-label effective n, is
+written to `evaluation/<step>_heldout.json` beside each calibration. Every
+calibration script now records its labelled rows (`labelled_rows`) and refreshes
+the evaluation as it writes; older calibrations' rows are extracted by re-running
+the step's calibration script on a copy of its calibration database with every
+key removed, sockets refused and clients that refuse any request, and must
+reproduce the committed cut-off and counts. `--dedup-db` adds
+`evaluate_dedup.py`'s seeded splits and joins (reported; a synthetic pair has no
+stored judgement, so the calibrated path cannot decide one without paid calls).
+
+```bash
+python scripts/dedup_admin.py recalibrate --status           # calibration state + every action's decision
+python scripts/evaluate_calibrations.py report               # the decisions alone (--json)
+python scripts/evaluate_calibrations.py evaluate [--step S] [--instance instance] [--db STEP=PATH] [--dedup-db DB]
+```
+
+The quality report records `calibration.<step>.<action>.deployed` (a warning
+when held back), `.lower_bound`, `.heldout_lower_bound` and
+`calibration.report_only_actions`; `calibration.policy` blocks publication when
+the policy cannot be read.
+
+Impact on the calibrations as committed on 2026-10-30 (no cut-off changed):
+
+| Step / action | Cut-off | Labelled correct | n_eff | Bound | Held-out | H. bound | Decision |
+|---|---|---|---|---|---|---|---|
+| source-gate reject | 0.58 | 95/100 | 99.8 | 0.898 | 95/101 | 0.886 | acts |
+| event-reality reject | 0.28 | 68/72 | 43.0 | 0.861 | 67/71 | 0.784 | report-only: ~4 more |
+| event-scope reject | 0.72 | 57/59 | 49.8 | 0.893 | 56/60 | 0.774 | report-only: ~7 more |
+| coherence split | 0.12 | 17/17 | 17.0 | 0.838 | 16/16 | 0.829 | acts |
+| coherence-same-organisation split | 0.06 | 19/20 | 20.0 | 0.784 | 16/17 | 0.750 | report-only: ~5 more |
+| duplicates merge | 0.81 | 16/16 | 16.0 | 0.829 | 15/15 | 0.819 | acts (narrowly) |
+| ai-duplicates merge | 0.30 | 68/75 | 62.6 | 0.832 | 68/74 | 0.846 | acts |
+| victim-attribution act | 0.18 | 44/46 | 30.1 | 0.844 | 44/47 | 0.687 | report-only: ~17 more |
+| victim-attribution replace | 0.69 | 23/25 | 11.6 | 0.702 | 20/22 | 0.671 | report-only: ~8 more |
+| victim-fill fill | 0.97 | 10/10 | 10.0 | 0.741 | 0/0 | - | report-only: ~15 more |
+| supplier-victims victim / same-incident / different | 0.87 / 0.89 / 0.09 | 25/26, 27/27, 19/19 | - | 0.830 / 0.895 / 0.854 | - | - | report-only: its work copy is gone, so no held-out evaluation; recalibrate |
+| ai-involvement flag | 0.69 | 34/35 | 35.0 | 0.871 | 33/35 | 0.831 | acts |
+| proper-name descriptive | 0.20 | 57/60 | 59.8 | 0.876 | 59/62 | 0.880 | acts |
+
+"~N more" is the number of further labelled actions, all correct, that would
+clear every bound (each wrong one needs more). Steps held back keep acting on
+their labels, as with a stale calibration. Rows were extracted from the
+recalibration copies, `calibration_*.db` and, for the source gate and AI
+involvement (calibrated on the live database, which has moved on), the backups
+`cyber_events.db.backup.20261027_pre_source_gate` and
+`..._20261029_before_review_fixes`; every extraction reproduced its committed
+cut-off and counts. Seeded cases on the 2026-10-30 live copy
+(`duplicate_heldout.json`, `seeded`): the 100 seeded splits are undecided by the
+calibrated judgement (no stored answer for a synthetic pair); of 100 seeded
+joins it merges 3 at 0.81, and one labelled-`different` pair scores 0.88 on
+current evidence (labels decide first, so it is never merged) - cases to review,
+not measured errors.
 
 **Flagged victims are reassessed, and unresolved ones are marked.** When
 `check-victim-attribution` finds a recorded victim below the cut-off and

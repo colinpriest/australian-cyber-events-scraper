@@ -144,7 +144,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     if cal.get("cutoff") is None:
         logger.warning("VICTIM FILL IS REPORT ONLY: no cut-off reached the precision target")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("victim-fill", cal, Path(path))
 
 
 def load_labels(path: Path = LABELS_PATH, required: bool = False) -> Dict[str, Dict[str, str]]:

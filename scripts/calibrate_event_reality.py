@@ -46,6 +46,8 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import event_reality as er  # noqa: E402
 from cyber_data_collector.utils.llm_models import (  # noqa: E402
     add_model_arguments, apply_model_arguments, typesafe_model,
@@ -195,7 +197,9 @@ def cmd_calibrate(args) -> int:
         "bootstrap_out_of_sample_precision": boot,
         "curve": table,
     }
+    result["labelled_rows"] = {"reject": deployment.standard_rows(rows, "not_incident")}
     er.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("event-reality")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: rejects {chosen['rejected_labelled']} labelled events, "
               f"{chosen['correct_labelled']} correctly; weighted precision {chosen['weighted_precision']:.3f}, "

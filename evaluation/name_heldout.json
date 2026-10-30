@@ -1,0 +1,1369 @@
+{
+  "version": 1,
+  "step": "proper-name",
+  "generated": "2026-10-30T16:49:20.435216",
+  "calibration": {
+    "question_version": "proper-name-v1",
+    "model": "jev-1.14.0",
+    "evidence": "proper-name:c40da730be4e57a3",
+    "generated": "2026-10-29T21:28:08.751344"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {
+    "descriptive": "extracted from calibration_names.db (stored scores, no API calls)"
+  },
+  "actions": {
+    "descriptive": {
+      "cutoff": 0.200001,
+      "precision_target": 0.95,
+      "minimum": 10,
+      "labelled_rows": 182,
+      "full": {
+        "acted": 60,
+        "correct": 57,
+        "weighted_precision": 0.9572754095188959,
+        "effective_n": 59.7931,
+        "lower_bound_unweighted": 0.8758127895225638,
+        "lower_bound_effective": 0.8855008985126372
+      },
+      "reselected_cutoff": 0.200001,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 62,
+        "correct": 59,
+        "weighted_precision": 0.9580420632294286,
+        "effective_n": 61.3854,
+        "lower_bound_unweighted": 0.879663820392464,
+        "lower_bound_effective": 0.887891068019491,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 150,
+            "test": 32,
+            "cutoff": 0.190001,
+            "acted": 11,
+            "correct": 11
+          },
+          {
+            "fold": 1,
+            "train": 145,
+            "test": 37,
+            "cutoff": 0.190001,
+            "acted": 11,
+            "correct": 11
+          },
+          {
+            "fold": 2,
+            "train": 140,
+            "test": 42,
+            "cutoff": 0.190001,
+            "acted": 11,
+            "correct": 11
+          },
+          {
+            "fold": 3,
+            "train": 145,
+            "test": 37,
+            "cutoff": 0.290001,
+            "acted": 19,
+            "correct": 16
+          },
+          {
+            "fold": 4,
+            "train": 148,
+            "test": 34,
+            "cutoff": 0.190001,
+            "acted": 10,
+            "correct": 10
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    }
+  },
+  "rows": {
+    "descriptive": [
+      {
+        "id": "afl fan website",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "aussie cyber agencies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australia-based petroleum distribution and logistics company",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "australian airline",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "australian asx-listed fintech",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "australian bank",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "australian charity",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australian company",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australian construction company",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australian critical infrastructure provider",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australian estate agencies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "australian fibre installation firm",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "australian gelato giant",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.14,
+        "positive": true
+      },
+      {
+        "id": "australian government department",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "australian government entities",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "australian health service website",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "australian healthcare provider",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "australian jewellery brand",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "australian legal network management service",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.1,
+        "positive": true
+      },
+      {
+        "id": "australian mobile, internet and nbn provider",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "australian online and in-store women\u2019s lingerie, swimwear and underwear retailer",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "australian organisation",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "australian personal protective equipment (ppe) maker",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "australian rare car part website",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "australian telecommunications company",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "australian university",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "banks",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "big four banks",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "broadmeadow-based office technology supplier",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.13,
+        "positive": true
+      },
+      {
+        "id": "canteen",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.19,
+        "positive": false
+      },
+      {
+        "id": "companies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "conveyancer",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "cyber crime squad detectives",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "entities in taiwan",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.11,
+        "positive": true
+      },
+      {
+        "id": "european law enforcement agencies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "foreign firms",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "french authorities",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "government",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "government agencies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "indigenous health organisation",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "law enforcement agencies in australia and offshore",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "medical imaging firm",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "ngos",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "nsw petroleum distributor",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "nsw pharmacy management firm",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "philippine authorities",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "privacy watchdog",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "qld pharmacy chain",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.1,
+        "positive": true
+      },
+      {
+        "id": "secure vpn",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.1,
+        "positive": false
+      },
+      {
+        "id": "state law enforcement",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "state police",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.11,
+        "positive": true
+      },
+      {
+        "id": "state-owned utilities",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "tasmanian government agencies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "unknown commercial entity",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "us companies",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "victorian car dealership",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "victorian government schools",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "victorian rv dealer",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "wa trade supplier",
+        "stratum": "A",
+        "weight": 2.0833,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "adelaide private hospital",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.31,
+        "positive": true
+      },
+      {
+        "id": "adelaide school",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.46,
+        "positive": true
+      },
+      {
+        "id": "australian health",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": true
+      },
+      {
+        "id": "australia\u2019s largest producer of gold",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.45,
+        "positive": true
+      },
+      {
+        "id": "bad packets",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.49,
+        "positive": false
+      },
+      {
+        "id": "big interest group pty ltd",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.4,
+        "positive": false
+      },
+      {
+        "id": "big4",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.44,
+        "positive": false
+      },
+      {
+        "id": "bigfooty",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.49,
+        "positive": false
+      },
+      {
+        "id": "cyber daily",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": false
+      },
+      {
+        "id": "cyberdaily",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.46,
+        "positive": false
+      },
+      {
+        "id": "cybertrackerau",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.31,
+        "positive": false
+      },
+      {
+        "id": "education department",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.43,
+        "positive": false
+      },
+      {
+        "id": "event secretary",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.22,
+        "positive": false
+      },
+      {
+        "id": "federal court",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.21,
+        "positive": false
+      },
+      {
+        "id": "five eyes law enforcement group (feleg)",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.29,
+        "positive": false
+      },
+      {
+        "id": "heart foundation",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.4,
+        "positive": false
+      },
+      {
+        "id": "hotel quarantine",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.49,
+        "positive": true
+      },
+      {
+        "id": "jbs-owned beef facilities",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.24,
+        "positive": true
+      },
+      {
+        "id": "ledger",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.35,
+        "positive": false
+      },
+      {
+        "id": "lion",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.2,
+        "positive": false
+      },
+      {
+        "id": "mexican government",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.23,
+        "positive": false
+      },
+      {
+        "id": "my rewards",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.31,
+        "positive": false
+      },
+      {
+        "id": "mydeal",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.44,
+        "positive": false
+      },
+      {
+        "id": "national cyber security coordinator",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": false
+      },
+      {
+        "id": "official visitors program",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.32,
+        "positive": false
+      },
+      {
+        "id": "oscars group",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.49,
+        "positive": false
+      },
+      {
+        "id": "perpetual",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.49,
+        "positive": false
+      },
+      {
+        "id": "quantum radiology",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": false
+      },
+      {
+        "id": "reflections holidays",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.46,
+        "positive": false
+      },
+      {
+        "id": "respect",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.42,
+        "positive": false
+      },
+      {
+        "id": "sa hospital",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.23,
+        "positive": true
+      },
+      {
+        "id": "smithfield nsw switchboard manufacturer",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.42,
+        "positive": true
+      },
+      {
+        "id": "smoke alarm solutions",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.45,
+        "positive": false
+      },
+      {
+        "id": "southern phone company",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.4,
+        "positive": false
+      },
+      {
+        "id": "sundoctors",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.48,
+        "positive": false
+      },
+      {
+        "id": "super vpn",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.43,
+        "positive": false
+      },
+      {
+        "id": "sydney pharmacy",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.35,
+        "positive": true
+      },
+      {
+        "id": "territory and state police",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.21,
+        "positive": true
+      },
+      {
+        "id": "the guardian",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.32,
+        "positive": false
+      },
+      {
+        "id": "vibetech",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.34,
+        "positive": false
+      },
+      {
+        "id": "victorian courts",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": true
+      },
+      {
+        "id": "victorian medical centre",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.4,
+        "positive": true
+      },
+      {
+        "id": "virtual ideas",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.36,
+        "positive": false
+      },
+      {
+        "id": "way forward",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.34,
+        "positive": false
+      },
+      {
+        "id": "wiz",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.32,
+        "positive": false
+      },
+      {
+        "id": "your community health",
+        "stratum": "B",
+        "weight": 1.1333,
+        "p": 0.34,
+        "positive": false
+      },
+      {
+        "id": "aaa collections",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.54,
+        "positive": false
+      },
+      {
+        "id": "aaca",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "ac laser",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.75,
+        "positive": false
+      },
+      {
+        "id": "ahm",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.67,
+        "positive": false
+      },
+      {
+        "id": "australian college of business intelligence",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "australian ministry of interior",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.53,
+        "positive": false
+      },
+      {
+        "id": "australian venue management association",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "blk sport",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "brighton australia",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "club old bar",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "colt telecom",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "cyble's research and intelligence labs",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.65,
+        "positive": false
+      },
+      {
+        "id": "department of education",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "energy one",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.6,
+        "positive": false
+      },
+      {
+        "id": "erindale vikings",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "fresh produce safety centre australia",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.6,
+        "positive": false
+      },
+      {
+        "id": "generation life",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.63,
+        "positive": false
+      },
+      {
+        "id": "gucci",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "institute of psychiatry",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.54,
+        "positive": false
+      },
+      {
+        "id": "law in order",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "linkt",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.66,
+        "positive": false
+      },
+      {
+        "id": "napoleon perdis",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.62,
+        "positive": false
+      },
+      {
+        "id": "outback pharmacies",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.64,
+        "positive": false
+      },
+      {
+        "id": "pegasus group australia",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "poole group",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.69,
+        "positive": false
+      },
+      {
+        "id": "prime properties",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "quest apartments and hotels",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "racgp",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "reportcy",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.55,
+        "positive": false
+      },
+      {
+        "id": "rural fire service",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.5,
+        "positive": false
+      },
+      {
+        "id": "sbs",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "sharp office systems",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "st vincent\u2019s heath",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "super gardens",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.69,
+        "positive": false
+      },
+      {
+        "id": "the smith family",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.53,
+        "positive": false
+      },
+      {
+        "id": "unique cars and parts",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.59,
+        "positive": false
+      },
+      {
+        "id": "zig inge group",
+        "stratum": "C",
+        "weight": 5.075,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "accc",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "atf services",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "ausfec limited",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "australian human resources institute",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "australian national maritime museum",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "australian red cross",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "bendigo and adelaide bank",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "bondi markets",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.81,
+        "positive": false
+      },
+      {
+        "id": "click studios",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "clubsnsw",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "distinctive systems",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.87,
+        "positive": false
+      },
+      {
+        "id": "doordash",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "exetel",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "finsure",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "genea",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "hollard",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "ikad engineering",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "life360",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "national tertiary education union wa notre dame branch",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "nitro pdf",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "nsw department of health",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "nsw rural fire service",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "nt health",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "pennant hills golf club",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "sakura mobile",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "securityscorecard",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "shenzhen zhenhua data information technology co.",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "sitro group australia",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "southern adelaide local health network (salhn)",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "spirit super",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "st james' anglican school",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "terence c ringland & co",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.82,
+        "positive": false
+      },
+      {
+        "id": "tfe hotels",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "the brown & hurley group pty ltd",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "tp-link",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "university of adelaide",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "university of technology sydney",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "vodafone",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "western australia police force (wapf)",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "western australia\u2019s mandurah state emergency service",
+        "stratum": "D",
+        "weight": 18.85,
+        "p": 0.95,
+        "positive": false
+      }
+    ]
+  },
+  "reproduces_calibration": true,
+  "reproduction_note": ""
+}

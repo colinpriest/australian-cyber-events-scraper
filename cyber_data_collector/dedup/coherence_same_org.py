@@ -407,7 +407,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         logger.warning("REPORT ONLY: the same-organisation calibration found no cut-off meeting its precision "
                        "target; nothing will be split except labelled-different members.")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("coherence-same-organisation", cal, Path(path))
 
 
 def decide_splits(event: Dict[str, Any], scores: Dict[str, Dict[str, Any]], labels: Dict[str, str],

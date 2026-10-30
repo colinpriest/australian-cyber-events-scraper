@@ -1560,7 +1560,9 @@ def cmd_recalibrate(args) -> int:
     database's stored timelines and corroboration searches are carried. Spends
     Jev and escalation calls only for evidence not already judged.
 
-    ``--status`` prints each calibration's state and spends nothing; ``--dry-run``
+    ``--status`` prints each calibration's state and, for every automatic action it
+    licenses, the deployment-rule decision (lower bound, held-out bound, what would
+    satisfy the rule; ``evaluation/deployment_policy.json``), and spends nothing; ``--dry-run``
     also counts the labelled cases each snapshot holds. ``--if-stale`` limits the
     work to calibrations that exist but no longer match (what the refresh runs).
     Exit 2: a snapshot, key or label file is missing (nothing spent for that
@@ -1579,6 +1581,13 @@ def cmd_recalibrate(args) -> int:
         cutoff = "-" if st.get("cutoff") is None else f"{st['cutoff']:.4f}"
         print(f"{st['step']:30} {st['state']:12} {cutoff:>9}  {st['reason']}")
     if args.status:
+        # A current calibration acts only if its labelled evidence passes the deployment rule
+        # (cyber_data_collector/dedup/deployment.py); a policy that cannot be read raises.
+        from cyber_data_collector.dedup import deployment
+
+        policy = deployment.load_policy()
+        print()
+        print(deployment.format_table(deployment.statuses(policy=policy), policy))
         return 0
     if args.if_stale:
         todo = [st for st in current if st["state"] == "stale"]

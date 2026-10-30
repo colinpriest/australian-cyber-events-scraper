@@ -344,7 +344,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         return None
     if cal.get("cutoff") is None:
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("event-reality", cal, Path(path))
 
 
 def protected_events(path: Path = LABELS_PATH) -> set:

@@ -261,7 +261,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     if cal.get("cutoff") is None:
         logger.error("Source gate calibration %s has no cut-off: REPORT-ONLY, nothing is removed", path)
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("source-gate", cal, Path(path))
 
 
 # --- replacement of junk evidence --------------------------------------------

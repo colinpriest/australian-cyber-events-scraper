@@ -465,7 +465,9 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         logger.warning("REPORT ONLY: the coherence calibration found no cut-off meeting its precision "
                        "target; nothing will be split except labelled strays.")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("coherence", cal, Path(path))
 
 
 # ----------------------------------------------------------------------

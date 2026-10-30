@@ -47,6 +47,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import victim_fill as vf  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
 from scripts.calibrate_victim_attribution import replacement_bootstrap, replacement_threshold  # noqa: E402
@@ -147,7 +149,9 @@ def cmd_calibrate(args) -> int:
         "labels_file": str(vf.LABELS_PATH.relative_to(vf.ROOT)), "sample_file": str(SAMPLE_PATH.relative_to(vf.ROOT)),
         "generated": datetime.now().isoformat(), "curve": curve, "rows": rows,
     }
+    result["labelled_rows"] = {"fill": deployment.standard_rows(rows, "right", p_key="prob", choice_key="choice")}
     vf.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("victim-fill")
     if chosen:
         print(f"Cut-off {chosen['threshold']:.4f}: fills {chosen['replaced_labelled']} labelled events, "
               f"{chosen['correct_labelled']} with the labelled victim; weighted precision "

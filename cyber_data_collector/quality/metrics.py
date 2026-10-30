@@ -891,6 +891,50 @@ def measure_confidence(conn: sqlite3.Connection, thresholds: Thresholds, today: 
     }
 
 
+def measure_calibration_deployment(conn: sqlite3.Connection, thresholds: Thresholds, today: date) -> Measurements:
+    """Whether each calibrated step's automatic actions pass the deployment rule (reads the committed files only).
+
+    ``cyber_data_collector/dedup/deployment.py``: an action acts only when the exact lower bound on its
+    labelled precision (and its held-out bound) clears ``evaluation/deployment_policy.json``. Per gated action:
+    ``calibration.<step>.<action>.deployed`` (its verdict), ``.lower_bound`` and ``.heldout_lower_bound``;
+    ``calibration.report_only_actions`` counts the actions a current calibration licenses that the rule (or a
+    stale calibration) holds back. An unreadable policy is ``calibration.policy`` failing - nothing could act.
+    """
+    from cyber_data_collector.dedup import deployment
+
+    try:
+        policy = deployment.load_policy()
+    except deployment.DeploymentPolicyError as exc:
+        return {"calibration.policy": Measurement(ok=False, detail=str(exc))}
+    out: Measurements = {"calibration.policy": Measurement(ok=True, detail=f"{policy.summary()} ({policy.version})")}
+    held: List[str] = []
+    for status in deployment.statuses(policy=policy):
+        for a in status["actions"]:
+            if not a["gated"] or a["cutoff"] is None:
+                continue
+            name = f"calibration.{status['step']}.{a['action']}"
+            stale = status["state"] == "stale"
+            deploys = bool(a["deploy"]) and not stale
+            reasons = [f"calibration stale: {status['reason']}"] if stale else a["reasons"]
+            detail = (f"{a['correct']}/{a['acted']} labelled {a['verb']} correct at cut-off {a['cutoff']}"
+                      + (f"; would pass with {a['needed']}" if a.get("needed") and not deploys else ""))
+            out[f"{name}.deployed"] = Measurement(ok=deploys, detail=detail, examples=reasons[:EXAMPLES])
+            out[f"{name}.lower_bound"] = Measurement(value=a["lower_bound"], detail="exact one-sided lower bound "
+                                                     f"at {policy.confidence:.0%} (floor {policy.precision_floor})")
+            h = a.get("heldout") or {}
+            out[f"{name}.heldout_lower_bound"] = (
+                Measurement(value=h["lower_bound"], detail=f"{h.get('correct')}/{h.get('acted')} held-out correct")
+                if h.get("lower_bound") is not None else
+                Measurement.unavailable("no held-out evaluation matching this calibration"))
+            if not deploys:
+                held.append(f"{status['step']} {a['action']}: {'; '.join(reasons)}")
+    out["calibration.report_only_actions"] = Measurement(
+        value=len(held), examples=held[:EXAMPLES],
+        detail="automatic actions a calibration licenses that are report-only (deployment rule or stale "
+               "calibration); `python scripts/dedup_admin.py recalibrate --status`")
+    return out
+
+
 MEASURES = (
     ("coverage", measure_coverage),
     ("coverage", measure_cyberdaily),
@@ -903,4 +947,5 @@ MEASURES = (
     ("duplicates", measure_duplicates),
     ("dates", measure_dates),
     ("staleness", measure_staleness),
+    ("calibration", measure_calibration_deployment),
 )

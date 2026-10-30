@@ -504,6 +504,11 @@ def recalibrate_step(name: str, live_db: Path, snapshot: Optional[Path] = None,
     cal_path = Path(mod.CALIBRATION_PATH)
     old_text = cal_path.read_text(encoding="utf-8") if cal_path.exists() else None
     old = json.loads(old_text) if old_text else {}
+    # The calibration script also rewrites the held-out evaluation beside it (deployment rule): restored with it.
+    from cyber_data_collector.dedup.deployment import heldout_path_for
+
+    heldout_path = heldout_path_for(cal_path)
+    old_heldout = heldout_path.read_text(encoding="utf-8") if heldout_path.exists() else None
 
     from cyber_data_collector.utils.jev import JevJudge
 
@@ -547,6 +552,10 @@ def recalibrate_step(name: str, live_db: Path, snapshot: Optional[Path] = None,
     except BaseException:
         if old_text is not None:
             cal_path.write_text(old_text, encoding="utf-8")
+        if old_heldout is not None:
+            heldout_path.write_text(old_heldout, encoding="utf-8")
+        elif heldout_path.exists():
+            heldout_path.unlink()
         raise
     after = calibration_state(spec)
     logger.info("%s recalibrated: cut-off %s -> %s, evidence %s -> %s", name, old.get("cutoff"), new.get("cutoff"),
