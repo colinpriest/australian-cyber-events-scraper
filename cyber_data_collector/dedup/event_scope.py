@@ -128,11 +128,16 @@ def escalation_question() -> str:
 
 
 def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None, refresh: bool = False,
-                 failed: Optional[List[str]] = None) -> Dict[str, float]:
+                 failed: Optional[List[str]] = None,
+                 states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """P(in scope) for each event; stored answers are reused (see :mod:`jev`).
 
     An event Jev fails on is appended to ``failed`` and left undecided. Repeated consecutive
     failures raise :class:`ScopeJudgementError`: a bad key or an outage should not run 1,000 times.
+
+    ``states`` freezes the evidence: an event already in it is asked on that state, any other is
+    built and added, and the caller passes the same mapping to :func:`escalate_band` and
+    :func:`record_final`, so Jev, the escalation and the stored decision see one evidence.
     """
     from cyber_data_collector.utils.jev import JevJudge
 
@@ -143,9 +148,15 @@ def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
     streak = 0
     try:
         for i, dedup_id in enumerate(dedup_ids, 1):
+            if states is None:
+                state = build_state(conn, dedup_id)
+            else:
+                if dedup_id not in states:
+                    states[dedup_id] = build_state(conn, dedup_id)
+                state = states[dedup_id]
             try:
-                answer = judge.ask("deduplicated_event", dedup_id, QUESTION_VERSION,
-                                   build_state(conn, dedup_id), q, refresh=refresh)[QUESTION_ID]
+                answer = judge.ask("deduplicated_event", dedup_id, QUESTION_VERSION, state, q,
+                                   refresh=refresh)[QUESTION_ID]
             except Exception as exc:  # noqa: BLE001 - one failure never decides an event
                 logger.warning("Event scope judgement failed for %s: %s", dedup_id, exc)
                 if failed is not None:
@@ -181,11 +192,13 @@ def calibration_identity() -> Dict[str, str]:
 
 
 def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None,
-                  failed: Optional[List[str]] = None) -> Dict[str, float]:
+                  failed: Optional[List[str]] = None,
+                  states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """Re-judge with the reasoning model every event Jev scores inside ESCALATE_BAND.
 
     Events whose escalation fails are appended to ``failed``: they are left undecided (retried
-    next run), never decided on Jev's mid-band score.
+    next run), never decided on Jev's mid-band score. With ``states`` (from :func:`judge_events`)
+    each event is shown the state Jev was asked on, never one built again.
     """
     from cyber_data_collector.utils.escalation import escalate
 
@@ -193,8 +206,9 @@ def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], cli
     band = sorted(d for d, p in probabilities.items() if lo <= p < hi)
     out: Dict[str, float] = {}
     for i, did in enumerate(band, 1):
+        state = build_state(conn, did) if states is None else final_decisions.frozen(states, did)
         value = escalate(conn, "deduplicated_event", did, ESCALATION_QUESTION_ID, ESCALATION_VERSION,
-                         build_state(conn, did), escalation_question(), client=client)
+                         state, escalation_question(), client=client)
         if value is not None:
             out[did] = value
         elif failed is not None:
@@ -212,11 +226,14 @@ STEP = final_decisions.Step(
 
 
 def record_final(conn: sqlite3.Connection, jev: Dict[str, float], escalated: Dict[str, float],
-                 failed: Optional[Sequence[str]] = None) -> Dict[str, float]:
+                 failed: Optional[Sequence[str]] = None,
+                 states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """Store each scored event's final decision against the evidence both answers were given; returns the final
-    scores (an event whose escalation failed has none)."""
-    return final_decisions.record_scores(conn, STEP, [(d, lambda d=d: build_state(conn, d)) for d in jev],
-                                         jev, escalated, failed or ())
+    scores (an event whose escalation failed has none). With ``states`` (from :func:`judge_events`) the decision is
+    stored against the state Jev was asked on; without, each state is built here (callers that do not freeze)."""
+    def build(d: str):
+        return (lambda: build_state(conn, d)) if states is None else (lambda: final_decisions.frozen(states, d))
+    return final_decisions.record_scores(conn, STEP, [(d, build(d)) for d in jev], jev, escalated, failed or ())
 
 
 def stored_final_probabilities(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, float]:
@@ -334,6 +351,11 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     rejections are returned for review. With both, events below the cut-off and events labelled out
     of scope are rejected (snapshotted); events labelled in scope never are. An event Jev or the
     escalation failed on is in ``judgement_failed`` / ``escalation_failed`` and is left alone.
+
+    Each event's evidence is built once: Jev is asked on it, the escalation is given it and the
+    decision is stored against it. Immediately before rejecting, every event its score would reject
+    is built again; one whose evidence changed since it was judged is not rejected but listed in
+    ``evidence_changed`` and judged again next run.
     """
     events = _select(conn, only)
     cal = active_calibration(calibration_path)
@@ -347,10 +369,11 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     labelled_out = sorted(d for d, label in known.items() if label == "out_of_scope" and d in in_run)
     judged_events = [d for d in events if d not in protected and d not in set(labelled_out)]
     judgement_failed: List[str] = []
-    jev_scores = judge_events(conn, judged_events, judge=judge, failed=judgement_failed)
+    states: Dict[str, Dict[str, Any]] = {}      # the evidence each judgement is made on, built once
+    jev_scores = judge_events(conn, judged_events, judge=judge, failed=judgement_failed, states=states)
     escalation_failed: List[str] = []
-    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
-    probabilities = record_final(conn, jev_scores, escalated, escalation_failed)
+    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed, states=states)
+    probabilities = record_final(conn, jev_scores, escalated, escalation_failed, states=states)
     meta = {r[0]: r[1:] for r in conn.execute(
         "SELECT deduplicated_event_id, title, victim_organization_name, event_date FROM DeduplicatedEvents")}
 
@@ -363,6 +386,17 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
         entry(did) for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
         if p < cutoff and did not in protected and did not in labelled_out]
     labelled_rejections = [entry(d, label="out_of_scope") for d in labelled_out] if cutoff is not None else []
+    # A score is acted on only while it describes the event: an event whose evidence changed after it was judged
+    # is left for the next run. Labelled rejections rest on the label, not on a score, and are not affected.
+    evidence_changed: List[Dict[str, Any]] = []
+    if apply and cal and below:
+        changed = set(final_decisions.changed_since(
+            states, [f["deduplicated_event_id"] for f in below], lambda d: build_state(conn, d)))
+        evidence_changed = [f for f in below if f["deduplicated_event_id"] in changed]
+        below = [f for f in below if f["deduplicated_event_id"] not in changed]
+        for f in evidence_changed:
+            logger.warning("NOT REJECTED: the evidence of %s changed after it was judged (P(in scope) %.3f); it is "
+                           "judged again next run", f["deduplicated_event_id"], f["p_in_scope"])
     rejections = below + labelled_rejections
     applied = bool(apply and cal and rejections)
     if applied:
@@ -372,7 +406,7 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     return {"events": len(events), "judged": len(probabilities), "settled_by_label": len(events) - len(judged_events), "escalated": len(escalated),
             "judgement_failed": judgement_failed, "escalation_failed": escalation_failed, "cutoff": cutoff,
             "calibrated": cal is not None, "applied": applied, "rejections": rejections,
-            "labelled_rejections": labelled_rejections, "restored_protected": restored,
+            "evidence_changed": evidence_changed, "labelled_rejections": labelled_rejections, "restored_protected": restored,
             "lowest_scoring": lowest, "distribution": _distribution(probabilities.values())}
 
 

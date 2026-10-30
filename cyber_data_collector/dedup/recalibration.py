@@ -225,14 +225,15 @@ def _plan_event_reality(conn: sqlite3.Connection) -> Plan:
     items = [d for d in wanted if d in active]
 
     def run(conn, judge, client):
-        jev = er.judge_events(conn, items, judge=judge, version=er.QUESTION_VERSION)
+        states: Dict[str, Dict[str, Any]] = {}      # each case's evidence, built once for all three steps
+        jev = er.judge_events(conn, items, judge=judge, version=er.QUESTION_VERSION, states=states)
         _require_scored("event", items, jev)
         failed: List[str] = []
-        escalated = er.escalate_band(conn, jev, client=client, failed=failed)
+        escalated = er.escalate_band(conn, jev, client=client, failed=failed, states=states)
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = er.record_final(conn, jev, escalated)
+        final = er.record_final(conn, jev, escalated, states=states)
         _require_agreement("event", final, er.stored_final_probabilities(conn, items))
 
     return Plan(items, len(wanted), run)
@@ -250,14 +251,15 @@ def _plan_event_scope(conn: sqlite3.Connection) -> Plan:
     items = [c["id"] for c in cases if c["id"] in active]
 
     def run(conn, judge, client):
-        jev = es.judge_events(conn, items, judge=judge)
+        states: Dict[str, Dict[str, Any]] = {}      # each case's evidence, built once for all three steps
+        jev = es.judge_events(conn, items, judge=judge, states=states)
         _require_scored("event", items, jev)
         failed: List[str] = []
-        escalated = es.escalate_band(conn, jev, client=client, failed=failed)
+        escalated = es.escalate_band(conn, jev, client=client, failed=failed, states=states)
         if failed:
             raise RecalibrationError(f"{len(failed)} event(s) in the escalation band could not be escalated "
                                      f"(first: {failed[0]}); see the log. Nothing was calibrated.")
-        final = es.record_final(conn, jev, escalated)
+        final = es.record_final(conn, jev, escalated, states=states)
         _require_agreement("event", final, es.stored_final_probabilities(conn, items))
 
     return Plan(items, len(cases), run)

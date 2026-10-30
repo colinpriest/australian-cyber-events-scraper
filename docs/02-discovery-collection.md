@@ -724,7 +724,7 @@ Three distinct LLM interactions occur during discovery and collection. All use O
 
 **Model:** GPT-4o-mini via instructor (structured output)
 
-**Concurrency:** 10 concurrent requests via asyncio semaphore. 60-second timeout per request.
+**Concurrency:** 10 concurrent requests via asyncio semaphore. 60-second HTTP timeout per request; transient failures retried by one loop (see LLM-Level below).
 
 **System prompt (verbatim):**
 
@@ -756,7 +756,7 @@ class ExtractedEntity(BaseModel):
 
 **Model:** GPT-4o-mini via instructor (structured output)
 
-**Concurrency:** 10 concurrent requests via asyncio semaphore. 60-second timeout per request.
+**Concurrency:** 10 concurrent requests via asyncio semaphore. 60-second HTTP timeout per request; transient failures retried by one loop (see LLM-Level below).
 
 **System prompt (verbatim):**
 
@@ -1149,7 +1149,7 @@ records each source's search of each month; `DiscoveryRecordState` and the
 | Discovery filter threshold | 0.2 | Minimum score for GDELT discovery stage |
 | Content filter threshold | 0.4 | Minimum score for GDELT content stage |
 | Max concurrent LLM requests | 10 | Semaphore limit for entity extraction and classification |
-| LLM timeout | 60 seconds | Per-request timeout for GPT-4o-mini calls |
+| LLM timeout | 60 seconds | Per-request HTTP timeout for fast-model calls (3 attempts, `utils/llm_retry.py`) |
 | Scraping timeout | 120 seconds | Per-URL timeout for Playwright scraping |
 | Page load timeout | 30 seconds | Playwright page load timeout |
 | Perplexity circuit breaker | 5 consecutive failures | Threshold before 5-minute backoff |
@@ -1190,9 +1190,15 @@ records each source's search of each month; `DiscoveryRecordState` and the
 
 ### LLM-Level
 
-- Per-request timeout of 60 seconds.
-- `max_retries=2` for instructor-based calls.
-- On timeout or error, the original event is returned unchanged (not discarded).
+- Per-request HTTP timeout (httpx: 60 seconds per phase, 10 to connect) on a client created with
+  `max_retries=0`, so a request that does not answer is cancelled, not abandoned in a running thread
+  (`cyber_data_collector/utils/llm_retry.py`).
+- One retry loop for classification and entity extraction: timeouts, connection errors, 429 and 5xx are
+  retried with back-off of 2 seconds doubling to at most 30, one request per attempt, at most 3 attempts.
+  Instructor re-asks only an answer that does not validate (once). Other errors propagate at once.
+- On a final failure the event is handed back flagged `classification_status = 'failed'` with its error
+  kind (a final timeout is temporary), so the retry queue tries it again; it is neither stored as
+  classified nor discarded.
 
 ### Pipeline-Level
 
