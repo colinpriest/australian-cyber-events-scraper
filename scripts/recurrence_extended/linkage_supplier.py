@@ -122,7 +122,7 @@ def _evidence(db_path, ids):
             judgments = db.execute('''SELECT subject_type, subject_id, question_id, value, created_at, rowid
                 FROM ModelJudgements WHERE (subject_type='event_pair' AND question_id='same_incident')
                 OR (subject_type='event_victim' AND question_id='is_recorded_victim')
-                ORDER BY created_at, rowid''').fetchall()
+                ORDER BY rowid''').fetchall()
     different, same, within = set(), set(), set()
     for verdict, a, b in overrides:
         if a is None or b is None:

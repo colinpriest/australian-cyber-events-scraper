@@ -21,13 +21,13 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional
 
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.utils.jev import ensure_schema
 from cyber_data_collector.utils.llm_models import chat_params, openai_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def escalate(conn: sqlite3.Connection, subject_type: str, subject_id: str, quest
     model = openai_model()
     digest = _hash(state, question, model)
     row = conn.execute("SELECT value FROM ModelJudgements WHERE question_id = ? AND input_hash = ? "
-                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (question_id, digest)).fetchone()
+                       "ORDER BY rowid DESC LIMIT 1", (question_id, digest)).fetchone()
     if row is not None:
         return float(row[0])
     client = client or _client()
@@ -102,7 +102,7 @@ def escalate(conn: sqlite3.Connection, subject_type: str, subject_id: str, quest
          json.dumps({"question": question, "reasoning_effort": REASONING_EFFORT}),
          digest, model, getattr(completion, "model", None),
          getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None),
-         datetime.now().isoformat()))
+         utc_now_iso()))
     conn.commit()
     return float(judgement.probability)
 
@@ -156,7 +156,7 @@ def escalate_choice(conn: sqlite3.Connection, subject_type: str, subject_id: str
                      + "\n".join(f"- {name}: {text}" for name, text in options.items()))
     digest = _hash(state, full_question, model)
     row = conn.execute("SELECT probabilities_json FROM ModelJudgements WHERE question_id = ? AND input_hash = ? "
-                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (question_id, digest)).fetchone()
+                       "ORDER BY rowid DESC LIMIT 1", (question_id, digest)).fetchone()
     if row is not None:
         stored = json.loads(row[0])
         return {name: float(stored[name]) for name in options}
@@ -192,6 +192,6 @@ def escalate_choice(conn: sqlite3.Connection, subject_type: str, subject_id: str
          json.dumps({"question": full_question, "reasoning_effort": REASONING_EFFORT}),
          digest, model, getattr(completion, "model", None),
          getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None),
-         datetime.now().isoformat()))
+         utc_now_iso()))
     conn.commit()
     return probs

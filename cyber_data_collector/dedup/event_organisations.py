@@ -41,13 +41,13 @@ import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
 from cyber_data_collector.utils.jev import ensure_schema
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ def named_organisations(conn: sqlite3.Connection, dedup_id: str,
     model = openai_fast_model()
     digest = _hash(text, model)
     row = conn.execute("SELECT answer FROM ModelJudgements WHERE question_id = ? AND input_hash = ? "
-                       "ORDER BY created_at DESC, rowid DESC LIMIT 1", (QUESTION_ID, digest)).fetchone()
+                       "ORDER BY rowid DESC LIMIT 1", (QUESTION_ID, digest)).fetchone()
     if row is not None:
         found = validated(text, NamedOrganisations(**json.loads(row[0])))
         found.cached = True
@@ -244,7 +244,7 @@ def named_organisations(conn: sqlite3.Connection, dedup_id: str,
         (str(uuid.uuid4()), "deduplicated_event", dedup_id, QUESTION_ID, EXTRACTION_VERSION, "extraction",
          json.dumps(answer.model_dump(), ensure_ascii=False), None, None, "{}",
          json.dumps({"instructions": INSTRUCTIONS}), digest, model, model, None, None,
-         datetime.now().isoformat()))
+         utc_now_iso()))
     conn.commit()
     return validated(text, answer)
 

@@ -39,6 +39,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.utils.llm_models import perplexity_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +295,8 @@ def verify_stored_aliases(conn: sqlite3.Connection, search: Optional[Search] = N
             continue
         verdict = verify_pair(conn, raw, canonical, search, known, report)
         if verdict == "same":
-            conn.execute("UPDATE EntityAliases SET source = 'llm', confidence = 1.0 WHERE raw_name = ?", (raw,))
+            conn.execute("UPDATE EntityAliases SET source = 'llm', confidence = 1.0, created_at = ? WHERE raw_name = ?",
+                         (utc_now_iso(), raw))      # re-dated: it became a trusted alias now
             out.confirmed.append((raw, canonical))
         elif verdict is not None:
             conn.execute("DELETE FROM EntityAliases WHERE raw_name = ? AND source = 'rule'", (raw,))

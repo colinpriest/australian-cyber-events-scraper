@@ -28,10 +28,10 @@ import os
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Dict, Mapping, Optional
 
 from cyber_data_collector.utils.llm_models import typesafe_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS ModelJudgements (
     model             TEXT,            -- the version that answered
     input_tokens      INTEGER,         -- for the whole request, repeated on each answer
     output_tokens     INTEGER,
-    created_at        TEXT NOT NULL
-);
+    created_at        TEXT NOT NULL    -- UTC with offset (utils.timestamps); rows before 2026-10-30: naive local
+);                                     -- time, so the newest answer is the highest rowid, not the largest stamp
 CREATE INDEX IF NOT EXISTS idx_judgements_lookup
     ON ModelJudgements (question_id, input_hash);
 CREATE INDEX IF NOT EXISTS idx_judgements_subject
@@ -167,7 +167,7 @@ class JevJudge:
         row = self.conn.execute(
             """SELECT primitive, answer, value, confidence, probabilities_json, model
                FROM ModelJudgements WHERE question_id = ? AND input_hash = ?
-               ORDER BY created_at DESC, rowid DESC LIMIT 1""", (question_id, digest)).fetchone()
+               ORDER BY rowid DESC LIMIT 1""", (question_id, digest)).fetchone()
         if row is None:
             return None
         return Judgement(question_id, row[0], row[1], row[2], row[3],
@@ -202,7 +202,7 @@ class JevJudge:
         response = self._get_client().system_one(state=dict(state), questions=pending, model=model)
         self.calls += 1
         usage = getattr(response, "usage", None)
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         rows = []
         for qid, question in pending.items():
             judgement = _from_answer(qid, response.answers[qid], response.model)
