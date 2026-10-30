@@ -225,6 +225,38 @@ scripts/calibrate_supplier_victims.py calibrate --different-only` adds the field
 to an existing calibration, after checking the stored judgements still
 reproduce its merge cut-off.
 
+### More labels for the deployment rule (2026-10-30)
+
+The deployment rule (`dedup/deployment.py`) lets an action run only when the
+exact one-sided 95% lower bound on its precision is at least 0.80 on all labels
+and on 5-fold held-out labels, with at least 15 labelled actions. Re-scored on
+current evidence (FinalDecisions; a copy of the labelling snapshot with the live
+stored searches, timelines and supplier answers carried in, 134 Jev calls and
+39 escalations), the 2026-10-27 labels gave usable scores for 73 of 103 victim
+candidates and 69 of 71 pairs. Every action then failed on the held-out bound
+alone: victims 22/24 held out (0.76), merges 30/33 (0.78), "different" 24/26
+(0.78).
+
+`extend` added 59 items (round 2, seed 20261030), every current candidate first
+scored by Jev on its current evidence (about 540 Jev calls): victim high +30 of
+125 eligible (weight 2.83 -> 2.06), same-incident high +4 and mid +5 (both
+strata are now a census), same-incident low +20 of 150 (weight 10.4 -> 4.71).
+They were labelled blind (same packet format and conventions, 2026-10-30): 27
+affected, 1 already recorded, 1 not affected, 1 unsure; 6 same, 22 different, 1
+unsure. Calibrated on the copy (`instance/recalibration/supplier-victims.db`),
+no further calls:
+
+| Question | Labelled used (positive) | Cut-off | Labelled at cut-off (lower bound) | Held out (lower bound) | Weighted recall | Bootstrap (mean / p05) |
+|---|---|---|---|---|---|---|
+| victim | 102 (71) | **0.85** | 52 of 54 right (0.888) | 53 of 56 (0.854) | 0.73 | 0.94 / 0.81 |
+| same incident, merge | 97 (42) | **0.87** | 33 of 34 (0.868) | 34 of 37 (0.804) | 0.79 | 0.95 / 0.81 |
+| same incident, "different" below | 97 (42) | **0.09** | 44 of 44 (0.925 at n_eff 38.5) | 46 of 49 (0.849) | 0.94 | 0.99 / 0.96 |
+
+All three pass the rule and act. The merge action passes by the smallest
+margin (held-out 0.804): its candidate population is exhausted (every high and
+mid pair is labelled), so one more wrong merge in a later recalibration would
+switch it off until new pairs exist to label.
+
 ## 5. Applying
 
 In order:
