@@ -226,7 +226,9 @@ def active_calibration(path: Path = CALIBRATION_PATH, quiet: bool = False) -> Op
     if cal.get("cutoff") is None:
         log("PROPER-NAME JUDGEMENT IS REPORT ONLY: no cut-off reached the precision target")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("proper-name", cal, Path(path), quiet=quiet)
 
 
 # ---------------------------------------------------------------- the loaded verdicts

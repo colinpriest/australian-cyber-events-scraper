@@ -290,7 +290,12 @@ def active_calibration(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         logger.warning("AI involvement calibration does not apply (%s): labels are the most probable "
                        "option until scripts/calibrate_ai_involvement.py calibrate is rerun", reason)
         return None
-    return cal if cal.get("cutoff") is not None else None
+    if cal.get("cutoff") is None:
+        return None
+    from cyber_data_collector.dedup import deployment
+
+    # A calibration the deployment rule holds back is treated as a stale one: labels are the most probable option.
+    return deployment.gate("ai-involvement", cal, Path(path))
 
 
 def labelled_events(path: Optional[Path] = None) -> Dict[str, str]:

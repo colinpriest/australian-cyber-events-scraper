@@ -58,6 +58,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import victim_judgement as vj  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
 from scripts.calibrate_event_reality import bootstrap, choose_cutoff, wilson  # noqa: E402
@@ -224,7 +226,11 @@ def cmd_calibrate(args) -> int:
         "sample_file": str(SAMPLE_PATH.relative_to(vj.ROOT)), "generated": datetime.now().isoformat(),
         "curve": curve, "replacement_curve": r_curve, "replacement_rows": replacement_rows,
     }
+    result["labelled_rows"] = {"act": deployment.standard_rows(rows, "not_incident"),
+                               "replace": deployment.standard_rows(replacement_rows, "right", p_key="prob",
+                                                                   choice_key="choice")}
     vj.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("victim-attribution")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: acts on {chosen['rejected_labelled']} labelled pairs, "
               f"{chosen['correct_labelled']} truly wrong; weighted precision {chosen['weighted_precision']:.3f}, "

@@ -49,6 +49,8 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.processing import ai_involvement as ai  # noqa: E402
 from cyber_data_collector.processing.breach_source import event_state  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
@@ -181,7 +183,9 @@ def cmd_calibrate(args) -> int:
               "labels_file": str(ai.LABELS_PATH.relative_to(ai.ROOT)),
               "sample_file": str(SAMPLE_PATH.relative_to(ai.ROOT)), "generated": datetime.now().isoformat(),
               "bootstrap_out_of_sample_precision": boot, "curve": table}
+    result["labelled_rows"] = {"flag": deployment.standard_rows(rows, "is_ai")}
     ai.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("ai-involvement")
     print(f"Bootstrap out-of-sample weighted precision: {boot}")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: flags {chosen['flagged_labelled']} labelled events, "

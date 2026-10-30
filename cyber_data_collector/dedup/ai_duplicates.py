@@ -493,7 +493,11 @@ def active_calibration(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     if reason:
         logger.warning(calibration_guard.report_only_message("AI duplicate", cal, reason))
         return None
-    return cal if cal.get("cutoff") is not None else None
+    if cal.get("cutoff") is None:
+        return None
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("ai-duplicates", cal, Path(path))
 
 
 def labels_sha256(path: Optional[Path] = None) -> str:

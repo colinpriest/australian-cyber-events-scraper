@@ -163,6 +163,10 @@ def external_inputs(live_db: Path, repo_root: Path) -> Dict[str, str]:
     candidates += sorted((repo_root / "evaluation").glob("*_labels.csv")) if (repo_root / "evaluation").is_dir() else []
     candidates += sorted((repo_root / "evaluation").glob("*_calibration.json")) \
         if (repo_root / "evaluation").is_dir() else []
+    # What decides whether each calibration may act (cyber_data_collector/dedup/deployment.py).
+    candidates += [repo_root / "evaluation" / "deployment_policy.json"]
+    candidates += sorted((repo_root / "evaluation").glob("*_heldout.json")) \
+        if (repo_root / "evaluation").is_dir() else []
     out = {}
     for path in candidates:
         if path.is_file():

@@ -296,8 +296,8 @@ def publication_allowed(conn: sqlite3.Connection, record: bool = True,
 # Output
 # ---------------------------------------------------------------------------
 
-GROUP_ORDER = ("integrity", "labels", "synthetic", "dates", "staleness", "duplicates", "evidence",
-               "backlog", "coverage")
+GROUP_ORDER = ("integrity", "labels", "synthetic", "dates", "staleness", "calibration", "duplicates",
+               "evidence", "backlog", "coverage")
 STATUS_ORDER = {FAIL: 0, NOT_MEASURED: 1, WARN: 2, PASS: 3, INFO: 4}
 
 

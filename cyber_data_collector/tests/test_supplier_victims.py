@@ -814,7 +814,9 @@ def test_different_only_adds_the_one_field_and_refuses_changed_data(tmp_path, mo
     written = json.loads(path.read_text())
     assert written["same_incident"]["different_cutoff"] == pytest.approx(0.780001)
     assert written["same_incident"]["marker"] == "kept" and written["victim"] == {"cutoff": 0.9}
-    assert {k: v for k, v in written.items() if k != "same_incident"} == \
+    # Besides the field, only the rows it was chosen on are added (for the deployment rule's held-out evaluation).
+    assert {r["id"] for r in written["labelled_rows"]["different"]} == {r["id"] for r in rows}
+    assert {k: v for k, v in written.items() if k not in ("same_incident", "labelled_rows")} == \
         {k: v for k, v in existing.items() if k != "same_incident"}
 
     # The data no longer reproduces the calibration's merge cut-off: refuse, change nothing.
