@@ -112,18 +112,70 @@ Return your response as a JSON object with this exact structure:
     ]
 }
 
+event_date is the date the incident happened (or was discovered) as the sources
+state it - not the date an article about it was published. Use null when the
+sources do not state it.
+source_urls are the addresses of the articles that report this incident (not a
+site's home page).
 Only include real cyber security incidents related to Australia. If no relevant
 incidents are found, return {"events": []}.
 ```
 
 ### JSON Recovery Strategy
 
-Perplexity responses sometimes contain malformed JSON. The implementation uses a four-tier fallback:
+Perplexity responses sometimes contain malformed or truncated JSON
+(`datasources/perplexity.py`). The tiers, in order:
 
-1. **Strip markdown wrappers** — Removes ` ```json ... ``` ` code block formatting, then parses
-2. **Repair truncated JSON** — Counts unclosed brackets/braces, finds last complete event boundary (`},`), and closes the structure
-3. **Strict JSON retry** — Re-queries Perplexity with `temperature=0.0` and explicit instruction: *"Return ONLY raw JSON. Do NOT wrap it in markdown code blocks."*
-4. **Partial extraction + completion** — Extracts fields using regex (`"title"\s*:\s*"..."`, etc.) from the malformed response and sends partial data back to Perplexity for completion
+1. **Strip markdown wrappers** and parse.
+2. **Repair a truncated answer** after its last complete incident object (`},` or the last `}`); an object
+   cut off mid-value is not "closed" (the old bracket-counting strategy kept a value cut mid-number).
+3. **Strict JSON retry** at `temperature=0.0` - not for an answer cut off at the token limit, which would be
+   cut off again.
+4. **Object-by-object recovery.** The answer is scanned (string-aware) for each `{...}` object of the
+   `events` array, and a field is read only from inside its own object: all fields of a closed object; of
+   the cut-off final object, only values that are themselves complete (a closed string or array; a number at
+   the cut is dropped). Reading an object stops at its first malformed value. The old recovery matched every
+   `"title"`, every `"event_date"` ... in the whole text and paired them by position, so one missing field
+   moved every later date and entity onto the wrong incident. Objects that lost their citations are sent to
+   the completion call (which until 2026-10-30, like the strict retry, always failed silently: both used
+   `tracker` without importing it).
+
+Every incident records how it was read (`recovery`: `null`, `repaired`, `object`, `truncated_object`,
+`completed`; kept in `source_metadata.provenance.recovery`).
+
+### Incomplete answers are searched again
+
+A search is complete only when its answer parsed whole and was not cut off. An empty `content`, an answer
+cut off at `max_tokens` (`finish_reason == "length"`), and one readable only after tier 2 or tier 4 keep
+their usable incidents but are noted as an `incomplete` failure (`note_failure`), so the source-month is
+not recorded as searched and is searched again (an answer nothing could read is a `parse` failure). A clean
+`{"events": []}` is a complete, empty answer.
+
+A cut-off answer is first searched again over the two halves of its date window (the `after:/before:`
+filter; the halves share their middle day), recursively while each half is at least `MIN_WINDOW_DAYS` (3)
+long and at most `MAX_SPLIT_DEPTH` (5) times - a 3-month window reaches windows of 3 to 6 days. The halves'
+answers replace the cut-off one; a half that fails is noted and the cut-off answer's incidents are kept.
+Only a window that cannot be split and is still cut off is kept as read and recorded incomplete.
+
+### One record per cited article
+
+Each article URL an answer item cites becomes its own `RawEvents` record with the item's title,
+description and fields, so each page is scraped, judged by the page gate, classified, enriched and
+deduplicated independently: a citation that is not about the incident is rejected on its own merits without
+taking its siblings down, and deduplication joins the ones that are. Until 2026-10-30 an item became one
+record whose `source_url` was its first URL: every other citation was lost, and the first URL's page was
+taken as the article for the whole answer. Home pages (`_is_article_url`) are still not sources; they are
+listed in the provenance as `skipped_urls`. An item that cites no article address becomes one record with
+no URL. Duplicate detection (`find_existing_raw_event`: source, URL, title) works per child, so the same
+answer on a later run stores nothing new; source-month accounting (`SourceMonthDiscovery.events_found`,
+`DiscoveryRecordState`) counts records, i.e. children.
+
+`event_date` is stored as the record's incident date only as a valid, not-future `YYYY-MM-DD`, with
+`event_date_basis = 'stated in the Perplexity discovery answer (unverified)'` and **no precision**: a raw
+record's precision is read as established by its source, and the answer is a model's account; enrichment
+verifies the date against the pages. A month or year alone stays in the provenance. `entity_name` is
+passed to entity extraction as a hint (which replaces it). The provenance shape is in
+[data-dictionary.md](data-dictionary.md#rawevents-source_metadata).
 
 ### Event Type Mapping
 
@@ -511,7 +563,8 @@ Google Search results receive low baseline confidence because only the title and
 ### Limitations
 
 - **No LLM processing at collection time** — Events are created with `CyberEventType.OTHER` and `EventSeverity.MEDIUM` as defaults. Proper classification occurs during enrichment.
-- **Daily quota** — Free tier allows 100 queries/day. The pipeline detects HTTP 429 and 403 quota errors and stops gracefully.
+- **Daily quota** — Free tier allows 100 queries/day. The pipeline detects HTTP 429 and 403 quota errors and stops gracefully; the month is searched again on a later run.
+- **Incomplete is not empty** — a 403 that is not a quota refusal, and an `error` object in a 200 body, keep the results already read and are noted as failures (`note_failure`, typed `other` / by the HTTP code), so the source-month is searched again. Until 2026-10-30 both ended the query quietly and the month was recorded as complete.
 - **Snippet-only content** — Full article scraping happens in the enrichment phase via Playwright or Perplexity fallback.
 
 ---
