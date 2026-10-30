@@ -7,40 +7,48 @@
     0.7
   ],
   "calibrated_on_database": "calibration_coherence_same_org.db",
+  "frame_databases": {
+    "1": "calibration_coherence_same_org.db",
+    "2": "calibration_coherence_same_org_2.db"
+  },
   "cutoff": 0.060001,
   "precision_target": 0.95,
   "min_splits": 5,
   "at_cutoff": {
     "cutoff": 0.060001,
-    "rejected_labelled": 20,
-    "correct_labelled": 19,
-    "weighted_precision": 0.95,
-    "weighted_recall": 0.7307692307692307,
+    "rejected_labelled": 26,
+    "correct_labelled": 25,
+    "weighted_precision": 0.9615384615384616,
+    "weighted_recall": 0.6872852233676976,
     "unweighted_precision_ci95": [
-      0.7638641064874331,
-      0.9911187805671268
+      0.811068230080416,
+      0.9931781910230102
     ]
   },
-  "labelled_used": 67,
-  "labelled_different": 26,
-  "unsure_excluded": 8,
+  "labelled_used": 94,
+  "labelled_different": 36,
+  "labelled_used_by_frame": {
+    "1": 67,
+    "2": 27
+  },
+  "unsure_excluded": 9,
   "missing": 0,
   "labels_file": "evaluation/coherence_same_org_labels.csv",
   "sample_file": "evaluation/coherence_same_org_sample.csv",
-  "generated": "2026-10-29T19:29:13.679491",
+  "generated": "2026-10-30T19:38:31.997060",
   "bootstrap_out_of_sample_precision": {
     "replicates": 1000,
     "median": 1.0,
-    "mean": 0.91720028998779,
-    "p05": 0.75
+    "mean": 0.9353119648306234,
+    "p05": 0.8
   },
   "candidate_selection_misses": {
-    "labelled": 39,
+    "labelled": 49,
     "labelled_different": 0,
     "weighted_share_different": 0.0,
     "unweighted_share_ci95": [
       0.0,
-      0.08966985360023902
+      0.07270029673590504
     ],
     "different_ids": []
   },
@@ -50,7 +58,7 @@
       "split_labelled": 1,
       "correct_labelled": 1,
       "precision": 1.0,
-      "recall": 0.038461538461538464,
+      "recall": 0.027491408934707903,
       "precision_ci95": [
         0.20654329147389294,
         1.0
@@ -58,278 +66,1017 @@
     },
     {
       "cutoff": 0.020001,
-      "split_labelled": 5,
-      "correct_labelled": 5,
+      "split_labelled": 6,
+      "correct_labelled": 6,
       "precision": 1.0,
-      "recall": 0.19230769230769232,
+      "recall": 0.16494845360824742,
       "precision_ci95": [
-        0.5655085052479191,
-        1.0
+        0.6096569663469354,
+        0.9999999999999999
       ]
     },
     {
       "cutoff": 0.030001,
-      "split_labelled": 11,
-      "correct_labelled": 11,
+      "split_labelled": 13,
+      "correct_labelled": 13,
       "precision": 1.0,
-      "recall": 0.4230769230769231,
+      "recall": 0.35738831615120276,
       "precision_ci95": [
-        0.7411599827511859,
+        0.7718981569447083,
         1.0
       ]
     },
     {
       "cutoff": 0.040001,
-      "split_labelled": 14,
-      "correct_labelled": 14,
+      "split_labelled": 18,
+      "correct_labelled": 18,
       "precision": 1.0,
-      "recall": 0.5384615384615384,
+      "recall": 0.4948453608247423,
       "precision_ci95": [
-        0.7846829880728186,
+        0.8241154494176252,
         1.0
       ]
     },
     {
       "cutoff": 0.050001,
-      "split_labelled": 19,
-      "correct_labelled": 18,
-      "precision": 0.9473684210526315,
-      "recall": 0.6923076923076923,
+      "split_labelled": 25,
+      "correct_labelled": 24,
+      "precision": 0.96,
+      "recall": 0.6597938144329897,
       "precision_ci95": [
-        0.7536078466345479,
-        0.99064824750947
+        0.8045552759497747,
+        0.9929039496133008
       ]
     },
     {
       "cutoff": 0.060001,
-      "split_labelled": 20,
-      "correct_labelled": 19,
-      "precision": 0.95,
-      "recall": 0.7307692307692307,
+      "split_labelled": 26,
+      "correct_labelled": 25,
+      "precision": 0.9615384615384616,
+      "recall": 0.6872852233676976,
       "precision_ci95": [
-        0.7638641064874331,
-        0.9911187805671268
+        0.811068230080416,
+        0.9931781910230102
       ]
     },
     {
       "cutoff": 0.080001,
-      "split_labelled": 24,
-      "correct_labelled": 22,
-      "precision": 0.9166666666666666,
-      "recall": 0.8461538461538461,
+      "split_labelled": 31,
+      "correct_labelled": 29,
+      "precision": 0.9354838709677419,
+      "recall": 0.7972508591065293,
       "precision_ci95": [
-        0.741507847985494,
-        0.9768416721570266
+        0.7928101168125354,
+        0.9821255922249368
       ]
     },
     {
       "cutoff": 0.090001,
-      "split_labelled": 25,
-      "correct_labelled": 23,
-      "precision": 0.92,
-      "recall": 0.8846153846153846,
+      "split_labelled": 33,
+      "correct_labelled": 31,
+      "precision": 0.9393939393939394,
+      "recall": 0.852233676975945,
       "precision_ci95": [
-        0.7503348787704218,
-        0.977780066308908
+        0.8039341828220181,
+        0.9832194695709291
       ]
     },
     {
       "cutoff": 0.100001,
-      "split_labelled": 26,
-      "correct_labelled": 24,
-      "precision": 0.9230769230769231,
-      "recall": 0.9230769230769231,
+      "split_labelled": 34,
+      "correct_labelled": 32,
+      "precision": 0.9411764705882353,
+      "recall": 0.8797250859106529,
       "precision_ci95": [
-        0.7585805251948495,
-        0.9786453608166245
+        0.8090606311053629,
+        0.9837176869361576
       ]
     },
     {
       "cutoff": 0.120001,
-      "split_labelled": 27,
-      "correct_labelled": 24,
-      "precision": 0.8888888888888888,
-      "recall": 0.9230769230769231,
+      "split_labelled": 35,
+      "correct_labelled": 32,
+      "precision": 0.9142857142857143,
+      "recall": 0.8797250859106529,
       "precision_ci95": [
-        0.7194181745602705,
-        0.9614803521050127
+        0.7762040092883747,
+        0.970418168994703
       ]
     },
     {
       "cutoff": 0.150001,
-      "split_labelled": 28,
-      "correct_labelled": 25,
-      "precision": 0.8928571428571429,
-      "recall": 0.9615384615384616,
+      "split_labelled": 36,
+      "correct_labelled": 33,
+      "precision": 0.9166666666666666,
+      "recall": 0.9072164948453608,
       "precision_ci95": [
-        0.7280377463234293,
-        0.9628823079452005
+        0.7817298972308114,
+        0.9712519107287082
+      ]
+    },
+    {
+      "cutoff": 0.250001,
+      "split_labelled": 37,
+      "correct_labelled": 34,
+      "precision": 0.918918918918919,
+      "recall": 0.9347079037800687,
+      "precision_ci95": [
+        0.7869900750149847,
+        0.9720399336036787
       ]
     },
     {
       "cutoff": 0.280001,
-      "split_labelled": 29,
-      "correct_labelled": 26,
-      "precision": 0.896551724137931,
-      "recall": 1.0,
+      "split_labelled": 38,
+      "correct_labelled": 35,
+      "precision": 0.9210526315789473,
+      "recall": 0.9621993127147767,
       "precision_ci95": [
-        0.7361455275293085,
-        0.9641857596186989
+        0.792003210797347,
+        0.972785898605735
       ]
     },
     {
       "cutoff": 0.700001,
-      "split_labelled": 31,
-      "correct_labelled": 26,
-      "precision": 0.8387096774193549,
-      "recall": 1.0,
+      "split_labelled": 41,
+      "correct_labelled": 35,
+      "precision": 0.8459214501510574,
+      "recall": 0.9621993127147767,
       "precision_ci95": [
-        0.6736529727502113,
-        0.9290748009456006
+        0.7155624473141073,
+        0.9311584547054459
       ]
     },
     {
       "cutoff": 0.710001,
-      "split_labelled": 34,
-      "correct_labelled": 26,
-      "precision": 0.7647058823529411,
+      "split_labelled": 44,
+      "correct_labelled": 35,
+      "precision": 0.7887323943661971,
+      "recall": 0.9621993127147767,
+      "precision_ci95": [
+        0.6549913631816677,
+        0.888468721765324
+      ]
+    },
+    {
+      "cutoff": 0.720001,
+      "split_labelled": 45,
+      "correct_labelled": 36,
+      "precision": 0.7950819672131147,
       "recall": 1.0,
       "precision_ci95": [
-        0.6000353719173557,
-        0.8756316189075566
+        0.6617674868607056,
+        0.8910399559749099
+      ]
+    },
+    {
+      "cutoff": 0.740001,
+      "split_labelled": 47,
+      "correct_labelled": 36,
+      "precision": 0.75,
+      "recall": 1.0,
+      "precision_ci95": [
+        0.6277546774315923,
+        0.8639686357607541
       ]
     },
     {
       "cutoff": 0.750001,
-      "split_labelled": 35,
-      "correct_labelled": 26,
-      "precision": 0.7428571428571429,
+      "split_labelled": 48,
+      "correct_labelled": 36,
+      "precision": 0.7348484848484849,
       "recall": 1.0,
       "precision_ci95": [
-        0.5793037572935127,
-        0.8583713127344985
+        0.6121535625207293,
+        0.8507951119028996
       ]
     },
     {
       "cutoff": 0.770001,
-      "split_labelled": 36,
-      "correct_labelled": 26,
-      "precision": 0.7222222222222222,
+      "split_labelled": 50,
+      "correct_labelled": 36,
+      "precision": 0.7012048192771084,
       "recall": 1.0,
       "precision_ci95": [
-        0.5600719978365485,
-        0.841518299741862
+        0.5833461285401034,
+        0.8252598564231963
       ]
     },
     {
       "cutoff": 0.780001,
-      "split_labelled": 40,
-      "correct_labelled": 26,
-      "precision": 0.65,
+      "split_labelled": 57,
+      "correct_labelled": 36,
+      "precision": 0.60625,
       "recall": 1.0,
       "precision_ci95": [
-        0.4950559699353738,
-        0.7786566682895086
+        0.5017755948554761,
+        0.7447662449383492
       ]
     },
     {
       "cutoff": 0.790001,
-      "split_labelled": 42,
-      "correct_labelled": 26,
-      "precision": 0.6190476190476191,
+      "split_labelled": 59,
+      "correct_labelled": 36,
+      "precision": 0.5866935483870968,
       "recall": 1.0,
       "precision_ci95": [
-        0.46813768219996377,
-        0.7500047910121407
+        0.4826610956186712,
+        0.724208239344156
       ]
     },
     {
       "cutoff": 0.840001,
-      "split_labelled": 43,
-      "correct_labelled": 26,
-      "precision": 0.5430242272347535,
+      "split_labelled": 60,
+      "correct_labelled": 36,
+      "precision": 0.5358721272834414,
       "recall": 1.0,
       "precision_ci95": [
-        0.4557879659331908,
-        0.7363489380154359
+        0.47365824394206846,
+        0.714306969962345
       ]
     },
     {
       "cutoff": 0.850001,
-      "split_labelled": 44,
-      "correct_labelled": 26,
-      "precision": 0.4836309523809524,
+      "split_labelled": 61,
+      "correct_labelled": 36,
+      "precision": 0.4931534707158351,
       "recall": 1.0,
       "precision_ci95": [
-        0.44409492646606574,
-        0.7231235612099317
+        0.46499566253828867,
+        0.7046485165072622
+      ]
+    },
+    {
+      "cutoff": 0.860001,
+      "split_labelled": 62,
+      "correct_labelled": 36,
+      "precision": 0.41542941982640474,
+      "recall": 1.0,
+      "precision_ci95": [
+        0.45665361737846166,
+        0.6952260453271835
+      ]
+    },
+    {
+      "cutoff": 0.900001,
+      "split_labelled": 64,
+      "correct_labelled": 36,
+      "precision": 0.31586488364015286,
+      "recall": 1.0,
+      "precision_ci95": [
+        0.4408599177828787,
+        0.6770618293457267
       ]
     },
     {
       "cutoff": 0.910001,
-      "split_labelled": 46,
-      "correct_labelled": 26,
-      "precision": 0.39682539682539686,
+      "split_labelled": 66,
+      "correct_labelled": 36,
+      "precision": 0.2865978569177435,
       "recall": 1.0,
       "precision_ci95": [
-        0.4224718277662822,
-        0.6979095404080942
+        0.4261479973870641,
+        0.659760687408244
       ]
     },
     {
       "cutoff": 0.930001,
-      "split_labelled": 47,
-      "correct_labelled": 26,
-      "precision": 0.3641456582633053,
+      "split_labelled": 68,
+      "correct_labelled": 36,
+      "precision": 0.24812414733969987,
       "recall": 1.0,
       "precision_ci95": [
-        0.41245213738758246,
-        0.685892525250887
+        0.4124071581374707,
+        0.643270889122056
       ]
     },
     {
       "cutoff": 0.940001,
-      "split_labelled": 50,
-      "correct_labelled": 26,
-      "precision": 0.2920035938903864,
+      "split_labelled": 73,
+      "correct_labelled": 36,
+      "precision": 0.18961113427856546,
       "recall": 1.0,
       "precision_ci95": [
-        0.3851151225880844,
-        0.6520308760449429
+        0.38170665864691183,
+        0.6052795571528633
+      ]
+    },
+    {
+      "cutoff": 0.950001,
+      "split_labelled": 74,
+      "correct_labelled": 36,
+      "precision": 0.17688679245283018,
+      "recall": 1.0,
+      "precision_ci95": [
+        0.37611598006562663,
+        0.5981908173280549
       ]
     },
     {
       "cutoff": 0.960001,
-      "split_labelled": 55,
-      "correct_labelled": 26,
-      "precision": 0.21952043228638973,
+      "split_labelled": 79,
+      "correct_labelled": 36,
+      "precision": 0.15476089176310415,
       "recall": 1.0,
       "precision_ci95": [
-        0.34692885310480803,
-        0.6020868092837061
+        0.35048276758066016,
+        0.5650186230250259
       ]
     },
     {
       "cutoff": 0.970001,
-      "split_labelled": 63,
-      "correct_labelled": 26,
-      "precision": 0.15711868503746676,
+      "split_labelled": 89,
+      "correct_labelled": 36,
+      "precision": 0.1174599586670111,
       "recall": 1.0,
       "precision_ci95": [
-        0.2995827804043614,
-        0.5358490464818889
+        0.30853277331729134,
+        0.508359654215194
       ]
     },
     {
       "cutoff": 0.980001,
-      "split_labelled": 67,
-      "correct_labelled": 26,
-      "precision": 0.13756613756613756,
+      "split_labelled": 93,
+      "correct_labelled": 36,
+      "precision": 0.1091686674669868,
       "recall": 1.0,
       "precision_ci95": [
-        0.28048871056929325,
-        0.5077712948512505
+        0.29445899414987403,
+        0.48869204837730434
+      ]
+    },
+    {
+      "cutoff": 0.990001,
+      "split_labelled": 94,
+      "correct_labelled": 36,
+      "precision": 0.10482708933717579,
+      "recall": 1.0,
+      "precision_ci95": [
+        0.2911404875065257,
+        0.48400628033046794
       ]
     }
-  ]
+  ],
+  "labelled_rows": {
+    "split": [
+      {
+        "id": "05a642a0-d7fb-45db-91ef-f58bdf57f4f6|32bacab9-9fc4-49be-a13f-2b7deae2d67f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "05a642a0-d7fb-45db-91ef-f58bdf57f4f6|966bede1-3a89-4673-a079-dddddf2b2b23",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "0d609fd3-043a-4d52-8374-e713fb4b0832|03941e7e-ccfd-4a97-b171-98d249b05448",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|21fbe008-862e-4045-9440-1f155c7064d8",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|38f78c58-b277-47d2-8bbe-bba9ef99b852",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.28,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|76d95efa-c540-4d4e-a556-3365cb304a6f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.1,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|7e501938-3a53-4f69-8668-8971b4a94ad7",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|97358175-6b71-4350-88c8-a3d20349b570",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|e3fa47f1-9699-4dcb-a37e-5afa4d3b5477",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": false
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|f39092c0-e3e2-435f-bd14-1550c84a4881",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": false
+      },
+      {
+        "id": "3ee27739-5634-48b0-aad9-c86283142c77|41eb21ac-d1fd-4791-b70e-91672c7a3711",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|71784f37-4a8d-4ed4-9767-d671bd2aed9b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|86e4eb0f-af43-4333-8951-dc40f4051ca5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|6a09d01a-9fb7-4723-a37c-5f6796f8bd8a",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|af44fd0d-3439-40ab-8456-77d4e3cc256f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "54b73e7f-bcd1-4bd0-ac7c-ee76a1435a87|201b349d-0813-428d-868f-98d2555d2e9e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "59608d46-26be-46ec-b76f-ad55867f83a6|5c7ea008-e670-4a0c-989c-ad3dff28636f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "6a6a01ca-9bf2-4d96-a858-d804d5924d35|2944167e-b0fc-4c05-8dab-2579398ed96d",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|8b78d9b2-0fd6-4544-9b80-0f3b75014d58",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "90fa2628-5ea4-4041-8280-b4ace7db1a87|8e1385bd-0bec-4472-86d7-4b3dfeef12f3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "a21af7bd-2bfa-4341-8c15-4d583244056b|0cdd9d5e-3052-4448-a933-10d78536f688",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": false
+      },
+      {
+        "id": "a59c2ae8-0b70-444a-8918-90a52f012bb0|d965261e-50d5-4ee5-bb51-4faa71ce7539",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da|093dd85b-3193-48b0-850b-a6cfdf3c4d28",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da|610cc04e-1b6a-4550-a681-a272ddf8d8a3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da|61a04977-e2a0-474b-a540-a4d0dba3044e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "ced6fd5f-1dfd-4db3-ad5d-d154bfaa31bd|02de02b1-43a7-48a5-896a-377a7109068c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "ced6fd5f-1dfd-4db3-ad5d-d154bfaa31bd|225a665e-ae88-4944-8e77-369f0df8bb6b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "e7b08df9-24c1-4b7a-8796-539d6d75f5f4|92749b6d-81a7-49c7-a69f-43a5cb06a9b3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "ea3f8b6c-86ed-43a4-829e-ca6f8c4dba9d|587eb54b-aa05-4786-92c8-1c19c6c6d900",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "1a5f2a82-3985-4eb4-b1aa-bfb62d4a77dc|fda63fcb-4042-4b8b-a5aa-a0a72eb57eaf",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "33e52830-eede-48ae-890b-241785ed192b|66758a79-a1d0-4039-99bd-ddde3fbe53a9",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "4d5812d3-c976-4458-9d75-2c2e9edba6a5|dd4158a6-15df-4ef4-8b05-f41ec8bb85be",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.75,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|82545a75-2b74-4e87-beae-76a43f6517ee",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "504421c8-03f0-466c-8f84-14d425f91405|7cd48527-7b8c-494c-8907-df0ba661b247",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "54b73e7f-bcd1-4bd0-ac7c-ee76a1435a87|43c91bef-3130-499e-9695-92bdae764b8b",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "6069f32f-e657-43aa-a3a7-520a00699c51|2306a124-545f-46a1-9bd8-faa06324bbcd",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "b11a4f02-2069-45f4-acdb-08f104bf24d3|74ea2704-6187-489e-bcd3-7a00def2982b",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|e9e22378-216d-4485-b2fd-9570b199b090",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "be90addc-7fe6-4af4-ae74-a9c9abb9686e|ccd4fefa-bf02-40c8-8a33-d11fa6795742",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "d8f6d341-dd77-4e49-bf84-cf9f7196f9a2|0ffa12aa-9862-458f-b1c5-11b99e5e287d",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "fd91f95c-c58e-40a7-ad3c-c84d69c098a6|0d3d64c9-800b-4f6f-aa29-2d603cf4054e",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "fd91f95c-c58e-40a7-ad3c-c84d69c098a6|b56539d1-f807-417c-9919-d23a5d080b76",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "1ae787a2-a6e7-4487-acef-1bb67d028f53|af1ce792-a24c-476b-b758-354cf4b28694",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|41bb4bd7-c932-4626-9e68-d78dcf07f47e",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|45a977c7-fcd1-4283-8eaf-3e9999cf27d3",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|bf9be414-ee85-40a1-9be9-8c6af0b46130",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "237a776e-5c78-4ad5-b2d6-91940bdb10b7|04feb382-fd33-4e49-b68b-dc27162a6323",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "342c599d-46e3-4982-9cbd-a704daac4fd2|b6819286-5dd0-4cd4-bbfb-8aa9e3dd3dc5",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "42c10955-eeac-4b28-999b-2acc1c46c81d|be2fe05a-8a2d-4249-a2af-7ea8a847bad0",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4722f686-18c5-4243-8a78-a313e9311a35|eb2f1d18-a3d4-4e3d-8ad7-450599133641",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4c0d5aad-0f29-4f25-8ea6-209cc64238f7|4fb444a7-ebb8-40e6-9826-70617b3fcd17",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "4c0d5aad-0f29-4f25-8ea6-209cc64238f7|71f678fb-579c-4a55-b270-fdc7723b8842",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|3223684f-79c5-4e7b-b5cd-b33303ff90a9",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|4df09447-06b3-4169-a9a5-e062e8271278",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|8fbad78c-7844-44cc-a057-aae38be87475",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|b569c6f6-0896-472f-bc64-9a3de1d0fba2",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.91,
+        "positive": false
+      },
+      {
+        "id": "50cbb6fe-d833-4369-b1fc-de52c0dc4f96|b45e4697-85ee-4f03-b35a-737ee9b08969",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "5b31d3f8-b184-4302-986a-3123c186a176|af2ac34c-0fd7-4e15-8230-406e234baccd",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "89c0a567-dc0e-4a69-9b7b-17b46b447a1c|d00b716c-abe5-4589-bf8e-9be289fc2d59",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.91,
+        "positive": false
+      },
+      {
+        "id": "97d89918-0964-4bd8-bc2e-769eb515196c|b0c0f73d-fbc2-427a-8499-c607a29902c9",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "b5698d4f-528b-4133-8090-b5f55c0589c3|d7ab0127-859c-40ba-9f0c-45bae87b0464",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "cc0bbbd0-5331-425a-ac8e-ec6224686868|637fdb34-da11-472b-bb9b-9e4207125b6b",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "da4d4ac3-59b9-4184-b4ca-72b5765d057a|15536a3e-e544-42b0-a7cf-32a0737525dc",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "dd5e72d9-7296-4e74-950a-e19a68c1f372|12dd6de5-7434-433a-aac9-3231811da8c4",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "dfa1f7be-bc7a-4b84-8643-0e8b381a1311|cd8f97a9-fb23-4d6e-ad30-0ae7a238933c",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "e6344526-0425-4c8c-a1fa-762e0fb66181|f49fe5aa-a610-4708-9c34-f5af7dacda7f",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "f8aa19b3-30cb-4a4d-b934-0c602e6e3ed8|cd0f85aa-9df2-4fb8-b241-7b0a935a283c",
+        "stratum": "C",
+        "weight": 5.88,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "05a642a0-d7fb-45db-91ef-f58bdf57f4f6|b3a474b9-0367-44bd-8b37-0f6f4a045080",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "05a642a0-d7fb-45db-91ef-f58bdf57f4f6|c9aadf74-fc62-45ec-b106-f03da3546742",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|2b79b1b8-7504-438b-a861-2757d50a432c",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|30da4439-1f10-4b65-8861-64e2e1d80be6",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|4e5197f4-a894-4380-8bdd-b56567458408",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|804738f8-f74c-4094-813c-11a7922c9593",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.25,
+        "positive": true
+      },
+      {
+        "id": "4c366690-2c6b-46b1-8e8b-b1564fed4b8d|ec9ca152-b5ca-4147-b11a-37c6476d2732",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "d0dcd07a-8108-44d0-bb23-8dbb78f9e676|f317333d-fddd-4cf2-badb-8b340a640865",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "e1eccfd1-1bfb-46d4-ba60-7768e391f30f|6fdbea21-e95c-4303-a175-6bca44bec660",
+        "stratum": "2A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "2ea1f1b2-c180-4706-a5e9-6b710449642e|2ca0f5ad-8d6e-4725-8aa6-8846e80a33c9",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "342c599d-46e3-4982-9cbd-a704daac4fd2|2a994b65-1d5a-464f-b9b3-58b9a2bb50d4",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "342c599d-46e3-4982-9cbd-a704daac4fd2|40730d8f-06ac-4875-bc7d-57a3ad82e39a",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|2987f086-2b16-4fc7-886c-1e04f7bc3fc2",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|dcf1076c-122a-4c7f-b100-c1731cda9e5d",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.7,
+        "positive": false
+      },
+      {
+        "id": "d66ed2bb-7d0e-422b-8be0-921f18185610|ba00731b-b776-4072-9b5f-14d67c66b05d",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "d66ed2bb-7d0e-422b-8be0-921f18185610|bd291836-cf27-4df2-88c0-ca436892c1ca",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "d66ed2bb-7d0e-422b-8be0-921f18185610|e7852e7f-37f4-4330-ace8-93aeac55bea0",
+        "stratum": "2B",
+        "weight": 1.375,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "0362d1d4-c904-415e-910a-73c4a9ca4e8b|ff7ae50a-6885-4d58-91ab-d7db8576aea6",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "21d1b49e-d2f2-4287-a48b-cfd463a94ea4|f2fae9f1-92b9-485f-917c-88e32af7f959",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "42c10955-eeac-4b28-999b-2acc1c46c81d|a019deed-53d9-45ce-8b62-9cb44cdd6ca5",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4a205999-7946-4e29-a899-aa20cc6c205b|02d581ba-7032-4c42-bdde-6d32fd20a546",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "4a205999-7946-4e29-a899-aa20cc6c205b|03f45b4f-3cd2-4d64-9eb1-a076e43b3f9e",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "4a205999-7946-4e29-a899-aa20cc6c205b|47c726b5-068d-4d06-822c-5eb48f907667",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "4a205999-7946-4e29-a899-aa20cc6c205b|ee94bc85-0001-41cf-b2e9-0d37921c5fd2",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "4ecde8f9-5fa9-40d6-a419-56f393dae594|0f49ea67-3a03-44c9-b411-ad2f1c6ec149",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "4f6211e9-999d-470f-a12e-025462cf9910|e660f1e6-d6bf-4c03-8f2a-8ad28fa4fa19",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "6641ba39-9359-4ee5-869c-2f674a6ca071|ba2f6055-37e7-4a47-9d4f-6f33b200fac4",
+        "stratum": "2C",
+        "weight": 13.8,
+        "p": 0.99,
+        "positive": false
+      }
+    ]
+  }
 }
