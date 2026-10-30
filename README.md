@@ -1322,7 +1322,10 @@ python scripts/dedup_admin.py roles-status                  # now also: older ro
   the cut-off calibrated by `scripts/calibrate_victim_fill.py` on blind labels
   (`evaluation/victim_fill_labels.csv`: `deduplicated_event_id,label,correct_victim,rationale,labeller`; label
   `named` + the victim, `none_named` or `unsure`) and only when the records' text names it. Without a calibration
-  only labelled events are filled. It is a separate step from attribution because its cut-off is a different
+  only labelled events are filled. Filling empties the population it is calibrated on, so the sample can hold
+  later *frames*, each drawn from its own snapshot (`--frame 2 --earlier-frame-db 1=...`; disjoint populations,
+  weights per frame) and calibrated with `--frame-db 2=...`; `recalibrate` refuses a multi-frame sample rather than
+  drop a frame. It is a separate step from attribution because its cut-off is a different
   question over a different population; `check-victim-attribution` uses the same candidates (`EVIDENCE_VERSION`
   `victim-evidence-v2`: its calibration needs `recalibrate`, a cheap re-run), and a recorded victim an attacker field
   names carries a note to the judgement.
