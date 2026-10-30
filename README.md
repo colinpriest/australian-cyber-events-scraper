@@ -763,6 +763,15 @@ sync`). Every check of whether a name is descriptive reads it. `fill-victims` fi
 as a victim (role `affected`, audited in `DescriptiveVictimDemotions`) so the event is filled with the organisation
 its evidence names; a victim-fill label may name several co-equal victims (`AustralianSuper; Rest; Hostplus`).
 
+A name is never joined to a description (`descriptive_names.joins_name_to_description`). On 2026-10-29 model
+folds put "Mackay Sugar" under "Australian sugar producer" and "AustralianSuper" under "Australian Super Funds",
+so every later fill of those events resolved the labelled organisation back to the description. Such a model fold
+is overturned (`verdict = 'description'`) and undone by `canonicalise-entities`; such an alias, other than a
+person's, is ignored by every alias lookup and refused when written; a listed description is never put in a fold
+group. A name a blind victim-fill label gives as an event's victim is a name, whatever the proper-name model scored
+it (only a person's `DescriptiveNames` entry outranks the label), and a labelled victim fills its event even when
+the text extraction did not list it.
+
 `dedup_admin.py alias add VARIANT CANONICAL --reason ...` records a person's alias (`EntityAliases` source `human`
 and a `human` decision): folded by `canonicalise-entities` as a reviewed alias, never re-asked or reversed by a
 model ("NSW Ministry of Health" is NSW Health, owner 2026-10-31).

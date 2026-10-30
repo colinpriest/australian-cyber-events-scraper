@@ -55,6 +55,8 @@ SUBJECT_TYPE = "organisation_name"
 ROOT = Path(__file__).resolve().parents[2]
 LABELS_PATH = ROOT / "evaluation" / "name_labels.csv"
 CALIBRATION_PATH = ROOT / "evaluation" / "name_calibration.json"
+#: A blind victim-fill label that names an event's victim says that name is the name of one organisation.
+VICTIM_LABELS_PATH = ROOT / "evaluation" / "victim_fill_labels.csv"
 
 INSTRUCTIONS = (
     "`name` is how an organisation was written in coverage of an Australian cyber incident, and `sentence` is "
@@ -206,6 +208,22 @@ def load_labels(path: Path = LABELS_PATH) -> Dict[str, Dict[str, str]]:
         return {}
 
 
+def labelled_victim_names(path: Path = VICTIM_LABELS_PATH) -> Set[str]:
+    """Lowercase names a blind victim-fill label gives as an event's victim (``named``; several split on ';').
+
+    Such a label was made by reading the event's evidence and finding that it names this organisation as the
+    victim, so the name is the name of one organisation whatever the model scored it ("Health Management
+    Systems", "O&G (Obstetrics and Gynaecology)" were scored below the cut-off). An absent file is no labels.
+    """
+    try:
+        with Path(path).open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+    except (OSError, csv.Error):
+        return set()
+    return {" ".join(v.split()).lower() for r in rows if (r.get("label") or "").strip() == "named"
+            for v in (r.get("correct_victim") or "").split(";") if v.strip()}
+
+
 def active_calibration(path: Path = CALIBRATION_PATH, quiet: bool = False) -> Optional[Dict[str, Any]]:
     """The calibration, only if measured on the current model, question and evidence (else logged, None).
 
@@ -246,12 +264,15 @@ def descriptive_names(conn: sqlite3.Connection, calibration_path: Path = CALIBRA
 
     labels = load_labels(labels_path)
     found = {n for n, r in labels.items() if (r.get("label") or "").strip() == "descriptive"}
+    victims = labelled_victim_names()
     cal = active_calibration(calibration_path, quiet=quiet)
     if cal:
         found |= {n for n, p in stored_probabilities(conn).items()
-                  if p < cal["cutoff"] and (labels.get(n, {}).get("label") or "").strip() != "named"}
-    # Remembered descriptions (DescriptiveNames); a person's entry outranks a 'named' label.
-    found |= table.keys(conn)
+                  if p < cal["cutoff"] and (labels.get(n, {}).get("label") or "").strip() != "named"
+                  and " ".join(n.split()).lower() not in victims}
+    # Remembered descriptions (DescriptiveNames); a person's entry outranks a 'named' label, and a model's
+    # entry gives way to a label naming the organisation as a victim.
+    found |= table.human_keys(conn) | (table.keys(conn) - victims)
     return found
 
 

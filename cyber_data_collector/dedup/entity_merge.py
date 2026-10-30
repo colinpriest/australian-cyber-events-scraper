@@ -206,6 +206,9 @@ def canonical_groups(conn: sqlite3.Connection, explicit_only: bool = False,
     # Known aliases: the reviewed list, plus every alias stored by a person or
     # confirmed by Perplexity. They fold directly; nothing else does unverified.
     known = {**stored_aliases(conn), **EXPLICIT_ALIASES}
+    from cyber_data_collector.dedup import descriptive_names
+
+    descriptions = descriptive_names.described(conn)
     usage: Dict[str, int] = {}
     for name, count in conn.execute(f"""
         SELECT v.entity_name, COUNT(*) FROM EnrichedEventEntities ee
@@ -221,6 +224,10 @@ def canonical_groups(conn: sqlite3.Connection, explicit_only: bool = False,
         # "Australian Healthcare Sector". They are handled by entity
         # classification, not here.
         if is_descriptive_label(name) or is_non_organisation(name) or _is_date(name):
+            continue
+        # Nor is a name remembered as a description (DescriptiveNames): "Mackay Sugar" was folded into
+        # "Australian sugar producer".
+        if descriptive_names.is_listed(descriptions, name) and name not in known:
             continue
         # A list of organisations is none of them: one naming the four major
         # banks was folded into Westpac.

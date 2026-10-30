@@ -61,3 +61,16 @@ def test_a_described_victim_is_demoted_and_audited(conn):
 def test_a_database_without_the_table_has_no_entries():
     c = sqlite3.connect(":memory:")
     assert dn.keys(c) == set() and dn.entries(c) == []
+
+
+def test_a_name_a_victim_label_gives_is_no_description_unless_a_person_says_so(conn, tmp_path, monkeypatch):
+    labels = tmp_path / "victims.csv"
+    labels.write_text("deduplicated_event_id,label,correct_victim,rationale,labeller\n"
+                      "e2,named,Mackay Sugar; Health Management Systems,its report names it,blind\n", encoding="utf-8")
+    monkeypatch.setattr(nj, "VICTIM_LABELS_PATH", labels)
+    dn.add(conn, "Health Management Systems", "model", source=dn.SOURCE_LLM, probability=0.1)
+    dn.add(conn, "Mackay Sugar", "owner says it is a description")             # a person's entry outranks
+    found = nj.descriptive_names(conn)
+    assert "health management systems" not in found and "mackay sugar" in found
+    assert dn.joins_name_to_description(found, "Mackay Sugar", "Health Management Systems")
+    assert not dn.joins_name_to_description(found, "Health Management Systems", "Other Org")

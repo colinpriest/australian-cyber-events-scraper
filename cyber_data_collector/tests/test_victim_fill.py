@@ -208,6 +208,19 @@ def test_without_a_calibration_only_labelled_events_are_filled(conn, tmp_path):
                             "AND relationship_type = 'victim'").fetchone()
 
 
+
+def test_a_labelled_victim_fills_even_when_the_extraction_missed_it(conn, tmp_path):
+    """The labeller found the victim in the evidence; the extraction listed only a description."""
+    _event(conn, "e1", NSW_TEXT)
+    extractor = _extractor(["NSW National Parks and Wildlife Service"])
+    judge = JevJudge(conn, client=FakeJev(pick="NSW National Parks and Wildlife Service"))
+    labels = _labels(tmp_path, [("e1", "named", "Swinburne University of Technology", "r", "t")])
+    result = vf.fill_victims(conn, apply=True, judge=judge, extractor=extractor,
+                             calibration_path=tmp_path / "absent.json", labels_path=labels)
+    (plan,) = result["plans"]
+    assert plan["action"] == "filled" and "not among the evidence's candidates" in plan["reason"]
+    assert _role(conn, "e1", "Swinburne University of Technology") == "victim"
+
 def test_labels_are_ground_truth_and_the_cutoff_and_text_guards_hold(conn, tmp_path):
     _event(conn, "e1", NSW_TEXT)
     _event(conn, "e2", NSW_TEXT)

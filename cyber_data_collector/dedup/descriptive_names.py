@@ -132,6 +132,28 @@ def remove(conn: sqlite3.Connection, name: str, source: Optional[str] = None) ->
     return removed
 
 
+def described(conn: sqlite3.Connection) -> Set[str]:
+    """Every name known to be a description: the table, and the proper-name verdicts loaded for this run."""
+    from cyber_data_collector.dedup import name_judgement as nj
+
+    return keys(conn) | set(nj._DESCRIPTIVE)
+
+
+def is_listed(descriptions: Set[str], name: Optional[str]) -> bool:
+    return bool(name) and (name.strip().lower() in descriptions or name_key(name) in descriptions)
+
+
+def joins_name_to_description(descriptions: Set[str], left: Optional[str], right: Optional[str]) -> bool:
+    """One of the two is a description and the other is not: they are never one organisation.
+
+    A description is not an organisation, so an alias or fold that joins a name to one files the named
+    organisation under the description: "Mackay Sugar" was folded into "Australian sugar producer" and
+    "AustralianSuper" into "Australian Super Funds" (2026-10-29), and every later victim fill of those events
+    resolved the labelled organisation back to the description. Two descriptions joined is not this error.
+    """
+    return is_listed(descriptions, left) != is_listed(descriptions, right)
+
+
 @dataclass
 class SyncReport:
     added: int = 0
@@ -147,6 +169,7 @@ def sync(conn: sqlite3.Connection) -> SyncReport:
     report = SyncReport()
     labels = nj.load_labels(nj.LABELS_PATH)
     labelled_named = {name_key(n) for n, r in labels.items() if (r.get("label") or "").strip() == "named"}
+    labelled_named |= nj.labelled_victim_names()     # a label naming an event's victim by this name
     wanted: Dict[str, Tuple[str, str, Optional[float], Optional[str], str]] = {}
     for n, r in labels.items():
         if (r.get("label") or "").strip() == "descriptive":

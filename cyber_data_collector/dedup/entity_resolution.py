@@ -186,18 +186,24 @@ def stored_aliases(conn: sqlite3.Connection, sources: Sequence[str] = TRUSTED_AL
     """``{raw_name: canonical_name}`` from ``EntityAliases`` for the given sources.
 
     An alias whose pair is listed in ``EntityAntiAliases`` (:mod:`anti_aliases`) is left out: the listing says
-    the two are different entities, and a person cannot list a pair a ``human`` alias joins.
+    the two are different entities, and a person cannot list a pair a ``human`` alias joins. So is an alias
+    other than a person's that joins a name to a description (:func:`descriptive_names.joins_name_to_description`):
+    the named organisation would be filed under the description.
     """
+    from cyber_data_collector.dedup import descriptive_names
     from cyber_data_collector.dedup.anti_aliases import is_anti_alias, pair_set
 
     marks = ", ".join("?" for _ in sources)
     try:
-        rows = conn.execute(f"SELECT raw_name, canonical_name FROM EntityAliases WHERE source IN ({marks})",
+        rows = conn.execute(f"SELECT raw_name, canonical_name, source FROM EntityAliases WHERE source IN ({marks})",
                             tuple(sources)).fetchall()
     except sqlite3.Error:
         return {}
     anti = pair_set(conn)
-    return {raw: canonical for raw, canonical in rows if not is_anti_alias(anti, raw, canonical)}
+    descriptions = descriptive_names.described(conn)
+    return {raw: canonical for raw, canonical, source in rows
+            if not is_anti_alias(anti, raw, canonical)
+            and (source == "human" or not descriptive_names.joins_name_to_description(descriptions, raw, canonical))}
 
 
 def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str],
@@ -412,8 +418,16 @@ class EntityResolver:
         """Bind ``raw_name`` to ``canonical_name`` for all future runs.
 
         Called when a human override rules that two differently-named records
-        describe the same incident.
+        describe the same incident. A model's alias joining a name to a description is refused (logged): the
+        named organisation would be filed under the description.
         """
+        from cyber_data_collector.dedup import descriptive_names
+
+        if source != "human" and descriptive_names.joins_name_to_description(
+                descriptive_names.described(conn), raw_name, canonical_name):
+            logger.warning("Alias %r -> %r refused: one is a description, the other a name", raw_name,
+                           canonical_name)
+            return
         key = canonical_key(canonical_name)
         conn.execute(
             """
