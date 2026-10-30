@@ -359,9 +359,12 @@ def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[s
     """
     from cyber_data_collector.dedup.entity_merge import preferred_name
 
+    from cyber_data_collector.dedup.anti_aliases import is_anti_alias, pair_set
+
     search = search or perplexity_search
     report = report if report is not None else VerificationReport()
     known = stored_verdicts(conn)
+    anti = pair_set(conn)          # listed as different entities (anti_aliases): never folded, never asked
     out: List[Tuple[str, List[str]]] = []
     for keep, drop in groups:
         pending = [keep, *drop]
@@ -374,6 +377,11 @@ def verified_groups(conn: sqlite3.Connection, groups: Sequence[Tuple[str, List[s
             joined: List[str] = []
             barred: Dict[str, Tuple[str, str]] = {}
             for name in order:
+                listed = next((m for m in [head, *joined] if is_anti_alias(anti, name, m)), None)
+                if listed is not None:
+                    barred[name] = (listed, "anti-alias")
+                    report.reused += 1
+                    continue
                 _revisit_stale_vetoes(conn, known, name, [head, *joined], search, report)
                 conflict = _recorded_conflict(known, name, [head, *joined])
                 if conflict is not None:

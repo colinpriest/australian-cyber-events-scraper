@@ -293,8 +293,9 @@ def migrate(db: Union[str, Path, sqlite3.Connection]) -> None:
 
         conn.commit()
         # The history of what was known when (events, membership, links, entities); no-op once installed.
-        from cyber_data_collector.dedup import input_history
+        from cyber_data_collector.dedup import anti_aliases, input_history
         input_history.ensure_schema(conn)
+        anti_aliases.ensure_schema(conn)
         logger.info("Deduplication v%d schema applied", SCHEMA_VERSION)
     finally:
         if owns_connection:

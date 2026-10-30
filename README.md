@@ -1196,8 +1196,26 @@ Super). Three rules now come first: a stored alias verdict that two names are
 person's outranking a model's) keeps them apart; a name the proper-name
 judgement calls a description joins no other name; and two names scoped to
 different places are two organisations. A list of organisations is none of
-them. On the live copy 7 groups remain; Optus / Optus Stadium (no verdict yet)
-and "ANZ customer" (not judged a description) are still joined.
+them.
+
+**Anti-aliases** (`EntityAntiAliases`, `dedup/anti_aliases.py`) are the opposite
+of aliases: names that look alike but are different entities ("Optus" / "Optus
+Stadium"). Every stored verdict that two names are `different`, `related` or
+`parent_subsidiary` is listed there, and `canonicalise-entities` puts every pair
+of names that victim counting still joins on name shape alone - no alias, no
+verdict, not a spelling variant - to the same Perplexity question, listing those
+it says differ. A person can add one too, with a reason; a person's entry is
+never replaced by a model, and one that contradicts a reviewed alias is refused.
+Victim counting, fold verification, stored aliases and the reversal of model
+folds all honour the list, so one entry keeps a pair apart everywhere.
+
+```bash
+python scripts/dedup_admin.py anti-alias list
+python scripts/dedup_admin.py anti-alias learn [--dry-run] [--limit N]     # also run by canonicalise-entities
+python scripts/dedup_admin.py anti-alias add "Optus" "Optus Stadium" --reason "..." [--relation related]
+python scripts/dedup_admin.py anti-alias remove "Optus" "Optus Stadium"
+python scripts/dedup_admin.py anti-alias sync                              # from stored verdicts
+```
 
 ### Stray records: event coherence
 
