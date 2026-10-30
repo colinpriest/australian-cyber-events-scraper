@@ -34,7 +34,9 @@ from scipy.special import ndtr
 
 from scripts.recurrence_extended.spells import (
     DEFAULT_TIE_POLICY,
+    RANDOM_TIE_POLICIES,
     TIE_POLICIES,
+    TIE_POLICY_ASSUMPTIONS,
     make_spells as shared_make_spells,
     occurrences,
     overlapping_interval_pairs,
@@ -216,19 +218,20 @@ def annotate_precision(events: pd.DataFrame, evidence: dict[str, set[str]]) -> p
     return out
 
 
-def make_spells(events: pd.DataFrame, censor: date, tie_policy: str = DEFAULT_TIE_POLICY) -> pd.DataFrame:
+def make_spells(events: pd.DataFrame, censor: date, tie_policy: str = DEFAULT_TIE_POLICY,
+                rng: Optional[np.random.Generator] = None) -> pd.DataFrame:
     """Build spells with right censoring; incidents of one organisation on one date follow ``tie_policy``.
 
     The shared builder (``recurrence_extended.spells``) is used, so these rates and the main analysis
-    treat ties identically: ``collapse`` (default) is one time point, ``zero_gap`` makes each incident its
-    own point one day after the previous.  Excluding future rows before pairing is essential: a later
-    event must not be treated as observed beyond the censor date.
+    treat ties identically (``collapse``, the default, is one time point; see that module for the others;
+    ``interval_draw`` needs ``rng``).  Excluding future rows before pairing is essential: a later event
+    must not be treated as observed beyond the censor date.
     """
     clean = events.copy()
     clean["size"] = clean["_analysis_size"] if "_analysis_size" in clean else size_labels(clean)
     points = occurrences(clean, tie_policy, {"size": ("size", "first")})
-    spells = shared_make_spells(points, censor, tie_policy)
-    start = pd.to_datetime(spells["event_date"])
+    spells = shared_make_spells(points, censor, tie_policy, rng=rng)
+    start = pd.to_datetime(spells["placed_date"])
     return pd.DataFrame({"entity_id": spells["entity_id"].astype(str), "size": spells["size"], "start": start,
                          "end": pd.to_datetime(spells["spell_end_date"]),
                          "duration_days": spells["duration_days"].astype(int),
@@ -480,24 +483,53 @@ def size_adjusted_date_sensitivity(events: pd.DataFrame, censor: date, seed: int
     return pd.DataFrame(rows)
 
 
-def tie_policy_sensitivity(events: pd.DataFrame, censor: date, weights: dict[str, float]) -> pd.DataFrame:
-    """Band rates with several incidents of one organisation on one date as one point and as repeats.
+def _tie_rates(spells: pd.DataFrame, weights: dict[str, float]) -> pd.DataFrame:
+    frames = []
+    for scheme, bounds in SCHEMES.items():
+        unadjusted = band_rates(spells, bounds)[["band", "events", "exposure_days", "rate_per_100_entity_years"]]
+        adjusted, _ = size_adjusted_bands(spells, bounds, weights)
+        merged = unadjusted.merge(adjusted, on="band", how="left")
+        merged.insert(0, "scheme", scheme)
+        frames.append(merged)
+    return pd.concat(frames, ignore_index=True)
 
-    For every tie policy (``spells.TIE_POLICIES``) and band scheme: repeats, exposure, the unadjusted rate
-    and the size-standardized rate. ``collapse`` is the primary treatment; ``zero_gap`` counts each tied
-    incident as a repeat one day after the previous, an upper bound on what ties contribute.
+
+def tie_policy_sensitivity(events: pd.DataFrame, censor: date, weights: dict[str, float],
+                           seed: int = 0, draws: int = 100) -> pd.DataFrame:
+    """Band rates under every tie policy: what is assumed about several incidents of one organisation on one date.
+
+    For every policy and band scheme: repeats, exposure, the unadjusted rate and the size-standardized
+    rate, with the policy's stated assumption (``spells.TIE_POLICY_ASSUMPTIONS``). The deterministic
+    policies (``spells.TIE_POLICIES``; ``collapse`` is the primary treatment) are one row each;
+    ``interval_draw`` places tied incidents at random within their shared verified interval ``draws``
+    times and reports the median over the draws, with the 2.5-97.5% range of the size-standardized
+    rate. No policy bounds the truth (see ``recurrence_extended.spells``).
     """
+    numeric = ["events", "exposure_days", "rate_per_100_entity_years", "size_adjusted_rate_per_100_entity_years"]
     frames = []
     for policy in TIE_POLICIES:
-        spells = make_spells(events, censor, policy)
-        for scheme, bounds in SCHEMES.items():
-            unadjusted = band_rates(spells, bounds)[["band", "events", "exposure_days", "rate_per_100_entity_years"]]
-            adjusted, _ = size_adjusted_bands(spells, bounds, weights)
-            merged = unadjusted.merge(adjusted, on="band", how="left")
-            merged.insert(0, "scheme", scheme)
-            merged.insert(0, "tie_policy", policy)
-            frames.append(merged)
-    return pd.concat(frames, ignore_index=True)
+        table = _tie_rates(make_spells(events, censor, policy), weights)
+        table.insert(0, "draws", 1)
+        table.insert(0, "tie_policy", policy)
+        frames.append(table)
+    for policy in RANDOM_TIE_POLICIES:
+        rng = np.random.default_rng(seed)
+        samples = [_tie_rates(make_spells(events, censor, policy, rng=rng), weights) for _ in range(max(1, draws))]
+        stacked = pd.concat(samples, ignore_index=True)
+        for column in numeric:
+            stacked[column] = pd.to_numeric(stacked[column], errors="coerce")
+        grouped = stacked.groupby(["scheme", "band"], sort=False)
+        table = grouped[numeric].median().reset_index()
+        table["unsupported_size_strata"] = grouped["unsupported_size_strata"].agg(
+            lambda s: "|".join(sorted({part for v in s.dropna() for part in str(v).split("|") if part}))).values
+        table["size_adjusted_2_5_pct"] = grouped["size_adjusted_rate_per_100_entity_years"].quantile(0.025).values
+        table["size_adjusted_97_5_pct"] = grouped["size_adjusted_rate_per_100_entity_years"].quantile(0.975).values
+        table.insert(0, "draws", len(samples))
+        table.insert(0, "tie_policy", policy)
+        frames.append(table)
+    out = pd.concat(frames, ignore_index=True)
+    out["assumption"] = out["tie_policy"].map(TIE_POLICY_ASSUMPTIONS)
+    return out
 
 
 def prospective_validation(events: pd.DataFrame, seen: dict[str, date], censor: date,
@@ -718,7 +750,7 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     precision.to_csv(out_dir / "timing_date_precision_coverage.csv", index=False)
     ties = tie_table(annotated)
     ties.to_csv(out_dir / "timing_entity_date_ties.csv", index=False)
-    tie_rates = tie_policy_sensitivity(annotated, censor, weights)
+    tie_rates = tie_policy_sensitivity(annotated, censor, weights, seed=seed, draws=draws)
     tie_rates.to_csv(out_dir / "timing_tie_policy_sensitivity.csv", index=False)
     validation = prospective_validation(annotated, seen, censor, out_dir)
     (out_dir / "timing_peak_validation.json").write_text(json.dumps(validation, indent=2), encoding="utf-8")
@@ -759,14 +791,21 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     tie_summary_counts = tie_summary(ties)
     tie_bands = tie_rates[(tie_rates["scheme"] == "pre_specified") & tie_rates["band"].isin(["1-90", "91-180", "181-270"])]
     tie_table_text = "| Tie policy | Days | Repeat events | Unadjusted rate | Size-standardized rate |\n|---|---|---:|---:|---:|\n" + "\n".join(
-        f"| {row.tie_policy} | {row.band} | {row.events} | {fmt(row.rate_per_100_entity_years)} | "
+        f"| {row.tie_policy} | {row.band} | {float(row.events):g} | {fmt(row.rate_per_100_entity_years)} | "
         f"{fmt(row.size_adjusted_rate_per_100_entity_years)} |" for row in tie_bands.itertuples())
+    assumptions = "\n".join(f"- `{policy}`: {TIE_POLICY_ASSUMPTIONS[policy]}."
+                            for policy in (*TIE_POLICIES, *RANDOM_TIE_POLICIES))
     tie_text = (
         "### Same-date ties and unknown ordering\n\n"
         "Several distinct incidents of one organisation can share a stored date, and nothing orders them; a "
-        "1st of the month may be only a month placeholder. The primary treatment (`collapse`) makes them one "
-        "time point (no order or gap invented, ids kept in `timing_entity_date_ties.csv`), which can understate "
-        "repeats; `zero_gap` counts each as a repeat one day after the previous, which can overstate them. "
+        "1st of the month may be only a month placeholder. Each tie policy states one assumption about them "
+        "(`collapse`, the primary treatment, keeps every id in `timing_entity_date_ties.csv`):\n\n"
+        f"{assumptions}\n\n"
+        "None of these bounds the truth: a tie that is one incident filed twice is represented only by "
+        "`collapse`, two incidents really weeks apart within a verified month exactly by none, and a tie "
+        "whose dates are unverified has no interval to place them in. Agreement across the policies shows "
+        f"only that a result does not hinge on these assumptions; `interval_draw` is the median of {draws} "
+        "draws. "
         f"Ties found: {tie_summary_counts}. Incidents on different stored dates whose verified intervals "
         f"overlap are no tie, but their dates do not order them either: "
         f"{overlapping_interval_pairs(annotated, 'date_earliest', 'date_latest')}; the `known_intervals` "
@@ -812,7 +851,7 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
     if not smooth.empty:
         outputs.append("timing_smooth_hazard.png")
     return {"section": section, "precision_counts": counts, "precise_entities": precise_entities,
-            "ties": tie_summary_counts, "tie_policies": list(TIE_POLICIES),
+            "ties": tie_summary_counts, "tie_policies": [*TIE_POLICIES, *RANDOM_TIE_POLICIES],
             "precise_repeating_entities": precise_repeating, "validation": validation, "size_validation": size_validation,
             "size_weights": weights, "size_reference_weights": weights,
             "band_schemes": list(SCHEMES), "date_imputations": draws,

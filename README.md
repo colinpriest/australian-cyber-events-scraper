@@ -2583,41 +2583,94 @@ controlled by size. The main model assumes equal log-rate steps between size
 categories. Unadjusted tables and plots are descriptive diagnostics; use the
 size-adjusted results for comparisons of recurrence.
 
+**How size is specified, tested.** The primary model keeps the numeric score
+(SMALL=1 to HUGE=4, UNKNOWN mean-imputed, plus an UNKNOWN indicator). The
+report's "Organisation Size Specification" section and
+`size_specification_comparison.csv` fit, for the run's bands and for the 0-90 /
+91-180 banding, the same model with size as a **categorical** factor (reference:
+the band with the most repeats; bands with fewer than 3 repeats pooled, as for
+every factor) and give log-likelihood, parameters, AIC, the likelihood-ratio
+test of the score nested in the factor (reported as not nested, AIC only, once
+two bands are pooled) and the headline elapsed-time tests re-run under each
+specification. A **size-by-phase interaction** (the score's slope in 91-180 and
+post-180 days against 0-90) is fitted only when every phase has at least 10
+repeats at two or more known size bands; otherwise it is listed as skipped with
+the reason. The score stays primary: on the 2026-10-30 copy categorical size
+does not fit significantly better (LRT `p = 0.092`, 2 df; AIC 1286.7 against
+1287.5), the constant-hazard test barely moves (`p = 0.130` with the score,
+`0.136` categorical; 0-90 / 91-180 banding `0.188` / `0.196`; directional
+delayed peak `0.277` / `0.280`), and the interaction is not significant (`p =
+0.164`, 2 df).
+
+**Size across name variants.** An organisation stored under several names
+(`victim_counting.organisation_groups`) used to take every attribute from one
+representative entity, so a researched size on "Singtel Optus Pty Limited" was
+lost when "Optus" was UNKNOWN. Size is now reconciled across all its variants
+(`reconcile_variant_sizes`): a `human` size method outranks model research, a
+known band outranks UNKNOWN, a higher `size_confidence` wins, then the
+representative, then the lowest entity id; the chosen variant's size columns are
+taken together. Variants giving different known bands are a *conflict*: the rule
+still chooses and the conflict is counted in the data-quality summary and listed
+in `organisation_size_reconciliation.csv`. On the 2026-10-30 copy 27
+organisations have several variants; 6 changed size against the
+representative-only rule and 9 have conflicting bands (several, such as Optus /
+Optus Stadium, are doubtful groupings rather than size disagreements).
+
 **Same-date ties and unknown ordering.** Spells are built in one place,
 `scripts/recurrence_extended/spells.py`, used by the main analysis
 (`build_spells`), the timing and date-precision runs, the order/transition runs
 and the linkage runs, so they cannot disagree about a tie. A *tie* is two or more
 distinct incidents of one organisation with the same stored date; nothing orders
 them, and a month-precision date is stored as the 1st, so some ties are month
-placeholders rather than simultaneous incidents. Each tie policy says what the
-model does with unknown ordering:
+placeholders rather than simultaneous incidents. Each tie policy states one
+assumption about the tied incidents (`TIE_POLICY_ASSUMPTIONS`, quoted in the
+reports):
 
-| Policy | A tie is | Effect on the models | Bias |
-|---|---|---|---|
-| `collapse` (**primary**, `--ties collapse`) | one time point; every incident id and the count are kept (`prior_event_ids`, `prior_event_count`, `next_event_count`) | no order or gap is invented; the tie can start or end a spell but is never a repeat of its own; prior-event numbers count time points | can understate repeats |
-| `zero_gap` (`--ties zero_gap`) | separate incidents, ordered arbitrarily by id, each one day after the previous (`tie_gap = 1`; an exact zero would give a spell no exposure) | each extra incident is a repeat in the first elapsed-time band; prior-event numbers count incidents | can overstate repeats (a tie may be one incident filed twice, or a month placeholder) |
+| Policy | Assumption | Effect on the models |
+|---|---|---|
+| `collapse` (**primary**, `--ties collapse`) | the tied incidents are one occurrence | one time point; every incident id and the count are kept (`prior_event_ids`, `prior_event_count`, `next_event_count`); the tie can start or end a spell but is never a repeat of its own; prior-event numbers count time points |
+| `zero_gap` (`--ties zero_gap`) | distinct incidents, one day apart in id order | each extra incident is a repeat after 1 day (`tie_gap = 1`; an exact zero would give a spell no exposure); prior-event numbers count incidents |
+| `interval_spread` (`--ties interval_spread`) | distinct incidents evenly spread across the verified interval they share | incident `k` of `n` is placed `floor((k-1) L / n)` days into the intersection of their verified `event_date_earliest` / `event_date_latest` intervals (`L` days, cut at the censor date), about `L / n` apart; a tie with no shared verified interval longer than a day (a verified day, or any unverified date) is placed as under `zero_gap` |
+| `interval_draw` (extended analyses only) | distinct incidents, each on a day drawn uniformly within the shared verified interval | repeated over the date draws (median and 2.5-97.5% reported); otherwise as `zero_gap` |
 
-Both are always run and compared: the main report has a "Same-Date Ties And
-Unknown Ordering" section, `tie_policy_sensitivity.csv` (repeats in total and
-per band, the adjusted constant-hazard test, the 0-90 / 91-180 banding test
-and the directional delayed-peak test under each policy, all adjusted for
-organisation size like the primary model), and `entity_date_ties.csv` lists every tie
-with its incident ids and kind: `month_precision_first_of_month` (every incident
-verified as month precision, so order and spacing are unknown by construction),
-`first_of_month_not_month_verified`, or `other_day`. The data-quality summary
-counts the ties by kind and the consecutive incidents on *different* stored dates whose
-verified intervals overlap (no tie, yet not ordered by their dates either). The
-extended analyses take `collapse` as primary and report both in
-`timing_tie_policy_sensitivity.csv` (unadjusted and size-standardized rates for every
-band scheme) and `timing_entity_date_ties.csv`. Under `zero_gap` a tied
-incident's attack type is its own and a transition between tied incidents
-depends on the arbitrary order (a bound, not a finding). The underlying
-incidents are never changed. On the 2026-10-29 copy the same-organisation
-same-day merge rule leaves **one** tie (two incidents of one hotel group, a 1st of
-the month whose precision is unverified, none month-verified): `zero_gap` adds one
-repeat (126 to 127), and moves the adjusted constant-hazard `p` from 0.635 to 0.632,
-the 0-90 / 91-180 banding `p` from 0.696 to 0.727 and the directional delayed-peak
-`p` from 0.299 to 0.308.
+None of these bounds the truth: a tie that is one incident filed twice is
+represented only by `collapse`, two incidents really 25 days apart in a verified
+month exactly by none (`interval_spread` puts two of them 15 days apart), and a
+tie whose dates are unverified has no interval at all. Agreement across them
+shows only that a result does not hinge on these assumptions. Spells run between
+*placed* dates (`prior_event_date`; the stored date is `prior_event_stored_date`),
+nothing is placed after the censor date, and a repeat between two incidents on
+or before the censor date is observed - including two tied incidents *on* it
+under `zero_gap`, which used to be dropped.
+
+Every deterministic policy is run and compared: the main report has a
+"Same-Date Ties And Unknown Ordering" section, `tie_policy_sensitivity.csv`
+(repeats in total, between tied incidents and per band, the adjusted
+constant-hazard test, the 0-90 / 91-180 banding test and the directional
+delayed-peak test under each policy, all adjusted for organisation size like the
+primary model, with each policy's assumption), and `entity_date_ties.csv` lists
+every tie with its incident ids, kind - `month_precision_first_of_month` (every
+incident verified as month precision), `first_of_month_not_month_verified`, or
+`other_day` - and `shared_interval_days`, the verified interval its incidents
+share. The data-quality summary counts the ties by kind, those with a shared
+verified interval longer than a day, and the consecutive incidents on
+*different* stored dates whose verified intervals overlap (no tie, yet not
+ordered by their dates either). The extended analyses take `collapse` as
+primary and report every policy, `interval_draw` included, in
+`timing_tie_policy_sensitivity.csv` (unadjusted and size-standardized rates for
+every band scheme) and `timing_entity_date_ties.csv`. When tied incidents are
+separated, a tied incident's attack type is its own and a transition between
+them depends on the order assumed. The underlying incidents are never changed.
+
+On the 2026-10-30 copy there are **11** ties (22 incidents; 4 unverified 1sts, 7
+other days), and every one has an unverified incident, so no tie has a shared
+verified interval and `interval_spread` equals `zero_gap`. Separating them adds
+11 repeats, all at 1 day (187 to 198), and that alone moves the adjusted
+constant-hazard `p` from 0.130 to 0.006, the 0-90 / 91-180 banding `p` from
+0.188 to 0.010, and the directional delayed-peak `p` from 0.277 to 0.774: the
+elapsed-time verdict depends on whether these ties are one occurrence or
+separate incidents a day apart, which the data cannot settle until their dates
+are verified.
 
 **Dates in the sensitivity analysis are intervals.** `timing_precision.py` takes
 an event's verified `date_precision` with its stored `event_date_earliest` /
@@ -2778,8 +2831,10 @@ Main outputs are written under `analysis/recurrent_timing/`:
 | `u_shape_adjusted_contrasts.csv` | U-shape phase contrasts |
 | `u_shape_covariate_variant_contrasts.csv` | Sensitivity checks dropping size and/or sector |
 | `delayed_peak_sensitivity_adjusted_contrasts.csv` | Formal 91-180 day delayed-peak contrasts |
-| `entity_date_ties.csv` | Every organisation-date with several incidents: ids, titles, kind (replaces `same_day_entity_events_collapsed.csv`) |
-| `tie_policy_sensitivity.csv` | Repeats and the headline adjusted tests with ties collapsed (primary) and as zero-gap repeats |
+| `entity_date_ties.csv` | Every organisation-date with several incidents: ids, titles, kind, shared verified interval (replaces `same_day_entity_events_collapsed.csv`) |
+| `tie_policy_sensitivity.csv` | Repeats and the headline adjusted tests under each tie policy (`collapse` primary, `zero_gap`, `interval_spread`), with its assumption |
+| `size_specification_comparison.csv` | Numeric size score against categorical size and the size-by-phase interaction: log-likelihood, AIC, LRTs, headline tests per specification |
+| `organisation_size_reconciliation.csv` | Organisations with several name variants: each variant's band, the band taken, the deciding rule, conflicts |
 | `piecewise_hazard.png`, `survival_curve.png`, `parametric_hazards.png` | Diagnostic plots |
 
 **`dashboard/recurrence.html`** is published with the other dashboards (see
