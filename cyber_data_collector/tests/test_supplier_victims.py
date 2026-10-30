@@ -824,3 +824,21 @@ def test_different_only_adds_the_one_field_and_refuses_changed_data(tmp_path, mo
     path.write_text(json.dumps(existing))
     assert cal.cmd_calibrate(args) == 2
     assert "different_cutoff" not in json.loads(path.read_text())["same_incident"]
+
+
+def test_a_stored_score_is_read_only_on_the_evidence_it_was_judged_on(conn, monkeypatch):
+    # Jev scores mid-band and the escalation decides; both saw one state, recorded with the final score.
+    class Jev:
+        def ask(self, subject_type, sid, version, state, questions):
+            return {next(iter(questions)): SimpleNamespace(value=0.5)}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("cyber_data_collector.utils.escalation.escalate", lambda *a, **k: 0.9)
+    state = {"incident": {"title": "ProctorU breach"}, "candidate": {"name": "UWA"}}
+    scores = sv.judge(conn, [("s1", state)], sv.KIND_VICTIM, judge_client=Jev())
+    assert scores.final == {"s1": 0.9}
+    assert sv.stored_final_probabilities(conn, sv.KIND_VICTIM, [("s1", state)]) == {"s1": 0.9}
+    changed = {**state, "candidate": {"name": "UWA", "kind": "organisation"}}
+    assert sv.stored_final_probabilities(conn, sv.KIND_VICTIM, [("s1", changed)]) == {}
