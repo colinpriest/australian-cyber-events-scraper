@@ -757,10 +757,13 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     """
     from cyber_data_collector.dedup import ai_duplicates as ai
     from cyber_data_collector.dedup import candidate_ranking as ranking
+    from cyber_data_collector.dedup import split_rulings
     from cyber_data_collector.dedup.org_timeline import research_all
 
     options = {"cap": cap_candidates, "partners_per_event": partners_per_event, "long_gap_budget": long_gap_budget}
     org_options = dict(options)
+    # A ruling cached between two strays of one event is not a judgement of the pair; it must not veto a merge.
+    voided = split_rulings.void_orphaned(conn) if apply else split_rulings.orphaned(conn)
     research_all(conn, search=timeline_search)
     corpus = ranking.load_corpus(conn)
     universe = PairUniverse(conn)
@@ -829,7 +832,7 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     out = {"pairs": len(pairs), "judged": len(probabilities), "escalated": len(escalated),
            "escalation_failed": escalation_failed, "cutoff": cutoff,
            "calibrated": cal is not None, "proposals": proposals, "merged": merged,
-           "held_conflicts": held, "veto_rejudged": rejudged,
+           "held_conflicts": held, "veto_rejudged": rejudged, "split_rulings_voided": len(voided),
            "candidates": {"organisation": org_stats, "ai": ai_stats}}
     if ai_result is not None:
         out["ai"] = {k: v for k, v in ai_result.items()
