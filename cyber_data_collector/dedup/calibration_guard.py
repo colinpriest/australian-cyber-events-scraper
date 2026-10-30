@@ -83,3 +83,13 @@ def report_only_message(what: str, calibration: Mapping[str, Any], reason: str) 
     return (f"REPORT ONLY: the {what} calibration does not apply to the current model, question and evidence "
             f"processing ({reason}). Recalibrate on current evidence with "
             "'python scripts/dedup_admin.py recalibrate'; nothing is acted on until then.")
+
+
+def cutoff_in_band(cutoff: float, band) -> bool:
+    """Whether a calibrated cut-off lies inside the escalation band (``lo <= cutoff <= hi``).
+
+    Outside it, a score between the band's edge and the cut-off is final on the screening model's answer
+    alone, never re-judged by the reasoning model: the case nearest the decision gets the weakest judgement.
+    """
+    lo, hi = band
+    return lo <= cutoff <= hi

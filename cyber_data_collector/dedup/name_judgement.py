@@ -242,12 +242,16 @@ def descriptive_names(conn: sqlite3.Connection, calibration_path: Path = CALIBRA
 
     A name labelled ``named`` never is, whatever it scored.
     """
+    from cyber_data_collector.dedup import descriptive_names as table
+
     labels = load_labels(labels_path)
     found = {n for n, r in labels.items() if (r.get("label") or "").strip() == "descriptive"}
     cal = active_calibration(calibration_path, quiet=quiet)
     if cal:
         found |= {n for n, p in stored_probabilities(conn).items()
                   if p < cal["cutoff"] and (labels.get(n, {}).get("label") or "").strip() != "named"}
+    # Remembered descriptions (DescriptiveNames); a person's entry outranks a 'named' label.
+    found |= table.keys(conn)
     return found
 
 
@@ -271,4 +275,4 @@ def is_descriptive_name(name: Optional[str]) -> bool:
     False for a name not judged, and for everything when no verdicts are loaded: nothing is decided here
     without a judgement behind it.
     """
-    return bool(name) and name.strip().lower() in _DESCRIPTIVE
+    return bool(name) and (name.strip().lower() in _DESCRIPTIVE or " ".join(name.split()).lower() in _DESCRIPTIVE)

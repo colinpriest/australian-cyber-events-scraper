@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Dict, List, Set, Tuple
@@ -52,9 +53,20 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
 
 
+RULING_COLUMNS = {"override_id", "left_enriched_event_id", "right_enriched_event_id", "verdict", "reason",
+                  "created_by", "created_at", "active"}
+
+
+def _has_rulings(conn: sqlite3.Connection) -> bool:
+    """A rulings table that records who made each ruling and when (one that does not holds no split rulings)."""
+    if not _has_table(conn, "DedupOverrides"):
+        return False
+    return RULING_COLUMNS <= {r[1] for r in conn.execute("PRAGMA table_info(DedupOverrides)")}
+
+
 def orphaned(conn: sqlite3.Connection) -> List[Orphan]:
     """Active rule-made split rulings whose two records both left the still-Active event they were split from."""
-    if not (_has_table(conn, "DedupOverrides") and _has_table(conn, "DedupSnapshots")):
+    if not (_has_rulings(conn) and _has_table(conn, "DedupSnapshots")):
         return []
     rulings = conn.execute(
         """SELECT override_id, left_enriched_event_id, right_enriched_event_id, COALESCE(reason, ''), created_at
@@ -92,8 +104,42 @@ def orphaned(conn: sqlite3.Connection) -> List[Orphan]:
     return found
 
 
+LABEL_SPLIT = re.compile(r"^split: \[label-contradiction\] labelled different incidents \(([^\s)]+) vs ([^\s)]+)\)")
+
+
+def withdrawn_label_rulings(conn: sqlite3.Connection, labels_path=None) -> List[Orphan]:
+    """Rulings cached by ``resolve-label-contradictions`` for a pair that is no longer labelled different.
+
+    Such a split rests only on the label (its reason names the pair by the first 8 characters of each id);
+    when the label is changed (an owner's decision), the ruling has nothing left behind it.
+    """
+    from cyber_data_collector.dedup import label_contradictions as lc
+
+    if not _has_rulings(conn):
+        return []
+    different = lc.labelled_different_pairs(labels_path)
+    found = []
+    for override_id, left, right, reason in conn.execute(
+            """SELECT override_id, left_enriched_event_id, right_enriched_event_id, COALESCE(reason, '')
+               FROM DedupOverrides WHERE active = 1 AND verdict = 'different' AND created_by = 'rule'
+                 AND reason LIKE 'split: [label-contradiction]%'"""):
+        m = LABEL_SPLIT.match(reason)
+        if m and not any({a[:len(m.group(1))], b[:len(m.group(2))]} == {m.group(1), m.group(2)}
+                         or {a[:len(m.group(2))], b[:len(m.group(1))]} == {m.group(1), m.group(2)}
+                         for a, b in different):
+            found.append(Orphan(override_id, left, right, "", reason))
+    return found
+
+
 def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
-    """Deactivate the rulings :func:`orphaned` finds; ``apply`` False only lists them."""
+    """Deactivate the rulings :func:`orphaned` and :func:`withdrawn_label_rulings` find; ``apply`` False only
+    lists them."""
+    withdrawn = withdrawn_label_rulings(conn)
+    if apply and withdrawn:
+        conn.executemany(
+            "UPDATE DedupOverrides SET active = 0, reason = reason || ' [void: the pair is no longer labelled "
+            "different]' WHERE override_id = ?", [(o.override_id,) for o in withdrawn])
+        conn.commit()
     found = orphaned(conn)
     if apply and found:
         conn.executemany(
@@ -102,4 +148,4 @@ def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
         conn.commit()
         logger.info("Voided %d split ruling(s) between records that both left the event they were split from",
                     len(found))
-    return found
+    return withdrawn + found

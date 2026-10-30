@@ -378,8 +378,11 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
     merges go through the ledger (snapshotted, reversible); a split caches 'different' rulings, and a merge
     the ledger refuses (a 'different' ruling or label) is reported, never forced.
     """
+    from cyber_data_collector.dedup import split_rulings
     from cyber_data_collector.dedup.ledger import DedupLedger
 
+    # A split ruling with nothing behind it (its label changed, or both records left one event) blocks nothing.
+    split_rulings.void_orphaned(conn, apply=apply)
     contradictions = find(conn, path)
     same = find_same(conn, path)
     if not contradictions and not same:
