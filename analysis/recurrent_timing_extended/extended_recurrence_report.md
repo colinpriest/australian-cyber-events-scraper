@@ -183,8 +183,8 @@ These are associations in a selected, publicly reported dataset, conditional on 
 
 ## Reproducibility
 
-Database snapshot: `snap-20261030202652-36f325f544f5` (retained under `instance/snapshots/`; rerun with `--snapshot-id snap-20261030202652-36f325f544f5`).
-Database snapshot SHA-256: `36f325f544f5f5f70f8f65fe68cce560261860c693eedbb7263d431ac17aae2d`.
+Database snapshot: `snap-20261030210516-86695b80fb34` (retained under `instance/snapshots/`; rerun with `--snapshot-id snap-20261030210516-86695b80fb34`).
+Database snapshot SHA-256: `86695b80fb341855d0131a71aa90e8befa9057bd49a35e7037faa4845b1cc003`.
 Bootstrap replicates: 500; date draws: 100.
 
 The detailed result tables are saved as CSV files alongside this report.
