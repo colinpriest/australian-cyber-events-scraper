@@ -205,25 +205,38 @@ def escalation_question() -> str:
 
 
 def judge_events(conn: sqlite3.Connection, dedup_ids: Sequence[str], judge=None,
-                 refresh: bool = False, version: str = QUESTION_VERSION) -> Dict[str, float]:
+                 refresh: bool = False, version: str = QUESTION_VERSION,
+                 states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """P(real incident) for each event; stored answers are reused (see :mod:`jev`).
 
     ``version`` is :data:`SCREEN_VERSION` (stored evidence only) or
     :data:`QUESTION_VERSION` (plus any stored corroboration search).
+
+    ``states`` freezes the evidence of the final question: an event already in it
+    is asked on that state, any other is built (:func:`final_state`) and added, and
+    the caller passes the same mapping to :func:`escalate_band` and
+    :func:`record_final`, so Jev, the escalation and the stored decision see one
+    evidence. The screen is asked on a different, cheaper state and takes none.
     """
     from cyber_data_collector.utils.jev import JevJudge
 
+    full = version == QUESTION_VERSION
+    if states is not None and not full:
+        raise ValueError("states freeze the final question's evidence; the screen is asked on its own")
     owned = judge is None
     judge = judge or JevJudge(conn)
     q = {QUESTION_ID: question(version)}
-    full = version == QUESTION_VERSION
     out: Dict[str, float] = {}
     try:
         for i, dedup_id in enumerate(dedup_ids, 1):
+            if states is None:
+                state = build_state(conn, dedup_id, corroborated=full, with_timeline=full)
+            else:
+                if dedup_id not in states:
+                    states[dedup_id] = final_state(conn, dedup_id)
+                state = states[dedup_id]
             try:
-                answer = judge.ask("deduplicated_event", dedup_id, version,
-                                   build_state(conn, dedup_id, corroborated=full, with_timeline=full),
-                                   q, refresh=refresh)[QUESTION_ID]
+                answer = judge.ask("deduplicated_event", dedup_id, version, state, q, refresh=refresh)[QUESTION_ID]
             except Exception as exc:  # noqa: BLE001 - one failure never decides an event
                 logger.warning("Event reality judgement failed for %s: %s", dedup_id, exc)
                 continue
@@ -256,11 +269,14 @@ def calibration_identity() -> Dict[str, str]:
 
 
 def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], client=None,
-                  failed: Optional[List[str]] = None) -> Dict[str, float]:
+                  failed: Optional[List[str]] = None,
+                  states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """Re-judge with the reasoning model every event Jev scores inside ESCALATE_BAND.
 
     Events whose escalation fails are appended to ``failed``: they are left
-    undecided (retried next run), never decided on Jev's mid-band score.
+    undecided (retried next run), never decided on Jev's mid-band score. With
+    ``states`` (from :func:`judge_events`) each event is shown the state Jev was
+    asked on, never one built again.
     """
     from cyber_data_collector.utils.escalation import escalate
 
@@ -268,9 +284,9 @@ def escalate_band(conn: sqlite3.Connection, probabilities: Dict[str, float], cli
     band = sorted(d for d, p in probabilities.items() if lo <= p < hi)
     out: Dict[str, float] = {}
     for i, did in enumerate(band, 1):
+        state = final_state(conn, did) if states is None else final_decisions.frozen(states, did)
         value = escalate(conn, "deduplicated_event", did, ESCALATION_QUESTION_ID, ESCALATION_VERSION,
-                         build_state(conn, did, corroborated=True, with_timeline=True),
-                         escalation_question(), client=client)
+                         state, escalation_question(), client=client)
         if value is not None:
             out[did] = value
         elif failed is not None:
@@ -293,11 +309,14 @@ def final_state(conn: sqlite3.Connection, dedup_id: str) -> Dict[str, Any]:
 
 
 def record_final(conn: sqlite3.Connection, jev: Dict[str, float], escalated: Dict[str, float],
-                 failed: Optional[Sequence[str]] = None) -> Dict[str, float]:
+                 failed: Optional[Sequence[str]] = None,
+                 states: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, float]:
     """Store each scored event's final decision against the evidence both answers were given; returns the final
-    scores (an event whose escalation failed has none)."""
-    return final_decisions.record_scores(conn, STEP, [(d, lambda d=d: final_state(conn, d)) for d in jev],
-                                         jev, escalated, failed or ())
+    scores (an event whose escalation failed has none). With ``states`` (from :func:`judge_events`) the decision is
+    stored against the state Jev was asked on; without, each state is built here (callers that do not freeze)."""
+    def build(d: str):
+        return (lambda: final_state(conn, d)) if states is None else (lambda: final_decisions.frozen(states, d))
+    return final_decisions.record_scores(conn, STEP, [(d, build(d)) for d in jev], jev, escalated, failed or ())
 
 
 def stored_final_probabilities(conn: sqlite3.Connection, ids: Sequence[str]) -> Dict[str, float]:
@@ -485,6 +504,13 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
 
     Without an active calibration, or without ``apply``, nothing is rejected:
     the would-be rejections are returned for review.
+
+    Each event's final evidence is built once, after the corroboration and
+    timeline research: Jev is asked on it, the escalation is given it and the
+    decision is stored against it. Immediately before rejecting, every event a
+    score would reject is built again; one whose evidence changed since it was
+    judged is not rejected but listed in ``evidence_changed`` and judged again
+    next run.
     """
     from cyber_data_collector.dedup.org_timeline import research_all
 
@@ -495,10 +521,11 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     screen = judge_events(conn, events, judge=judge, version=SCREEN_VERSION)
     corroborated = corroborate_low(conn, screen, search=search)
     research_all(conn, search=timeline_search)
-    jev_scores = judge_events(conn, events, judge=judge, version=QUESTION_VERSION)
+    states: Dict[str, Dict[str, Any]] = {}      # the evidence each final judgement is made on, built once
+    jev_scores = judge_events(conn, events, judge=judge, version=QUESTION_VERSION, states=states)
     escalation_failed: List[str] = []
-    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed)
-    probabilities = record_final(conn, jev_scores, escalated, escalation_failed)
+    escalated = escalate_band(conn, jev_scores, client=escalation_client, failed=escalation_failed, states=states)
+    probabilities = record_final(conn, jev_scores, escalated, escalation_failed, states=states)
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents"))
@@ -514,6 +541,7 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     # model's lean decides as before.
     labelled_out: List[Dict[str, Any]] = []
     needs_review: List[Dict[str, Any]] = []
+    by_score = {f["deduplicated_event_id"] for f in below}     # rejections a score decides (not a label alone)
     if cutoff is not None and apply:
         already = {f["deduplicated_event_id"] for f in below}
         candidates = sorted(labelled_non_incidents(labels_path) & set(probabilities) - already - protected)
@@ -522,12 +550,25 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
             entry = {"deduplicated_event_id": did, "title": titles.get(did), "p_real": probabilities[did],
                      "label": "not_incident"}
             unchanged = gained is not None and did not in gained
+            if not unchanged and probabilities[did] < LABELLED_NON_INCIDENT_MAX_P:
+                by_score.add(did)
             (labelled_out if unchanged or probabilities[did] < LABELLED_NON_INCIDENT_MAX_P
              else needs_review).append(entry)
         for did in sorted(labelled_out_of_scope(labels_path) & set(probabilities) - already - protected):
             labelled_out.append({"deduplicated_event_id": did, "title": titles.get(did),
                                  "p_real": probabilities[did], "label": "out_of_scope"})
         below = below + labelled_out
+    # A score is acted on only while it describes the event: an event whose evidence changed after it was
+    # judged (another process, a refreshed timeline, a re-enriched record) is left for the next run.
+    evidence_changed: List[Dict[str, Any]] = []
+    if apply and cal and by_score:
+        changed = set(final_decisions.changed_since(states, sorted(by_score), lambda d: final_state(conn, d)))
+        evidence_changed = [f for f in below if f["deduplicated_event_id"] in changed]
+        below = [f for f in below if f["deduplicated_event_id"] not in changed]
+        labelled_out = [f for f in labelled_out if f["deduplicated_event_id"] not in changed]
+        for f in evidence_changed:
+            logger.warning("NOT REJECTED: the evidence of %s changed after it was judged (P(real) %.3f); it is "
+                           "judged again next run", f["deduplicated_event_id"], f["p_real"])
     applied = bool(apply and cal and below)
     if applied:
         reject_events(conn, below)
@@ -536,4 +577,4 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
             "escalation_failed": escalation_failed, "cutoff": cutoff,
             "labelled_rejections": labelled_out, "labelled_needing_review": needs_review,
             "calibrated": cal is not None, "applied": applied, "rejections": below,
-            "restored_protected": restored}
+            "evidence_changed": evidence_changed, "restored_protected": restored}

@@ -130,3 +130,125 @@ def test_a_check_events_run_leaves_a_decision_on_the_evidence_it_judged(conn, tm
                              calibration_path=tmp_path / "none.json")
     assert result["judged"] == 2
     assert er.stored_final_probabilities(conn, ["a", "b"]) == {"a": pytest.approx(0.9), "b": pytest.approx(0.9)}
+
+
+# ----------------------------------------------------------------------
+# The evidence is frozen: built once, and checked again before acting
+# ----------------------------------------------------------------------
+
+class EditingJev(FakeJev):
+    """Jev answering ``p``, which - while it is asked about event ``a`` on the final question - changes ``a``'s
+    evidence in the database, as another process (a re-enrichment, a timeline refresh) could."""
+
+    def __init__(self, conn, p, final_question=lambda questions: True):
+        super().__init__(p)
+        self.conn, self.final_question, self.asked = conn, final_question, {}
+
+    def system_one(self, state, questions, model=None):
+        if self.final_question(questions):
+            did = state["event"]["title"].rsplit(" ", 1)[-1]
+            self.asked[did] = json.loads(json.dumps(state))
+            if did == "a":
+                _edit_page(self.conn, "a")
+        return super().system_one(state, questions, model)
+
+
+def _final_question(questions):
+    """The event-reality final question (the screen has no corroboration instructions)."""
+    return "corroboration" in next(iter(questions.values())).instructions
+
+
+def _reality_files(tmp_path, cutoff):
+    cal = tmp_path / "reality_cal.json"
+    cal.write_text(json.dumps({"cutoff": cutoff, **er.calibration_identity()}))
+    labels = tmp_path / "reality_labels.csv"
+    labels.write_text("deduplicated_event_id,label\nunrelated,real\n", encoding="utf-8")
+    return cal, labels
+
+
+def _scope_files(tmp_path, cutoff):
+    cal = tmp_path / "scope_cal.json"
+    cal.write_text(json.dumps({"cutoff": cutoff, **es.calibration_identity()}))
+    scope = tmp_path / "scope_labels.csv"
+    scope.write_text("deduplicated_event_id,label,rationale,labeller\nunrelated,in_scope,r,t\n", encoding="utf-8")
+    reality = tmp_path / "reality_labels.csv"
+    reality.write_text("deduplicated_event_id,label\n", encoding="utf-8")
+    return cal, scope, reality
+
+
+@pytest.fixture
+def ledger(monkeypatch):
+    """Rejections without the ledger's snapshot tables (the ledger has its own tests)."""
+    from cyber_data_collector.dedup.ledger import DedupLedger
+    monkeypatch.setattr(DedupLedger, "snapshot_event", lambda self, batch, did: None)
+
+
+def _status(conn, did):
+    return conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = ?", (did,)).fetchone()[0]
+
+
+def _assert_one_evidence(conn, step, escalation_question_id, escalation_text, asked):
+    """Jev, the escalation and the stored decision of ``a`` all rest on the state Jev was asked on."""
+    from cyber_data_collector.utils import escalation as esc
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    jev_state = asked["a"]
+    evidence, escalation_digest = conn.execute(
+        "SELECT evidence_hash, escalation_input_hash FROM FinalDecisions WHERE step = ? AND subject_id = 'a'",
+        (step,)).fetchone()
+    assert evidence == fd.state_hash(jev_state)
+    assert escalation_digest == esc.input_hash(jev_state, escalation_text(), openai_model())
+    # The escalation was asked once, on that state - not on the edited one.
+    stored = [r[0] for r in conn.execute("SELECT input_hash FROM ModelJudgements WHERE question_id = ? "
+                                         "AND subject_id = 'a'", (escalation_question_id,))]
+    assert stored == [escalation_digest]
+
+
+def test_check_events_does_not_reject_an_event_whose_evidence_changed_after_it_was_judged(conn, tmp_path, ledger):
+    cal, labels = _reality_files(tmp_path, cutoff=0.3)
+    jev = EditingJev(conn, 0.5, final_question=_final_question)          # mid-band: escalated
+    result = er.check_events(conn, apply=True, judge=JevJudge(conn, client=jev), escalation_client=FakeReasoner(0.04),
+                             search=lambda q, m: {"answer": "FOUND: no\nINCIDENT: none found", "citations": []},
+                             timeline_search=lambda q, m: {"answer": "NONE FOUND", "citations": []},
+                             calibration_path=cal, labels_path=labels)
+    assert [f["deduplicated_event_id"] for f in result["rejections"]] == ["b"]
+    assert [f["deduplicated_event_id"] for f in result["evidence_changed"]] == ["a"]
+    assert _status(conn, "a") == "Active" and _status(conn, "b") == "Rejected"
+    _assert_one_evidence(conn, "event-reality", er.ESCALATION_QUESTION_ID, er.escalation_question, jev.asked)
+    # The decision is on record against the evidence it was made on, which is no longer "a"'s evidence.
+    assert fd.state_hash(er.final_state(conn, "a")) != fd.state_hash(jev.asked["a"])
+    assert er.stored_final_probabilities(conn, ["a"]) == {}
+
+
+def test_check_scope_does_not_reject_an_event_whose_evidence_changed_after_it_was_judged(conn, tmp_path, ledger):
+    cal, scope, reality = _scope_files(tmp_path, cutoff=0.3)
+    jev = EditingJev(conn, 0.5)
+    result = es.check_scope(conn, apply=True, judge=JevJudge(conn, client=jev), escalation_client=FakeReasoner(0.04),
+                            calibration_path=cal, labels_path=scope, reality_labels_path=reality)
+    assert [f["deduplicated_event_id"] for f in result["rejections"]] == ["b"]
+    assert [f["deduplicated_event_id"] for f in result["evidence_changed"]] == ["a"]
+    assert _status(conn, "a") == "Active" and _status(conn, "b") == "Rejected"
+    _assert_one_evidence(conn, "event-scope", es.ESCALATION_QUESTION_ID, es.escalation_question, jev.asked)
+
+
+def test_unchanged_evidence_is_rejected_and_nothing_is_reported_as_changed(conn, tmp_path, ledger):
+    cal, scope, reality = _scope_files(tmp_path, cutoff=0.3)
+    result = es.check_scope(conn, apply=True, judge=JevJudge(conn, client=FakeJev(0.05)),
+                            escalation_client=FakeReasoner(None), calibration_path=cal, labels_path=scope,
+                            reality_labels_path=reality)
+    assert result["evidence_changed"] == [] and len(result["rejections"]) == 2
+
+
+def test_a_frozen_state_is_never_rebuilt_behind_the_callers_back(conn):
+    states = {}
+    jev = er.judge_events(conn, ["a"], judge=JevJudge(conn, client=FakeJev(0.5)), states=states)
+    _edit_page(conn, "a")
+    escalated = er.escalate_band(conn, jev, client=FakeReasoner(0.2), states=states)
+    er.record_final(conn, jev, escalated, states=states)
+    assert fd.latest(conn, er.STEP, ["a"])["a"][1] == fd.state_hash(states["a"])
+    assert fd.changed_since(states, ["a"], lambda d: er.final_state(conn, d)) == ["a"]
+    with pytest.raises(ValueError):            # a subject Jev was not asked about on these states
+        er.escalate_band(conn, {"b": 0.5}, client=FakeReasoner(0.2), states=states)
+    with pytest.raises(ValueError):            # the screen is asked on its own, cheaper state
+        er.judge_events(conn, ["a"], judge=JevJudge(conn, client=FakeJev(0.5)), version=er.SCREEN_VERSION,
+                        states={})

@@ -5,7 +5,6 @@ import logging
 from typing import Dict, List, Optional
 
 import instructor
-import openai
 from pydantic import BaseModel, Field
 from tqdm import tqdm
 
@@ -14,6 +13,7 @@ from cyber_data_collector.processing.record_evidence import (
     BASIS_SNIPPET_ONLY,
     BASIS_UNSCRAPED,
 )
+from cyber_data_collector.utils import llm_retry
 from cyber_data_collector.utils.entity_scraper import is_blocked_domain
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from cyber_data_collector.models.events import (
@@ -87,7 +87,12 @@ class LLMClassifier:
             self.logger.warning("OpenAI API key not provided; classifier runs in degraded mode.")
             self.client = None
         else:
-            self.client = instructor.from_openai(openai.OpenAI(api_key=openai_api_key))
+            # The request times out at the HTTP level and the SDK never retries it: one retry policy
+            # (utils/llm_retry.py) decides what is attempted again, so a timed-out request is cancelled,
+            # not abandoned while it keeps running.
+            self.client = instructor.from_openai(llm_retry.openai_client(openai_api_key))
+        #: How the retry loop waits between attempts (a test replaces it).
+        self.sleep = asyncio.sleep
 
     async def classify_events(self, events: List[CyberEvent]) -> List[CyberEvent]:
         """Classify and enhance events using the configured LLM with concurrent processing."""
@@ -190,15 +195,17 @@ class LLMClassifier:
     async def _invoke_llm(
         self,
         request: EventEnhancementRequest,
-        timeout_seconds: int = 60,
-        max_attempts: int = 2,
+        max_attempts: int = llm_retry.MAX_ATTEMPTS,
     ) -> EventEnhancement:
-        """Call the LLM with a per-attempt timeout, retrying once on TimeoutError.
+        """Call the LLM, retrying transient failures (timeouts, connection errors, 429, 5xx).
 
-        OpenAI calls occasionally hang under load. Without a retry, a single
-        slow call wastes the full timeout window and forfeits the event. One
-        cheap retry usually succeeds and is dwarfed by the cost of losing the
-        classification entirely.
+        OpenAI calls occasionally hang under load. The client's HTTP timeout
+        ends a hung request (``llm_retry.REQUEST_TIMEOUT``) and
+        :func:`llm_retry.call_with_retries` tries again with back-off, one
+        request per attempt, at most ``max_attempts``; instructor re-asks only
+        when the answer does not validate. A final transient error is raised as
+        it is (a temporary failure for the retry queue); any other propagates
+        at once.
         """
         if not self.client:
             raise RuntimeError("LLM client not configured")
@@ -283,64 +290,45 @@ CRITICAL REQUIREMENTS:
 - Always provide all fields even for rejected events (use defaults for rejected events).
 """
 
-        last_exc: Optional[BaseException] = None
         model_name = openai_fast_model()
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        lambda: self.client.chat.completions.create(
-                            **chat_params(model_name),
-                            response_model=EventEnhancement,
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "You are a cybersecurity incident analyst focused on identifying SPECIFIC cybersecurity incidents affecting Australian organizations. "
-                                        "ACCEPT events that describe specific incidents affecting named organizations, even if details are limited. "
-                                        "Examples to ACCEPT: 'Toll Group ransomware attack', 'Perth Mint data breach', 'ANU cyber attack', 'Canva security incident', 'Travelex ransomware'. "
-                                        "Examples to REJECT: 'Multiple Cyber Incidents Reported', 'OAIC Notifiable Data Breaches Report', 'What is a cyber attack?', policy documents. "
-                                        "REJECT obvious summaries, regulatory reports, and policy documents, but ACCEPT specific incidents. "
-                                        "When in doubt about whether something is a specific incident affecting a named organization, ACCEPT it rather than reject it. "
-                                        "Bias toward inclusion of potential incidents for further analysis."
-                                    ),
-                                },
-                                {
-                                    "role": "user",
-                                    "content": user_prompt,
-                                },
-                            ],
-                            max_retries=2,
-                        )
-                    ),
-                    timeout=timeout_seconds
-                )
-                # Track token usage from instructor-wrapped response
-                from cyber_data_collector.utils.token_tracker import tracker
-                raw = getattr(response, '_raw_response', None)
-                if raw and hasattr(raw, 'usage') and raw.usage:
-                    tracker.record(
-                        model_name, raw.usage.prompt_tokens,
-                        raw.usage.completion_tokens, context="llm_classifier",
-                    )
-                return response
-            except asyncio.TimeoutError as exc:
-                last_exc = exc
-                if attempt < max_attempts:
-                    self.logger.warning(
-                        f"LLM request timed out after {timeout_seconds}s "
-                        f"(attempt {attempt}/{max_attempts}) for: {request.title[:50]}..., retrying"
-                    )
-                    await asyncio.sleep(1)  # brief backoff before retry
-                    continue
-                self.logger.warning(
-                    f"LLM request timed out after {timeout_seconds}s "
-                    f"on final attempt {attempt}/{max_attempts} for: {request.title[:50]}..."
-                )
-                raise
-        # Should be unreachable - either we returned a response or raised above.
-        assert last_exc is not None
-        raise last_exc
+
+        def call() -> EventEnhancement:
+            return self.client.chat.completions.create(
+                **chat_params(model_name),
+                response_model=EventEnhancement,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a cybersecurity incident analyst focused on identifying SPECIFIC cybersecurity incidents affecting Australian organizations. "
+                            "ACCEPT events that describe specific incidents affecting named organizations, even if details are limited. "
+                            "Examples to ACCEPT: 'Toll Group ransomware attack', 'Perth Mint data breach', 'ANU cyber attack', 'Canva security incident', 'Travelex ransomware'. "
+                            "Examples to REJECT: 'Multiple Cyber Incidents Reported', 'OAIC Notifiable Data Breaches Report', 'What is a cyber attack?', policy documents. "
+                            "REJECT obvious summaries, regulatory reports, and policy documents, but ACCEPT specific incidents. "
+                            "When in doubt about whether something is a specific incident affecting a named organization, ACCEPT it rather than reject it. "
+                            "Bias toward inclusion of potential incidents for further analysis."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt,
+                    },
+                ],
+                max_retries=llm_retry.validation_retries(),
+            )
+
+        response = await llm_retry.call_with_retries(
+            call, what=f"Classification of {request.title[:50]!r}", logger=self.logger,
+            attempts=max_attempts, sleep=self.sleep)
+        # Track token usage from instructor-wrapped response
+        from cyber_data_collector.utils.token_tracker import tracker
+        raw = getattr(response, '_raw_response', None)
+        if raw and hasattr(raw, 'usage') and raw.usage:
+            tracker.record(
+                model_name, raw.usage.prompt_tokens,
+                raw.usage.completion_tokens, context="llm_classifier",
+            )
+        return response
 
     def _apply_enhancement_to_event(self, event: CyberEvent, enhancement: EventEnhancement) -> Optional[CyberEvent]:
         """Apply LLM enhancement to the event record, or return None if rejected."""

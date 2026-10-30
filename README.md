@@ -1646,6 +1646,20 @@ earlier version quarantined for a temporary storage failure when their stored
 reason says so; one quarantined with the old generic "enriched event could not
 be stored" is listed by `status` and returned by `release`.
 
+**Classifier timeouts stop the request.** The fast-model classification and
+entity extraction wrapped a synchronous call in `asyncio.wait_for(asyncio.to_thread(...))`:
+on timeout the await was abandoned while the thread and its HTTP request kept
+running (holding a slot, spending tokens), the retry started a second request on
+top, and instructor's `max_retries=2` (which retries any exception) and the OpenAI
+SDK's own 2 retries multiplied the attempts. Now (`utils/llm_retry.py`) the client
+has an httpx timeout (60 s per phase, 10 s to connect) and `max_retries=0`, so a
+hung request is cancelled by httpx and raises `APITimeoutError`; instructor
+re-asks only when the answer does not validate (one re-ask); and one loop retries
+timeouts, connection errors, 429 and 5xx - one request per attempt, at most 3,
+with back-off of 2 s doubling to at most 30 s. Other errors (400, 401, validation)
+propagate at once. A final timeout is raised as itself, so the retry queue classes
+it as temporary and the fetch-error types as `network`.
+
 ### API request budgets
 
 `--api-budget openai=3000 perplexity=1500 typesafe=20000` (or
@@ -2198,6 +2212,24 @@ answers without a paid call (on the 2026-10-29 copy 20 of the 73 organisation
 pairs; the other 53 and the 347 AI pairs have no stored answer on their current
 evidence and need asking, exactly as before this change). Nothing in the
 evidence fingerprints changed, so no calibration goes stale.
+
+**The evidence is frozen while it is judged.** Event reality and event scope used
+to build an event's evidence three times - for the Jev question, again for the
+escalation and again for the `FinalDecisions` row - so a timeline refreshed or a
+record re-enriched in between (by this run or another process) left Jev, the
+escalation and the stored decision describing different evidence, and the
+rejection acted on a decision nobody had made. Each event's evidence for the
+final judgement is now built once (after `check-events`' corroboration and
+timeline research; the screen keeps its own cheaper state) and that one object is
+what Jev is asked on, what the escalation is given and what is hashed into
+`FinalDecisions` (`states` in `judge_events` / `escalate_band` / `record_final`;
+`final_decisions.frozen`). Immediately before rejecting, each event a score would
+reject is built again and its hash compared (`final_decisions.changed_since`); an
+event whose evidence changed since it was judged is **not rejected**, is listed in
+`evidence_changed` in the findings and the command output, and is judged again
+next run. Rejections a label alone decides are unaffected. Coherence (both
+variants), victim attribution and the duplicate checks already built each
+subject's state once.
 
 **Contradictory links do not join a group.** If A=B and B=C but A and C are
 labelled different, ruled different, or scored below the calibration's
