@@ -409,7 +409,7 @@ def _plan_supplier_victims(conn: sqlite3.Connection) -> Plan:
                     f"{len(bad)} labelled {kind} item(s) could not be judged or escalated (first: {bad[0]}); "
                     "see the log. Nothing was calibrated.")
             _require_scored(kind, [sid for sid, _ in items], scores.final)
-            _require_agreement(kind, scores.final, sv.stored_final_probabilities(conn, kind))
+            _require_agreement(kind, scores.final, sv.stored_final_probabilities(conn, kind, items))
 
     return Plan(victims + pairs, sum(len(w) for w in wanted.values()), run)
 

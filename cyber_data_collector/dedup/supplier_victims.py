@@ -730,6 +730,25 @@ def calibration_identity() -> Dict[str, str]:
                 events=event_reality.evidence_fingerprint())}
 
 
+def _steps():
+    """The two judging steps as :mod:`final_decisions` stores them: each final score is kept against the one
+    state Jev and the escalation were both shown, and read back only while the subject's evidence is that state."""
+    from cyber_data_collector.dedup import final_decisions
+
+    return {
+        KIND_VICTIM: final_decisions.Step(
+            name="supplier-victim", question_id=VICTIM_QUESTION_ID, version=VICTIM_VERSION,
+            make_question=victim_question, escalation_id=VICTIM_ESCALATION_ID,
+            escalation_version=VICTIM_ESCALATION_VERSION, escalation_text=victim_escalation_question,
+            band=ESCALATE_BAND),
+        KIND_PAIR: final_decisions.Step(
+            name="supplier-same-incident", question_id=PAIR_QUESTION_ID, version=PAIR_VERSION,
+            make_question=pair_question, escalation_id=PAIR_ESCALATION_ID,
+            escalation_version=PAIR_ESCALATION_VERSION, escalation_text=pair_escalation_question,
+            band=ESCALATE_BAND),
+    }
+
+
 @dataclass
 class Scores:
     """Final score per subject: the escalation's inside the band, Jev's outside it."""
@@ -743,7 +762,11 @@ class Scores:
 
 def judge(conn: sqlite3.Connection, items: Sequence[Tuple[str, Dict[str, Any]]], kind: str,
           judge_client=None, escalation_client=None, escalate_band: bool = True) -> Scores:
-    """Ask Jev about each (subject id, state); escalate the middle band. Stored answers are reused."""
+    """Ask Jev about each (subject id, state); escalate the middle band. Stored answers are reused.
+
+    Each final score is recorded in ``FinalDecisions`` against the state both answers were given, so a stored
+    score is never an escalation of one evidence state paired with a Jev answer on another."""
+    from cyber_data_collector.dedup import final_decisions
     from cyber_data_collector.utils.escalation import escalate
     from cyber_data_collector.utils.jev import JevJudge
 
@@ -755,6 +778,8 @@ def judge(conn: sqlite3.Connection, items: Sequence[Tuple[str, Dict[str, Any]]],
         qid, version, q = PAIR_QUESTION_ID, PAIR_VERSION, pair_question()
         eqid, eversion, eq, subject_type = (PAIR_ESCALATION_ID, PAIR_ESCALATION_VERSION,
                                             pair_escalation_question(), "event_pair")
+    step = _steps()[kind]
+    final_decisions.ensure_schema(conn)
     scores = Scores()
     owned = judge_client is None
     jev = judge_client or JevJudge(conn)
@@ -777,27 +802,37 @@ def judge(conn: sqlite3.Connection, items: Sequence[Tuple[str, Dict[str, Any]]],
                 scores.escalated[sid] = value
                 p = value
             scores.final[sid] = p
+            final_decisions.record(conn, step, sid, state, p, sid in scores.escalated)
             if i % 25 == 0:
                 logger.info("Judged %d/%d %s item(s)", i, len(items), kind)
+                conn.commit()
     finally:
+        conn.commit()
         if owned:
             jev.close()
     return scores
 
 
-def stored_final_probabilities(conn: sqlite3.Connection, kind: str) -> Dict[str, float]:
-    """Final score per subject from storage, as :func:`judge` computes it; in-band items with no
-    stored escalation are left out (undecided)."""
-    return stored_probabilities(conn, kind)[1]
+def stored_final_probabilities(conn: sqlite3.Connection, kind: str,
+                               items: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None) -> Dict[str, float]:
+    """Final score per subject from the decision :func:`judge` recorded on its **current** evidence
+    (:mod:`final_decisions`); a subject with none - never judged, escalation failed, or evidence changed since -
+    has no score. ``items`` are ``(subject id, state)``; without them the current candidates are gathered.
+
+    It used to pair the newest Jev answer with the newest escalation, each chosen alone, so a calibration could
+    read an escalation of evidence the Jev answer was not given."""
+    from cyber_data_collector.dedup import final_decisions
+
+    if items is None:
+        gathered = gather(conn)
+        items = gathered.victim_items(conn) if kind == KIND_VICTIM else gathered.pair_items(conn)
+    return final_decisions.read_current(conn, _steps()[kind], [(sid, lambda st=state: st) for sid, state in items])
 
 
 def stored_probabilities(conn: sqlite3.Connection, kind: str) -> Tuple[Dict[str, float], Dict[str, float]]:
-    """(Jev's score, final score) per subject from storage."""
-    from cyber_data_collector.utils.llm_models import openai_model
-
-    qid, version, eqid, eversion = ((VICTIM_QUESTION_ID, VICTIM_VERSION, VICTIM_ESCALATION_ID,
-                                     VICTIM_ESCALATION_VERSION) if kind == KIND_VICTIM else
-                                    (PAIR_QUESTION_ID, PAIR_VERSION, PAIR_ESCALATION_ID, PAIR_ESCALATION_VERSION))
+    """(Jev's newest score, final score on current evidence) per subject from storage. Jev's own score is for
+    stratifying a labelling sample only; anything that decides reads the final score."""
+    qid, version = (VICTIM_QUESTION_ID, VICTIM_VERSION) if kind == KIND_VICTIM else (PAIR_QUESTION_ID, PAIR_VERSION)
 
     def latest(question_id: str, ver: str, model: str) -> Dict[str, float]:
         out: Dict[str, float] = {}
@@ -810,16 +845,7 @@ def stored_probabilities(conn: sqlite3.Connection, kind: str) -> Tuple[Dict[str,
     from cyber_data_collector.utils.jev import ensure_schema as jev_schema
     jev_schema(conn)
     jev = latest(qid, version, typesafe_model())
-    escalated = latest(eqid, eversion, openai_model())
-    lo, hi = ESCALATE_BAND
-    out: Dict[str, float] = {}
-    for sid, p in jev.items():
-        if lo <= p < hi:
-            if sid in escalated:
-                out[sid] = escalated[sid]
-        else:
-            out[sid] = p
-    return jev, out
+    return jev, stored_final_probabilities(conn, kind)
 
 
 # ----------------------------------------------------------------------
