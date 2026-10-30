@@ -282,3 +282,19 @@ def test_record_members_writes_every_labelled_event(apart):
     conn, snapshot, _ = apart
     assert lc.record_members(snapshot) == 3
     assert lc.labelled_members() == {"ded-a": {"enr-a", "enr-a2"}, "ded-b": {"enr-b"}}
+
+
+def test_a_split_made_from_a_label_that_has_changed_no_longer_blocks(world, tmp_path, monkeypatch):
+    """The pair was split because it was labelled different; the owner relabels it same: the split's rulings go
+    and the pair is merged again."""
+    conn, snapshot, _ = world
+    _merge_anyway(conn)
+    lc.resolve(conn, snapshot, apply=True)                       # split: rulings cached from the label
+    assert conn.execute("SELECT COUNT(*) FROM DedupOverrides WHERE active = 1 AND reason LIKE "
+                        "'split: [label-contradiction]%'").fetchone()[0] >= 1
+    monkeypatch.setattr(lc, "LABELS_PATH", _labels(tmp_path, [("ded-a", "ded-b")], label="same"))
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert [c.kind for c in result] == ["same"] and result[0].unresolved is None
+    assert conn.execute("SELECT COUNT(*) FROM DedupOverrides WHERE active = 1 AND reason LIKE "
+                        "'split: [label-contradiction]%'").fetchone()[0] == 0
+    assert lc.find_same(conn) == []

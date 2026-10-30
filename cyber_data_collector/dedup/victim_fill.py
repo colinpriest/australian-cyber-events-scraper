@@ -512,10 +512,15 @@ def fill_victims(conn: sqlite3.Connection, apply: bool = False, judge=None, esca
     owned = judge is None
     judge = judge or JevJudge(conn)
     errors: List[Dict[str, str]] = []
-    from cyber_data_collector.dedup import name_judgement
+    from cyber_data_collector.dedup import descriptive_names, name_judgement
+    if apply:
+        descriptive_names.sync(conn)       # remember every description the labels and calibrated verdicts know
     name_judgement.activate(conn)          # the current verdicts, whatever an earlier step loaded
     try:
         undone = undo_description_fills(conn, judge, apply=apply)
+        # Any other description recorded as a victim is no victim either (the fills above are restored
+        # exactly first): off the event, so it is filled from its evidence.
+        demoted = descriptive_names.demote_victims(conn, apply=apply).demoted
         events = victimless_events(conn, only_event)
         plans = plan_fills(conn, events, cal, labels, judge, extractor=extractor, escalation_client=escalation_client,
                            use_text=use_text, stored_text_only=stored_text_only, errors=errors)
@@ -527,5 +532,7 @@ def fill_victims(conn: sqlite3.Connection, apply: bool = False, judge=None, esca
     return {"eligible": len(events), "calibrated": cal is not None, "cutoff": cal["cutoff"] if cal else None,
             "applied": batch is not None, "batch_id": batch, "counts": dict(counts), "errors": errors,
             "description_fills": undone,
+            "descriptive_victims_demoted": [{"deduplicated_event_id": d.deduplicated_event_id, "name": d.name}
+                                            for d in demoted],
             "plans": [{**{k: v for k, v in p.items() if k not in ("chosen", "candidates")},
                        "candidates": [c["name"] for c in p["candidates"]]} for p in plans]}

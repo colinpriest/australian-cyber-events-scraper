@@ -50,10 +50,17 @@ QUESTION_ID = "same_incident"
 # labelled cases (Western Sydney University's four separate incidents); pairs
 # v3 scores inside ESCALATE_BAND - fixed before calibration - are re-judged by
 # the reasoning model, and the final score is calibrated.
-QUESTION_VERSION = "same-incident-v3-timeline"
+# v4 (2026-10-31): absence of detail is not evidence of a separate incident, and two separate incidents at one
+# organisation close together in time are rare. v3 answered "different" whenever one event said too little: the
+# Department of Finance's own "Information management" page against its MAS-panel disclosure on the same day
+# (0.08), an unsupported CBA record against the bank's 2016 domain-misspelling leak (0.04).
+QUESTION_VERSION = "same-incident-v4-thin-evidence"
 ESCALATION_QUESTION_ID = "same_incident_escalated"
-ESCALATION_VERSION = "same-incident-escalation-v1"
-ESCALATE_BAND = (0.2, 0.8)
+ESCALATION_VERSION = "same-incident-escalation-v2"
+# The band must reach past the merge cut-off: a score just under the cut-off and above the band was decided by
+# Jev alone and never merged (Ambulance Victoria's April/May 2024 intranet exposure: Jev 0.80, band to 0.8, cut-off
+# 0.81, 2026-10-31). Widened from (0.2, 0.8); a calibration whose cut-off lies outside the band does not apply.
+ESCALATE_BAND = (0.2, 0.9)
 RECORDS_PER_EVENT = 6
 #: Bump when what a pair's events show a model changes beyond event reality's evidence
 #: (``event_reality.EVIDENCE_VERSION``) and the date provenance (``date_provenance.EVIDENCE_VERSION``).
@@ -78,16 +85,23 @@ INSTRUCTIONS = (
     "two dates stated to the day in the records is strong evidence. `organisation_timeline`, when "
     "present, is researched history of the organisation's publicly reported incidents with dates "
     "and sources: if both events match the same incident in it they are one incident; if they "
-    "match two different incidents in it they are two."
+    "match two different incidents in it they are two. Two separate incidents at one organisation "
+    "within the same few weeks, or within periods that overlap, are rare; two reports of one "
+    "incident are common. An event whose records say little about what happened (a generic page, "
+    "a short notice, a snippet, research that adds nothing specific) is NOT evidence of a different "
+    "incident: answer that they are two incidents only when the evidence positively shows a "
+    "separate incident - a different attack or method, different systems or data, a different "
+    "attacker, a separate date stated in the records, or a source saying it is another incident."
 )
 CRITERIA = {
     "true": ("One incident: the same breach or attack reported again - follow-up coverage, a later "
              "notification or regulator statement, a class action, an aggregator entry, or an "
              "organisation's own web page or notice that the evidence ties to that incident; also "
              "one supplier's breach recorded twice for the same customer."),
-    "false": ("Two incidents: a separate attack or breach, a different time with no link between "
-              "them, a new compromise after the first was resolved, or a different attacker or "
-              "method - even when both are the same kind of incident at the same organisation."),
+    "false": ("Two incidents, shown by the evidence: a separate attack or breach, a different time with no "
+              "link between them, a new compromise after the first was resolved, or a different attacker "
+              "or method - even when both are the same kind of incident at the same organisation. Too "
+              "little detail on one side is not a difference."),
 }
 
 
@@ -536,6 +550,11 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
         logger.warning(calibration_guard.report_only_message("duplicate", cal, reason))
         return None
     if cal.get("cutoff") is None:
+        return None
+    if not calibration_guard.cutoff_in_band(cal["cutoff"], ESCALATE_BAND):
+        logger.error("Duplicate calibration cut-off %.2f lies outside the escalation band %s: scores between the "
+                     "band and the cut-off would be decided by Jev alone - REPORT ONLY until recalibrated",
+                     cal["cutoff"], ESCALATE_BAND)
         return None
     from cyber_data_collector.dedup import deployment
 
