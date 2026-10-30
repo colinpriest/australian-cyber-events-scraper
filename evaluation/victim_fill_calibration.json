@@ -4,48 +4,123 @@
   "evidence": "victim-fill:c65d47bf27978c63",
   "settled_at": 0.9,
   "calibrated_on_database": "calibration_victim_fill.db",
-  "cutoff": 0.97,
+  "frame_databases": {
+    "1": "calibration_victim_fill.db",
+    "2": "calibration_victim_fill_2.db"
+  },
+  "cutoff": null,
   "precision_target": 0.95,
   "min_fills": 10,
-  "at_cutoff": {
-    "threshold": 0.97,
-    "replaced_labelled": 10,
-    "correct_labelled": 10,
-    "weighted_precision": 1.0,
-    "unweighted_precision_ci95": [
-      0.7224598312333834,
-      1.0
-    ]
-  },
+  "at_cutoff": null,
   "bootstrap_out_of_sample_precision": {
-    "replicates": 514,
-    "median": 1.0,
-    "mean": 0.9821405410413192,
-    "p05": 1.0
+    "replicates": 416,
+    "median": 0.8,
+    "mean": 0.8011266377852917,
+    "p05": 0.5
   },
-  "labelled_used": 56,
-  "labelled_named": 25,
+  "labelled_used": 92,
+  "labelled_named": 34,
   "excluded": {
-    "unsure": 2,
+    "unsure": 4,
     "missing": 0
   },
-  "recall_labelled_named": 0.4,
+  "recall_labelled_named": null,
   "labels_file": "evaluation\\victim_fill_labels.csv",
   "sample_file": "evaluation\\victim_fill_sample.csv",
-  "generated": "2026-10-29T22:17:47.035212",
+  "generated": "2026-10-30T18:55:11.954574",
   "curve": [
     {
       "threshold": 0.55,
-      "replaced_labelled": 36,
-      "correct_labelled": 19,
-      "weighted_precision": 0.5277777777777778,
+      "replaced_labelled": 52,
+      "correct_labelled": 25,
+      "weighted_precision": 0.4807692307692308,
       "unweighted_precision_ci95": [
-        0.3700567162693947,
-        0.6801420709279067
+        0.35103894702884453,
+        0.6131454602947278
       ]
     },
     {
       "threshold": 0.72,
+      "replaced_labelled": 51,
+      "correct_labelled": 25,
+      "weighted_precision": 0.49019607843137253,
+      "unweighted_precision_ci95": [
+        0.35857262142306195,
+        0.623193045515904
+      ]
+    },
+    {
+      "threshold": 0.79,
+      "replaced_labelled": 45,
+      "correct_labelled": 24,
+      "weighted_precision": 0.5333333333333333,
+      "unweighted_precision_ci95": [
+        0.3907720886241046,
+        0.6706509605798527
+      ]
+    },
+    {
+      "threshold": 0.8,
+      "replaced_labelled": 44,
+      "correct_labelled": 24,
+      "weighted_precision": 0.5454545454545454,
+      "unweighted_precision_ci95": [
+        0.4006593217065349,
+        0.6829499221314639
+      ]
+    },
+    {
+      "threshold": 0.82,
+      "replaced_labelled": 43,
+      "correct_labelled": 24,
+      "weighted_precision": 0.5581395348837209,
+      "unweighted_precision_ci95": [
+        0.4110735806551171,
+        0.6956691437607867
+      ]
+    },
+    {
+      "threshold": 0.83,
+      "replaced_labelled": 41,
+      "correct_labelled": 22,
+      "weighted_precision": 0.5365853658536586,
+      "unweighted_precision_ci95": [
+        0.38746215345974366,
+        0.6794400088181413
+      ]
+    },
+    {
+      "threshold": 0.84,
+      "replaced_labelled": 40,
+      "correct_labelled": 21,
+      "weighted_precision": 0.525,
+      "unweighted_precision_ci95": [
+        0.37497106853929735,
+        0.6706477044981831
+      ]
+    },
+    {
+      "threshold": 0.85,
+      "replaced_labelled": 39,
+      "correct_labelled": 20,
+      "weighted_precision": 0.5128205128205128,
+      "unweighted_precision_ci95": [
+        0.3619910864569657,
+        0.661350712168669
+      ]
+    },
+    {
+      "threshold": 0.86,
+      "replaced_labelled": 38,
+      "correct_labelled": 20,
+      "weighted_precision": 0.5263157894736842,
+      "unweighted_precision_ci95": [
+        0.37258710742710854,
+        0.6752122119105841
+      ]
+    },
+    {
+      "threshold": 0.87,
       "replaced_labelled": 35,
       "correct_labelled": 19,
       "weighted_precision": 0.5428571428571428,
@@ -55,47 +130,37 @@
       ]
     },
     {
-      "threshold": 0.8,
-      "replaced_labelled": 31,
+      "threshold": 0.88,
+      "replaced_labelled": 33,
       "correct_labelled": 19,
-      "weighted_precision": 0.6129032258064516,
+      "weighted_precision": 0.5757575757575758,
       "unweighted_precision_ci95": [
-        0.4382380114113197,
-        0.7626712464872843
+        0.4080697369146003,
+        0.7276464100497011
       ]
     },
     {
-      "threshold": 0.82,
-      "replaced_labelled": 30,
-      "correct_labelled": 19,
-      "weighted_precision": 0.6333333333333333,
+      "threshold": 0.9,
+      "replaced_labelled": 32,
+      "correct_labelled": 18,
+      "weighted_precision": 0.5625,
       "unweighted_precision_ci95": [
-        0.45513246433604937,
-        0.7812629779598231
+        0.3932530203122613,
+        0.7183491403055682
       ]
     },
     {
-      "threshold": 0.83,
+      "threshold": 0.92,
       "replaced_labelled": 28,
-      "correct_labelled": 17,
-      "weighted_precision": 0.6071428571428571,
-      "unweighted_precision_ci95": [
-        0.42408726034906297,
-        0.7643454817241996
-      ]
-    },
-    {
-      "threshold": 0.84,
-      "replaced_labelled": 27,
       "correct_labelled": 16,
-      "weighted_precision": 0.5925925925925926,
+      "weighted_precision": 0.5714285714285714,
       "unweighted_precision_ci95": [
-        0.4072638305536409,
-        0.7548548662714265
+        0.390704789856154,
+        0.7349170381926877
       ]
     },
     {
-      "threshold": 0.85,
+      "threshold": 0.93,
       "replaced_labelled": 26,
       "correct_labelled": 15,
       "weighted_precision": 0.5769230769230769,
@@ -105,87 +170,47 @@
       ]
     },
     {
-      "threshold": 0.86,
-      "replaced_labelled": 25,
-      "correct_labelled": 15,
-      "weighted_precision": 0.6,
-      "unweighted_precision_ci95": [
-        0.40739127785127344,
-        0.7659694233580909
-      ]
-    },
-    {
-      "threshold": 0.87,
-      "replaced_labelled": 23,
-      "correct_labelled": 14,
-      "weighted_precision": 0.6086956521739131,
-      "unweighted_precision_ci95": [
-        0.4078517960374599,
-        0.7784262201761787
-      ]
-    },
-    {
-      "threshold": 0.88,
-      "replaced_labelled": 22,
-      "correct_labelled": 14,
-      "weighted_precision": 0.6363636363636364,
-      "unweighted_precision_ci95": [
-        0.4295134934371804,
-        0.802670272273921
-      ]
-    },
-    {
-      "threshold": 0.9,
-      "replaced_labelled": 21,
-      "correct_labelled": 13,
-      "weighted_precision": 0.6190476190476191,
-      "unweighted_precision_ci95": [
-        0.40878295815501514,
-        0.7924923220201749
-      ]
-    },
-    {
-      "threshold": 0.92,
-      "replaced_labelled": 17,
-      "correct_labelled": 11,
-      "weighted_precision": 0.6470588235294118,
-      "unweighted_precision_ci95": [
-        0.4129996672121182,
-        0.826905138560951
-      ]
-    },
-    {
-      "threshold": 0.93,
-      "replaced_labelled": 16,
-      "correct_labelled": 11,
-      "weighted_precision": 0.6875,
-      "unweighted_precision_ci95": [
-        0.4440393186673406,
-        0.8583556494803894
-      ]
-    },
-    {
       "threshold": 0.94,
-      "replaced_labelled": 15,
-      "correct_labelled": 11,
-      "weighted_precision": 0.7333333333333333,
+      "replaced_labelled": 23,
+      "correct_labelled": 15,
+      "weighted_precision": 0.6521739130434783,
       "unweighted_precision_ci95": [
-        0.4804911034231324,
-        0.8910272389681718
+        0.4488997690689164,
+        0.8118894536301776
       ]
     },
     {
       "threshold": 0.95,
-      "replaced_labelled": 13,
-      "correct_labelled": 10,
-      "weighted_precision": 0.7692307692307693,
+      "replaced_labelled": 19,
+      "correct_labelled": 13,
+      "weighted_precision": 0.6842105263157895,
       "unweighted_precision_ci95": [
-        0.49743126004873084,
-        0.918206209075343
+        0.4601001017506463,
+        0.846358289955714
       ]
     },
     {
       "threshold": 0.96,
+      "replaced_labelled": 15,
+      "correct_labelled": 12,
+      "weighted_precision": 0.8,
+      "unweighted_precision_ci95": [
+        0.5481406466534955,
+        0.9295257935638959
+      ]
+    },
+    {
+      "threshold": 0.97,
+      "replaced_labelled": 12,
+      "correct_labelled": 11,
+      "weighted_precision": 0.9166666666666666,
+      "unweighted_precision_ci95": [
+        0.6461140782014047,
+        0.9851352905492264
+      ]
+    },
+    {
+      "threshold": 0.98,
       "replaced_labelled": 11,
       "correct_labelled": 10,
       "weighted_precision": 0.9090909090909091,
@@ -195,42 +220,22 @@
       ]
     },
     {
-      "threshold": 0.97,
-      "replaced_labelled": 10,
-      "correct_labelled": 10,
-      "weighted_precision": 1.0,
-      "unweighted_precision_ci95": [
-        0.7224598312333834,
-        1.0
-      ]
-    },
-    {
-      "threshold": 0.98,
-      "replaced_labelled": 9,
-      "correct_labelled": 9,
-      "weighted_precision": 1.0,
-      "unweighted_precision_ci95": [
-        0.7008472464490407,
-        1.0
-      ]
-    },
-    {
       "threshold": 0.99,
-      "replaced_labelled": 7,
-      "correct_labelled": 7,
+      "replaced_labelled": 8,
+      "correct_labelled": 8,
       "weighted_precision": 1.0,
       "unweighted_precision_ci95": [
-        0.6456611570247934,
+        0.6755843804891231,
         1.0
       ]
     },
     {
       "threshold": 1.0,
-      "replaced_labelled": 3,
-      "correct_labelled": 3,
+      "replaced_labelled": 4,
+      "correct_labelled": 4,
       "weighted_precision": 1.0,
       "unweighted_precision_ci95": [
-        0.43849391955098227,
+        0.5100999795960008,
         1.0
       ]
     }
@@ -238,6 +243,7 @@
   "rows": [
     {
       "id": "247185cd-f9f7-4019-8d07-516e927dd41e",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -258,6 +264,7 @@
     },
     {
       "id": "27f277f4-a81b-4516-aa79-e29bdb723baa",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -273,6 +280,7 @@
     },
     {
       "id": "39f21519-1501-41ce-bf18-584c960845ea",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -286,6 +294,7 @@
     },
     {
       "id": "542bf331-6b21-4d9b-88f6-ec166edf9153",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -301,6 +310,7 @@
     },
     {
       "id": "648ee8e9-e87a-4eff-88e1-20c68cd16fc0",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -319,6 +329,7 @@
     },
     {
       "id": "738453a0-c7eb-4e1b-b680-f691ad45561b",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -334,6 +345,7 @@
     },
     {
       "id": "7650d0ad-1f9c-41ea-acf0-b44a973ebcd6",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -348,6 +360,7 @@
     },
     {
       "id": "782885d3-950d-4fb8-85f6-614822293926",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -362,6 +375,7 @@
     },
     {
       "id": "80303c02-94d6-46d9-8345-648b025d7a60",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -382,6 +396,7 @@
     },
     {
       "id": "95fb29eb-66f4-4256-8729-8498a6fb77d8",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -400,6 +415,7 @@
     },
     {
       "id": "9868e1f7-2faf-4caf-a72a-a15b7b1be9e6",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -414,6 +430,7 @@
     },
     {
       "id": "b2f2bc02-a60c-40a2-9339-275f1b734761",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -427,6 +444,7 @@
     },
     {
       "id": "b5f2e88f-614d-4d31-a83e-d367b5c81cc1",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -445,6 +463,7 @@
     },
     {
       "id": "b93c6353-e028-4006-bf1d-4f257fdcef81",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -465,6 +484,7 @@
     },
     {
       "id": "bd1eb6df-a77d-463b-aed1-c78533e6eac2",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -478,6 +498,7 @@
     },
     {
       "id": "e998a383-e1aa-485e-b5b5-3fc0d4961d79",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -495,6 +516,7 @@
     },
     {
       "id": "eaa61d0c-0ad0-4cc0-938a-f36f49bfa05e",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -510,6 +532,7 @@
     },
     {
       "id": "efbfebc0-6898-464d-8e38-e421eee42c3f",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -526,6 +549,7 @@
     },
     {
       "id": "fc98d727-75b0-463e-94c4-4a55ba8dea31",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -541,6 +565,7 @@
     },
     {
       "id": "fef39e6c-93f9-4193-9fae-45b8afaab504",
+      "frame": "1",
       "stratum": "A",
       "weight": 3.85,
       "choice": null,
@@ -559,6 +584,7 @@
     },
     {
       "id": "19c65b54-c3fc-4eed-94c3-b2a87080d830",
+      "frame": "1",
       "stratum": "B",
       "weight": 1.0,
       "choice": "Australian car dealerships",
@@ -575,6 +601,7 @@
     },
     {
       "id": "1af64a9c-9102-4c4a-8631-650cfba29c46",
+      "frame": "1",
       "stratum": "B",
       "weight": 1.0,
       "choice": "Ghost criminal messaging app",
@@ -589,6 +616,7 @@
     },
     {
       "id": "aa0021cc-f4ff-4f8c-98ea-78f2c5a750bb",
+      "frame": "1",
       "stratum": "B",
       "weight": 1.0,
       "choice": "cPanel, L.L.C.",
@@ -609,6 +637,7 @@
     },
     {
       "id": "d7add526-f7e6-4011-8e19-57b1f3eccb88",
+      "frame": "1",
       "stratum": "B",
       "weight": 1.0,
       "choice": "Services Australia",
@@ -625,6 +654,7 @@
     },
     {
       "id": "da9b4a4d-8cd9-4288-89e4-a0a7bf38ae06",
+      "frame": "1",
       "stratum": "B",
       "weight": 1.0,
       "choice": "Navman Wireless Australia Pty Limited",
@@ -643,6 +673,7 @@
     },
     {
       "id": "00ac6d2a-e89b-4193-a291-99d6a0adcb45",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Medibank Private Limited",
@@ -657,6 +688,7 @@
     },
     {
       "id": "150d8cf4-f285-4e30-9ce0-74b99a2eef48",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Transport for NSW",
@@ -670,6 +702,7 @@
     },
     {
       "id": "27f90993-044e-4a6d-b49a-7d2343231c7f",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Sri Lanka",
@@ -686,6 +719,7 @@
     },
     {
       "id": "461943aa-92fa-44ab-9370-6b62e836f5fe",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "State of Queensland",
@@ -700,6 +734,7 @@
     },
     {
       "id": "4af0447f-9480-4839-98ad-cc1bdf95379c",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Auto-IT",
@@ -720,6 +755,7 @@
     },
     {
       "id": "4d0f674c-08da-4218-8101-5ad814da7da5",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Department of Education",
@@ -736,6 +772,7 @@
     },
     {
       "id": "54a836f0-96db-4434-a7d8-56902f600799",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "RMS",
@@ -754,6 +791,7 @@
     },
     {
       "id": "57cf4880-c110-48ff-8893-464196ea6612",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Australian target",
@@ -767,6 +805,7 @@
     },
     {
       "id": "703a33c9-652f-4274-96cd-3795fb74c598",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Samoans in Australia",
@@ -781,6 +820,7 @@
     },
     {
       "id": "7d8b0f5f-b85b-444f-b6ff-37431193cc6e",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "The Good Guys",
@@ -796,6 +836,7 @@
     },
     {
       "id": "7df2e906-afd6-4caf-8f9c-89e7cabc7e4d",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Australian networks",
@@ -810,6 +851,7 @@
     },
     {
       "id": "8500d9ae-7710-4d69-b637-8066d9343d66",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Australian government services",
@@ -824,6 +866,7 @@
     },
     {
       "id": "9d5654da-1128-433c-8a7e-451c35876648",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Department for Education, Children and Young People, Tasmania",
@@ -843,6 +886,7 @@
     },
     {
       "id": "aef97dac-596a-423a-bf0b-9095219831ae",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Latitude Financial Services Pty Ltd",
@@ -856,6 +900,7 @@
     },
     {
       "id": "b46f16b8-75b3-44c6-bfd0-806a23430c3f",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Goa Digital",
@@ -872,6 +917,7 @@
     },
     {
       "id": "bbe69fad-460e-4790-a4e8-18c765b4390c",
+      "frame": "1",
       "stratum": "C",
       "weight": 1.0,
       "choice": "Parliament of Australia",
@@ -886,6 +932,7 @@
     },
     {
       "id": "086c2b36-0bc5-4532-a5a3-2c9577c9c330",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Sold RE PTY LTD",
@@ -900,6 +947,7 @@
     },
     {
       "id": "0cb0dd62-58c9-4d47-b094-1a6c1c4505af",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "NSW Health",
@@ -915,6 +963,7 @@
     },
     {
       "id": "2431d506-0c75-45c3-9d6e-9148884702f7",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Toll Holdings Limited",
@@ -928,6 +977,7 @@
     },
     {
       "id": "376facf9-af9a-44a6-94dc-65372742a81c",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Adobe Commerce merchants",
@@ -942,6 +992,7 @@
     },
     {
       "id": "47cb4689-9e48-498d-bb88-445a5f468c3e",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Transport for NSW",
@@ -956,6 +1007,7 @@
     },
     {
       "id": "650f680d-9490-4293-8e54-2e7fecc4dc62",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Needlework Tours",
@@ -969,6 +1021,7 @@
     },
     {
       "id": "69d6372d-b771-42a3-97f7-0f849d657187",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "the gym's booking API",
@@ -983,6 +1036,7 @@
     },
     {
       "id": "6f05f28e-5652-451c-a714-534f9dc1c9c4",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Services Australia",
@@ -997,6 +1051,7 @@
     },
     {
       "id": "8412673e-45e2-489f-b5cc-de8e6b29f297",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "a South Australian woman",
@@ -1016,6 +1071,7 @@
     },
     {
       "id": "938493fc-1f43-43db-8879-516c880d43a0",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Department of Health (Western Australia)",
@@ -1029,6 +1085,7 @@
     },
     {
       "id": "aa8ba783-e9a7-44ee-a4aa-deaebcfb2399",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "YOUR COMMUNITY HEALTH",
@@ -1042,6 +1099,7 @@
     },
     {
       "id": "b3516ce9-0028-4d35-887d-68c3df36a63e",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Spectrum Medical Imaging",
@@ -1057,6 +1115,7 @@
     },
     {
       "id": "c65bcfd9-779c-4680-9bb1-8e49dc695b2c",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "TMA Group of Companies Pty Ltd",
@@ -1072,6 +1131,7 @@
     },
     {
       "id": "ed134a6e-47f0-4b5f-9815-1d3cd312a0a0",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "five Australian victims",
@@ -1089,6 +1149,7 @@
     },
     {
       "id": "f1100e07-7152-4e63-b20b-e951bc170b59",
+      "frame": "1",
       "stratum": "D",
       "weight": 1.0,
       "choice": "Allens Linklaters",
@@ -1099,6 +1160,1276 @@
       "candidates": [
         "Allens Linklaters"
       ]
+    },
+    {
+      "id": "126a1ec1-ba13-4919-ae65-34d38b86e3f7",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Palo Alto",
+        "Shadowserver Foundation",
+        "Unit 42"
+      ]
+    },
+    {
+      "id": "20b39f2f-b151-49e1-ab92-6149c4172930",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "SonicWall",
+        "Rapid7"
+      ]
+    },
+    {
+      "id": "257e72a8-f342-4c44-90e2-ac5c4c4d1ae8",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Google",
+        "Softpedia",
+        "uptodown",
+        "Check Point"
+      ]
+    },
+    {
+      "id": "29a432e6-5789-4328-a108-d14d2d9a78a1",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "NAB",
+        "Australian Federal Police",
+        "Joint Policing Cybercrime Coordination Centre",
+        "NSW Police",
+        "NSW Police Force Cybercrime Squad",
+        "Strike Force Downstream",
+        "Sydney gold dealership"
+      ]
+    },
+    {
+      "id": "3206edf5-4ea1-43ce-9d85-92b293a20ed4",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Searchlight Cyber",
+        "watchTowr",
+        "Automattic Inc.",
+        "Cyber Daily",
+        "GoDaddy",
+        "VentraIP"
+      ]
+    },
+    {
+      "id": "369389a0-49c7-4ee7-bf5a-c9cef39bd487",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Binance Australia Pty Ltd",
+        "Australian Federal Police",
+        "Joint Policing Cybercrime Coordination Centre",
+        "National Anti-Scam Centre"
+      ]
+    },
+    {
+      "id": "39e0a5ed-799e-4c83-890d-7d62bc8a78dd",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "The Australian Federal Police",
+        "Australian Federal Police",
+        "Royal Thai Military",
+        "Royal Thai Police (RTP)",
+        "Cambodia",
+        "National Anti-Scam Centre"
+      ]
+    },
+    {
+      "id": "3bef20e9-a432-4210-880e-e5690c8bdda6",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "bank",
+        "Australian Federal Police"
+      ]
+    },
+    {
+      "id": "54f267e7-bb01-40fd-aea1-e2c16cdb70dc",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "BMW",
+        "Bridgestone",
+        "Change2Target",
+        "Cyberscoop",
+        "Fortian",
+        "Harrods",
+        "Intellect Systems",
+        "Jaguar Land Rover"
+      ]
+    },
+    {
+      "id": "7d49728e-b548-448d-bbcf-dce6b7943ebf",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Cloudflare",
+        "Automattic Inc.",
+        "Brazil",
+        "Canada",
+        "Germany",
+        "GoDaddy",
+        "India",
+        "Israel"
+      ]
+    },
+    {
+      "id": "81a79e4c-97fa-41f2-a96b-d0e35ddbcd73",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Joint Policing Cybercrime Coordination Centre",
+        "Australian Federal Police",
+        "NSW",
+        "Optus",
+        "Pakistan",
+        "Sydney Local Court"
+      ]
+    },
+    {
+      "id": "892d516d-5af5-4a13-9ff1-150f04ef398b",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australia and New Zealand Banking Group Limited",
+        "ANZ",
+        "Commonwealth Bank of Australia",
+        "NAB",
+        "Westpac",
+        "Australian superannuation funds",
+        "Microsoft"
+      ]
+    },
+    {
+      "id": "90b69c38-2496-4cae-b295-0e4cc5c15346",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "ACCC",
+        "Australian Communications and Media Authority (ACMA)",
+        "National Anti-Scam Centre"
+      ]
+    },
+    {
+      "id": "981d5f0f-4f1d-4617-9a4a-13311c7ede5b",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Cyber Daily",
+        "Google"
+      ]
+    },
+    {
+      "id": "aa6c0178-9814-4275-a6a2-9fd2bfe32a70",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Midland Industries",
+      "candidates": [
+        "Bathurst RSL Club",
+        "CDG Chartered Accounting",
+        "Chadwick Switchboards",
+        "Creative Universe",
+        "DigiGround",
+        "Reddrop Group",
+        "The Frame Group",
+        "Thorndale Foundation"
+      ]
+    },
+    {
+      "id": "be85dfd9-2fcc-44cb-b5db-b50067fa7a8e",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "DrayTek Corporation",
+        "Forescout",
+        "Vedere Labs",
+        "VigorConnect"
+      ]
+    },
+    {
+      "id": "bff26785-f3ef-48bc-a19d-2a3cd3be0a2c",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Automattic Inc.",
+        "GoDaddy",
+        "VentraIP"
+      ]
+    },
+    {
+      "id": "c754e440-7c37-4814-a478-78970a78b90f",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Germany",
+        "Bulgaria",
+        "Canada",
+        "Cyprus",
+        "Serbia",
+        "Switzerland"
+      ]
+    },
+    {
+      "id": "d57aee2c-90a9-45bc-b029-e154fcf6e320",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Boeing",
+        "McGrathNicol",
+        "US government offices",
+        "Ultra Intelligence & Communications"
+      ]
+    },
+    {
+      "id": "e529a1bb-9499-400e-a023-c6ce64b2b800",
+      "frame": "2",
+      "stratum": "2A",
+      "weight": 2.6,
+      "choice": null,
+      "prob": 0.0,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian Federal Police",
+        "National Anti-Scam Centre",
+        "National Bureau of Investigation",
+        "Philippine Presidential Anti-Organized Crime Commission",
+        "ACCC",
+        "Cyber Daily",
+        "Philippines"
+      ]
+    },
+    {
+      "id": "7e96f987-0300-4cc4-a50b-a85d0668d364",
+      "frame": "2",
+      "stratum": "2B",
+      "weight": 1.0,
+      "choice": "Metricon Homes Pty Ltd",
+      "prob": 0.72,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Metricon Homes Pty Ltd",
+        "Australian Construction Company",
+        "Cyble"
+      ]
+    },
+    {
+      "id": "b355242c-8a16-4565-aa4a-028c4497fe1c",
+      "frame": "2",
+      "stratum": "2B",
+      "weight": 1.0,
+      "choice": "South Australian Government",
+      "prob": 0.79,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "Government of South Australia",
+      "candidates": [
+        "Government of South Australia",
+        "South Australian Government"
+      ]
+    },
+    {
+      "id": "dd5e72d9-7296-4e74-950a-e19a68c1f372",
+      "frame": "2",
+      "stratum": "2B",
+      "weight": 1.0,
+      "choice": "Meta Platforms, Inc.",
+      "prob": 0.72,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Meta Platforms",
+      "candidates": [
+        "Meta Platforms, Inc.",
+        "Facebook, Inc.",
+        "ABC News",
+        "IMF Bentham",
+        "Omni Bridgeway",
+        "Sydney Morning Herald",
+        "The Observer"
+      ]
+    },
+    {
+      "id": "053a9852-fdd7-4ae3-b52b-04787b95a260",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Australian Super Funds",
+      "prob": 0.86,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "APRA",
+        "Australian Super Funds",
+        "LexisNexis Risk Solutions"
+      ]
+    },
+    {
+      "id": "4545eb4b-f3d1-4773-b3fa-a9dc47082a9e",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Auto-IT",
+      "prob": 0.93,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Auto-IT",
+        "BIG4",
+        "Discovery Parks",
+        "RMS",
+        "Reflections"
+      ]
+    },
+    {
+      "id": "46d72e62-f95c-4bce-a1aa-2c096c5ffc09",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Australian Super Funds",
+      "prob": 0.94,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian Super Funds",
+        "Cyber Daily",
+        "Trustwave"
+      ]
+    },
+    {
+      "id": "50e55a18-4b00-41c1-a05b-16bf468f4617",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Government",
+      "prob": 0.87,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Government",
+        "Nanyang Technological University",
+        "RSIS",
+        "S. Rajaratnam School of International Studies"
+      ]
+    },
+    {
+      "id": "51717275-266b-4a8a-823d-5bd709f25e7c",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "AustralianSuper",
+      "prob": 0.92,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "AustralianSuper",
+      "candidates": [
+        "AustralianSuper",
+        "Australian Super Funds",
+        "AAP",
+        "ABC News",
+        "Association of Superannuation Funds of Australia (ASFA)",
+        "Australian Retirement",
+        "Hostplus",
+        "Insignia Financial"
+      ]
+    },
+    {
+      "id": "638c7a8b-ee23-4be1-a64e-d1b6379e73c7",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Mackay Sugar",
+      "prob": 0.94,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Mackay Sugar",
+      "candidates": [
+        "Mackay Sugar",
+        "Australian sugar producer"
+      ]
+    },
+    {
+      "id": "da36a79f-7533-4368-aad2-9c4c6cb52f5b",
+      "frame": "2",
+      "stratum": "2C",
+      "weight": 1.0,
+      "choice": "Discord Inc.",
+      "prob": 0.93,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Discord Inc.",
+        "RaidProtect"
+      ]
+    },
+    {
+      "id": "07930c37-f4d4-48e8-ad58-cd4e71d47905",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "LUSH",
+      "prob": 0.95,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Lush",
+      "candidates": [
+        "LUSH",
+        "Cyber Daily"
+      ]
+    },
+    {
+      "id": "5c8c930d-0a42-4c6a-a8ec-b67e3eccf9a7",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "Services Australia",
+      "prob": 1.0,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Services Australia",
+      "candidates": [
+        "Services Australia"
+      ]
+    },
+    {
+      "id": "6380cc92-f41f-4486-a187-aa5eac5c13c8",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "Australian critical infrastructure provider (name not publicly disclosed)",
+      "prob": 0.98,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian critical infrastructure provider (name not publicly disclosed)",
+        "Australian security clearance holder",
+        "Australia\u2019s military"
+      ]
+    },
+    {
+      "id": "76477b8c-37b8-44ac-b2b9-6bb92abfd15a",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "Australian critical infrastructure provider",
+      "prob": 0.95,
+      "right": false,
+      "label": "none_named",
+      "labelled_victim": null,
+      "candidates": [
+        "Australian critical infrastructure provider",
+        "ASIO",
+        "Google Threat Intelligence"
+      ]
+    },
+    {
+      "id": "adafeff2-670d-4559-896f-da706227cca7",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "Mackay Sugar",
+      "prob": 0.96,
+      "right": true,
+      "label": "named",
+      "labelled_victim": "Mackay Sugar",
+      "candidates": [
+        "Mackay Sugar",
+        "Australian sugar producer"
+      ]
+    },
+    {
+      "id": "fe66656e-5989-4ed4-b5a2-ed3e889ed15e",
+      "frame": "2",
+      "stratum": "2D",
+      "weight": 1.0,
+      "choice": "TCL Communications",
+      "prob": 0.96,
+      "right": false,
+      "label": "named",
+      "labelled_victim": "TCL Communication",
+      "candidates": [
+        "Google",
+        "Qihoo 360",
+        "TCL Communications",
+        "Xplora"
+      ]
     }
-  ]
+  ],
+  "labelled_rows": {
+    "fill": [
+      {
+        "id": "247185cd-f9f7-4019-8d07-516e927dd41e",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "27f277f4-a81b-4516-aa79-e29bdb723baa",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "39f21519-1501-41ce-bf18-584c960845ea",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "542bf331-6b21-4d9b-88f6-ec166edf9153",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "648ee8e9-e87a-4eff-88e1-20c68cd16fc0",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "738453a0-c7eb-4e1b-b680-f691ad45561b",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "7650d0ad-1f9c-41ea-acf0-b44a973ebcd6",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "782885d3-950d-4fb8-85f6-614822293926",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "80303c02-94d6-46d9-8345-648b025d7a60",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "95fb29eb-66f4-4256-8729-8498a6fb77d8",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "9868e1f7-2faf-4caf-a72a-a15b7b1be9e6",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "b2f2bc02-a60c-40a2-9339-275f1b734761",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "b5f2e88f-614d-4d31-a83e-d367b5c81cc1",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "b93c6353-e028-4006-bf1d-4f257fdcef81",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "bd1eb6df-a77d-463b-aed1-c78533e6eac2",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "e998a383-e1aa-485e-b5b5-3fc0d4961d79",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "eaa61d0c-0ad0-4cc0-938a-f36f49bfa05e",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "efbfebc0-6898-464d-8e38-e421eee42c3f",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "fc98d727-75b0-463e-94c4-4a55ba8dea31",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "fef39e6c-93f9-4193-9fae-45b8afaab504",
+        "stratum": "A",
+        "weight": 3.85,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "19c65b54-c3fc-4eed-94c3-b2a87080d830",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "1af64a9c-9102-4c4a-8631-650cfba29c46",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "aa0021cc-f4ff-4f8c-98ea-78f2c5a750bb",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "d7add526-f7e6-4011-8e19-57b1f3eccb88",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "da9b4a4d-8cd9-4288-89e4-a0a7bf38ae06",
+        "stratum": "B",
+        "weight": 1.0,
+        "p": 0.55,
+        "positive": false
+      },
+      {
+        "id": "00ac6d2a-e89b-4193-a291-99d6a0adcb45",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "150d8cf4-f285-4e30-9ce0-74b99a2eef48",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": true
+      },
+      {
+        "id": "27f90993-044e-4a6d-b49a-7d2343231c7f",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "461943aa-92fa-44ab-9370-6b62e836f5fe",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "4af0447f-9480-4839-98ad-cc1bdf95379c",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": true
+      },
+      {
+        "id": "4d0f674c-08da-4218-8101-5ad814da7da5",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "54a836f0-96db-4434-a7d8-56902f600799",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "57cf4880-c110-48ff-8893-464196ea6612",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "703a33c9-652f-4274-96cd-3795fb74c598",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.87,
+        "positive": false
+      },
+      {
+        "id": "7d8b0f5f-b85b-444f-b6ff-37431193cc6e",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.83,
+        "positive": true
+      },
+      {
+        "id": "7df2e906-afd6-4caf-8f9c-89e7cabc7e4d",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.8,
+        "positive": false
+      },
+      {
+        "id": "9d5654da-1128-433c-8a7e-451c35876648",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "aef97dac-596a-423a-bf0b-9095219831ae",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "b46f16b8-75b3-44c6-bfd0-806a23430c3f",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "bbe69fad-460e-4790-a4e8-18c765b4390c",
+        "stratum": "C",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": true
+      },
+      {
+        "id": "086c2b36-0bc5-4532-a5a3-2c9577c9c330",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "0cb0dd62-58c9-4d47-b094-1a6c1c4505af",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 1.0,
+        "positive": true
+      },
+      {
+        "id": "2431d506-0c75-45c3-9d6e-9148884702f7",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "376facf9-af9a-44a6-94dc-65372742a81c",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "47cb4689-9e48-498d-bb88-445a5f468c3e",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "650f680d-9490-4293-8e54-2e7fecc4dc62",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "6f05f28e-5652-451c-a714-534f9dc1c9c4",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "8412673e-45e2-489f-b5cc-de8e6b29f297",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "938493fc-1f43-43db-8879-516c880d43a0",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "aa8ba783-e9a7-44ee-a4aa-deaebcfb2399",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 1.0,
+        "positive": true
+      },
+      {
+        "id": "b3516ce9-0028-4d35-887d-68c3df36a63e",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "c65bcfd9-779c-4680-9bb1-8e49dc695b2c",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 1.0,
+        "positive": true
+      },
+      {
+        "id": "ed134a6e-47f0-4b5f-9815-1d3cd312a0a0",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "f1100e07-7152-4e63-b20b-e951bc170b59",
+        "stratum": "D",
+        "weight": 1.0,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "126a1ec1-ba13-4919-ae65-34d38b86e3f7",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "20b39f2f-b151-49e1-ab92-6149c4172930",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "257e72a8-f342-4c44-90e2-ac5c4c4d1ae8",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "29a432e6-5789-4328-a108-d14d2d9a78a1",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "3206edf5-4ea1-43ce-9d85-92b293a20ed4",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "369389a0-49c7-4ee7-bf5a-c9cef39bd487",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "39e0a5ed-799e-4c83-890d-7d62bc8a78dd",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "3bef20e9-a432-4210-880e-e5690c8bdda6",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "54f267e7-bb01-40fd-aea1-e2c16cdb70dc",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "7d49728e-b548-448d-bbcf-dce6b7943ebf",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "81a79e4c-97fa-41f2-a96b-d0e35ddbcd73",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "892d516d-5af5-4a13-9ff1-150f04ef398b",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "90b69c38-2496-4cae-b295-0e4cc5c15346",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "981d5f0f-4f1d-4617-9a4a-13311c7ede5b",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "aa6c0178-9814-4275-a6a2-9fd2bfe32a70",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "be85dfd9-2fcc-44cb-b5db-b50067fa7a8e",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "bff26785-f3ef-48bc-a19d-2a3cd3be0a2c",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "c754e440-7c37-4814-a478-78970a78b90f",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "d57aee2c-90a9-45bc-b029-e154fcf6e320",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "e529a1bb-9499-400e-a023-c6ce64b2b800",
+        "stratum": "2A",
+        "weight": 2.6,
+        "p": null,
+        "positive": false
+      },
+      {
+        "id": "7e96f987-0300-4cc4-a50b-a85d0668d364",
+        "stratum": "2B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "b355242c-8a16-4565-aa4a-028c4497fe1c",
+        "stratum": "2B",
+        "weight": 1.0,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "dd5e72d9-7296-4e74-950a-e19a68c1f372",
+        "stratum": "2B",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "053a9852-fdd7-4ae3-b52b-04787b95a260",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "4545eb4b-f3d1-4773-b3fa-a9dc47082a9e",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "46d72e62-f95c-4bce-a1aa-2c096c5ffc09",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "50e55a18-4b00-41c1-a05b-16bf468f4617",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.87,
+        "positive": false
+      },
+      {
+        "id": "51717275-266b-4a8a-823d-5bd709f25e7c",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.92,
+        "positive": true
+      },
+      {
+        "id": "638c7a8b-ee23-4be1-a64e-d1b6379e73c7",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.94,
+        "positive": true
+      },
+      {
+        "id": "da36a79f-7533-4368-aad2-9c4c6cb52f5b",
+        "stratum": "2C",
+        "weight": 1.0,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "07930c37-f4d4-48e8-ad58-cd4e71d47905",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": true
+      },
+      {
+        "id": "5c8c930d-0a42-4c6a-a8ec-b67e3eccf9a7",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 1.0,
+        "positive": true
+      },
+      {
+        "id": "6380cc92-f41f-4486-a187-aa5eac5c13c8",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "76477b8c-37b8-44ac-b2b9-6bb92abfd15a",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "adafeff2-670d-4559-896f-da706227cca7",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": true
+      },
+      {
+        "id": "fe66656e-5989-4ed4-b5a2-ed3e889ed15e",
+        "stratum": "2D",
+        "weight": 1.0,
+        "p": 0.96,
+        "positive": false
+      }
+    ]
+  }
 }
