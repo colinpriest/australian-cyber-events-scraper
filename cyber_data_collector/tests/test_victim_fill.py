@@ -347,6 +347,52 @@ def test_a_description_is_not_a_victim_candidate_or_a_usable_victim(conn, tmp_pa
     assert roles.victim() is None
 
 
+def test_a_chosen_description_is_judged_first_and_never_filled(conn, tmp_path, monkeypatch):
+    # The 2026-10-30 fills made "Australian sugar producer" a victim: the name had never been judged.
+    text = "An Australian sugar producer was hit by ransomware last week, its systems taken offline."
+    _event(conn, "e1", text, title="Australian sugar producer hit by ransomware")
+    cal = tmp_path / "names_cal.json"
+    cal.write_text(json.dumps({**nj.calibration_identity(), "cutoff": 0.5}), encoding="utf-8")
+    monkeypatch.setattr(nj, "CALIBRATION_PATH", cal)
+    monkeypatch.setattr(nj, "LABELS_PATH", tmp_path / "no_name_labels.csv")
+    monkeypatch.setattr(nj.active_calibration, "__defaults__", (cal, False))
+    monkeypatch.setattr(nj.descriptive_names, "__defaults__", (cal, tmp_path / "no_name_labels.csv", True))
+    monkeypatch.setattr(nj.activate, "__defaults__", (cal, tmp_path / "no_name_labels.csv"))
+    fake = FakeJev(pick="Australian sugar producer", pick_p=0.99, proper={"Australian sugar producer": 0.05})
+    result = vf.fill_victims(conn, apply=True, judge=JevJudge(conn, client=fake),
+                             extractor=_extractor(["Australian sugar producer"]),
+                             calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path))
+    assert result["counts"] == {"unfilled": 1}, result["plans"]
+    assert "description" in result["plans"][0]["reason"]
+    assert fake.asked.count(nj.QUESTION_ID) == 1                     # judged once, then stored
+    assert _role(conn, "e1", "Australian sugar producer") is None
+
+
+def test_an_earlier_fill_of_a_description_is_undone_once(conn, tmp_path, monkeypatch):
+    text = "An Australian sugar producer was hit by ransomware last week, its systems taken offline."
+    _event(conn, "e1", text, title="Australian sugar producer hit by ransomware", links=[("OpenAI", "bystander")])
+    nolabels = tmp_path / "no_name_labels.csv"
+    none_cal = tmp_path / "no_names_cal.json"
+    monkeypatch.setattr(nj.active_calibration, "__defaults__", (none_cal, False))
+    monkeypatch.setattr(nj.descriptive_names, "__defaults__", (none_cal, nolabels, True))
+    monkeypatch.setattr(nj.activate, "__defaults__", (none_cal, nolabels))
+    fake = FakeJev(pick="Australian sugar producer", pick_p=0.99, proper={"Australian sugar producer": 0.05})
+    kw = dict(judge=JevJudge(conn, client=fake), extractor=_extractor(["Australian sugar producer"]),
+              calibration_path=_calibration(tmp_path), labels_path=_labels(tmp_path))
+    assert vf.fill_victims(conn, apply=True, **kw)["counts"] == {"filled": 1}   # no name verdicts yet: filled
+    assert _role(conn, "e1", "Australian sugar producer") == "victim"
+    cal = tmp_path / "names_cal.json"
+    cal.write_text(json.dumps({**nj.calibration_identity(), "cutoff": 0.5}), encoding="utf-8")
+    monkeypatch.setattr(nj.active_calibration, "__defaults__", (cal, False))
+    monkeypatch.setattr(nj.descriptive_names, "__defaults__", (cal, nolabels, True))
+    monkeypatch.setattr(nj.activate, "__defaults__", (cal, nolabels))
+    result = vf.fill_victims(conn, apply=True, **kw)
+    assert [f["applied"] for f in result["description_fills"]] == [True]
+    assert _role(conn, "e1", "Australian sugar producer") is None and _role(conn, "e1", "OpenAI") == "bystander"
+    assert conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents").fetchone()[0] is None
+    assert vf.fill_victims(conn, apply=True, **kw)["description_fills"] == []    # done once
+
+
 # ------------------------------------------------------------------ role classification
 
 def test_the_classifier_is_shown_the_members_descriptions_when_the_event_has_no_summary(conn):
