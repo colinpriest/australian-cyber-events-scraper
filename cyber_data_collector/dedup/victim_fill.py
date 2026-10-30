@@ -298,6 +298,21 @@ def _named_in_records(conn: sqlite3.Connection, dedup_id: str, candidate: Dict[s
     return any(named(conn, dedup_id, spelling) for spelling in [candidate["name"], *candidate.get("spellings", [])])
 
 
+def _is_description(conn: sqlite3.Connection, name: str, title: str, judge) -> bool:
+    """Does the proper-name judgement call ``name`` a description? A name with no verdict yet is judged first.
+
+    Candidates come from Perplexity's victim names and text extractions as well as entity links, and only some
+    of those had ever been judged, so an unjudged description passed as a name: the 2026-10-30 fills made
+    "Australian sugar producer" and "an Australian SaaS company" victims. Nothing is adopted without a verdict.
+    """
+    from cyber_data_collector.dedup import name_judgement
+
+    if name.strip().lower() not in name_judgement.stored_probabilities(conn):
+        name_judgement.judge_names(conn, [(name, name_judgement.sentence_for(conn, name) or title)], judge=judge)
+        name_judgement.activate(conn)
+    return name_judgement.is_descriptive_name(name)
+
+
 def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: Optional[Dict[str, Any]],
                labels: Dict[str, Dict[str, str]], judge, extractor=None, escalation_client=None,
                use_text: bool = True, stored_text_only: bool = False,
@@ -346,6 +361,8 @@ def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: 
                               f"{cal['cutoff']:.2f})")
         elif not _named_in_records(conn, did, by_name[choice["name"]]):
             plan["reason"] = f"{choice['name']!r} is not named in the records' text"
+        elif _is_description(conn, choice["name"], event.get("title") or "", judge):
+            plan["reason"] = f"{choice['name']!r} is a description, not the name of one organisation"
         else:
             plan.update(action="filled", new_victim=choice["name"], chosen=by_name[choice["name"]],
                         reason=f"chosen among {len(choice['candidates'])} evidence candidate(s)")
@@ -395,6 +412,64 @@ def apply_fills(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal: 
     return batch_id
 
 
+def undo_description_fills(conn: sqlite3.Connection, judge, apply: bool = False) -> List[Dict[str, str]]:
+    """Undo every fill whose victim the proper-name judgement calls a description (judged first if it never was).
+
+    The fill put a description in place of a name, so its basis is gone whatever the fill step's calibration
+    says. The event's roles go back to those recorded before the fill (``roles_before_json``: links the fill
+    added are removed, roles it changed restored) and its scalar victim to the one in the fill's snapshot; a
+    ``reversed`` row is written so it is done once. An event whose roles changed since the fill is left and
+    reported - another step has acted on it. Returns the fills found (``applied`` says whether undone).
+    """
+    ensure_schema(conn)
+    reversed_batches = {(r[0], r[1]) for r in conn.execute(
+        "SELECT batch_id, deduplicated_event_id FROM VictimFillActions WHERE action = 'reversed'")}
+    out: List[Dict[str, str]] = []
+    rows = conn.execute("SELECT batch_id, deduplicated_event_id, new_victim, roles_before_json FROM VictimFillActions "
+                        "WHERE action = 'filled' ORDER BY rowid").fetchall()
+    for batch_id, did, victim, roles_before in rows:
+        if (batch_id, did) in reversed_batches:
+            continue
+        title = (conn.execute("SELECT title FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                              (did,)).fetchone() or [""])[0]
+        if not _is_description(conn, victim, title or "", judge):
+            continue
+        entry = {"batch_id": batch_id, "deduplicated_event_id": did, "victim": victim, "applied": False}
+        out.append(entry)
+        filled_entity = conn.execute(
+            "SELECT dee.entity_id FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id "
+            "WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim' AND v.entity_name = ?",
+            (did, victim)).fetchone()
+        if filled_entity is None:
+            entry["skipped"] = "the filled victim is no longer a victim role (changed since the fill)"
+            continue
+        if not apply:
+            continue
+        before = {int(e): role for e, role in json.loads(roles_before or "[]")}
+        current = [int(r[0]) for r in conn.execute(
+            "SELECT entity_id FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ?", (did,))]
+        for entity_id in current:
+            if entity_id not in before:
+                conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? AND entity_id = ?",
+                             (did, entity_id))
+        for entity_id, role in before.items():
+            conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = ? WHERE deduplicated_event_id = ? "
+                         "AND entity_id = ?", (role, did, entity_id))
+        snap = conn.execute("SELECT payload_json FROM DedupSnapshots WHERE batch_id = ? AND deduplicated_event_id = ? "
+                            "ORDER BY rowid LIMIT 1", (batch_id, did)).fetchone()
+        scalar = json.loads(snap[0])["event"].get("victim_organization_name") if snap else None
+        conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ?",
+                     (scalar, did))
+        conn.execute(
+            "INSERT INTO VictimFillActions (batch_id, deduplicated_event_id, action, new_victim, reason, created_at) "
+            "VALUES (?, ?, 'reversed', ?, ?, ?)",
+            (batch_id, did, victim, "the filled victim is a description, not the name of one organisation",
+             utc_now_iso()))
+        entry["applied"] = True
+    conn.commit()
+    return out
+
+
 def stored_candidates(conn: sqlite3.Connection, only_event: Optional[str] = None) -> List[Dict[str, Any]]:
     """Each eligible event with the candidates its *stored* evidence gives; asks no model, writes nothing.
 
@@ -437,7 +512,10 @@ def fill_victims(conn: sqlite3.Connection, apply: bool = False, judge=None, esca
     owned = judge is None
     judge = judge or JevJudge(conn)
     errors: List[Dict[str, str]] = []
+    from cyber_data_collector.dedup import name_judgement
+    name_judgement.activate(conn)          # the current verdicts, whatever an earlier step loaded
     try:
+        undone = undo_description_fills(conn, judge, apply=apply)
         events = victimless_events(conn, only_event)
         plans = plan_fills(conn, events, cal, labels, judge, extractor=extractor, escalation_client=escalation_client,
                            use_text=use_text, stored_text_only=stored_text_only, errors=errors)
@@ -448,5 +526,6 @@ def fill_victims(conn: sqlite3.Connection, apply: bool = False, judge=None, esca
     counts = Counter(p["action"] for p in plans)
     return {"eligible": len(events), "calibrated": cal is not None, "cutoff": cal["cutoff"] if cal else None,
             "applied": batch is not None, "batch_id": batch, "counts": dict(counts), "errors": errors,
+            "description_fills": undone,
             "plans": [{**{k: v for k, v in p.items() if k not in ("chosen", "candidates")},
                        "candidates": [c["name"] for c in p["candidates"]]} for p in plans]}

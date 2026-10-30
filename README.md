@@ -1343,7 +1343,11 @@ python scripts/dedup_admin.py roles-status                  # now also: older ro
   only labelled events are filled. It is a separate step from attribution because its cut-off is a different
   question over a different population; `check-victim-attribution` uses the same candidates (`EVIDENCE_VERSION`
   `victim-evidence-v2`: its calibration needs `recalibrate`, a cheap re-run), and a recorded victim an attacker field
-  names carries a note to the judgement.
+  names carries a note to the judgement. A chosen victim is adopted only with a proper-name verdict: a name never
+  judged is judged first (candidates come from Perplexity's victim names and text extractions too, which were not
+  all judged - the 2026-10-30 fills made "Australian sugar producer" a victim), and a description is never filled.
+  An earlier fill whose victim is now judged a description is undone at the start of every run (roles back to
+  `roles_before_json`, the victim column back to the fill's snapshot; a `reversed` row in `VictimFillActions`).
 * **Proper names** (`dedup/name_judgement.py`). Whether "government agency in Australia" or "Australian Government
   Department" is a description rather than a name is **not** decided by a word list or by capitalisation: Jev gives
   P(this identifies one specific organisation) for the name and the sentence it came from (`judge-names`, stored,

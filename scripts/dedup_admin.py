@@ -3729,6 +3729,9 @@ def cmd_fill_victims(args) -> int:
     state = (f"calibrated cut-off {result['cutoff']}" if result["calibrated"]
              else "REPORT ONLY: no calibration for these models, questions and evidence (labelled events only)")
     print(f"{verb}: {result['counts']} of {result['eligible']} eligible event(s); {state}; findings in {out}")
+    for f in result.get("description_fills", []):
+        what = "undone" if f["applied"] else (f.get("skipped") or "would be undone (pass --apply)")
+        print(f"  earlier fill of a description {f['victim']!r} ({f['deduplicated_event_id'][:8]}): {what}")
     if result["errors"]:
         for e in result["errors"]:
             print(f"ERROR: {e['deduplicated_event_id'][:8]} left undecided: {e['error']}", file=sys.stderr)
