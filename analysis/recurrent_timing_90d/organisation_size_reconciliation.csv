@@ -1,8 +1,4 @@
 entity_id,entity_name,size_variants,size_variant_bands,representative_size_estimate,org_size,size_source_entity_id,size_rule,size_conflict,changed_from_representative
-160,Optus,2,Optus=HUGE|Optus Stadium=LARGE,HUGE,HUGE,160,higher size_confidence,True,False
 391,University of Adelaide,2,University of Adelaide=LARGE|The University of Adelaide=LARGE,LARGE,LARGE,24269,higher size_confidence,False,False
-416,Department of Customer Service NSW,2,Department of Customer Service NSW=HUGE|ANZ customer=UNKNOWN,HUGE,HUGE,416,known band over UNKNOWN,False,False
-591,Nissan,2,Nissan=HUGE|Nissan Oceania=HUGE,HUGE,HUGE,591,higher size_confidence,False,False
-1041,Department of Defence,2,Department of Defence=HUGE|Defence Forces=HUGE,HUGE,HUGE,1041,higher size_confidence,False,False
 5289,Bunnings Group Limited,2,Bunnings Group Limited=HUGE|Bunnings customers=UNKNOWN,HUGE,HUGE,5289,known band over UNKNOWN,False,False
 5902,TMA Group of Companies,2,TMA Group of Companies=UNKNOWN|TMA=SMALL,UNKNOWN,SMALL,29331,known band over UNKNOWN,False,True
