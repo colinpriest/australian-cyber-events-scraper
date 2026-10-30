@@ -103,6 +103,18 @@ and never acted on, and Jev's raw score is not used in its place.
    choose-then-test procedure is the out-of-sample precision. Written to
    `evaluation/supplier_victim_calibration.json` with the question versions
    and models. A question with no cut-off reaching 95% stays report-only.
+5. `extend --kind K --stratum S --add N --round R --seed X [--judge]` - when a
+   cut-off rests on too few labelled actions for the deployment rule, adds up
+   to N items to one stratum: a seeded random draw from the current
+   candidates that Jev's own score (on their current evidence) puts in the
+   stratum and that are not sampled yet (`--judge` asks Jev for candidates
+   with no such score; without it the step refuses, since placing only the
+   scored ones would bias the draw). Old and new items of the stratum are one
+   random sample of it and all weigh `population / items` (population: the
+   stratum's size at sampling, or more if it now holds more); other strata
+   are unchanged. The new items are judged in full (final scores stored) and
+   written with `round` R; `packet --round R` is the blind packet of those
+   items only.
 
 `--apply` reads the labels and the calibration first and **refuses (exit 2)
 and says why** when the labels are missing, unreadable or malformed, or the
