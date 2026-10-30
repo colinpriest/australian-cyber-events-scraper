@@ -22,8 +22,10 @@ registration date: keep them there across reruns.
 
 ``--as-known-at DATE`` reconstructs the incident links, victims, dates, size bands and record membership from the
 recorded history of when each became known (``cyber_data_collector/dedup/input_history.py``) instead of reading
-today's. Inputs the history does not reach back to are the earliest recorded state and are listed in the report.
-The observation cutoff then defaults to DATE, and may not be later than it.
+today's. Rows the history does not reach back to have unknown state at DATE: they hold the state recorded when
+tracking began as a stand-in, are listed in ``InputHistoryUnknown`` and counted in the report, and
+``--history-unknown exclude`` drops the victim rows resting on them. The observation cutoff then defaults to DATE,
+and may not be later than it.
 """
 from __future__ import annotations
 
@@ -44,7 +46,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.analyze_recurrent_timing import (
-    UNRESOLVED_ATTRIBUTION_POLICIES, apply_attribution_policy, last_ingest_date, load_victim_events, parse_date,
+    HISTORY_UNKNOWN_POLICIES, UNRESOLVED_ATTRIBUTION_POLICIES, apply_attribution_policy, apply_history_unknown_policy,
+    last_ingest_date, load_victim_events, parse_date,
 )
 from cyber_data_collector.publication.snapshot import AnalysisInput
 from scripts.recurrence_extended import history_reconstruction, linkage_supplier, sequence_bias, timing_precision
@@ -156,7 +159,8 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
                  bootstrap: int = 200, date_draws: int = 100,
                  seed: int = 20261027, unresolved_attributions: str = "include",
                  analysis_input: AnalysisInput | None = None,
-                 snapshot_id: str | None = None, as_known_at: str | date | None = None) -> dict[str, Any]:
+                 snapshot_id: str | None = None, as_known_at: str | date | None = None,
+                 history_unknown: str = "include") -> dict[str, Any]:
     """Run every extended analysis on one snapshot.
 
     The snapshot is ``analysis_input`` (shared with the caller's other analyses), else the retained
@@ -171,9 +175,15 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
     ``unresolved_attributions`` keeps (``include``) or drops (``exclude``)
     victim rows the calibrated attribution check left unresolved; the counts
     are in the summary's ``unresolved_attributions`` either way.
+
+    ``history_unknown`` does the same, in a reconstruction, for victim rows resting on an input whose state at
+    ``as_known_at`` is unknown (``InputHistoryUnknown``); counted in the summary's ``history_unknown``.
     """
     if bootstrap < 1 or date_draws < 1:
         raise ValueError("bootstrap and date draws must both be positive")
+    if history_unknown != "include" and as_known_at is None and (analysis_input is None
+                                                                 or analysis_input.reconstruction is None):
+        raise ValueError("history_unknown='exclude' needs as_known_at: nothing is unknown without a reconstruction")
     out_dir.mkdir(parents=True, exist_ok=True)
     owned = analysis_input is None
     inputs = analysis_input or AnalysisInput.open(db_path, snapshot_id)
@@ -194,6 +204,7 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         raw_events = add_first_discovery(load_victim_events(snapshot), snapshot)
         events, coverage = observed_by(raw_events, end)
         events, unresolved = apply_attribution_policy(events, unresolved_attributions)
+        events, unknown_inputs = apply_history_unknown_policy(events, history_unknown)
         if events.empty:
             raise RuntimeError("No victim events were available by the analysis cutoff")
         reference = size_reference(events)
@@ -214,6 +225,7 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         inputs.record(out_dir, analysis="extended recurrence analyses", censor_date=end.isoformat(),
                       seed=seed, bootstrap_replicates=bootstrap, date_draws=date_draws,
                       unresolved_attributions=unresolved_attributions,
+                      **({"history_unknown": history_unknown} if reconstruction is not None else {}),
                       **({"frozen_cohort_check": registration} if registration else {}))
     finally:
         if owned:
@@ -232,6 +244,9 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         "history_reconstruction": reconstruction.to_dict() if reconstruction else None,
         "frozen_cohort_check": registration or None,
         "unresolved_attributions": unresolved,
+        "history_unknown": ({**unknown_inputs, "rows unknown by table (InputHistoryUnknown)":
+                             {t: sum(r.values()) for t, r in reconstruction.unknown.items()}}
+                            if reconstruction is not None else None),
         "organisation_size_reference": reference.to_dict(orient="records"),
         "analyses": results,
     }
@@ -265,6 +280,13 @@ def run_analysis(db_path: Path, out_dir: Path, censor_date: date | None = None,
         f"{unresolved['events with an unresolved attribution']} incident(s), "
         f"{'included' if unresolved['policy'] == 'include' else 'excluded'} here "
         f"(--unresolved-attributions).", "",
+        *([f"Victim attributions resting on an input whose state at --as-known-at is unknown (it predates the "
+           f"recorded history; the state recorded when tracking began stands in): "
+           f"{unknown_inputs['victim-event attributions with unknown inputs at the cutoff']} on "
+           f"{unknown_inputs['events with unknown inputs']} incident(s) and "
+           f"{unknown_inputs['organisations with unknown inputs']} organisation(s), "
+           f"{'included' if history_unknown == 'include' else 'excluded'} here (--history-unknown).", ""]
+          if reconstruction is not None else []),
         history_reconstruction.LIMITATION_WITH_RECONSTRUCTION if reconstruction
         else history_reconstruction.LIMITATION_WITHOUT_RECONSTRUCTION, "",
     ]
@@ -295,7 +317,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--as-known-at", default=None,
                         help="Reconstruct the incident links, victims, dates, size bands and record membership as "
                              "recorded by this date (YYYY-MM-DD, end of that UTC day, or YYYY-MM-DD HH:MM[:SS]) "
-                             "instead of reading today's; inputs the history does not reach are listed in the report")
+                             "instead of reading today's; a time is UTC unless it carries an offset such as +10:00. "
+                             "Rows the history does not reach are unknown and counted in the report")
+    parser.add_argument("--history-unknown", choices=HISTORY_UNKNOWN_POLICIES, default="include",
+                        help="With --as-known-at: keep (default) or drop victim rows resting on an input whose state "
+                             "at that date is unknown (InputHistoryUnknown)")
     parser.add_argument("--bootstrap", type=int, default=200, help="Bootstrap replicates")
     parser.add_argument("--date-draws", type=int, default=100, help="Date-uncertainty draws")
     parser.add_argument("--seed", type=int, default=20261027, help="Random seed")
@@ -305,7 +331,8 @@ def main(argv: list[str] | None = None) -> int:
     summary = run_analysis(Path(args.db), Path(args.out_dir),
                            parse_date(args.censor_date) if args.censor_date else None,
                            args.bootstrap, args.date_draws, args.seed, args.unresolved_attributions,
-                           snapshot_id=args.snapshot_id, as_known_at=args.as_known_at)
+                           snapshot_id=args.snapshot_id, as_known_at=args.as_known_at,
+                           history_unknown=args.history_unknown)
     print(f"Wrote extended recurrence analyses to {Path(args.out_dir).resolve()}")
     print(f"Observation cutoff: {summary['censor_date']}")
     return 0

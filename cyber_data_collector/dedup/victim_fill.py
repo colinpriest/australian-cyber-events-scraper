@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from cyber_data_collector.dedup import calibration_guard
 from cyber_data_collector.utils.llm_models import openai_fast_model, openai_model, typesafe_model
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +256,7 @@ def stored_best_probabilities(conn: sqlite3.Connection) -> Dict[str, float]:
         found: Dict[str, Dict[str, Any]] = {}
         for sid, pj in conn.execute(
                 "SELECT subject_id, probabilities_json FROM ModelJudgements WHERE question_id = ? "
-                "AND model_requested = ? ORDER BY created_at, rowid", (question_id, model)):
+                "AND model_requested = ? ORDER BY rowid", (question_id, model)):
             found[sid] = json.loads(pj or "{}")
         return found
 
@@ -360,7 +361,7 @@ def apply_fills(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal: 
     ensure_schema(conn)
     ledger = DedupLedger(conn)
     batch_id = f"victim-fill-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     cal_json = json.dumps({k: (cal or {}).get(k) for k in ("question_version", "model", "cutoff",
                                                            "calibrated_on_database", "generated")})
     try:

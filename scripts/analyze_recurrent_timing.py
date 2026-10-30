@@ -461,6 +461,7 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
     variant pair across two events splits a genuine repeat into two
     single-event "organisations".
     """
+    from cyber_data_collector.dedup.input_history import unknown_victim_rows
     from cyber_data_collector.dedup.victim_counting import (
         organisation_groups, unresolved_rows, within_event_duplicates,
     )
@@ -474,13 +475,18 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
     # Victims the calibrated attribution check flagged as probably wrong with no
     # trusted replacement: kept, and marked for the attribution sensitivity.
     unresolved = unresolved_rows(conn, victims, drop)
+    # In an --as-known-at reconstruction, victim rows resting on an input whose state at the cutoff is unknown
+    # (it predates the recorded history: a stand-in state is held). Kept, and marked; empty otherwise.
+    history_unknown = unknown_victim_rows(conn, [(e, d) for e, _, d in victims])
     if drop:
         df = df[[(int(e), d) not in drop for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]]
     df["attribution_unresolved"] = [(int(e), d) in unresolved
                                     for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]
+    df["history_unknown"] = [(int(e), str(d)) in history_unknown
+                             for e, d in zip(df["entity_id"], df["deduplicated_event_id"])]
     df["entity_id"] = df["entity_id"].map(lambda e: groups.get(int(e), int(e)))
-    df["attribution_unresolved"] = df.groupby(["entity_id", "deduplicated_event_id"])[
-        "attribution_unresolved"].transform("max").astype(bool)
+    for flag in ("attribution_unresolved", "history_unknown"):
+        df[flag] = df.groupby(["entity_id", "deduplicated_event_id"])[flag].transform("max").astype(bool)
     reps = sorted(set(df["entity_id"]))
     attrs = pd.read_sql_query(
         f"SELECT entity_id, {', '.join(_ENTITY_COLUMNS)} FROM EntitiesV2 "
@@ -515,6 +521,38 @@ def apply_attribution_policy(events: pd.DataFrame, policy: str) -> tuple[pd.Data
         "victim-event attributions unresolved": int(flags.sum()),
         "events with an unresolved attribution": distinct("deduplicated_event_id"),
         "organisations with an unresolved attribution": distinct("entity_id"),
+    }
+    if policy == "exclude":
+        events = events.loc[~flags].copy()
+    info["victim-event attributions analysed"] = int(len(events))
+    return events, info
+
+
+HISTORY_UNKNOWN_POLICIES = ("include", "exclude")
+
+
+def apply_history_unknown_policy(events: pd.DataFrame, policy: str) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Keep or drop victim rows whose inputs at the ``--as-known-at`` cutoff are unknown; say how many there were.
+
+    In a reconstruction (``input_history.rewind``) a row that predates the recorded history holds the state
+    recorded when tracking began as a stand-in and is listed in ``InputHistoryUnknown``; ``history_unknown``
+    marks the victim rows resting on one (incident state, victim link, organisation state or membership).
+    ``include`` (the default) keeps them with the stand-in state; ``exclude`` drops them. Either way the counts
+    are reported. Outside a reconstruction nothing is unknown.
+    """
+    if policy not in HISTORY_UNKNOWN_POLICIES:
+        raise ValueError(f"history-unknown policy must be one of {HISTORY_UNKNOWN_POLICIES}")
+    flags = (events["history_unknown"].fillna(False).astype(bool) if "history_unknown" in events
+             else pd.Series(False, index=events.index))
+
+    def distinct(column: str) -> int:
+        return int(events.loc[flags, column].nunique()) if column in events else 0
+
+    info = {
+        "policy": policy,
+        "victim-event attributions with unknown inputs at the cutoff": int(flags.sum()),
+        "events with unknown inputs": distinct("deduplicated_event_id"),
+        "organisations with unknown inputs": distinct("entity_id"),
     }
     if policy == "exclude":
         events = events.loc[~flags].copy()
@@ -2164,7 +2202,16 @@ def main() -> int:
         "--as-known-at",
         default=None,
         help="Reconstruct incident links, victims, dates, size bands and record membership as recorded by this date "
-             "(YYYY-MM-DD, end of that UTC day) instead of reading today's. The censor date defaults to it.",
+             "(YYYY-MM-DD, end of that UTC day; or YYYY-MM-DD HH:MM[:SS], UTC unless it carries an offset such as "
+             "+10:00) instead of reading today's. The censor date defaults to it.",
+    )
+    parser.add_argument(
+        "--history-unknown",
+        choices=HISTORY_UNKNOWN_POLICIES,
+        default="include",
+        help="With --as-known-at: victim rows resting on an input whose state at that date is unknown (it predates "
+             "the recorded history; the state recorded when tracking began stands in): keep them (default) or drop "
+             "them. They are counted in the data-quality summary either way.",
     )
     parser.add_argument(
         "--elapsed-bounds",
@@ -2207,6 +2254,8 @@ def main() -> int:
              "dashboards, from the published snapshot, and moves them into place together).",
     )
     args = parser.parse_args()
+    if args.history_unknown != "include" and not args.as_known_at:
+        parser.error("--history-unknown exclude needs --as-known-at (nothing is unknown without a reconstruction)")
 
     from cyber_data_collector.publication.snapshot import AnalysisInput
 
@@ -2244,6 +2293,9 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     events, unresolved_info = apply_attribution_policy(events, args.unresolved_attributions)
     if events.empty:
         raise RuntimeError("No victim events remain after excluding unresolved attributions.")
+    events, history_unknown_info = apply_history_unknown_policy(events, args.history_unknown)
+    if events.empty:
+        raise RuntimeError("No victim events remain after excluding those with unknown inputs at --as-known-at.")
     spells, ties = build_spells(events, censor_date, args.ties)
     tie_sensitivity = tie_policy_sensitivity(events, censor_date, elapsed_bounds)
     spells["elapsed_band"] = [
@@ -2353,6 +2405,10 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         "covariate coverage": covariate_coverage,
         "unresolved victim attributions": {**unresolved_info, "repeats": unresolved_sensitivity},
     }
+    if reconstruction is not None:
+        data_quality["inputs unknown at --as-known-at"] = {
+            **history_unknown_info, "rows unknown by table (InputHistoryUnknown)":
+                {table: sum(reasons.values()) for table, reasons in reconstruction.unknown.items()}}
 
     summary = {
         "snapshot_id": analysis_input.snapshot.snapshot_id,
@@ -2412,7 +2468,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
 
     analysis_input.record(out_dir, analysis="repeat-event timing", censor_date=censor_date.isoformat(),
                           elapsed_bounds=str(elapsed_bounds), bootstrap_replicates=args.bootstrap, seed=args.seed,
-                          unresolved_attributions=args.unresolved_attributions)
+                          unresolved_attributions=args.unresolved_attributions,
+                          **({"history_unknown": args.history_unknown} if reconstruction is not None else {}))
     print(f"Wrote recurrent timing analysis to {out_dir}")
     print(f"Adjusted elapsed-time LRT p-value: {adjusted_lrt['p_value']:.4g}")
     print(f"Best parametric AIC model: {model_table.iloc[0]['model']}")
@@ -2423,7 +2480,7 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         run_analysis(source_db, extended_out, censor_date,
                      bootstrap=args.bootstrap, date_draws=args.date_draws, seed=args.seed,
                      unresolved_attributions=args.unresolved_attributions, analysis_input=analysis_input,
-                     as_known_at=args.as_known_at)
+                     as_known_at=args.as_known_at, history_unknown=args.history_unknown)
         print(f"Wrote extended recurrence analyses to {extended_out}")
 
     if args.dashboard_out:

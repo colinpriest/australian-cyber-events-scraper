@@ -2667,20 +2667,38 @@ python scripts/analyze_recurrence_extensions.py --snapshot-id <id> --as-known-at
   code added later is covered with no hook. Untracked columns write nothing.
 * **Existing ledgers are reused, not copied.** `VictimAttributionActions`, `VictimFillActions`,
   `EntityAliases`, `ContextualEntityAliases`, `EntityMentionResolutions`, `DedupOverrides` and `ModelJudgements`
-  carry their own timestamps; the reconstruction drops rows dated after the cutoff. `EntityMerges` and
-  `DedupSnapshots` hold the state *before* one change, not since when it held and not for every change, so they
-  cannot date a state; their effects are in the history tables from when tracking began.
-* **History before tracking cannot be invented.** The first time a table is tracked its current state is
-  written as `baseline` rows (`backfilled = 1`) and `InputHistoryStatus.tracking_since` records when. A cutoff
-  earlier than that is **reconstructed from current state**: each row takes the state recorded when tracking
-  began (later changes are undone), and a row whose first record is a genuine insert did not exist before it.
-  A ledger is trusted from its first row only; a cutoff before that leaves the table as it is. The report
-  (`## Inputs as known at DATE`) and `analysis_inputs.json` (`history_reconstruction`) list, per input, whether
-  it came from history or from the baseline, with counts of rows removed (not yet known), restored (since
-  deleted) and changed, and which columns were tracked only later.
-* **Dates are UTC.** `--as-known-at 2026-06-30` is the end of that UTC day; `"2026-06-30 08:30"` is exact.
-  The observation cutoff defaults to it and may not be later. Other inputs (attack type, records-affected
-  band, source text) are the present-day values unless listed in the report.
+  carry their own timestamps; the reconstruction **always** drops rows dated after the cutoff. A ledger is
+  trusted from its first row only: a cutoff before it drops every row, and what the ledger held then is
+  recorded as unknown. In ledgers that replace rows in place (`EntityAliases`, `EntityMentionResolutions`,
+  `DedupOverrides`) a dropped row may have replaced a decision that held at the cutoff, so it is recorded as
+  unknown too. `EntityMerges` and `DedupSnapshots` hold the state *before* one change, not since when it held
+  and not for every change, so they cannot date a state; their effects are in the history tables from when
+  tracking began.
+* **History before tracking cannot be invented, and is marked unknown.** The first time a table is tracked
+  its current state is written as `baseline` rows (`backfilled = 1`) and `InputHistoryStatus.tracking_since`
+  records when. A row with no record at or before the cutoff whose first record is a baseline has **unknown**
+  state then: it keeps the baseline state as a stand-in and is listed in `InputHistoryUnknown`
+  (`source, table_name, key_json, columns_json, reason`) in the reconstructed copy, as are rows never recorded,
+  columns tracked only after a row's state was recorded, and ledger rows that cannot be dated. A row whose
+  first record is a genuine insert did not exist before it. The report (`## Inputs as known at DATE`) and
+  `analysis_inputs.json` (`history_reconstruction.unknown_at_cutoff`) count them per table and reason, beside
+  the rows removed (not yet known), restored (since deleted) and changed. Both analyses mark the victim rows
+  that rest on an unknown incident, link, organisation or membership (`input_history.unknown_victim_rows`) and
+  report how many there are; they are kept by default (`--history-unknown include`, the stand-in state is
+  used) and `--history-unknown exclude` drops them. On the 2026-10-29 copy, a cutoff of 2026-10-27 (before
+  tracking began) leaves 33,944 rows unknown.
+* **Everything is compared in UTC.** `--as-known-at 2026-06-30` is the end of that UTC day; `"2026-06-30 08:30"`
+  is UTC; `2026-06-30T08:30+10:00` is converted (to 2026-06-29 22:30 UTC). Ledger writers stamp
+  `utils/timestamps.utc_now_iso()` (`YYYY-MM-DDTHH:MM:SS+00:00`); older stamps have no offset and are read by
+  the convention their writer used, declared per table in `input_history.LEDGERS`: UTC for the
+  `CURRENT_TIMESTAMP` defaults (`EntityAliases`, `DedupOverrides`), local time for the `datetime.now()` writers
+  (`ModelJudgements`, `VictimAttributionActions`, `VictimFillActions`, `ContextualEntityAliases`,
+  `EntityMentionResolutions`), converted with the machine's local-time rules for that date (Brisbane, UTC+10).
+  Stored values are not rewritten. A table declared `ambiguous` (writers of both kinds; none is today) keeps a
+  naive stamp only when both readings fall before the cutoff and records it as unknown when they straddle it.
+  Because the two conventions do not sort as strings, "the newest judgement" is the highest `rowid`. The
+  observation cutoff defaults to the UTC date of `--as-known-at` and may not be later. Other inputs (attack
+  type, records-affected band, source text) are the present-day values unless listed in the report.
 * **Reproducible.** The retained snapshot is the live database as it was; the reconstruction runs on a
   working copy, so `--snapshot-id <id> --as-known-at <date>` (recorded as `reproduce` in
   `analysis_inputs.json`) reproduces it exactly.
