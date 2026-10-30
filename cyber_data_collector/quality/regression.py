@@ -187,6 +187,13 @@ def check_event_scope(conn, resolver: EventResolver, path: Path) -> Dict[str, Me
 
 
 def check_duplicates(conn, resolver: EventResolver, path: Path) -> Dict[str, Measurement]:
+    # A labelled event can be split as well as merged: where the labelling-time records are kept beside the
+    # labels, each side is the Active event holding most of them (dedup.label_contradictions.SideResolver).
+    members_path = Path(path).parent / "duplicate_label_members.csv"
+    if members_path.exists():
+        from cyber_data_collector.dedup.label_contradictions import SideResolver, labelled_members
+
+        resolver = SideResolver(conn, labelled_members(members_path))
     rows = read_labels(path, "pair_id")
     contradictions, unchecked, checked = [], defaultdict(int), 0
     for row in rows:
