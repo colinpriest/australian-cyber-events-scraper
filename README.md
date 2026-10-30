@@ -248,6 +248,26 @@ python run_full_pipeline.py --skip-classification
 
 > Do not enable GDELT unless you have a BigQuery budget. Use `--source Perplexity OAIC GoogleSearch WebberInsurance CyberDaily` to exclude it.
 
+**Perplexity: one record per cited article** (2026-10-30, `datasources/perplexity.py`). Each article URL
+an answer item cites is its own raw record (same title, description and answer fields), scraped, gated,
+classified, enriched and deduplicated on its own: a citation that is not about the incident is rejected
+without taking its siblings down. An item used to become one record with its *first* URL, so the other
+citations were lost and the first page stood for the whole answer. `source_metadata.provenance` records
+the query, the answer item's id (shared by its siblings), the URL's index, the sibling URLs, the URLs that
+are not article addresses (skipped, as before) and the answer's own fields
+([data dictionary](docs/data-dictionary.md#rawevents-source_metadata)). The answer's `event_date` is stored
+only as a full day, with basis `stated in the Perplexity discovery answer (unverified)` and no precision.
+
+**Incomplete is not empty.** A malformed answer is read one incident object at a time (a field only from
+inside its own object; of a cut-off final object only complete values) - the old reader paired the i-th
+title with the i-th date across the whole text. An empty answer, one cut off at `max_tokens`, or one
+readable only after repair or recovery keeps its incidents but is noted as an `incomplete` failure, so the
+source-month is searched again; a cut-off answer is first searched again over the two halves of its date
+window (down to 3-day windows, 5 splits). A clean `{"events": []}` is complete. Google: a 403 that is not a
+quota refusal, or an `error` object in a 200 body, keeps the results read and is noted the same way (both
+used to leave the month recorded complete). The strict-JSON retry and the completion call now work (they
+raised a swallowed `NameError`). Details: [docs/01-data-sources.md](docs/01-data-sources.md#json-recovery-strategy).
+
 **Cyber Daily** (`CyberDaily`, added 2026-10-28) reads the Security section's
 public RSS feed. The feed gives title, standfirst, publication date and URL,
 and goes back to 2018. The article page is scraped and judged like any other
