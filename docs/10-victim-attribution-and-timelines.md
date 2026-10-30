@@ -122,6 +122,24 @@ breach at 0.92, Heritage Bank at 0.75, Commonwealth Bank in a scam story at
 The bootstrap mean (0.944) is just under the 0.95 target - the procedure's
 honest precision is about 94%.
 
+### Census extension (2026-10-30)
+
+The strata above were drawn on 2026-10-27 scores; the acting band is defined on
+the *current* evidence. `calibrate_victim_attribution.py sample --extend-below 0.5
+--extend-stratum D --frame-db <database the sample was drawn on>` scores nothing
+itself: after `check-victim-attribution` has judged every pair of a copy of the
+recalibration database on current evidence (758 pairs; 613 Jev and 106 escalation
+calls, the 145 labelled pairs reused), it adds every unsampled pair of the
+original 636-pair frame scoring below 0.5 as stratum `D`, weight 1, and moves the
+sampled pairs in that region whose weight was above 1 into it with weight 1 (3:
+two from B, one from C). Rows outside the region keep their inclusion
+probabilities, so their weights stay unbiased. The region holds 62 frame pairs:
+55 already labelled, **7 new**. The 122 pairs of the snapshot outside the frame
+belong to events rejected before the sample was drawn (all are rejected in the
+live database) and are left out. The frame is small: the original census had
+already covered almost all of the acting band, so more labels in that band have
+to come from events created after the labelling snapshot.
+
 ### On a copy of the live database
 
 `check-victim-attribution --apply` (after the v2 timelines): 636 event-victim
