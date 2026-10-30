@@ -33,32 +33,30 @@ Three steps, each over stored evidence and each answer stored:
    (:mod:`utils.escalation`); if that fails the item is **undecided** and never
    acted on with Jev's raw score.
 
-Acting needs a **calibration** measured on labelled examples of this database
-(``scripts/calibrate_supplier_victims.py``; labels in
-``evaluation/supplier_victim_labels.csv``), for the current question versions
-and models. Labels are ground truth: a labelled ``not_affected`` /
-``different`` item is never acted on, a labelled ``affected`` / ``same`` one
-always is. With a calibration, :func:`find_supplier_victims` with ``apply``:
+**One event per customer, linked** (owner decision, 2026-10-31). A supplier breach is the
+supplier's own event plus one event per major affected customer (victim = the customer, vendor =
+the supplier), tied together by ``SupplierIncidents`` / ``SupplierIncidentLinks``
+(:mod:`supplier_links`). No event carries several customers as co-victims and no customer event is
+merged into another or into the supplier's. This module used to do both - attach accepted customers
+as ``victim`` roles of the supplier incident and merge customers' events into it - which counted a
+customer twice when it had its own event and filed another organisation's event under it (Allens,
+attached to the NSW Health Accellion event beside its own January 2021 Accellion event, 2026-10-30).
 
-* merges each accepted event candidate into the supplier incident through
-  :meth:`DedupLedger.merge_events` (which refuses across a cached
-  ``different`` ruling), carrying the merged event's victims across - except
-  one that is the supplier itself;
-* attaches each accepted victim candidate as a ``victim`` role. An organisation
-  with its own separate event near the incident's date is decided by whether
-  that event has been *ruled on* (:func:`rule_on_own_event`): ruled the **same**
-  incident (a label, a ``same`` override, or a calibrated same-incident
-  judgement at its cut-off) it is merged into the supplier incident through the
-  ledger, which carries the customer across; ruled a **different** incident (a
-  label, a ``different`` override, or a calibrated judgement below the cut-off)
-  the customer is attached as a victim of the supplier incident as well; only
-  an **unresolved** pair is held, with the reason it is unresolved. The model
-  rules "different" only below its own calibrated ``different_cutoff``; a score
-  between that and the merge cut-off is held, because the merge cut-off measured
-  only the precision of merging.
+The judgements above are now **link** decisions (labels first, then the calibrated cut-offs): an
+event judged the same supplier incident is linked as its customer's event, and a named customer
+accepted as affected with no event of its own near the incident is linked with no event. Without
+``apply`` :func:`find_supplier_victims` reports the links it would write; with ``apply`` (labels and a
+current calibration required, as before) it
 
-Every attachment is recorded in ``SupplierVictimAttachments`` (who, which
-judgement, probability, cut-off, question version) after a ledger snapshot.
+* converts the old state (:func:`supplier_links.convert`): every victim role
+  ``SupplierVictimAttachments`` added that is still present is removed (:func:`reverse_attachments`,
+  audit row ``reversed`` with the owner decision as reason) and the customer becomes a link row, and an
+  event the supplier step joined across customers is split per customer through the ledger;
+* writes the links (idempotent upserts) and lists the events that hold or held several customers
+  (:func:`multi_customer_events`).
+
+:func:`attach_victim`, :func:`carry_victims` and :func:`merge_pairs` remain for the audit trail and the
+manual ``dedup_admin.py merge`` command; ``find_supplier_victims`` never calls them.
 Victims are organisations: products, people, threat actors, collectives
 ("Australian universities") and sector labels are never candidates.
 """
@@ -164,6 +162,18 @@ CREATE TABLE IF NOT EXISTS SupplierVictimAttachments (
 );
 CREATE INDEX IF NOT EXISTS idx_supplier_attach_event
     ON SupplierVictimAttachments (deduplicated_event_id);
+CREATE TABLE IF NOT EXISTS SupplierVictimReversals (
+    attachment_id         TEXT PRIMARY KEY,   -- the SupplierVictimAttachments row undone
+    deduplicated_event_id TEXT NOT NULL,
+    entity_id             INTEGER NOT NULL,
+    entity_name           TEXT NOT NULL,
+    action                TEXT NOT NULL,      -- 'reversed'
+    restored_role         TEXT,               -- NULL: the event link was removed
+    own_events_json       TEXT NOT NULL,      -- the organisation's other Active events as victim
+    reason                TEXT NOT NULL,
+    snapshot_batch        TEXT,
+    created_at            TEXT NOT NULL
+);
 """
 
 
@@ -1127,6 +1137,124 @@ def held_by_own_event(cand: VictimCandidate, incident: SupplierIncident,
     return blockers[0] if blockers else None
 
 
+OWNER_DECISION = ("owner decision 2026-10-31: one event per customer; a supplier's customers are not "
+                  "co-victims of one event")
+# The member-link role given back when the attachment recorded no event-level role to restore.
+_UNRECORDED_MEMBER_ROLE = "affected_customer"
+
+
+def reverse_attachments(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
+    """Undo every victim role this module attached that is still on its Active event.
+
+    The event-level role goes back to the attachment's ``previous_role`` (the link is removed when
+    there was none). Member links the attachment set to ``victim`` go back to ``previous_role`` or,
+    when none was recorded, ``affected_customer`` - except for a victim carried across a merge
+    (``decided_by`` ``merge``): those records are the customer's own and keep their links. Each
+    reversal is snapshotted through the ledger and recorded in ``SupplierVictimReversals``
+    (``action`` ``reversed``); a reversed attachment is never reversed again. ``apply`` False only
+    lists them.
+    """
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    ensure_schema(conn)
+    own = victim_events(conn)
+    rows = conn.execute(
+        """SELECT a.attachment_id, a.deduplicated_event_id, a.entity_id, a.entity_name, a.previous_role,
+                  a.decided_by
+           FROM SupplierVictimAttachments a
+           JOIN DeduplicatedEvents d ON d.deduplicated_event_id = a.deduplicated_event_id
+           JOIN DeduplicatedEventEntities dee ON dee.deduplicated_event_id = a.deduplicated_event_id
+                AND dee.entity_id = a.entity_id AND dee.relationship_type = 'victim'
+           WHERE d.status = 'Active'
+             AND a.attachment_id NOT IN (SELECT attachment_id FROM SupplierVictimReversals)
+           ORDER BY a.created_at, a.attachment_id""").fetchall()
+    out: List[Dict[str, Any]] = []
+    done: Set[Tuple[str, int]] = set()
+    for attachment_id, did, entity_id, name, previous, decided_by in rows:
+        if (did, entity_id) in done:
+            continue
+        done.add((did, entity_id))
+        others = sorted(e for e, _ in own.get(entity_id, []) if e != did)
+        out.append({"attachment_id": attachment_id, "deduplicated_event_id": did, "victim": name,
+                    "decided_by": decided_by, "restored_role": previous, "own_events": others,
+                    "why": OWNER_DECISION})
+        if not apply:
+            continue
+        batch = f"supplier-victims-reverse-{datetime.now().strftime('%Y%m%d%H%M%S')}-{did[:8]}"
+        DedupLedger(conn).snapshot_event(batch, did)
+        if previous is None:
+            conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? AND entity_id = ?",
+                         (did, entity_id))
+        else:
+            conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = ? "
+                         "WHERE deduplicated_event_id = ? AND entity_id = ?", (previous, did, entity_id))
+        members = [r[0] for r in conn.execute(
+            "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?", (did,))]
+        if members and decided_by != "merge":
+            conn.execute(f"UPDATE EnrichedEventEntities SET relationship_type = ? WHERE entity_id = ? "
+                         f"AND relationship_type = 'victim' AND enriched_event_id IN ({','.join('?' * len(members))})",
+                         (previous or _UNRECORDED_MEMBER_ROLE, entity_id, *members))
+        # Every attachment row of this (event, organisation) is undone by this one reversal.
+        for (aid,) in conn.execute(
+                """SELECT attachment_id FROM SupplierVictimAttachments WHERE deduplicated_event_id = ?
+                   AND entity_id = ? AND attachment_id NOT IN (SELECT attachment_id FROM SupplierVictimReversals)""",
+                (did, entity_id)).fetchall():
+            conn.execute("INSERT INTO SupplierVictimReversals VALUES (?, ?, ?, ?, 'reversed', ?, ?, ?, ?, ?)",
+                         (aid, did, entity_id, name, previous, json.dumps(others), OWNER_DECISION, batch,
+                          datetime.now().isoformat()))
+        conn.execute("UPDATE DeduplicatedEvents SET updated_at = CURRENT_TIMESTAMP WHERE deduplicated_event_id = ?",
+                     (did,))
+        logger.info("Reversed %r as a victim of %s: %s", name, did, OWNER_DECISION)
+    if apply and out:
+        conn.commit()
+    return out
+
+
+def multi_customer_events(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """Active events that hold, or held, the victims of more than one customer through this module.
+
+    An event qualifies when it has a ``SupplierVictimAttachments`` row, was the target of a merge this
+    module made (``DedupDecisions`` whose reasoning names :data:`PAIR_VERSION`), or was snapshotted under a
+    ``supplier-victims-*`` batch, and the distinct organisations it records as victims now or had
+    attached number more than one - or it absorbed another event through such a merge.
+    """
+    ensure_schema(conn)
+    has = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    touched: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"attached": set(), "merged_from": set(),
+                                                               "batches": set()})
+    for did, name, merged_from in conn.execute(
+            "SELECT deduplicated_event_id, entity_name, merged_from FROM SupplierVictimAttachments"):
+        touched[did]["attached"].add(name)
+        if merged_from:
+            touched[did]["merged_from"].add(merged_from)
+    if "DedupDecisions" in has:
+        for did, batch in conn.execute(
+                "SELECT DISTINCT deduplicated_event_id, batch_id FROM DedupDecisions WHERE action = 'merge' "
+                "AND reasoning LIKE ?", (f"%{PAIR_VERSION}%",)):
+            touched[did]["batches"].add(batch)
+    if "DedupSnapshots" in has:
+        for did, batch in conn.execute(
+                "SELECT DISTINCT deduplicated_event_id, batch_id FROM DedupSnapshots "
+                "WHERE batch_id LIKE 'supplier-victims-%'"):
+            touched[did]["batches"].add(batch)
+    active = {r[0]: r[1] for r in conn.execute(
+        "SELECT deduplicated_event_id, title FROM DeduplicatedEvents WHERE status = 'Active'")}
+    out = []
+    for did in sorted(touched):
+        if did not in active:
+            continue
+        victims = sorted(r[0] for r in conn.execute(
+            """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id)
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""", (did,)))
+        t = touched[did]
+        customers = set(victims) | t["attached"]
+        if len(customers) > 1 or t["merged_from"]:
+            out.append({"deduplicated_event_id": did, "title": active[did], "victims_now": victims,
+                        "attached_customers": sorted(t["attached"]), "merged_from": sorted(t["merged_from"]),
+                        "supplier_batches": sorted(t["batches"])})
+    return out
+
+
 RULED_SAME, RULED_DIFFERENT, UNRESOLVED = "same", "different", "unresolved"
 CONFLICT = "conflicting rulings: "
 
@@ -1260,17 +1388,29 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                           judge_client=None, escalation_client=None, search=None,
                           labels_path: Path = LABELS_PATH, calibration_path: Path = CALIBRATION_PATH,
                           role_refresher=None, limit: Optional[int] = None) -> Dict[str, Any]:
-    """Detect supplier incidents, gather and judge candidates, and (with ``apply``) act.
+    """Detect supplier incidents, judge their customers and other events, and report or write the links.
 
-    With ``apply``, raises :class:`CalibrationError` before changing anything
-    when the labels are missing or unreadable or the calibration is missing or
-    was measured on other models or questions.
+    One event per customer (owner decision 2026-10-31): nothing here attaches a co-victim or merges
+    events of different customers. With ``apply``, raises :class:`CalibrationError` before changing
+    anything when the labels are missing or unreadable or the calibration does not match the current
+    models and questions; then converts the old state (attachments reversed into links, events joined
+    across customers split per customer) and writes the links (:mod:`supplier_links`). Without it, the
+    same plan is reported and nothing is written. ``role_refresher`` is kept for callers.
     """
+    from cyber_data_collector.dedup import supplier_links as sl
+
     ensure_schema(conn)
-    cal = labels = None
+    sl.ensure_schema(conn)
+    cal: Dict[str, Any] = {}
+    labels: Dict[Tuple[str, str], str] = {}
     if apply:
         labels = read_labels(labels_path)
         cal = active_calibration(calibration_path)
+    else:
+        try:
+            labels = read_labels(labels_path)
+        except CalibrationError:
+            labels = {}
 
     search_failures: List[Dict[str, str]] = []
     if research:
@@ -1288,123 +1428,59 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                 logger.warning("Supplier search failed for %s: %s", inc.dedup_id, exc)
                 search_failures.append({"deduplicated_event_id": inc.dedup_id, "error": str(exc)})
 
-    g = gather(conn, limit)
-    incidents, cands, pairs, index, resolver = g.incidents, g.candidates, g.pairs, g.index, g.resolver
-    by_id = g.by_id
+    # The old state is converted first (its splits create the customers' events), then everything is judged.
+    before = gather(conn, limit)
+    registry = sl.Registry(conn, before.resolver)
+    conversion = sl.convert(conn, before, registry, apply)
+    g = gather(conn, limit) if apply else before
     victim_items = g.victim_items(conn)
     pair_items = g.pair_items(conn)
     vscores = judge(conn, victim_items, KIND_VICTIM, judge_client, escalation_client)
     pscores = judge(conn, pair_items, KIND_PAIR, judge_client, escalation_client)
+    vcut = (cal.get("victim") or {}).get("cutoff") if apply else None
+    pcut = (cal.get("same_incident") or {}).get("cutoff") if apply else None
+    if not apply:
+        try:
+            current = active_calibration(calibration_path)
+            vcut = (current.get("victim") or {}).get("cutoff")
+            pcut = (current.get("same_incident") or {}).get("cutoff")
+        except CalibrationError:
+            pass
+    planned = sl.plan_links(conn, g, labels, vscores, pscores, vcut, pcut, registry)
 
     result: Dict[str, Any] = {
-        "supplier_incidents": len(incidents), "victim_candidates": len(victim_items),
+        "supplier_incidents": len(g.incidents), "victim_candidates": len(victim_items),
         "pair_candidates": len(pair_items),
         "judged": {"victim": len(vscores.final), "same_incident": len(pscores.final)},
         "escalated": {"victim": len(vscores.escalated), "same_incident": len(pscores.escalated)},
         "undecided": {"victim": vscores.undecided, "same_incident": pscores.undecided},
         "failed": {"victim": vscores.failed, "same_incident": pscores.failed},
-        "search_failures": search_failures, "applied": False, "calibrated": cal is not None,
+        "search_failures": search_failures, "applied": False, "calibrated": bool(cal) if apply else None,
+        "cutoffs": {"victim": vcut, "same_incident": pcut},
         "incidents": [], "merged": [], "attached": [], "held": [], "variants": [],
+        "reversed": conversion["attachments_reversed"], "splits": conversion["splits"],
+        "attachments_converted": conversion["attachments_converted"],
+        "ambiguous": conversion["ambiguous"] + planned["ambiguous"],
+        "links": [vars(link) for link in registry.links.values()],
+        "supplier_incident_rows": len(registry.incidents), "written": {},
+        "multi_customer_events": [],
     }
-    flat = {c.subject_id: c for cs in cands.values() for c in cs}
-    for inc in incidents:
+    for inc in g.incidents:
         result["incidents"].append({
             "deduplicated_event_id": inc.dedup_id, "title": inc.title, "event_date": inc.event_date,
             "vendors": inc.vendors, "victims": [n for _, n in inc.victims], "reasons": inc.reasons,
             "candidates": [{"name": c.name, "entity_id": c.entity_id, "found_by": c.found_by,
                             "p_affected": vscores.final.get(c.subject_id), "p_jev": vscores.jev.get(c.subject_id)}
-                           for c in cands[inc.dedup_id]],
+                           for c in g.candidates[inc.dedup_id]],
             "pairs": [{"other": p.other_id, "gap_days": p.gap_days, "reasons": p.reasons,
                        "p_same": pscores.final.get(p.pair_id), "p_jev": pscores.jev.get(p.pair_id)}
-                      for p in pairs if p.supplier_id == inc.dedup_id],
+                      for p in g.pairs if p.supplier_id == inc.dedup_id],
         })
     if not apply:
+        conn.rollback()     # planning may have created entity rows for named customers; keep nothing
         return result
-
-    vcut = (cal.get("victim") or {}).get("cutoff")
-    pcut = (cal.get("same_incident") or {}).get("cutoff")
-    dcut = (cal.get("same_incident") or {}).get("different_cutoff")
-    result.update({"applied": True, "cutoffs": {"victim": vcut, "same_incident": pcut,
-                                                          "different": dcut}})
-    known_pairs = {p.pair_id for p in pairs}
-    pair_ok = {sid: how for sid, how in accepted(pscores.final, labels, KIND_PAIR, pcut).items()
-               if sid in known_pairs}
-    different = {sid for (k, sid), lab in labels.items() if k == KIND_PAIR and lab in NEGATIVE[KIND_PAIR]}
-
-    # A victim with its own event near the incident is decided by whether that pair has been ruled on.
-    victim_ok = accepted(vscores.final, labels, KIND_VICTIM, vcut)
-    rulings: Dict[Tuple[str, str], OwnEventRuling] = {}
-    to_merge = [p for p in pairs if p.pair_id in pair_ok]
-    queued = {p.pair_id for p in to_merge}
-    own_now = victim_events(conn)
-    for sid in sorted(victim_ok):
-        cand = flat.get(sid)
-        if cand is None:
-            continue
-        inc = by_id[cand.dedup_id]
-        for own_id in nearby_own_events(cand, inc, own_now):
-            ruling = rulings[(sid, own_id)] = rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
-                                                                pcut, known_pairs, dcut)
-            pid = "|".join(sorted((inc.dedup_id, own_id)))
-            if ruling.verdict == RULED_SAME and pid not in queued:
-                # Ruled the same by a label or override (a model ruling is already in pair_ok).
-                queued.add(pid)
-                to_merge.append(PairCandidate(inc.dedup_id, own_id,
-                                              [f"own event of candidate victim {cand.name}, ruled the same "
-                                               f"incident ({ruling.basis})"],
-                                              _gap(inc.event_date, dict(own_now[cand.entity_id]).get(own_id))))
-    # A pair whose label and override disagree is held for a human, not offered to the ledger.
-    conflicted = {"|".join(sorted((flat[sid].dedup_id, own_id)))
-                  for (sid, own_id), r in rulings.items() if r.basis.startswith(CONFLICT)}
-    to_merge = [p for p in to_merge if p.pair_id not in conflicted]
-    result["merged"] = merge_pairs(conn, to_merge, by_id, resolver, different, role_refresher, pscores.final, pcut)
-    if role_refresher is not None:
-        role_refresher.flush(conn)   # merges reclassify roles before victims are attached
-        conn.commit()
-    gone = {m["source"] for m in result["merged"] if "refused" not in m}
-    refused = {frozenset((m["target"], m["source"])): m["refused"] for m in result["merged"] if "refused" in m}
-
-    own = victim_events(conn)   # after the merges
-    for sid, how in sorted(victim_ok.items()):
-        cand = flat.get(sid)
-        if cand is None or cand.dedup_id in gone:
-            continue
-        inc = by_id[cand.dedup_id]
-        ruled_different: List[OwnEventRuling] = []
-        unresolved: List[OwnEventRuling] = []
-        for own_id in nearby_own_events(cand, inc, own):
-            ruling = rulings.get((sid, own_id)) or rule_on_own_event(conn, inc.dedup_id, own_id, labels, pscores,
-                                                                     pcut, known_pairs, dcut)
-            if ruling.verdict == RULED_DIFFERENT:
-                ruled_different.append(ruling)
-            elif ruling.verdict == RULED_SAME:
-                # Ruled the same incident, but the event is still there: the merge was refused or did not run.
-                why = refused.get(frozenset((inc.dedup_id, own_id)), "the merge did not run")
-                unresolved.append(OwnEventRuling(own_id, UNRESOLVED,
-                                                 f"ruled the same incident ({ruling.basis}) but not merged: {why}",
-                                                 ruling.probability))
-            else:
-                unresolved.append(ruling)
-        if unresolved:
-            result["held"].append({"deduplicated_event_id": inc.dedup_id, "victim": cand.name,
-                                   "own_event": unresolved[0].own_event, "p_affected": vscores.final.get(sid),
-                                   "own_event_rulings": [r.as_dict() for r in unresolved],
-                                   "why": "the organisation has its own event near this incident and the pair "
-                                          "is unresolved: " + "; ".join(f"{r.own_event[:8]}: {r.basis}"
-                                                                        for r in unresolved)})
-            continue
-        variant = variant_of_victim(conn, inc.dedup_id, cand.entity_id, cand.name, resolver)
-        if variant:
-            result["variants"].append({"deduplicated_event_id": inc.dedup_id, "candidate": cand.name,
-                                       "victim": variant, "p_affected": vscores.final.get(sid)})
-            continue
-        entity_id = _entity_for(conn, cand, index)
-        decided ="label" if how == "label" else ("escalation" if sid in vscores.escalated else "jev")
-        if attach_victim(conn, inc.dedup_id, entity_id, decided, subject_id=sid,
-                         probability=vscores.final.get(sid), cutoff=vcut, question_version=VICTIM_VERSION):
-            result["attached"].append({"deduplicated_event_id": inc.dedup_id, "title": inc.title,
-                                       "victim": cand.name, "p_affected": vscores.final.get(sid),
-                                       "decided_by": decided,
-                                       "own_events_ruled_different": [r.as_dict() for r in ruled_different]})
+    result["written"] = registry.write()
+    result["applied"] = True
+    result["multi_customer_events"] = multi_customer_events(conn)
     conn.commit()
     return result
