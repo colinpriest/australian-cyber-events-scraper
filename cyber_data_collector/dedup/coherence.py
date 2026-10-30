@@ -12,7 +12,11 @@ Three stages, cheapest first:
 
 1. **Suspects (free).** A member is suspect when the organisation Perplexity
    identified for it shares no distinctive name key with the event's victim,
-   vendor or the organisation most of its members name. Only suspects can be
+   vendor or the organisation most of its members name - or, in an event whose
+   recorded victim the attribution check flagged as probably wrong with nothing
+   to replace it, when its research names no organisation at all (nothing then
+   vouches for it). Those last are outside the calibrated suspect population:
+   they are judged and reported, and split by label only. Only suspects can be
    split out by the model here: same-organisation members are usually misdated
    copies or follow-ups (Partnered Health, Latitude, OpenAI in the 2026-10-02
    review). A different incident at the same organisation is
@@ -217,15 +221,33 @@ def find_suspect_events(conn: sqlite3.Connection, resolver: Optional[EntityResol
     members_by_event = {e[0]: load_event_members(conn, e[0]) for e in events}
     resolver = fitted_resolver(conn, resolver, events, members_by_event)
     wanted = set(include or ())
+    doubted = victim_in_doubt(conn)
 
     found = []
     for did, title, event_date, victim, vendor in events:
         members = members_by_event[did]
         odd = suspect_members(resolver, members, victim, vendor)
-        if odd or did in wanted:
+        # The name test vouches for a member only through the event's victim; when that victim is itself in doubt,
+        # a member whose research names no organisation has nothing vouching for it (the Hürriyet report of the
+        # Medicare breach sat in the OpenAI rogue-agent event, 2026-10-30).
+        unidentified = [m for m in members if not m["org"]] if did in doubted else []
+        if odd or unidentified or did in wanted:
             found.append({"id": did, "title": title, "date": event_date, "victim": victim,
-                          "vendor": vendor, "members": members, "suspect_ids": [m["id"] for m in odd]})
+                          "vendor": vendor, "members": members,
+                          "suspect_ids": [m["id"] for m in odd] + [m["id"] for m in unidentified],
+                          "unidentified_ids": [m["id"] for m in unidentified]})
     return found
+
+
+def victim_in_doubt(conn: sqlite3.Connection) -> set:
+    """Events whose recorded victim the calibrated attribution check flagged with nothing to replace it
+    (:func:`victim_judgement.unresolved_attributions`). Empty for a database that has never been checked."""
+    from cyber_data_collector.dedup.victim_judgement import unresolved_attributions
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'VictimAttributionActions'"
+                        ).fetchone():
+        return set()
+    return {did for did, _entity in unresolved_attributions(conn)}
 
 
 def suspect_members(resolver: EntityResolver, members: Sequence[Dict[str, Any]],
@@ -484,6 +506,9 @@ def decide_strays(event: Dict[str, Any], scores: Dict[str, Dict[str, Any]], labe
     """
     members = {m["id"]: m for m in event["members"]}
     suspects = set(event.get("suspect_ids") or [])
+    # Members suspected only because the victim is in doubt are not the population the cut-off was calibrated on
+    # (members naming another organisation): they are judged and reported, and split by label alone.
+    unidentified = set(event.get("unidentified_ids") or [])
     labelled_out, model_out, held = [], [], []
     for mid, m in members.items():
         sid = member_subject_id(event["id"], mid)
@@ -498,7 +523,11 @@ def decide_strays(event: Dict[str, Any], scores: Dict[str, Dict[str, Any]], labe
             continue
         elif (mid in suspects and cutoff is not None and score.get("p") is not None
               and score["p"] < cutoff):
-            model_out.append({**entry, "basis": "model"})
+            if mid in unidentified:
+                held.append({**entry, "basis": "model", "guard": "victim in doubt and no organisation identified: "
+                             "outside the calibrated suspects, split by label only"})
+            else:
+                model_out.append({**entry, "basis": "model"})
 
     note = None
     undecided = [mid for mid in suspects

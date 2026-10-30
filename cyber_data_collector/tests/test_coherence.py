@@ -382,3 +382,28 @@ def test_command_fails_loudly_without_keys(monkeypatch, capsys):
     rc = dedup_admin.cmd_check_coherence(SimpleNamespace(db=":memory:", apply=True, event=None))
     assert rc == 2
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err
+
+
+def test_a_member_naming_no_organisation_is_a_suspect_only_when_the_victim_is_in_doubt(conn, monkeypatch):
+    # The OpenAI rogue-agent event held a report of the separate Medicare breach whose research named no one.
+    def event_with(victim_doubted):
+        monkeypatch.setattr(co, "victim_in_doubt", lambda c: {"rogue"} if victim_doubted else set())
+        return next((e for e in co.find_suspect_events(conn, co.EntityResolver(conn)) if e["id"] == "rogue"), None)
+
+    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('rogue', 'OpenAI rogue agent', '2026-07-08', 'OpenAI', NULL, 'Active')")
+    for eid, title, org in (("r1", "OpenAI discloses more victims", "OpenAI"), ("r2", "OpenAI slows training", "OpenAI"),
+                            ("r3", "Australia PM criticizes OpenAI over security breach", None)):
+        conn.execute("INSERT INTO EnrichedEvents VALUES (?,?,?,?,NULL,NULL,?)", (eid, eid, title, "2026-07-08",
+                                                                               json.dumps({"formal_entity_name": org})))
+        conn.execute("INSERT INTO RawEvents VALUES (?, ?, ?, NULL)", (eid, f"https://news.example.com/{eid}", title))
+        conn.execute("INSERT INTO EventDeduplicationMap VALUES (?,?,?)", ("m" + eid, eid, "rogue"))
+    assert event_with(False) is None                                     # the victim vouches for them all
+    event = event_with(True)
+    assert event["suspect_ids"] == ["r3"] and event["unidentified_ids"] == ["r3"]
+    resolver = co.EntityResolver(conn)
+    # Judged and reported, but outside the calibrated suspects: the model alone does not split it ...
+    out = co.decide_strays(event, _scores(event, {"r3": 0.02}), {}, 0.3, resolver)
+    assert out["strays"] == [] and [h["id"] for h in out["held"]] == ["r3"]
+    # ... a label does.
+    out = co.decide_strays(event, _scores(event, {"r3": 0.02}), {"rogue|r3": "different"}, 0.3, resolver)
+    assert [s["id"] for s in out["strays"]] == ["r3"] and out["strays"][0]["basis"] == "label"
