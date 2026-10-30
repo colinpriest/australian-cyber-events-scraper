@@ -166,8 +166,16 @@ def preferred_name(names: Sequence[str], usage: Dict[str, int]) -> str:
     return max(names, key=score)
 
 
+#: A case caption names two parties: "Australian Securities and Investments Commission v Fortnum Private Wealth
+#: Ltd [2026] NSWSC 1252". Folding one into either party made ASIC an alias of Fortnum (2026-10-30).
+_CAPTION = re.compile(r"\S\s+(?:v|vs|v\.|vs\.)\s+\S")
+
+
 def is_organisation_list(name: str) -> bool:
-    """A name listing several organisations ("ANZ, NAB, Westpac, Commonwealth Bank")."""
+    """A name listing several organisations ("ANZ, NAB, Westpac, Commonwealth Bank"), or a case caption
+    naming two parties ("ASIC v Fortnum Private Wealth Ltd")."""
+    if _CAPTION.search(name or ""):
+        return True
     parts = [part for part in re.split(r",|;", name or "") if part.strip()]
     # Each part a name of its own (two or more words): "Smith, Jones & Co" is one firm.
     return len(parts) >= 2 and all(len(_tokens(part)) >= 2 for part in parts)
