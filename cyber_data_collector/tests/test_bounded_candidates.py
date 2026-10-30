@@ -82,7 +82,9 @@ def test_the_counts_before_the_cap_equal_the_enumerated_ones():
              for b in sorted(spans, key=bc.span_order)[i + 1:]]
     _, exhaustive = ranking.select(corpus, pairs, group_of=lambda p: 0)
     _, counts = bc.select_bounded(corpus, spans, _make)
-    assert counts == {k: exhaustive[k] for k in ("before", "long_gap_before", "unknown_gap_before")}
+    assert {k: counts[k] for k in ("before", "long_gap_before", "unknown_gap_before")} == {
+        k: exhaustive[k] for k in ("before", "long_gap_before", "unknown_gap_before")}
+    assert counts["events_at_retrieval_budget"] == 0 and 0 < counts["pairs_scored"] < counts["before"]
 
 
 def test_bounded_retrieval_keeps_exactly_what_exhaustive_ranking_keeps():
@@ -204,3 +206,102 @@ def test_a_group_up_to_the_uncapped_threshold_keeps_every_pair_and_a_larger_one_
     # One event over the threshold and the cap applies again.
     assert bc.rank_groups(corpus, {0: spans}, _make, uncapped_max=29)[1]["uncapped_groups"] == 0
     assert e_stats["before"] == c_stats["before"] == 435 and e_stats["after"] == 435
+
+
+# ---------------------------------------------------------------------------
+# CPU and memory, not only paid calls: the interval index and bounded posting walks
+# ---------------------------------------------------------------------------
+
+def _random_spans(rng, n, undated_share=0.1, prefix="x"):
+    """Events with day, month and year intervals, many on the same days and overlapping, some undated."""
+    out = []
+    for i in range(n):
+        event_id = f"{prefix}{rng.randrange(10 ** 6):06d}{i:04d}"
+        if rng.random() < undated_share:
+            out.append(bc.Span(event_id, None, None))
+            continue
+        day = DAY0 + timedelta(days=rng.randrange(0, 400))
+        kind = rng.random()
+        if kind < 0.15:
+            out.append(bc.Span(event_id, date(day.year, 1, 1), date(day.year, 12, 31)))
+        elif kind < 0.4:
+            first = day.replace(day=1)
+            out.append(bc.Span(event_id, first, (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)))
+        else:
+            out.append(bc.Span(event_id, day, day + timedelta(days=rng.choice((0, 0, 0, 3)))))
+    return out
+
+
+def _sorting_nearest(span, members, k):
+    """What ``select_bounded`` did before the index: sort the whole posting for every event that carries the key."""
+    def key(s):
+        g = bc.span_gap(span, s)
+        return (g if g is not None else 10 ** 9, s.event_id)
+    return [s.event_id for s in sorted(members, key=key)][:k]
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_the_interval_index_finds_exactly_the_nearest_the_full_sort_found(seed):
+    rng = random.Random(seed)
+    members = _random_spans(rng, rng.choice((5, 30, 120, 300)))
+    index = bc.IntervalIndex(members)
+    queries = members + _random_spans(rng, 20, prefix="q")          # members (self included) and outsiders
+    for k in (1, 3, 24, len(members) + 5):
+        for q in queries:
+            assert index.nearest(q, k) == _sorting_nearest(q, members, k), (seed, k, q)
+
+
+def test_the_adjacent_neighbours_are_the_start_and_end_order_slices():
+    rng = random.Random(4)
+    members = _random_spans(rng, 200)
+    index = bc.IntervalIndex(members)
+    by_start = sorted((s for s in members if s.start), key=bc.span_order)
+    by_end = sorted(by_start, key=lambda s: (s.end, s.event_id))
+    for s in by_start:
+        i, j = by_start.index(s), by_end.index(s)
+        expected = [x.event_id for x in by_start[max(0, i - 8):i] + by_start[i + 1:i + 9]
+                    + by_end[max(0, j - 8):j] + by_end[j + 1:j + 9]]
+        assert index.adjacent(s, 8) == expected
+    assert index.adjacent(bc.Span("undated", None, None), 8) == []
+
+
+def test_a_rare_word_many_events_carry_is_followed_only_to_its_nearest_and_its_undated_members():
+    """A token carried by every event of a big group used to be unioned whole for every event (quadratic)."""
+    spans = _spans(1200, undated=30, seed=13)
+    corpus = _corpus(spans, rare={"everywhere"})
+    for s in spans:
+        corpus.features[s.event_id].tokens.add("everywhere")
+    make = Counting()
+    kept, counts = bc.select_bounded(corpus, spans, make)
+    assert counts["pairs_scored"] < 1200 * (2 * bc.PER_KEY_LIMIT + 4 * 8 + 8)   # linear, not 1200 * 1199 / 2
+    assert make.built == len(kept)                                           # only kept pairs are built
+    assert counts["events_at_retrieval_budget"] == 0 and kept
+
+
+def test_a_strong_undated_match_inside_long_postings_is_still_retrieved():
+    spans = _spans(500, undated=10, seed=17)
+    ids = [s.event_id for s in spans]
+    dated = sorted((s for s in spans if s.start), key=bc.span_order)
+    undated, partner = ids[0], dated[250].event_id
+    rng = random.Random(9)
+    one = {s.event_id for s in rng.sample(dated[:240], 99)} | {undated, partner}
+    two = {s.event_id for s in rng.sample(dated[260:], 99)} | {undated, partner}   # they share only this pair
+    corpus = _corpus(spans, rare={"alpha", "beta"})
+    for i in one:
+        corpus.features[i].tokens.add("alpha")
+    for i in two:
+        corpus.features[i].tokens.add("beta")
+    kept, _ = bc.select_bounded(corpus, spans, _make)
+    pair = {p["pair_id"]: p for p in kept}.get(bc.pair_id(undated, partner))
+    assert pair is not None and pair["rank_strong"]                         # two shared rare words, unknown gap
+
+
+def test_an_event_with_more_keys_than_the_budget_is_counted_not_hidden():
+    spans = _spans(400, seed=19)
+    corpus = _corpus(spans, rare={f"t{k}" for k in range(10)})
+    for s in spans:
+        corpus.features[s.event_id].tokens.update(f"t{k}" for k in range(10))   # ten long postings each
+    _, counts = bc.select_bounded(corpus, spans, _make, retrieval_budget=2 * bc.PER_KEY_LIMIT)
+    assert counts["events_at_retrieval_budget"] == 400
+    _, stats = bc.rank_groups(corpus, {0: spans}, _make)
+    assert stats["events_at_retrieval_budget"] == 0                          # the default budget holds them

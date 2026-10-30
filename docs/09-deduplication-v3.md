@@ -1101,14 +1101,24 @@ of up to `EXHAUSTIVE_GROUP_MAX` (60) events are ranked as before. A larger group
 `AIUniverse.ranked`, `ranking.subdivide(..., day_of=...)`) goes through `select_bounded`:
 
 1. *Posting lists* over the group for each key the score uses: non-hub source URLs, vendor, corpus-rare words, records-affected
-   figure. A key shared by many events (a vendor, a figure) is followed to its `PER_KEY_LIMIT` (24) nearest by date.
-2. *Date neighbours*: the group's events sorted by interval start and by interval end; the `K` neighbours either side of an
-   event are its nearest by interval gap (right of an event in start order, and left in end order, the gap is monotone).
+   figure. A posting of more than `PER_KEY_LIMIT` (24) events - any key, a URL or a rare word as much as a vendor or a
+   figure - is followed to its 24 nearest by date and its 24 undated members (smallest pair ids first), through an
+   `IntervalIndex` built once per posting: `bisect` to the event's interval, then a walk outwards (right in start order, left
+   in end order, where the gap only grows), all of a tied gap taken to break the tie by id. It returns exactly what sorting
+   the whole posting by `(gap, id)` returned (tested on random groups with day, month and year intervals), without the
+   sort per event (it was O(n * L log L) for a key shared by L events). An event's keys are followed rarest first and at most
+   `RETRIEVAL_BUDGET` (1,024) candidates are taken from them; an event that reaches it is counted
+   (`events_at_retrieval_budget`, printed by `check-duplicates`). On the 2026-10-29 database the most is about 300.
+2. *Date neighbours*: the group's `IntervalIndex` (events in interval start and end order, built once); the `K` neighbours
+   either side of an event are its nearest by interval gap (right of an event in start order, and left in end order, the gap
+   is monotone).
 3. *Undated and tied pairs*: a pair with no date term ties at zero evidence and is ordered by pair id, so the `K` smallest
    pair ids among an event's undated partners (all partners, for an undated event) are found by `bisect` over the sorted ids.
-4. The retrieved candidates are scored with the same `score_pair`, each event keeps its best `K`, and the reserved long-gap /
-   undated budget is filled from the same postings - which are exactly what "strong" means, so a strong match is retrieved
-   however far apart or undated.
+4. The retrieved candidates are scored with the same `score_pair` (each pair once, remembered as a small tuple), each event
+   keeps its best `K`, and the reserved long-gap / undated budget is filled from the same postings - which are exactly what
+   "strong" means, so a strong match is retrieved however far apart or undated when its posting is short (a non-hub source
+   has at most 3 events by definition), and when it is undated in a long one. The route's pair dict is built only for the
+   pairs kept (`pairs_scored` counts the rest).
 
 The counts before the cap (all pairs, long-gap, unknown-gap) are arithmetic (`bisect`), not enumerated; for a large group
 `before` includes pairs another route owns. On random groups (400 events, undated events, rare-word families, distinct dates) the
@@ -1178,7 +1188,10 @@ customer is exactly the shape that is large, spread over weeks, and chained thro
    words shared (+1.5 each, up to 3), an equal record count (+2) or attack method (+0.5), and the closeness of the two
    events' date intervals (up to +2; 0 days apart when the intervals overlap, nothing when a date is unknown). Events
    recording the same supplier are linked even when they share no article or word, because a supplier breach names a
-   different customer each time (suppliers with more than 100 events are skipped and counted). In a bucket that shares a
+   different customer each time. A supplier of more than `MAX_SUPPLIER_GROUP` (100) events is subdivided, not skipped: each
+   dated event is linked to its `SUPPLIER_NEIGHBOURS` (8) neighbours either side in date order (the interval index), each
+   undated one to its 8 either side in id order, so the work is O(n * 8) and the reports of one incident stay connected;
+   the count is `supplier_links.suppliers_subdivided` in the findings. In a bucket that shares a
    blocking key already, a pair needs article, supplier or rare-word evidence to be linked at all; dates and counts only
    order neighbours.
 2. *Plan* (`plan`). Connected groups of at most `max_size` (20) events are one neighbourhood, exactly as before. A larger

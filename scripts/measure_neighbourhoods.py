@@ -140,8 +140,10 @@ def run(db: str, key: str, max_size: int, neighbours: int, call_budget: int,
         edges = [tuple(sorted(k)) for k, why in pair_reasons.items() if strong(k, why)]
         corpus = ranking.load_corpus(conn)
         old_edges = len(edges)
+        suppliers_subdivided = 0
         if supplier_links:
-            extra, _skipped = nb.supplier_pairs(corpus)
+            extra, suppliers_subdivided = nb.supplier_pairs(
+                corpus, _intervals(conn, {i for i, f in corpus.features.items() if f.vendor}))
             edges = sorted(set(edges) | {tuple(sorted(e)) for e in extra})
         nodes = {i for e in edges for i in e}
         key_of = (vendor_key(conn, set(by_id)) if key == "vendor" else source_key(records, judge_pairs.hub_urls))
@@ -204,6 +206,7 @@ def run(db: str, key: str, max_size: int, neighbours: int, call_budget: int,
         return {
             "key": key, "database": str(db), "events": len(records), "linked_events": len(nodes),
             "strong_edges": old_edges, "edges_with_supplier_links": len(edges), "supplier_links": supplier_links,
+            "suppliers_subdivided": suppliers_subdivided,
             "max_size": max_size, "neighbours": neighbours,
             "bucket_sizes": {"groups": len(components), "largest": [len(c) for c in components[:10]],
                              "larger_than_max_size": len(large),
