@@ -12,6 +12,11 @@ database first; calibrate on the database as it was when labelled.
                  any cut-off lies here and its precision decides whether rejection is safe.
                * ``B`` - a seeded sample of 0.5-0.9; ``C`` - of 0.9 and above. B and C are weighted
                  up to their bands and measure what a cut-off misses (recall).
+               ``--extend`` keeps the existing file and raises its census to ``--census-below``
+               (for more labels where the cut-off lies): unsampled events below the new bound join
+               the census A, B rows below it become census rows (weight 1), and the remaining B rows
+               - still a simple random sample of the narrowed band - are reweighted to it. Nothing
+               is redrawn; a sample whose scores have left their bands is refused.
 
 ``packet``     Writes one JSON labelling packet per sampled event to ``--out`` (not committed):
                the event, every active record's page text and Perplexity research, and the victim's
@@ -36,6 +41,7 @@ database first; calibrate on the database as it was when labelled.
 Usage (from the project root):
     python scripts/dedup_admin.py check-scope                      # scores every active event
     python scripts/calibrate_event_scope.py sample
+    python scripts/calibrate_event_scope.py sample --extend --census-below 0.75   # more labels near the cut-off
     python scripts/calibrate_event_scope.py packet --out <dir>
     python scripts/calibrate_event_scope.py calibrate --precision 0.95
 """
@@ -63,6 +69,59 @@ from scripts.calibrate_event_reality import bootstrap, choose_cutoff  # noqa: E4
 
 SAMPLE_PATH = es.ROOT / "evaluation" / "event_scope_sample.csv"
 EXTRA_STRATUM = "X"
+#: Stratum C (a seeded sample) starts here; B is the census bound up to it.
+HIGH_BAND = 0.9
+
+
+def _bands(probs: Dict[str, float], census_below: float) -> Dict[str, List[str]]:
+    return {
+        "A": sorted(d for d, p in probs.items() if p < census_below),
+        "B": sorted(d for d, p in probs.items() if census_below <= p < HIGH_BAND),
+        "C": sorted(d for d, p in probs.items() if p >= HIGH_BAND),
+    }
+
+
+def extend_sample(existing: List[Dict[str, str]], probs: Dict[str, float],
+                  census_below: float) -> Dict[str, List[str]]:
+    """The sample with its census raised to ``census_below``, nothing redrawn.
+
+    Every event scoring below ``census_below`` becomes a census row (stratum A): the existing A rows,
+    the existing B rows below it and every unsampled event below it. The B rows at or above it are
+    still a simple random sample of the narrowed band (a simple random sample restricted to a sub-band
+    is one of that sub-band), so they keep stratum B and are reweighted to it; C is unchanged.
+
+    Raises ``ValueError`` when the existing sample cannot be extended soundly: a sampled event with no
+    score on its current evidence, a row whose score left the band it was drawn from (A at or above
+    the new census bound, B at or above the high band, C below it), or a band with events and no row.
+    """
+    problems = []
+    for r in existing:
+        d, stratum = r["deduplicated_event_id"], r["stratum"]
+        if stratum == EXTRA_STRATUM:
+            continue
+        p = probs.get(d)
+        if p is None:
+            problems.append(f"{d} ({stratum}) has no score on its current evidence")
+        elif stratum == "A" and p >= census_below:
+            problems.append(f"{d} (A, census) scores {p:.3f}, not below the new census bound {census_below}: "
+                            "a census cannot be narrowed")
+        elif stratum == "B" and p >= HIGH_BAND:
+            problems.append(f"{d} (B) scores {p:.3f}, above the band it was drawn from")
+        elif stratum == "C" and p < HIGH_BAND:
+            problems.append(f"{d} (C) scores {p:.3f}, below the band it was drawn from")
+        elif stratum not in ("A", "B", "C"):
+            problems.append(f"{d} has unknown stratum {stratum!r}")
+    bands = _bands(probs, census_below)
+    sampled = {s: sorted(r["deduplicated_event_id"] for r in existing if r["stratum"] == s) for s in "BC"}
+    chosen = {"A": bands["A"],
+              "B": sorted(d for d in sampled["B"] if probs.get(d, HIGH_BAND) >= census_below),
+              "C": sampled["C"]}
+    for s in "BC":
+        if bands[s] and not chosen[s]:
+            problems.append(f"band {s} holds {len(bands[s])} event(s) and no sampled row is left in it")
+    if problems:
+        raise ValueError("cannot extend the sample: " + "; ".join(problems))
+    return chosen
 
 
 def cmd_sample(args) -> int:
@@ -74,15 +133,27 @@ def cmd_sample(args) -> int:
               file=sys.stderr)
         return 2
     unjudged = len(active) - len(probs)
-    bands = {
-        "A": sorted(d for d, p in probs.items() if p < args.census_below),
-        "B": sorted(d for d, p in probs.items() if args.census_below <= p < 0.9),
-        "C": sorted(d for d, p in probs.items() if p >= 0.9),
-    }
-    rng = random.Random(args.seed)
-    chosen = {"A": bands["A"],
-              "B": sorted(rng.sample(bands["B"], min(args.sample_mid, len(bands["B"])))),
-              "C": sorted(rng.sample(bands["C"], min(args.sample_high, len(bands["C"]))))}
+    bands = _bands(probs, args.census_below)
+    if args.extend:
+        if not SAMPLE_PATH.exists():
+            print(f"--extend needs an existing sample: {SAMPLE_PATH} is missing.", file=sys.stderr)
+            return 2
+        with SAMPLE_PATH.open(encoding="utf-8") as fh:
+            existing = list(csv.DictReader(fh))
+        try:
+            chosen = extend_sample(existing, probs, args.census_below)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        before = {r["deduplicated_event_id"] for r in existing}
+        added = [d for d in chosen["A"] if d not in before]
+        print(f"Extending {SAMPLE_PATH.name}: census raised to {args.census_below}; "
+              f"{len(added)} unsampled event(s) added to the census, nothing redrawn.")
+    else:
+        rng = random.Random(args.seed)
+        chosen = {"A": bands["A"],
+                  "B": sorted(rng.sample(bands["B"], min(args.sample_mid, len(bands["B"])))),
+                  "C": sorted(rng.sample(bands["C"], min(args.sample_high, len(bands["C"]))))}
     SAMPLE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with SAMPLE_PATH.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
@@ -207,6 +278,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--sample-mid", type=int, default=40)
     p.add_argument("--sample-high", type=int, default=30)
     p.add_argument("--seed", type=int, default=20261029)
+    p.add_argument("--extend", action="store_true",
+                   help="Keep the existing sample and raise its census to --census-below: unsampled events "
+                        "below it join stratum A (weight 1), B rows below it become census rows and the rest "
+                        "of B is reweighted to its narrowed band. Nothing is redrawn.")
     p.set_defaults(func=cmd_sample)
     p = sub.add_parser("packet", aliases=["packets"])
     p.add_argument("--out", required=True)

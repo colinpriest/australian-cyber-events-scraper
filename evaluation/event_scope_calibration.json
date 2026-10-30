@@ -12,28 +12,28 @@
   "min_rejections": 10,
   "at_cutoff": {
     "cutoff": 0.720001,
-    "rejected_labelled": 59,
-    "correct_labelled": 57,
-    "weighted_precision": 0.9694772987409385,
-    "weighted_recall": 0.4762886597938144,
+    "rejected_labelled": 71,
+    "correct_labelled": 68,
+    "weighted_precision": 0.9577464788732394,
+    "weighted_recall": 0.49340434486061324,
     "unweighted_precision_ci95": [
-      0.8845621301839242,
-      0.9906542869664985
+      0.8829739389031531,
+      0.9855270017501733
     ]
   },
-  "labelled_used": 120,
-  "labelled_out_of_scope": 79,
+  "labelled_used": 143,
+  "labelled_out_of_scope": 96,
   "extra_labelled_outside_sample": 0,
-  "unsure_excluded": 2,
-  "missing": 8,
+  "unsure_excluded": 4,
+  "missing": 1,
   "labels_file": "evaluation\\event_scope_labels.csv",
   "sample_file": "evaluation\\event_scope_sample.csv",
-  "generated": "2026-10-29T20:22:09.911903",
+  "generated": "2026-10-30T18:35:14.921305",
   "bootstrap_out_of_sample_precision": {
     "replicates": 1000,
-    "median": 0.9523809523809523,
-    "mean": 0.9262400569722966,
-    "p05": 0.7874743326488706
+    "median": 0.9545454545454546,
+    "mean": 0.9358778683930528,
+    "p05": 0.8190256700815173
   },
   "curve": [
     {
@@ -41,7 +41,7 @@
       "rejected_labelled": 3,
       "correct_labelled": 3,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.022492970946579195,
+      "weighted_recall": 0.021767838743850583,
       "unweighted_precision_ci95": [
         0.43849391955098227,
         1.0
@@ -52,7 +52,7 @@
       "rejected_labelled": 11,
       "correct_labelled": 11,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.08247422680412371,
+      "weighted_recall": 0.07981540872745214,
       "unweighted_precision_ci95": [
         0.7411599827511859,
         1.0
@@ -60,377 +60,1437 @@
     },
     {
       "cutoff": 0.040001,
-      "rejected_labelled": 18,
-      "correct_labelled": 18,
+      "rejected_labelled": 19,
+      "correct_labelled": 19,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.13495782567947517,
+      "weighted_recall": 0.13786297871105369,
       "unweighted_precision_ci95": [
-        0.8241154494176252,
+        0.8318156346315496,
         1.0
       ]
     },
     {
       "cutoff": 0.050001,
-      "rejected_labelled": 27,
-      "correct_labelled": 27,
+      "rejected_labelled": 29,
+      "correct_labelled": 29,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.20243673851921273,
+      "weighted_recall": 0.21042244119055564,
       "unweighted_precision_ci95": [
-        0.8754409628553641,
+        0.8830264055344442,
         1.0
       ]
     },
     {
       "cutoff": 0.060001,
-      "rejected_labelled": 30,
-      "correct_labelled": 30,
+      "rejected_labelled": 33,
+      "correct_labelled": 33,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.22492970946579194,
+      "weighted_recall": 0.23944622618235642,
       "unweighted_precision_ci95": [
-        0.8864829086095221,
+        0.8957265699643882,
         1.0
       ]
     },
     {
       "cutoff": 0.070001,
-      "rejected_labelled": 31,
-      "correct_labelled": 31,
+      "rejected_labelled": 34,
+      "correct_labelled": 34,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.232427366447985,
+      "weighted_recall": 0.24670217243030662,
       "unweighted_precision_ci95": [
-        0.889740999265246,
-        0.9999999999999999
+        0.8984820937803899,
+        1.0
       ]
     },
     {
       "cutoff": 0.080001,
-      "rejected_labelled": 40,
-      "correct_labelled": 40,
+      "rejected_labelled": 44,
+      "correct_labelled": 44,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.29990627928772257,
+      "weighted_recall": 0.3192616349098086,
       "unweighted_precision_ci95": [
-        0.9123754607496077,
-        1.0
+        0.9197016822179859,
+        0.9999999999999999
       ]
     },
     {
       "cutoff": 0.120001,
-      "rejected_labelled": 45,
-      "correct_labelled": 45,
+      "rejected_labelled": 49,
+      "correct_labelled": 49,
       "weighted_precision": 1.0,
-      "weighted_recall": 0.3373945641986879,
+      "weighted_recall": 0.35554136614955956,
       "unweighted_precision_ci95": [
-        0.9213457380593594,
-        1.0
+        0.9272997032640949,
+        0.9999999999999999
       ]
     },
     {
       "cutoff": 0.150001,
-      "rejected_labelled": 49,
-      "correct_labelled": 48,
-      "weighted_precision": 0.9795918367346939,
-      "weighted_recall": 0.3598875351452671,
+      "rejected_labelled": 53,
+      "correct_labelled": 52,
+      "weighted_precision": 0.9811320754716981,
+      "weighted_recall": 0.37730920489341013,
       "unweighted_precision_ci95": [
-        0.8930623153224584,
-        0.9963884204614692
+        0.9005685649885059,
+        0.9966616326132506
       ]
     },
     {
       "cutoff": 0.180001,
-      "rejected_labelled": 50,
-      "correct_labelled": 49,
-      "weighted_precision": 0.98,
-      "weighted_recall": 0.3673851921274602,
+      "rejected_labelled": 54,
+      "correct_labelled": 53,
+      "weighted_precision": 0.9814814814814815,
+      "weighted_recall": 0.3845651511413603,
       "unweighted_precision_ci95": [
-        0.8950431352816304,
-        0.9964608319110235
+        0.902283346415128,
+        0.996723596684648
       ]
     },
     {
       "cutoff": 0.200001,
-      "rejected_labelled": 51,
-      "correct_labelled": 50,
-      "weighted_precision": 0.9803921568627451,
-      "weighted_recall": 0.37488284910965325,
+      "rejected_labelled": 55,
+      "correct_labelled": 54,
+      "weighted_precision": 0.9818181818181818,
+      "weighted_recall": 0.3918210973893105,
       "unweighted_precision_ci95": [
-        0.8969519232441061,
-        0.9965303967465577
+        0.9039399953951678,
+        0.9967833024077472
       ]
     },
     {
       "cutoff": 0.220001,
-      "rejected_labelled": 53,
-      "correct_labelled": 51,
-      "weighted_precision": 0.9622641509433962,
-      "weighted_recall": 0.3823805060918463,
-      "unweighted_precision_ci95": [
-        0.8724547684904087,
-        0.9895899311661807
-      ]
-    },
-    {
-      "cutoff": 0.250001,
-      "rejected_labelled": 55,
-      "correct_labelled": 53,
-      "weighted_precision": 0.9636363636363636,
-      "weighted_recall": 0.39737582005623245,
-      "unweighted_precision_ci95": [
-        0.8767630702509827,
-        0.989970669144275
-      ]
-    },
-    {
-      "cutoff": 0.300001,
-      "rejected_labelled": 56,
-      "correct_labelled": 54,
-      "weighted_precision": 0.9642857142857143,
-      "weighted_recall": 0.40487347703842547,
-      "unweighted_precision_ci95": [
-        0.8788099414778991,
-        0.9901507814974224
-      ]
-    },
-    {
-      "cutoff": 0.680001,
       "rejected_labelled": 57,
       "correct_labelled": 55,
-      "weighted_precision": 0.9662019433882552,
-      "weighted_recall": 0.42867853795688843,
+      "weighted_precision": 0.9649122807017544,
+      "weighted_recall": 0.3990770436372607,
       "unweighted_precision_ci95": [
         0.8807899619581051,
         0.9903245386467442
       ]
     },
     {
-      "cutoff": 0.710001,
-      "rejected_labelled": 58,
-      "correct_labelled": 56,
-      "weighted_precision": 0.9679230152365678,
-      "weighted_recall": 0.45248359887535144,
-      "unweighted_precision_ci95": [
-        0.8827063524467295,
-        0.9904922711335143
-      ]
-    },
-    {
-      "cutoff": 0.720001,
+      "cutoff": 0.250001,
       "rejected_labelled": 59,
       "correct_labelled": 57,
-      "weighted_precision": 0.9694772987409385,
-      "weighted_recall": 0.4762886597938144,
+      "weighted_precision": 0.9661016949152542,
+      "weighted_recall": 0.4135889361331611,
       "unweighted_precision_ci95": [
         0.8845621301839242,
         0.9906542869664985
       ]
     },
     {
-      "cutoff": 0.740001,
-      "rejected_labelled": 63,
-      "correct_labelled": 60,
-      "weighted_precision": 0.9338446788111218,
-      "weighted_recall": 0.5477038425492033,
+      "cutoff": 0.300001,
+      "rejected_labelled": 60,
+      "correct_labelled": 58,
+      "weighted_precision": 0.9666666666666667,
+      "weighted_recall": 0.4208448823811113,
       "unweighted_precision_ci95": [
-        0.8690882244316417,
-        0.9836741271577875
+        0.8863601247107462,
+        0.9908108735098498
+      ]
+    },
+    {
+      "cutoff": 0.600001,
+      "rejected_labelled": 61,
+      "correct_labelled": 59,
+      "weighted_precision": 0.9672131147540983,
+      "weighted_recall": 0.42810082862906146,
+      "unweighted_precision_ci95": [
+        0.888102992233543,
+        0.9909622991843121
+      ]
+    },
+    {
+      "cutoff": 0.640001,
+      "rejected_labelled": 62,
+      "correct_labelled": 60,
+      "weighted_precision": 0.967741935483871,
+      "weighted_recall": 0.4353567748770117,
+      "unweighted_precision_ci95": [
+        0.8897932286898178,
+        0.9911088150029237
+      ]
+    },
+    {
+      "cutoff": 0.650001,
+      "rejected_labelled": 63,
+      "correct_labelled": 61,
+      "weighted_precision": 0.9682539682539683,
+      "weighted_recall": 0.44261272112496186,
+      "unweighted_precision_ci95": [
+        0.8914331816504081,
+        0.9912506559597031
+      ]
+    },
+    {
+      "cutoff": 0.680001,
+      "rejected_labelled": 66,
+      "correct_labelled": 64,
+      "weighted_precision": 0.9696969696969697,
+      "weighted_recall": 0.46438055986881244,
+      "unweighted_precision_ci95": [
+        0.8960728112941316,
+        0.9916502649240535
+      ]
+    },
+    {
+      "cutoff": 0.710001,
+      "rejected_labelled": 69,
+      "correct_labelled": 66,
+      "weighted_precision": 0.9565217391304348,
+      "weighted_recall": 0.47889245236471284,
+      "unweighted_precision_ci95": [
+        0.8797860261535665,
+        0.9851043661497328
+      ]
+    },
+    {
+      "cutoff": 0.720001,
+      "rejected_labelled": 71,
+      "correct_labelled": 68,
+      "weighted_precision": 0.9577464788732394,
+      "weighted_recall": 0.49340434486061324,
+      "unweighted_precision_ci95": [
+        0.8829739389031531,
+        0.9855270017501733
+      ]
+    },
+    {
+      "cutoff": 0.730001,
+      "rejected_labelled": 75,
+      "correct_labelled": 71,
+      "weighted_precision": 0.9466666666666667,
+      "weighted_recall": 0.5151721836044638,
+      "unweighted_precision_ci95": [
+        0.8707382679518444,
+        0.9790669110399569
+      ]
+    },
+    {
+      "cutoff": 0.740001,
+      "rejected_labelled": 82,
+      "correct_labelled": 76,
+      "weighted_precision": 0.926829268292683,
+      "weighted_recall": 0.5514519148442147,
+      "unweighted_precision_ci95": [
+        0.8494197580293277,
+        0.9660356854852388
       ]
     },
     {
       "cutoff": 0.750001,
-      "rejected_labelled": 66,
-      "correct_labelled": 62,
-      "weighted_precision": 0.9048433048433049,
-      "weighted_recall": 0.5953139643861294,
+      "rejected_labelled": 85,
+      "correct_labelled": 78,
+      "weighted_precision": 0.900398476214684,
+      "weighted_recall": 0.5963067233597933,
       "unweighted_precision_ci95": [
-        0.8542688489926583,
-        0.9761817706953214
+        0.839638370084281,
+        0.9595367911014697
       ]
     },
     {
       "cutoff": 0.770001,
-      "rejected_labelled": 68,
-      "correct_labelled": 62,
-      "weighted_precision": 0.8437832093517535,
-      "weighted_recall": 0.5953139643861294,
+      "rejected_labelled": 87,
+      "correct_labelled": 78,
+      "weighted_precision": 0.8432837888450507,
+      "weighted_recall": 0.5963067233597933,
       "unweighted_precision_ci95": [
-        0.8205602176535453,
-        0.958932443979826
+        0.8149483835215049,
+        0.9446155167180331
       ]
     },
     {
       "cutoff": 0.780001,
-      "rejected_labelled": 73,
-      "correct_labelled": 66,
-      "weighted_precision": 0.8374630597863151,
-      "weighted_recall": 0.6905342080599812,
+      "rejected_labelled": 93,
+      "correct_labelled": 82,
+      "weighted_precision": 0.8150472543510814,
+      "weighted_recall": 0.6860163403909503,
       "unweighted_precision_ci95": [
-        0.8150416221426188,
-        0.9527716456706489
+        0.8004996842701593,
+        0.9326563148046185
       ]
     },
     {
       "cutoff": 0.790001,
-      "rejected_labelled": 74,
-      "correct_labelled": 66,
-      "weighted_precision": 0.8139637649138312,
-      "weighted_recall": 0.6905342080599812,
+      "rejected_labelled": 94,
+      "correct_labelled": 82,
+      "weighted_precision": 0.7938933989863197,
+      "weighted_recall": 0.6860163403909503,
       "unweighted_precision_ci95": [
-        0.8009095372797369,
-        0.9441933383034987
+        0.7899995060049553,
+        0.9254425963318832
       ]
     },
     {
       "cutoff": 0.810001,
-      "rejected_labelled": 75,
-      "correct_labelled": 66,
-      "weighted_precision": 0.7917472598323662,
-      "weighted_recall": 0.6905342080599812,
+      "rejected_labelled": 96,
+      "correct_labelled": 83,
+      "weighted_precision": 0.7793907047510789,
+      "weighted_recall": 0.7084437446487396,
       "unweighted_precision_ci95": [
-        0.7874015748031495,
-        0.9355670103092784
+        0.7819868570932831,
+        0.9191237020323721
       ]
     },
     {
       "cutoff": 0.820001,
-      "rejected_labelled": 77,
-      "correct_labelled": 68,
-      "weighted_precision": 0.8025270022416956,
-      "weighted_recall": 0.7381443298969073,
+      "rejected_labelled": 98,
+      "correct_labelled": 85,
+      "weighted_precision": 0.7897651200720555,
+      "weighted_recall": 0.7532985531643182,
       "unweighted_precision_ci95": [
-        0.7925471803683823,
-        0.9372750893541368
+        0.7861693677036048,
+        0.9208108839813649
       ]
     },
     {
       "cutoff": 0.830001,
-      "rejected_labelled": 79,
-      "correct_labelled": 70,
-      "weighted_precision": 0.812245688819996,
-      "weighted_recall": 0.7857544517338332,
+      "rejected_labelled": 100,
+      "correct_labelled": 87,
+      "weighted_precision": 0.7992076212508046,
+      "weighted_recall": 0.7981533616798966,
       "unweighted_precision_ci95": [
-        0.7974501267503696,
-        0.9388948979715092
+        0.7901947810519012,
+        0.9224290614158575
       ]
     },
     {
       "cutoff": 0.840001,
-      "rejected_labelled": 80,
-      "correct_labelled": 70,
-      "weighted_precision": 0.7927382753403934,
-      "weighted_recall": 0.7857544517338332,
+      "rejected_labelled": 101,
+      "correct_labelled": 87,
+      "weighted_precision": 0.7816539955701496,
+      "weighted_recall": 0.7981533616798966,
       "unweighted_precision_ci95": [
-        0.7849700281693438,
-        0.9306651696322249
+        0.7806876109575833,
+        0.915600885211876
       ]
     },
     {
       "cutoff": 0.850001,
-      "rejected_labelled": 82,
-      "correct_labelled": 72,
-      "weighted_precision": 0.8022374594009384,
-      "weighted_recall": 0.8333645735707591,
+      "rejected_labelled": 103,
+      "correct_labelled": 89,
+      "weighted_precision": 0.7908418074058142,
+      "weighted_recall": 0.8430081701954751,
       "unweighted_precision_ci95": [
-        0.7898683447569095,
-        0.9323921909274209
+        0.784697266688472,
+        0.917276496340161
       ]
     },
     {
       "cutoff": 0.860001,
-      "rejected_labelled": 85,
-      "correct_labelled": 75,
-      "weighted_precision": 0.8149586358264393,
-      "weighted_recall": 0.904779756326148,
+      "rejected_labelled": 106,
+      "correct_labelled": 92,
+      "weighted_precision": 0.8032597950078626,
+      "weighted_recall": 0.9102903829688428,
       "unweighted_precision_ci95": [
-        0.7968121063083018,
-        0.9348271257631602
+        0.7904447909077673,
+        0.9196686815835292
       ]
     },
     {
       "cutoff": 0.870001,
-      "rejected_labelled": 88,
-      "correct_labelled": 77,
-      "weighted_precision": 0.805996192893401,
-      "weighted_recall": 0.952389878163074,
+      "rejected_labelled": 109,
+      "correct_labelled": 94,
+      "weighted_precision": 0.7956045868859256,
+      "weighted_recall": 0.9551451914844215,
       "unweighted_precision_ci95": [
-        0.7898806043001849,
-        0.9287479910204541
+        0.7852989880602104,
+        0.9147974302819615
       ]
     },
     {
       "cutoff": 0.880001,
-      "rejected_labelled": 90,
-      "correct_labelled": 78,
-      "weighted_precision": 0.7941445562671546,
-      "weighted_recall": 0.976194939081537,
+      "rejected_labelled": 111,
+      "correct_labelled": 95,
+      "weighted_precision": 0.7849578264712377,
+      "weighted_recall": 0.9775725957422107,
       "unweighted_precision_ci95": [
-        0.7812588689264784,
-        0.9220539475642889
+        0.7786184580786779,
+        0.9092855766961772
       ]
     },
     {
       "cutoff": 0.890001,
-      "rejected_labelled": 92,
-      "correct_labelled": 79,
-      "weighted_precision": 0.783176746917205,
+      "rejected_labelled": 113,
+      "correct_labelled": 96,
+      "weighted_precision": 0.7750513306028246,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.7731123836110049,
-        0.9155238662011852
+        0.7722291199082653,
+        0.9038999300191578
       ]
     },
     {
       "cutoff": 0.920001,
-      "rejected_labelled": 93,
-      "correct_labelled": 79,
-      "weighted_precision": 0.6655439121756487,
+      "rejected_labelled": 115,
+      "correct_labelled": 96,
+      "weighted_precision": 0.579023678471241,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.7630400864073414,
-        0.9081590676752016
+        0.7563185513352585,
+        0.8916027152919156
       ]
     },
     {
       "cutoff": 0.960001,
-      "rejected_labelled": 94,
-      "correct_labelled": 79,
-      "weighted_precision": 0.5786334056399133,
+      "rejected_labelled": 116,
+      "correct_labelled": 96,
+      "weighted_precision": 0.5140201381556397,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.7532737570410223,
-        0.9008447365240871
+        0.7486439764897705,
+        0.8855264618221343
+      ]
+    },
+    {
+      "cutoff": 0.970001,
+      "rejected_labelled": 117,
+      "correct_labelled": 96,
+      "weighted_precision": 0.46213859060774026,
+      "weighted_recall": 1.0,
+      "unweighted_precision_ci95": [
+        0.7411452930121714,
+        0.8795019013314984
       ]
     },
     {
       "cutoff": 0.980001,
-      "rejected_labelled": 96,
-      "correct_labelled": 79,
-      "weighted_precision": 0.4588063295493636,
+      "rejected_labelled": 119,
+      "correct_labelled": 96,
+      "weighted_precision": 0.384517625933303,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.7345877787621297,
-        0.8863958593205933
+        0.7266458695547726,
+        0.8676153579121442
       ]
     },
     {
       "cutoff": 0.990001,
-      "rejected_labelled": 112,
-      "correct_labelled": 79,
-      "weighted_precision": 0.1726984332513272,
+      "rejected_labelled": 135,
+      "correct_labelled": 96,
+      "weighted_precision": 0.16406555146027246,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.6152493563162676,
-        0.7818446064743015
+        0.6296510538586366,
+        0.7808887267258569
       ]
     },
     {
       "cutoff": 1.000001,
-      "rejected_labelled": 120,
-      "correct_labelled": 79,
-      "weighted_precision": 0.13165038002171553,
+      "rejected_labelled": 143,
+      "correct_labelled": 96,
+      "weighted_precision": 0.1275126920085243,
       "weighted_recall": 1.0,
       "unweighted_precision_ci95": [
-        0.5697466444292892,
-        0.7370969364029997
+        0.5907377236060101,
+        0.7429551808570305
       ]
     }
-  ]
+  ],
+  "labelled_rows": {
+    "reject": [
+      {
+        "id": "0a75d185-637e-4404-8a2a-b555156f46e8",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "127184d7-ac69-4012-bc92-05ae7b30239b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "148e8dc6-09db-4bd5-9b6a-5a70b2523073",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.64,
+        "positive": true
+      },
+      {
+        "id": "1886ad1f-a27e-455a-bee2-175d46bec37d",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": true
+      },
+      {
+        "id": "19f30a25-c9c5-4170-9a60-bbadccfeb7e3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.6,
+        "positive": true
+      },
+      {
+        "id": "22ef1d74-64e1-4906-ac59-8531cd3203cf",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "240e0962-840b-4d38-9b79-63d9514fb8d4",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "25e13894-c2fa-46c4-9d83-265abba3b74d",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": true
+      },
+      {
+        "id": "29aec421-ae03-47cb-8c84-fe096cae8b2c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "2a1d6384-0a63-429b-96c6-26c8596aa9c2",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": true
+      },
+      {
+        "id": "2f373046-1a18-4864-a383-77aca5b9f9e6",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "2fd428ff-9f1b-467a-9ebc-c713d59009b5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": true
+      },
+      {
+        "id": "2fe76e76-9246-4d6b-b53f-c15c4e3911f1",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "30449ec8-0ac7-44b6-a077-a3372299f10c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "34f04aa7-e2e5-4c5d-9c68-9bd7ede0f315",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "3f72d721-ccb9-4578-8925-393527418b9e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "48da8173-df10-4c5b-a056-c83ac91be69a",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "4977fc04-b72e-436f-8b1a-bfbbd1f602c9",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "4c8ffd29-fb18-47fd-886f-a17e8e84440b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "50e7cf69-e97a-493b-824d-9ed0c75cfbfb",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "536f4234-7439-4a51-b4b3-a869920f2273",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "539aabac-3d4c-43c1-95c6-d432477608aa",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "55109202-d1a2-4dda-b411-728f54037083",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "558131cb-93dc-427e-a9a0-8d6befa32673",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "55b71923-2a91-45a8-a8fd-58a94615050f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "56ac7aba-d217-486c-9eeb-36900be06ac5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "5a574bd3-e858-4011-98c4-b7e9e75ec59e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "5e0f1e29-d26d-4c5b-ba43-95eacd3c26ba",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "5e15704f-f472-444d-aa98-61effa595f5b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": false
+      },
+      {
+        "id": "62d1712a-a3db-4547-a772-9476c2388244",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "65bcbba1-57f8-45ff-9ae3-c12545008e8c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "67b5be9f-9075-4fe2-808f-4783b4341303",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": true
+      },
+      {
+        "id": "6b236474-54bb-4b61-a86d-2627d5860b01",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "703a33c9-652f-4274-96cd-3795fb74c598",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "7128199b-aff0-47b2-a83b-85308e5cf5a0",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "7506fc5b-ec35-4e02-bb2e-473fda37d070",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": true
+      },
+      {
+        "id": "7650d0ad-1f9c-41ea-acf0-b44a973ebcd6",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "78c1fde6-1610-40ec-b063-40fc9ac4b20f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "7d70194a-f48b-443f-9ce0-4edef06bbcd8",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": false
+      },
+      {
+        "id": "7d8dae0f-835b-4354-a3d5-3c74545257a3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": true
+      },
+      {
+        "id": "7e7e266d-5c39-4b2a-90e7-4d56505e6485",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "88757002-4c01-40e5-ac2e-0f34b1f4b52f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "911cc3ae-6000-4454-9883-0284428c1c57",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "92277ae4-bb56-44f2-9391-707597afdad5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "9b5e67ac-93a6-4858-b5e8-78d8bdca241c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "9ecb03ce-0ac4-4d73-83c3-4ef069898036",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.2,
+        "positive": true
+      },
+      {
+        "id": "9f9e67df-f969-4385-8fb1-2677c4f78229",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "a0f9bcc0-019c-4167-ba3b-19181a9e9634",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "a5c5124d-2460-4952-9c01-81dc5e5447e9",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "a70689f2-50bf-40a1-a21b-9b5b0855a756",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.71,
+        "positive": true
+      },
+      {
+        "id": "aa89c7c0-dbab-4ff6-a577-7876646ebebc",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "aabdd1ca-54c6-4fc1-8543-38b019c122f9",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": true
+      },
+      {
+        "id": "ae1a022d-675c-45d1-9312-1edc48ef63a5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "b45d1d5d-9e80-4d61-aa3e-16835d09fbd4",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "b625a9a1-b268-4c7c-8ae0-d5d5a76f2469",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.22,
+        "positive": true
+      },
+      {
+        "id": "b7d950d5-d1ff-4394-8c2b-1c0e92e71291",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "bce0194f-3bef-4755-98a4-27fbe13bd9f3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.22,
+        "positive": false
+      },
+      {
+        "id": "bd1eb6df-a77d-463b-aed1-c78533e6eac2",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": true
+      },
+      {
+        "id": "bddb6f65-b796-46e7-a721-c4ce00bbd75e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "bebb790c-2494-4980-b3a3-d9520095447a",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "c640c6f1-24a6-45e2-9414-87ecd58653b3",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.25,
+        "positive": true
+      },
+      {
+        "id": "c7d8a596-15d8-4758-a792-5a1292b5797b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "c84bcd46-7199-4d3b-9d08-c612678cfdf9",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "ced6fd5f-1dfd-4db3-ad5d-d154bfaa31bd",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.15,
+        "positive": false
+      },
+      {
+        "id": "cf0b96ea-3a35-4a76-b9b6-a70ec93725f9",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "d4e79d62-4e79-4e41-a477-547a3427811d",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "d950485b-7e0f-4bc4-9b03-48acf117e578",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "dfa5893d-6019-45a8-b45a-438f694a2653",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.65,
+        "positive": true
+      },
+      {
+        "id": "e7da1eb7-0bb4-4674-b680-25df939bc534",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "e94eba13-5f43-4832-843c-04691d59775c",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.25,
+        "positive": true
+      },
+      {
+        "id": "e9d72988-260d-4ad0-9c79-9231d066d7ff",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "eaba32c0-e92a-4f05-9278-fcb066e717a4",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "ebaf9d7d-e5af-4a51-b658-6a90abbd0f16",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": true
+      },
+      {
+        "id": "ebe271e0-4ad8-41cf-bd0e-588ab9ec4c21",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.3,
+        "positive": true
+      },
+      {
+        "id": "ec371fe2-f016-4caa-838f-a95c418b828e",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "f0adf32a-9fb2-4c41-b1ea-577148773fc5",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "f556ff44-2667-472b-9efc-693e2430c40f",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "f9348faf-6bfe-4db7-8e91-a5b93b585d9b",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": false
+      },
+      {
+        "id": "fc98d727-75b0-463e-94c4-4a55ba8dea31",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.74,
+        "positive": true
+      },
+      {
+        "id": "fcf6249c-4b9d-49e1-9be5-d72d31bce78d",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "fdf33115-2d27-4e74-b27d-c211db283638",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": true
+      },
+      {
+        "id": "feeb9505-07b3-4429-882d-00c720e97072",
+        "stratum": "A",
+        "weight": 1.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "1749862e-23de-4bed-8043-314058f0f293",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "17700ece-e04b-472b-95da-0e892e22e6b6",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.81,
+        "positive": false
+      },
+      {
+        "id": "19c65b54-c3fc-4eed-94c3-b2a87080d830",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "1b06da39-2265-4059-abfa-56b9c339fd07",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "24f9cc09-05ad-4f31-a891-87909a3bef2f",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.85,
+        "positive": true
+      },
+      {
+        "id": "2767cd32-cfe6-47a8-ae01-7483e93ea0d2",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": true
+      },
+      {
+        "id": "28771fa3-fa81-48a6-92c6-416db430d488",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.87,
+        "positive": true
+      },
+      {
+        "id": "29d31743-171a-4e1c-9fc1-43918bea2ace",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "30fc60cc-7f26-4303-a176-ca44fe2143f3",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "3455f379-5f5a-400e-80c8-ef29774a5280",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.83,
+        "positive": true
+      },
+      {
+        "id": "3458189e-839f-48c6-8c5b-744d26edd614",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.79,
+        "positive": false
+      },
+      {
+        "id": "34da22ac-3831-43b4-adf1-870478f36344",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "3fafa37d-967c-4fc0-96a4-d15a302647e2",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.87,
+        "positive": false
+      },
+      {
+        "id": "4af19c1f-fd6c-4a60-aaf2-af430e2af0b7",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "4d28527e-6c05-4cdd-97c6-5dc315310a2c",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "5d621963-42f6-455f-a11d-76ffdbbd4bf6",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": true
+      },
+      {
+        "id": "62cfe72f-077f-4c90-b42e-a3c6d12b6e9c",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": false
+      },
+      {
+        "id": "648ee8e9-e87a-4eff-88e1-20c68cd16fc0",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "701a425a-22c4-4ffa-815a-5da8e7a7c809",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.83,
+        "positive": true
+      },
+      {
+        "id": "782885d3-950d-4fb8-85f6-614822293926",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.85,
+        "positive": true
+      },
+      {
+        "id": "88eb75ee-c7d8-4c3d-8541-1c6139bf2126",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "9df933e9-a6e8-46f9-b027-ff77af6b4fa0",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.75,
+        "positive": true
+      },
+      {
+        "id": "a162ab31-dc45-4397-af2c-7f6030227012",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.81,
+        "positive": true
+      },
+      {
+        "id": "a57f27e6-ff4e-46f3-8960-03a775c68685",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.75,
+        "positive": false
+      },
+      {
+        "id": "a732b52d-d4c9-4dd8-aa5c-e209ef9df740",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "ac943930-594c-4590-a555-60f03f35d320",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.87,
+        "positive": true
+      },
+      {
+        "id": "bbf4a7ab-1d73-486f-a91c-9cfbca5bc77e",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.75,
+        "positive": true
+      },
+      {
+        "id": "e6439609-b004-49b2-a658-a834558bf95d",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "e912cf66-f0e0-4713-bbba-8ed1ceec259f",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "f5789f0e-ba82-4580-8e61-740a4d7d31cc",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": true
+      },
+      {
+        "id": "fe5a868c-8a4d-41f8-acd6-c43053f64c1d",
+        "stratum": "B",
+        "weight": 3.0909,
+        "p": 0.78,
+        "positive": true
+      },
+      {
+        "id": "052a103d-b0aa-4501-922a-52d66cc893f0",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "22c0382a-87e4-45f3-a967-94c1eb0177e2",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "230e3c30-9f6f-409a-b2bb-58e9b6599917",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "29847657-f16a-4bdd-b69a-6be344ccd3d8",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "2aadee29-28b2-4a22-9328-90551ec70f78",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "2ca6566f-e993-4c72-9669-10b34496505d",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "38a66f29-00ce-4c57-9a20-bf8174f97e0e",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "42f712dd-e188-4a0c-972c-0fe97786335a",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "57a3a704-43a5-4305-8c54-c3f7a7ccf81a",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "5c1a35cf-1b32-4150-9855-a9db62e66218",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "77e94b89-7ffd-4290-8583-c50d09d80e05",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "7d8b0f5f-b85b-444f-b6ff-37431193cc6e",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "7ef57666-bd1e-4384-aaea-4f0b6c504f60",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "7f39f3ad-01fb-45b5-9022-7194e6f4a320",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "875d0ad9-9ab5-4833-ad94-3356c35dd4b1",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "8fd5d2cd-6e8a-4a96-808d-bb3d4e4028cb",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "92cef7e9-c345-4b8a-b227-b88e109d4209",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "949ca8a9-4ddf-4661-a492-c6a939a15fe2",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "999b3e4f-8307-4e6c-bce7-8ac84d542f76",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "a4af6ca3-e7e3-4b5a-9c1a-ee804d57082a",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "b54cf97a-c3e9-4352-bddd-c38b3b618176",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "b6ffe002-c721-4a97-821d-a863920afa36",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "bbe69fad-460e-4790-a4e8-18c765b4390c",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "c45385e4-796f-4ee7-88af-fa1cbe73a6da",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "dfec03c9-ca41-4db4-82ad-bd69574553d2",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "e3979677-b6a7-4110-8453-af2e2a44fdea",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "f0444ee7-84b5-4eb5-bc86-0def26122a54",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "f5e23b09-dbd0-4745-8cea-0ec209072cd4",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 1.0,
+        "positive": false
+      },
+      {
+        "id": "f8534d52-f559-4be9-9fd2-3ae8799a3da3",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "fd4ff67b-b99a-48e0-bf8d-351bbe0c832f",
+        "stratum": "C",
+        "weight": 30.1,
+        "p": 0.99,
+        "positive": false
+      }
+    ]
+  }
 }
