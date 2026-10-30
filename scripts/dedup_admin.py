@@ -3129,6 +3129,16 @@ def _escalation_failures(result: Dict[str, Any]) -> int:
     return 0
 
 
+def _evidence_changed(result: Dict[str, Any]) -> None:
+    """Lists the events not acted on because their evidence changed after they were judged (judged again next run)."""
+    changed = result.get("evidence_changed") or []
+    if changed:
+        print(f"{len(changed)} event(s) NOT rejected: their evidence changed after they were judged; they are "
+              "judged again next run")
+        for f in changed:
+            print(f"  changed  {f['deduplicated_event_id'][:8]}  {(f.get('title') or '')[:80]}")
+
+
 def cmd_check_events(args) -> int:
     """Judge every active event with Jev; reject below the calibrated cut-off.
 
@@ -3156,6 +3166,7 @@ def cmd_check_events(args) -> int:
     verb = "Rejected" if result["applied"] else "Would reject"
     print(f"{verb} {len(result['rejections'])} of {result['judged']} event(s) "
           f"below cut-off {result['cutoff']}; findings in {out}")
+    _evidence_changed(result)
     return _escalation_failures(result)
 
 
@@ -3211,6 +3222,7 @@ def cmd_check_scope(args) -> int:
         verb = "Rejected" if result["applied"] else "Would reject"
         print(f"{verb} {len(result['rejections'])} of {result['events']} event(s) as out of scope "
               f"(cut-off {result['cutoff']}, {len(result['labelled_rejections'])} by label); findings in {out}")
+        _evidence_changed(result)
     failed = result["judgement_failed"] + result["escalation_failed"]
     if failed:
         print(f"check-scope: {len(failed)} event(s) UNDECIDED - a judgement or escalation failed; they were "
