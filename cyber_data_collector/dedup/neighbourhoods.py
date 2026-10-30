@@ -56,9 +56,10 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.dedup import candidate_ranking as ranking
+from cyber_data_collector.dedup.bounded_candidates import IntervalIndex, Span
 
 logger = logging.getLogger(__name__)
 
@@ -160,17 +161,25 @@ def build_links(
     return links
 
 
-#: Most events one supplier may have before its pairs stop being generated (a name this common is not one incident).
+#: Most events of one supplier that are paired exhaustively; a supplier with more is subdivided by date.
 MAX_SUPPLIER_GROUP = 100
+#: In a subdivided supplier, the events each one is linked to on either side in date order.
+SUPPLIER_NEIGHBOURS = NEIGHBOURS_PER_EVENT
 
 
-def supplier_pairs(corpus: ranking.Corpus, ids: Optional[Iterable[str]] = None,
-                   max_group: int = MAX_SUPPLIER_GROUP) -> Tuple[List[Tuple[str, str]], int]:
+def supplier_pairs(corpus: ranking.Corpus, intervals: Mapping[str, Optional[Interval]],
+                   ids: Optional[Iterable[str]] = None, max_group: int = MAX_SUPPLIER_GROUP,
+                   neighbours: int = SUPPLIER_NEIGHBOURS) -> Tuple[List[Tuple[str, str]], int]:
     """Pairs of events that record the same supplier: the supplier clue, which needs no shared article or word.
 
     A supplier breach reported once per customer names a different victim every time and may share no rare
-    word, so the usual candidate keys never pair the reports. Returns ``(pairs, suppliers skipped)``; a supplier
-    with more than ``max_group`` events is skipped (and counted).
+    word, so the usual candidate keys never pair the reports. A supplier of at most ``max_group`` events gives
+    every pair of them. A larger one is **subdivided**, not skipped: its events are ordered by date interval
+    (``intervals``: an event's ``(earliest, latest)``, None or absent when undated) and each dated event is linked
+    to the ``neighbours`` before and after it in start order and in end order (the interval index of
+    :mod:`bounded_candidates`), each undated one to the ``neighbours`` before and after it in id order. Reports of
+    one incident lie close in date, so they stay linked, directly or through each other, with O(n * neighbours)
+    work. Returns ``(pairs, suppliers subdivided)``.
     """
     wanted = set(ids) if ids is not None else None
     by_vendor: Dict[str, List[str]] = defaultdict(list)
@@ -178,16 +187,26 @@ def supplier_pairs(corpus: ranking.Corpus, ids: Optional[Iterable[str]] = None,
         if features.vendor and (wanted is None or event_id in wanted):
             by_vendor[features.vendor].append(event_id)
     pairs: List[Tuple[str, str]] = []
-    skipped = 0
+    subdivided = 0
     for members in by_vendor.values():
         if len(members) < 2:
             continue
-        if len(members) > max_group:
-            skipped += 1
-            continue
         ordered = sorted(members)
-        pairs.extend((a, b) for i, a in enumerate(ordered) for b in ordered[i + 1:])
-    return pairs, skipped
+        if len(members) <= max_group:
+            pairs.extend((a, b) for i, a in enumerate(ordered) for b in ordered[i + 1:])
+            continue
+        subdivided += 1
+        spans = [Span(i, *(intervals.get(i) or (None, None))) for i in ordered]
+        index = IntervalIndex(spans)
+        linked: Set[Tuple[str, str]] = set()
+        for position, span in enumerate(spans):
+            partners = (index.adjacent(span, neighbours) if span.start is not None else
+                        ordered[max(0, position - neighbours):position] + ordered[position + 1:position + 1 + neighbours])
+            linked.update((min(span.event_id, other), max(span.event_id, other)) for other in partners)
+        pairs.extend(sorted(linked))
+    if subdivided:
+        logger.info("Supplier links: %d supplier(s) with more than %d events subdivided by date", subdivided, max_group)
+    return pairs, subdivided
 
 
 def links_within(ids: Sequence[str], corpus: ranking.Corpus,

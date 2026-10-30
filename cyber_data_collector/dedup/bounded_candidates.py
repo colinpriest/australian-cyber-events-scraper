@@ -15,8 +15,14 @@ of evidence the score uses, then scores only those and keeps the best ``K``
 
 * the events citing the same non-hub source, naming the same vendor, sharing a
   corpus-rare word or the same records-affected figure - posting lists built
-  once over the group; a key shared by many events (a vendor, a figure) is
-  followed to its ``PER_KEY_LIMIT`` nearest in date;
+  once over the group. A posting of more than ``PER_KEY_LIMIT`` events (a
+  vendor, a figure, a rare word many reports of a big group carry) is followed
+  to its ``PER_KEY_LIMIT`` nearest in date **and** its ``PER_KEY_LIMIT`` undated
+  members (smallest pair ids first), through an :class:`IntervalIndex` built
+  once per posting - never by sorting the posting for every event that carries
+  it. An event's keys are followed rarest first, and at most
+  ``RETRIEVAL_BUDGET`` candidates are taken from them (counted:
+  ``events_at_retrieval_budget``);
 * the ``K`` events nearest in time on either side by date interval - events
   sorted by interval start and by interval end, walked with indexes. Right of
   an event in start order, and left of it in end order, the interval gap is
@@ -29,9 +35,16 @@ of evidence the score uses, then scores only those and keeps the best ``K``
 
 The reserved route for strong long-gap or undated matches is fed from the same
 source / supplier / rare-word postings, which are exactly what "strong" means,
-so a strong match is retrieved however far apart in time, or undated. The
+so a strong match is retrieved however far apart in time, or undated, as long as
+its posting is short (a non-hub source is cited by at most
+``candidates.HUB_MAX_EVENTS`` events by definition); in a longer posting the
+undated members are still followed, and the dated ones nearest in date. The
 counts before the cap (all pairs, long-gap, unknown-gap) are computed
 arithmetically (``bisect``), not by enumeration.
+
+Work per event is bounded by ``K``, ``PER_KEY_LIMIT`` and ``RETRIEVAL_BUDGET``
+(times a logarithm), plus the events whose interval overlaps the event's own
+in a long posting (all at gap 0, so all are looked at to break the tie by id).
 
 What differs from the exhaustive ranking is only how ties break among dated
 pairs of equal evidence and equal gap (start order here, pair id there), and a
@@ -46,10 +59,11 @@ in a large group, never how a pair is scored or judged.
 from __future__ import annotations
 
 import bisect
+import heapq
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from datetime import date
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.dedup.candidate_ranking import (
     LONG_GAP_BUDGET, PARTNERS_PER_EVENT, WINDOW_DAYS, Corpus, score_pair, select,
@@ -64,8 +78,12 @@ EXHAUSTIVE_GROUP_MAX = 60
 #: copies 707 to 4,603 days apart), which the route used to judge. The AI route, one big group by construction,
 #: keeps its cap. Documented in README.md; the findings report ``uncapped_groups``.
 UNCAPPED_GROUP_MAX = EXHAUSTIVE_GROUP_MAX
-#: Events followed per key shared by many events (a vendor, a records-affected figure): the nearest in date.
+#: Events followed per key shared by many events (a vendor, a figure, a common rare word): the nearest in date,
+#: and as many undated ones.
 PER_KEY_LIMIT = 24
+#: Most candidates one event takes from its postings (rarest key first). On the 2026-10-29 database the most any
+#: event touches is about 300 (101 cited sources of at most 3 events each); the bound is for a large group.
+RETRIEVAL_BUDGET = 1024
 
 
 def pair_id(a: str, b: str) -> str:
@@ -114,6 +132,86 @@ def _smallest_pair_ids(sorted_ids: List[str], pivot: str, k: int) -> List[str]:
     return out
 
 
+class IntervalIndex:
+    """Events sorted once by date interval, for nearest-in-date queries that never sort per query.
+
+    Dated events are held in start order (start, end, id) and in end order (end, id), as day ordinals; undated
+    ones and all ids in id order. Right of a query interval in start order, and left of it in end order, the gap
+    grows monotonically, so the nearest are found by ``bisect`` and a bounded walk out from the query.
+    """
+
+    def __init__(self, spans: Iterable[Span]):
+        unique = {s.event_id: s for s in spans}
+        dated = sorted((s for s in unique.values() if s.start is not None),
+                       key=lambda s: (s.start, s.end, s.event_id))
+        self.by_start: List[Span] = dated
+        self.by_end: List[Span] = sorted(dated, key=lambda s: (s.end, s.event_id))
+        self.starts = [s.start.toordinal() for s in self.by_start]
+        self.start_ends = [s.end.toordinal() for s in self.by_start]
+        self.ends = [s.end.toordinal() for s in self.by_end]
+        self.end_starts = [s.start.toordinal() for s in self.by_end]
+        self.start_pos = {s.event_id: i for i, s in enumerate(self.by_start)}
+        self.end_pos = {s.event_id: i for i, s in enumerate(self.by_end)}
+        self.undated_ids = sorted(s.event_id for s in unique.values() if s.start is None)
+        self.all_ids = sorted(unique)
+        self.max_length = max((e - s for s, e in zip(self.starts, self.start_ends)), default=0)
+
+    def __len__(self) -> int:
+        return len(self.all_ids)
+
+    def adjacent(self, span: Span, k: int) -> List[str]:
+        """The ``k`` events before and after a member ``span`` in start order and in end order."""
+        if span.start is None or k <= 0:
+            return []
+        i, j = self.start_pos[span.event_id], self.end_pos[span.event_id]
+        return [x.event_id for x in (*self.by_start[max(0, i - k):i], *self.by_start[i + 1:i + 1 + k],
+                                     *self.by_end[max(0, j - k):j], *self.by_end[j + 1:j + 1 + k])]
+
+    def _overlapping(self, start: int, end: int) -> List[str]:
+        """Ids of the dated events whose interval overlaps ``[start, end]`` (day ordinals): gap 0. Scans whichever
+        of the start-order or end-order range that can hold them is shorter (the longest interval bounds both)."""
+        s_lo = bisect.bisect_left(self.starts, start - self.max_length)
+        s_hi = bisect.bisect_right(self.starts, end)
+        e_lo = bisect.bisect_left(self.ends, start)
+        e_hi = bisect.bisect_right(self.ends, end + self.max_length)
+        if s_hi - s_lo <= e_hi - e_lo:
+            return [self.by_start[p].event_id for p in range(s_lo, s_hi) if self.start_ends[p] >= start]
+        return [self.by_end[p].event_id for p in range(e_lo, e_hi) if self.end_starts[p] <= end]
+
+    def nearest(self, span: Span, k: int) -> List[str]:
+        """The ``k`` members nearest in date to ``span`` (undated last, ties by id): exactly
+        ``sorted(members, key=(span_gap or infinity, id))[:k]``, ``span`` itself included when it is a member."""
+        if k <= 0:
+            return []
+        if span.start is None:                     # no gap to anyone: the k smallest ids
+            return self.all_ids[:k]
+        start, end = span.start.toordinal(), span.end.toordinal()
+        overlap = self._overlapping(start, end)
+        if len(overlap) >= k:
+            return heapq.nsmallest(k, overlap)
+        out = sorted(overlap)
+        n = len(self.by_start)
+        right = bisect.bisect_right(self.starts, end)          # by_start[right:] start after the span
+        left = bisect.bisect_left(self.ends, start) - 1        # by_end[:left + 1] end before it
+        while len(out) < k and (right < n or left >= 0):
+            gap = min(self.starts[right] - end if right < n else 10 ** 9,
+                      start - self.ends[left] if left >= 0 else 10 ** 9)
+            tied: List[str] = []
+            while right < n and self.starts[right] - end == gap:
+                tied.append(self.by_start[right].event_id)
+                right += 1
+            while left >= 0 and start - self.ends[left] == gap:
+                tied.append(self.by_end[left].event_id)
+                left -= 1
+            out.extend(sorted(tied)[:k - len(out)])
+        out.extend(self.undated_ids[:k - len(out)])
+        return out
+
+    def undated_by_pair_id(self, pivot: str, k: int) -> List[str]:
+        """The ``k`` undated members whose pair id with ``pivot`` sorts first."""
+        return _smallest_pair_ids(self.undated_ids, pivot, k)
+
+
 #: ``make_pair(a, b, gap, group)`` builds a route's pair dict; ``a`` is the earlier event.
 MakePair = Callable[[Span, Span, Optional[int], Any], Dict[str, Any]]
 
@@ -121,108 +219,119 @@ MakePair = Callable[[Span, Span, Optional[int], Any], Dict[str, Any]]
 def select_bounded(corpus: Corpus, spans: Sequence[Span], make_pair: MakePair, group: Any = None,
                    window_days: int = WINDOW_DAYS, partners_per_event: int = PARTNERS_PER_EVENT,
                    long_gap_budget: int = LONG_GAP_BUDGET, per_key_limit: int = PER_KEY_LIMIT,
-                   exclude: Optional[Callable[[str, str], bool]] = None
+                   exclude: Optional[Callable[[str, str], bool]] = None,
+                   retrieval_budget: int = RETRIEVAL_BUDGET,
                    ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """:func:`candidate_ranking.select` for one group, without building the group's pairs.
 
     ``spans`` are the group's events (one per id). Returns ``(kept pairs, counts)``; the counts are the
     arithmetic ones (``before``, ``long_gap_before``, ``unknown_gap_before``) over **all** the group's pairs,
-    including any ``exclude`` removes. ``partners_per_event`` must be positive: no cap means every pair, which
-    is the exhaustive path's job.
+    including any ``exclude`` removes; ``events_at_retrieval_budget``, the events whose keys were not all
+    followed because ``retrieval_budget`` candidates had been taken; and ``pairs_scored``, the pairs retrieved and
+    scored (``make_pair`` is called only for the pairs kept). ``partners_per_event`` must be positive: no
+    cap means every pair, which is the exhaustive path's job.
     """
     if partners_per_event <= 0:
         raise ValueError("bounded retrieval needs a positive partners_per_event")
     ordered = sorted({s.event_id: s for s in spans}.values(), key=span_order)
     n = len(ordered)
-    by_start = [s for s in ordered if s.start is not None]            # already in start order
-    by_end = sorted(by_start, key=lambda s: (s.end, s.event_id))
-    start_pos = {s.event_id: i for i, s in enumerate(by_start)}
-    end_pos = {s.event_id: i for i, s in enumerate(by_end)}
     by_id = {s.event_id: s for s in ordered}
-    all_ids = sorted(by_id)
-    undated_ids = sorted(s.event_id for s in ordered if s.start is None)
+    index = IntervalIndex(ordered)                                    # the group's date-interval index, built once
 
     # Arithmetic counts over every pair of the group (a far pair is counted once: from its earlier event).
-    starts = [s.start for s in by_start]
-    window = timedelta(days=window_days)
+    starts = index.starts
     counts = {"before": _combinations(n),
-              "long_gap_before": sum(len(starts) - bisect.bisect_right(starts, s.end + window) for s in by_start),
-              "unknown_gap_before": _combinations(n) - _combinations(len(by_start))}
+              "long_gap_before": sum(len(starts) - bisect.bisect_right(starts, e + window_days)
+                                     for e in index.start_ends),
+              "unknown_gap_before": _combinations(n) - _combinations(len(starts)),
+              "events_at_retrieval_budget": 0}
 
-    # Posting lists: the events of this group that carry each key.
+    # Posting lists: the events of this group that carry each key; each event's keys, rarest first.
     postings: Dict[Tuple[str, Any], List[str]] = defaultdict(list)
+    keys_of: Dict[str, List[Tuple[str, Any]]] = {}
     for s in ordered:
         f = corpus.features.get(s.event_id)
         if f is None:
             continue
-        for url in f.urls - corpus.hub_urls:
-            postings[("url", url)].append(s.event_id)
+        keys = [("url", url) for url in f.urls - corpus.hub_urls]
         if f.vendor:
-            postings[("vendor", f.vendor)].append(s.event_id)
-        for token in f.tokens & corpus.rare_tokens:
-            postings[("token", token)].append(s.event_id)
+            keys.append(("vendor", f.vendor))
+        keys.extend(("token", token) for token in f.tokens & corpus.rare_tokens)
         if f.records_affected is not None:
-            postings[("records", f.records_affected)].append(s.event_id)
+            keys.append(("records", f.records_affected))
+        for key in keys:
+            postings[key].append(s.event_id)
+        keys_of[s.event_id] = keys
+    for keys in keys_of.values():
+        keys.sort(key=lambda key: (len(postings[key]), key[0], str(key[1])))
+    posting_index: Dict[Tuple[str, Any], IntervalIndex] = {}
 
-    def nearest(span: Span, ids: List[str]) -> List[str]:
-        """``ids`` limited to ``per_key_limit``, nearest in date to ``span`` (undated last), ties by id."""
-        def key(i: str) -> Tuple[int, str]:
-            g = span_gap(span, by_id[i])
-            return (g if g is not None else 10 ** 9, i)
-        return sorted(ids, key=key)[:per_key_limit]
+    def follow(span: Span, key: Tuple[str, Any]) -> List[str]:
+        """A posting, or for a long one its ``per_key_limit`` nearest in date and as many undated members."""
+        ids = postings[key]
+        if len(ids) <= per_key_limit:
+            return ids
+        idx = posting_index.get(key)
+        if idx is None:
+            idx = posting_index[key] = IntervalIndex(by_id[i] for i in ids)
+        return idx.nearest(span, per_key_limit) + idx.undated_by_pair_id(span.event_id, per_key_limit)
 
     def retrieve(span: Span) -> Set[str]:
         found: Set[str] = set()
-        f = corpus.features.get(span.event_id)
-        if f is not None:
-            for url in f.urls - corpus.hub_urls:
-                found.update(postings[("url", url)])
-            for token in f.tokens & corpus.rare_tokens:
-                found.update(postings[("token", token)])
-            if f.vendor:
-                found.update(nearest(span, postings[("vendor", f.vendor)]))
-            if f.records_affected is not None:
-                found.update(nearest(span, postings[("records", f.records_affected)]))
+        taken = 0
+        for key in keys_of.get(span.event_id, ()):
+            if taken >= retrieval_budget:
+                counts["events_at_retrieval_budget"] += 1
+                break
+            got = follow(span, key)
+            taken += len(got)
+            found.update(got)
         k = partners_per_event
         # No date term: the K smallest pair ids among the partners the date cannot rank.
-        found.update(_smallest_pair_ids(all_ids if span.start is None else undated_ids, span.event_id, k))
-        if span.start is not None:
-            i, j = start_pos[span.event_id], end_pos[span.event_id]
-            found.update(x.event_id for x in by_start[max(0, i - k):i])
-            found.update(x.event_id for x in by_start[i + 1:i + 1 + k])
-            found.update(x.event_id for x in by_end[max(0, j - k):j])
-            found.update(x.event_id for x in by_end[j + 1:j + 1 + k])
+        found.update(_smallest_pair_ids(index.all_ids if span.start is None else index.undated_ids,
+                                        span.event_id, k))
+        found.update(index.adjacent(span, k))
         found.discard(span.event_id)
         return found
 
-    scored: Dict[str, Dict[str, Any]] = {}
+    # Every retrieved pair is scored once and remembered compactly - (score, strong, gap, earlier id, later id) -
+    # so the other event's retrieval reuses it; the route's pair dict is built only for the pairs kept.
+    scored: Dict[str, Tuple[float, bool, Optional[int], str, str]] = {}
     top: List[List[str]] = []
     for span in ordered:
-        near: List[Tuple[Tuple[float, str], str]] = []
+        near: List[Tuple[float, str]] = []
         for other_id in retrieve(span):
             if exclude is not None and exclude(span.event_id, other_id):
                 continue
             pid = pair_id(span.event_id, other_id)
-            if pid not in scored:
+            entry = scored.get(pid)
+            if entry is None:
                 other = by_id[other_id]
                 a, b = (span, other) if span_order(span) <= span_order(other) else (other, span)
                 gap = span_gap(a, b)
-                score, reasons, strong = score_pair(corpus, a.event_id, b.event_id, gap, window_days)
-                scored[pid] = {**make_pair(a, b, gap, group), "rank_score": round(score, 4),
-                               "rank_reasons": reasons, "rank_strong": strong,
-                               "rank_far": gap is not None and gap > window_days}
-            if not scored[pid]["rank_far"]:
-                near.append(((-scored[pid]["rank_score"], pid), pid))
-        top.append([pid for _, pid in sorted(near)[:partners_per_event]])
+                score, _reasons, strong = score_pair(corpus, a.event_id, b.event_id, gap, window_days)
+                entry = scored[pid] = (round(score, 4), strong, gap, a.event_id, b.event_id)
+            if entry[2] is None or entry[2] <= window_days:
+                near.append((-entry[0], pid))
+        near.sort()
+        top.append([pid for _, pid in near[:partners_per_event]])
+    counts["pairs_scored"] = len(scored)
+
+    def build(pid: str, kept_as: str) -> Dict[str, Any]:
+        score, strong, gap, a_id, b_id = scored[pid]
+        _score, reasons, _strong = score_pair(corpus, a_id, b_id, gap, window_days)
+        return {**make_pair(by_id[a_id], by_id[b_id], gap, group), "rank_score": score, "rank_reasons": reasons,
+                "rank_strong": strong, "rank_far": gap is not None and gap > window_days, "rank_kept_as": kept_as}
 
     kept: Dict[str, Dict[str, Any]] = {}
     for pids in top:
         for pid in pids:
-            kept[pid] = {**scored[pid], "rank_kept_as": "partner"}
-    reserve = [p for pid, p in scored.items() if p["rank_strong"] and pid not in kept
-               and (p["rank_far"] or not isinstance(p["gap_days"], int))]
-    for p in sorted(reserve, key=lambda p: (-p["rank_score"], p["pair_id"]))[:long_gap_budget]:
-        kept[p["pair_id"]] = {**p, "rank_kept_as": "reserved"}
+            if pid not in kept:
+                kept[pid] = build(pid, "partner")
+    reserve = [(-entry[0], pid) for pid, entry in scored.items()
+               if entry[1] and pid not in kept and (entry[2] is None or entry[2] > window_days)]
+    for _, pid in sorted(reserve)[:long_gap_budget]:
+        kept[pid] = build(pid, "reserved")
     return sorted(kept.values(), key=lambda p: p["pair_id"]), counts
 
 
@@ -240,7 +349,9 @@ def rank_groups(corpus: Corpus, groups: Dict[Any, Sequence[Span]], make_pair: Ma
     first group. ``make_pair(a, b, gap, group)`` builds the pair dict (``pair_id``, ``a``, ``b``, ``gap_days``
     and whatever the route's judgement needs), ``a`` being the earlier event, undated last.
     ``exclude(a_id, b_id)`` removes the pairs another route owns. Returns ``(kept, stats)`` with the keys
-    :func:`candidate_ranking.select` returns, plus ``bounded_groups`` and ``uncapped_groups``. ``before`` for a
+    :func:`candidate_ranking.select` returns, plus ``bounded_groups``, ``uncapped_groups`` and
+    ``events_at_retrieval_budget`` and ``pairs_scored`` (:func:`select_bounded`; 0 for groups ranked by
+    enumeration). ``before`` for a
     large group counts every pair of it, including excluded ones.
 
     A group of at most ``uncapped_max`` events keeps **every** pair: the cap bounds a large group's cost, and for a
@@ -279,6 +390,8 @@ def rank_groups(corpus: Corpus, groups: Dict[Any, Sequence[Span]], make_pair: Ma
         stats["largest_group_pairs"] = max(stats["largest_group_pairs"], extra["largest_group_pairs"])
     stats["bounded_groups"] = len(big)
     stats["uncapped_groups"] = uncapped_groups
+    stats["events_at_retrieval_budget"] = 0
+    stats["pairs_scored"] = 0
     stats["parameters"]["uncapped_group_max"] = uncapped_max
     for gid, ordered in big:
         kept, counts = select_bounded(corpus, ordered, make_pair, gid, window_days, partners_per_event,
@@ -288,6 +401,8 @@ def rank_groups(corpus: Corpus, groups: Dict[Any, Sequence[Span]], make_pair: Ma
         stats["before"] += counts["before"]
         stats["long_gap_before"] += counts["long_gap_before"]
         stats["unknown_gap_before"] += counts["unknown_gap_before"]
+        stats["events_at_retrieval_budget"] += counts["events_at_retrieval_budget"]
+        stats["pairs_scored"] += counts["pairs_scored"]
         stats["groups"] += 1
         stats["largest_group_pairs"] = max(stats["largest_group_pairs"], counts["before"])
     out = sorted(merged.values(), key=lambda p: p["pair_id"])

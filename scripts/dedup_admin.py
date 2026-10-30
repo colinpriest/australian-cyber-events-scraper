@@ -1940,10 +1940,15 @@ def cmd_adjudicate_candidates(args) -> int:
             corpus = ranking.load_corpus(conn)
             if not args.no_supplier_links:
                 # The supplier clue: reports of one supplier breach name a different customer each time and
-                # may share no article or rare word, so the keys above never pair them.
-                supplier_edges, skipped_suppliers = nb.supplier_pairs(corpus)
+                # may share no article or rare word, so the keys above never pair them. A supplier with more
+                # than nb.MAX_SUPPLIER_GROUP events is linked by date neighbours instead of every pair.
+                vendor_events = {i for i, f in corpus.features.items() if f.vendor}
+                supplier_edges, subdivided = nb.supplier_pairs(corpus, _date_intervals(conn, vendor_events))
                 edges = sorted(set(edges) | {tuple(sorted(e)) for e in supplier_edges})
-                summary["supplier_links"] = {"pairs": len(supplier_edges), "suppliers_too_common": skipped_suppliers}
+                summary["supplier_links"] = {"pairs": len(supplier_edges), "suppliers_subdivided": subdivided}
+                if subdivided:
+                    print(f"Supplier links: {subdivided} supplier(s) with more than {nb.MAX_SUPPLIER_GROUP} events "
+                          f"linked by date neighbours instead of every pair")
             linked = {i for edge in edges for i in edge}
             intervals = _date_intervals(conn, linked)
             links = nb.build_links(edges, corpus,
@@ -3672,6 +3677,9 @@ def cmd_check_duplicates(args) -> int:
         if stats and stats.get("bounded_groups"):
             print(f"  ({route}: {stats['bounded_groups']} group(s) of more than 60 events ranked by indexed retrieval, "
                   "not by building every pair)")
+        if stats and stats.get("events_at_retrieval_budget"):
+            print(f"  ({route}: {stats['events_at_retrieval_budget']} event(s) reached the retrieval budget; "
+                  "their rarest keys were followed, the rest not)")
     for held in result.get("held_conflicts") or []:
         print(f"  HELD {held['pair_id'][:8]}|...: would join {held['blocked_by'][:8]}|... ({held['reason']})")
     if result.get("veto_rejudged"):
