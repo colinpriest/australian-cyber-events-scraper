@@ -1,13 +1,12 @@
 dimension,group,organisations,repeats,reference_weight_covered,standardized_rate_per_100_entity_years,status
-Event order,First observed,615,42,1.0,2.0486688968922424,available
-Event order,Second or later observed,42,15,1.0,17.5775826024083,available
-Prior incident source,GoogleSearch,75,2,1.0,0.7686572350342232,available
-Prior incident source,Multiple sources,243,35,1.0,4.070075905005623,available
-Prior incident source,OAIC,5,0,0.505691056910569,,unavailable: missing size exposure
-Prior incident source,Perplexity,174,11,1.0,2.0789166574990414,available
-Prior incident source,PerplexityResearch,1,0,0.26991869918699185,,unavailable: missing size exposure
-Prior incident source,WebberInsurance,150,9,1.0,1.4835407572661028,available
-Prior incident calendar cohort,2019–2021,128,25,1.0,2.9243222205628467,available
-Prior incident calendar cohort,2022–2023,135,12,1.0,1.8055069854632815,available
-Prior incident calendar cohort,2024 onward,372,15,1.0,3.2305647774095245,available
-Prior incident calendar cohort,Through 2018,16,5,0.8552845528455284,,unavailable: missing size exposure
+Event order,First observed,941,95,1.0,3.63604703388275,available
+Event order,Second or later observed,95,87,1.0,19.401476866488586,available
+Prior incident source,CyberDaily,235,25,1.0,7.33833527033792,available
+Prior incident source,GoogleSearch,66,4,1.0,2.4768193724017213,available
+Prior incident source,Multiple sources,478,89,1.0,5.798922974897834,available
+Prior incident source,Perplexity,115,44,1.0,10.028794270342946,available
+Prior incident source,WebberInsurance,136,20,1.0,2.861507612195219,available
+Prior incident calendar cohort,2019–2021,147,54,1.0,4.726092762587715,available
+Prior incident calendar cohort,2022–2023,197,49,1.0,5.7857709463856235,available
+Prior incident calendar cohort,2024 onward,655,56,1.0,6.663263120905819,available
+Prior incident calendar cohort,Through 2018,27,23,1.0,8.113298452043647,available
