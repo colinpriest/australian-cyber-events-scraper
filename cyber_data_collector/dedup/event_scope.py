@@ -365,10 +365,13 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     # The labels are needed (and must be readable) only when this run could act on them - and, being read first,
     # they decide first: an event labelled in scope is never rejected and one labelled out of scope is rejected,
     # whatever the model says, so neither is (re-)asked about.
-    known = labels(labels_path, reality_labels_path) if apply and cal else {}
-    protected = {d for d, label in known.items() if label == "in_scope"}
+    # Labels decide whether or not a calibration may act (they rest on the label, not on the model's precision),
+    # and stand for the event their records are in now (event_reality.resolve_labelled: merges are followed).
+    known = labels(labels_path, reality_labels_path) if apply else {}
+    protected = event_reality.resolve_labelled(conn, [d for d, label in known.items() if label == "in_scope"])
     in_run = set(events)
-    labelled_out = sorted(d for d, label in known.items() if label == "out_of_scope" and d in in_run)
+    labelled_out = sorted(event_reality.resolve_labelled(conn, [d for d, label in known.items()
+                                                                 if label == "out_of_scope"]) & in_run - protected)
     judged_events = [d for d in events if d not in protected and d not in set(labelled_out)]
     judgement_failed: List[str] = []
     states: Dict[str, Dict[str, Any]] = {}      # the evidence each judgement is made on, built once
@@ -387,7 +390,7 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
     below = [] if cutoff is None else [
         entry(did) for did, p in sorted(probabilities.items(), key=lambda kv: kv[1])
         if p < cutoff and did not in protected and did not in labelled_out]
-    labelled_rejections = [entry(d, label="out_of_scope") for d in labelled_out] if cutoff is not None else []
+    labelled_rejections = [entry(d, label="out_of_scope") for d in labelled_out]
     # A score is acted on only while it describes the event: an event whose evidence changed after it was judged
     # is left for the next run. Labelled rejections rest on the label, not on a score, and are not affected.
     evidence_changed: List[Dict[str, Any]] = []
@@ -400,10 +403,10 @@ def check_scope(conn: sqlite3.Connection, apply: bool = False, judge=None,
             logger.warning("NOT REJECTED: the evidence of %s changed after it was judged (P(in scope) %.3f); it is "
                            "judged again next run", f["deduplicated_event_id"], f["p_in_scope"])
     rejections = below + labelled_rejections
-    applied = bool(apply and cal and rejections)
+    applied = bool(apply and rejections)
     if applied:
         reject_events(conn, rejections)
-    restored = restore_protected(conn, protected) if apply and cal else []
+    restored = restore_protected(conn, protected) if apply else []
     lowest = [entry(did) for did, _ in sorted(probabilities.items(), key=lambda kv: kv[1])[:REPORT_LOWEST]]
     return {"events": len(events), "judged": len(probabilities), "settled_by_label": len(events) - len(judged_events), "escalated": len(escalated),
             "judgement_failed": judgement_failed, "escalation_failed": escalation_failed, "cutoff": cutoff,

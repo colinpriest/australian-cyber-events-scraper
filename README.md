@@ -828,7 +828,12 @@ correct is also what a true precision of 0.74 produces now and then. So a
 current calibration licenses its automatic actions (rejections, merges, splits,
 fills, attachments, AI labels, re-datings) only when they pass one rule, applied
 by every step's `active_calibration` through `dedup/deployment.py` before it
-acts:
+acts. What a label decides is not a model's action and is applied whatever
+the rule says: with `--apply`, event reality and event scope reject events
+labelled not an incident / out of scope and restore labelled ones, report-only
+or not, and a label stands for the event its records are in now (merges are
+followed, `event_reality.resolve_labelled` - a labelled-real event merged into
+another used to leave that event unprotected). The rule:
 
 - the **exact one-sided Clopper-Pearson lower bound** on the action's precision,
   from the unweighted labelled counts at the cut-off, clears the floor;

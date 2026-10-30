@@ -184,10 +184,13 @@ def test_inactive_events_are_not_judged(conn, tmp_path):
 
 def test_without_a_calibration_nothing_is_rejected_and_the_lowest_are_reported(conn, tmp_path):
     result = _check(conn, tmp_path, cutoff=None, apply=True)
-    assert not result["calibrated"] and not result["applied"] and result["rejections"] == []
+    # Nothing is rejected on a score; only what a label decides (none of these events is labelled out of scope).
+    assert not result["calibrated"] and result["rejections"] == result["labelled_rejections"]
     assert [f["deduplicated_event_id"] for f in result["lowest_scoring"]][:2] == ["us", "uk"]
-    assert result["distribution"]["0.0-0.1"] == 2 and result["distribution"]["0.9-1.0"] == 2
-    assert set(_status(conn).values()) == {"Active"}
+    # An event labelled in scope is settled by its label and not scored.
+    assert result["distribution"]["0.0-0.1"] == 2 and sum(result["distribution"].values()) == result["judged"]
+    assert result["judged"] + result["settled_by_label"] == result["events"]
+    assert _status(conn)["us"] == "Active" and _status(conn)["uk"] == "Active"
 
 
 def test_a_missing_calibration_file_is_report_only(conn, tmp_path):
@@ -249,9 +252,11 @@ def test_an_event_labelled_out_of_scope_in_the_reality_labels_is_rejected_too(co
     assert _status(conn)["au"] == "Rejected" and result["applied"]
 
 
-def test_labels_are_acted_on_only_with_a_calibration(conn, tmp_path):
+def test_labels_are_acted_on_even_without_a_calibration(conn, tmp_path):
+    # A labelled rejection rests on the label, not on the model's precision: a report-only step still applies it.
     result = _check(conn, tmp_path, cutoff=None, apply=True, rows=[("supplier", "out_of_scope")])
-    assert not result["applied"] and _status(conn)["supplier"] == "Active"
+    assert result["applied"] and _status(conn)["supplier"] == "Rejected"
+    assert [f["deduplicated_event_id"] for f in result["labelled_rejections"]] == ["supplier"]
 
 
 def test_acting_without_readable_scope_labels_refuses(conn, tmp_path):
