@@ -36,6 +36,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import duplicate_judgement as dj  # noqa: E402
 from cyber_data_collector.utils.llm_models import (  # noqa: E402
     add_model_arguments, apply_model_arguments,
@@ -117,7 +119,11 @@ def main(argv=None) -> int:
               "labelled_used": len(rows), "labelled_same": sum(r["same"] for r in rows),
               "unsure_excluded": unsure, "missing": missing, "generated": datetime.now().isoformat(),
               "curve": curve}
+    result["labelled_rows"] = {"merge": deployment.standard_rows(rows, "same", id_key="pair_id"),
+                               "different-veto": deployment.standard_rows(rows, "same", id_key="pair_id",
+                                                                          invert=True)}
     dj.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("duplicates")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: merges {chosen['merged_labelled']} labelled pairs, "
               f"{chosen['correct_labelled']} truly the same; precision {chosen['precision']:.3f}, "

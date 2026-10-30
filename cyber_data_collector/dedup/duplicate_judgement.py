@@ -535,7 +535,11 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     if reason:
         logger.warning(calibration_guard.report_only_message("duplicate", cal, reason))
         return None
-    return cal if cal.get("cutoff") is not None else None
+    if cal.get("cutoff") is None:
+        return None
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("duplicates", cal, Path(path))
 
 
 def _components(edges: Sequence[Tuple[str, str]]) -> List[List[str]]:

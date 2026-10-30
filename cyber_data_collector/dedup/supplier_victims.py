@@ -868,7 +868,11 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Dict[str, Any]:
     if reason:
         raise CalibrationError(f"calibration {path} does not apply to the current model, question and evidence "
                                f"processing ({reason}); recalibrate before applying")
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    # Each kind's cut-off the deployment rule holds back is None in the copy returned: that kind acts on
+    # labels only, and a pair with no calibrated 'different' bound stays unresolved (held).
+    return deployment.gate("supplier-victims", cal, path)
 
 
 def accepted(scores: Dict[str, float], labels: Dict[Tuple[str, str], str], kind: str,

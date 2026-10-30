@@ -587,7 +587,10 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Optional[Dict[str, Any]
     if cal.get("cutoff") is None:
         logger.warning("VICTIM ATTRIBUTION IS REPORT ONLY: no cut-off reached the precision target")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    # A replacement threshold the rule holds back is set to None: those pairs are flagged, not replaced.
+    return deployment.gate("victim-attribution", cal, Path(path))
 
 
 # ---------------------------------------------------------------- flags

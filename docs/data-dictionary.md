@@ -1316,8 +1316,21 @@ Side-by-side comparison of PDF-scraped vs. Power BI dashboard-scraped data:
 | `calibrated_on_database` | string | The labelling-time snapshot (or recalibration copy) scored |
 | `recalibration` | object | Present when `dedup_admin.py recalibrate` wrote the file: reason, labelling snapshot, the previous evidence, cut-off and `labelled_used`, cases scored |
 | `labelled_used`, `curve`, `bootstrap_out_of_sample_precision`, ... | | The measurement (see the calibration script's docstring) |
+| `labelled_rows` | object | Per automatic action (`reject`, `merge`, `split`, `fill`, ...), the labelled rows the cut-off was chosen on: `{id, stratum, weight, p, positive}` (`positive` = the action would be right; `p` null = never acted on). Written since 2026-10-30; read by `scripts/evaluate_calibrations.py` |
 
 `evaluation/calibration_snapshots.json` maps each step to the labelling-time backup it is recalibrated on.
+
+**Deployment rule.** A current calibration acts only when every automatic action passes
+`evaluation/deployment_policy.json` (`confidence`, `precision_floor`, `min_labelled_actions`,
+`require_heldout_evaluation`, `heldout_folds`, with a `rationale` per key; `dedup/deployment.py`).
+`evaluation/<step>_heldout.json` (written by `scripts/evaluate_calibrations.py` and by every calibration script)
+holds the held-out evaluation of one calibration: `calibration` (its `question_version`, `model`, `evidence`,
+`generated` - the rule uses the file only when all four match), `rows_source`, and per action `cutoff`, `full`
+(counts, `weighted_precision`, Kish `effective_n` and the exact lower bounds at the committed cut-off),
+`reproduces` / `reproduction_note` (the rows re-choose the committed cut-off and give its counts), and `heldout`
+(pooled counts over `folds` folds keyed by `sha256(step|subject id)`, `per_fold` cut-offs, `folds_without_cutoff`).
+`rows` holds rows extracted from a calibration database; `seeded` (duplicates, with `--dedup-db`) the
+`evaluate_dedup.py` results, reported only.
 `ModelJudgements.subject_type` also takes `event_member_same_org` (`check-same-organisation`).
 
 `evaluation/event_scope_calibration.json` (`check-scope`) is calibrated on `evaluation/event_scope_labels.csv`
