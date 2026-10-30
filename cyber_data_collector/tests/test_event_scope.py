@@ -521,6 +521,58 @@ def test_sample_stratifies_on_the_stored_score_with_a_census_of_the_low_band(wor
     assert again == 0 and list(csv.DictReader(world.sample.open(encoding="utf-8"))) == rows     # seeded
 
 
+def test_extend_raises_the_census_without_redrawing_and_reweights_the_rest(world):
+    # Scores: f0-f11 0.005-0.06, a0-a7 0.80-0.87, x1 0.95. The existing sample: f* census (A), a* sample (B).
+    rows = list(csv.DictReader(world.sample.open(encoding="utf-8")))
+    world.sample.write_text("deduplicated_event_id,stratum,weight\n"
+                            + "".join(f"{r['deduplicated_event_id']},{r['stratum']},{r['weight']}\n"
+                                      for r in rows if r["deduplicated_event_id"] not in ("a1", "a4"))
+                            + "x1,C,1.0\n", encoding="utf-8")
+    assert cal.main(["--db", str(world.db), "sample", "--extend", "--census-below", "0.845"]) == 0
+    out = {r["deduplicated_event_id"]: r for r in csv.DictReader(world.sample.open(encoding="utf-8"))}
+    # Census below 0.845: every f*, the sampled a0/a2/a3, and the unsampled a1/a4 - all weight 1.
+    census = {d for d, r in out.items() if r["stratum"] == "A"}
+    assert census == {f"f{i}" for i in range(12)} | {"a0", "a1", "a2", "a3", "a4"}
+    assert {out[d]["weight"] for d in census} == {"1.0"}
+    # B is what is left of the old sample above it (a5-a7), standing for the 3 events of 0.845-0.9; C unchanged.
+    assert {d for d, r in out.items() if r["stratum"] == "B"} == {"a5", "a6", "a7"}
+    assert {float(out[d]["weight"]) for d in ("a5", "a6", "a7")} == {1.0}
+    assert out["x1"]["stratum"] == "C"
+
+
+def test_extend_reweights_a_partly_sampled_band(world):
+    world.sample.write_text("deduplicated_event_id,stratum,weight\n"
+                            + "".join(f"f{i},A,1.0\n" for i in range(12)) + "a0,B,4\na6,B,4\nx1,C,1\n",
+                            encoding="utf-8")
+    assert cal.main(["--db", str(world.db), "sample", "--extend", "--census-below", "0.825"]) == 0
+    out = {r["deduplicated_event_id"]: r for r in csv.DictReader(world.sample.open(encoding="utf-8"))}
+    assert {d for d, r in out.items() if r["stratum"] == "A"} == {f"f{i}" for i in range(12)} | {"a0", "a1", "a2"}
+    assert out["a6"]["stratum"] == "B" and float(out["a6"]["weight"]) == pytest.approx(5.0)   # a3-a7: 5 events
+
+
+@pytest.mark.parametrize("sample, census, message", [
+    ("f0,A,1\nx1,C,1\na0,B,1\n", 0.03, "a census cannot be narrowed"),            # f5+ score above 0.03 ...
+    ("f0,A,1\nx1,B,1\n", 0.5, "above the band it was drawn from"),               # x1 scores 0.95: not a B row
+    ("f0,A,1\na0,C,1\na1,B,1\n", 0.5, "below the band it was drawn from"),
+    ("f0,A,1\nghost,B,1\nx1,C,1\n", 0.5, "no score on its current evidence"),
+    ("f0,A,1\na0,B,1\n", 0.5, "no sampled row is left"),                         # C holds x1 and no row
+])
+def test_extend_refuses_a_sample_it_cannot_extend_soundly(world, capsys, sample, census, message):
+    rows = "deduplicated_event_id,stratum,weight\n" + sample
+    if message == "a census cannot be narrowed":
+        rows += "f9,A,1\n"
+    world.sample.write_text(rows, encoding="utf-8")
+    assert cal.main(["--db", str(world.db), "sample", "--extend", "--census-below", str(census)]) == 2
+    assert message in capsys.readouterr().err
+    assert world.sample.read_text(encoding="utf-8") == rows                      # left as it was
+
+
+def test_extend_needs_an_existing_sample(world, capsys):
+    world.sample.unlink()
+    assert cal.main(["--db", str(world.db), "sample", "--extend"]) == 2
+    assert "needs an existing sample" in capsys.readouterr().err
+
+
 def test_sample_needs_stored_judgements(tmp_path, monkeypatch, capsys):
     db = tmp_path / "empty.db"
     _build(db).close()
