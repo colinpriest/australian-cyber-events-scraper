@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "step": "victim-fill",
+  "generated": "2026-10-30T16:49:17.254179",
+  "calibration": {
+    "question_version": "victim-fill-v1+victim-fill-escalation-v1+event-organisations-v1",
+    "model": "jev-1.14.0+gpt-5.5-2026-04-23+gpt-5.4-mini-2026-03-17",
+    "evidence": "victim-fill:c65d47bf27978c63",
+    "generated": "2026-10-29T22:17:47.035212"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {
+    "fill": "calibration file"
+  },
+  "actions": {
+    "fill": {
+      "cutoff": 0.97,
+      "precision_target": 0.95,
+      "minimum": 10,
+      "labelled_rows": 56,
+      "full": {
+        "acted": 10,
+        "correct": 10,
+        "weighted_precision": 1.0,
+        "effective_n": 10.0,
+        "lower_bound_unweighted": 0.7411344491069478,
+        "lower_bound_effective": 0.7411344491069478
+      },
+      "reselected_cutoff": 0.97,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 0,
+        "correct": 0,
+        "weighted_precision": null,
+        "effective_n": 0.0,
+        "lower_bound_unweighted": null,
+        "folds": 5,
+        "folds_without_cutoff": 5,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 41,
+            "test": 15,
+            "cutoff": null,
+            "acted": 0,
+            "correct": 0
+          },
+          {
+            "fold": 1,
+            "train": 48,
+            "test": 8,
+            "cutoff": null,
+            "acted": 0,
+            "correct": 0
+          },
+          {
+            "fold": 2,
+            "train": 47,
+            "test": 9,
+            "cutoff": null,
+            "acted": 0,
+            "correct": 0
+          },
+          {
+            "fold": 3,
+            "train": 47,
+            "test": 9,
+            "cutoff": null,
+            "acted": 0,
+            "correct": 0
+          },
+          {
+            "fold": 4,
+            "train": 41,
+            "test": 15,
+            "cutoff": null,
+            "acted": 0,
+            "correct": 0
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    }
+  },
+  "rows": {},
+  "reproduces_calibration": true,
+  "reproduction_note": ""
+}

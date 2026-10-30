@@ -1,0 +1,1750 @@
+{
+  "version": 1,
+  "step": "ai-duplicates",
+  "generated": "2026-10-30T16:49:04.311038",
+  "calibration": {
+    "question_version": "same-incident-ai-v1+same-incident-ai-escalation-v1",
+    "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+    "evidence": "ai-duplicates:8168fbdc99a0d454",
+    "generated": "2026-10-29T20:41:08.228827"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {
+    "merge": "extracted from calibration_ai_duplicates.db (stored scores, no API calls)",
+    "different-veto": "extracted from calibration_ai_duplicates.db (stored scores, no API calls)"
+  },
+  "actions": {
+    "merge": {
+      "cutoff": 0.299999,
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 113,
+      "full": {
+        "acted": 75,
+        "correct": 68,
+        "weighted_precision": 0.951048951048951,
+        "effective_n": 62.6118,
+        "lower_bound_unweighted": 0.831833860581046,
+        "lower_bound_effective": 0.8794018426197638
+      },
+      "reselected_cutoff": 0.299999,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 74,
+        "correct": 68,
+        "weighted_precision": 0.9577464788732394,
+        "effective_n": 61.9287,
+        "lower_bound_unweighted": 0.8462345617895528,
+        "lower_bound_effective": 0.887928111017589,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 91,
+            "test": 22,
+            "cutoff": 0.719999,
+            "acted": 13,
+            "correct": 13
+          },
+          {
+            "fold": 1,
+            "train": 84,
+            "test": 29,
+            "cutoff": 0.299999,
+            "acted": 20,
+            "correct": 16
+          },
+          {
+            "fold": 2,
+            "train": 95,
+            "test": 18,
+            "cutoff": 0.719999,
+            "acted": 11,
+            "correct": 11
+          },
+          {
+            "fold": 3,
+            "train": 87,
+            "test": 26,
+            "cutoff": 0.299999,
+            "acted": 20,
+            "correct": 18
+          },
+          {
+            "fold": 4,
+            "train": 95,
+            "test": 18,
+            "cutoff": 0.349999,
+            "acted": 10,
+            "correct": 10
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    },
+    "different-veto": {
+      "cutoff": 0.050001,
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 113,
+      "full": {
+        "acted": 32,
+        "correct": 32,
+        "weighted_precision": 1.0,
+        "effective_n": 32.0,
+        "lower_bound_unweighted": 0.9106318010137352,
+        "lower_bound_effective": 0.9106318010137352
+      },
+      "reselected_cutoff": 0.050001,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 30,
+        "correct": 30,
+        "weighted_precision": 1.0,
+        "effective_n": 30.0,
+        "lower_bound_unweighted": 0.9049661471446959,
+        "lower_bound_effective": 0.9049661471446959,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 91,
+            "test": 22,
+            "cutoff": 0.050001,
+            "acted": 7,
+            "correct": 7
+          },
+          {
+            "fold": 1,
+            "train": 84,
+            "test": 29,
+            "cutoff": 0.040001,
+            "acted": 6,
+            "correct": 6
+          },
+          {
+            "fold": 2,
+            "train": 95,
+            "test": 18,
+            "cutoff": 0.050001,
+            "acted": 6,
+            "correct": 6
+          },
+          {
+            "fold": 3,
+            "train": 87,
+            "test": 26,
+            "cutoff": 0.050001,
+            "acted": 4,
+            "correct": 4
+          },
+          {
+            "fold": 4,
+            "train": 95,
+            "test": 18,
+            "cutoff": 0.050001,
+            "acted": 7,
+            "correct": 7
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    }
+  },
+  "rows": {
+    "merge": [
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|357db488-9a8b-4dbf-9ac8-ba6931e09004",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|6bb15642-455f-4180-b4b2-30a0ca9a4f7e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|39d8a932-ede9-4fd9-aa61-c52a819f3432",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.12,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|6bb15642-455f-4180-b4b2-30a0ca9a4f7e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "2cbaacd1-dd6c-4be3-a7ae-e12f0902a445|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|4baf9989-9111-4dde-9386-f0f77871e463",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|5e68edf1-b29a-487e-bdcd-3aaac241b4e7",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|659a618c-9856-405c-a81e-f89e23d025d5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.08,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a732b52d-d4c9-4dd8-aa5c-e209ef9df740",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.05,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.18,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.04,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.22,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "62534708-0807-46dd-b18a-2498a638b871|659a618c-9856-405c-a81e-f89e23d025d5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "62534708-0807-46dd-b18a-2498a638b871|a732b52d-d4c9-4dd8-aa5c-e209ef9df740",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|d74593c0-d488-46dd-9b1b-d5f3a93d0709",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "659a618c-9856-405c-a81e-f89e23d025d5|69d6372d-b771-42a3-97f7-0f849d657187",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "659a618c-9856-405c-a81e-f89e23d025d5|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "69458c19-91d3-4f2b-a1e4-0377a0b8fb41|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "69458c19-91d3-4f2b-a1e4-0377a0b8fb41|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.05,
+        "positive": false
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.04,
+        "positive": false
+      },
+      {
+        "id": "a01953e9-35b5-499e-bed1-8eec01b88e46|baca48ea-8c2f-4048-8e1c-14819a8229b6",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "a732b52d-d4c9-4dd8-aa5c-e209ef9df740|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "a732b52d-d4c9-4dd8-aa5c-e209ef9df740|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "c5dea795-dac9-48ec-a8fc-1c764d900c22|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "c5dea795-dac9-48ec-a8fc-1c764d900c22|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "d74593c0-d488-46dd-9b1b-d5f3a93d0709|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "e1458dc4-7748-4eff-be50-abc82cc38c6e|e94eba13-5f43-4832-843c-04691d59775c",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "e49b1330-921d-4e46-8563-3a4922149c71|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "e9191236-4731-4d70-8338-ac86582a581f|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": false
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.83,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|439d69f3-b09d-480c-b6cb-748eca9516e8",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.35,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e94eba13-5f43-4832-843c-04691d59775c",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.3,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.35,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": true
+      },
+      {
+        "id": "8500d9ae-7710-4d69-b637-8066d9343d66|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": true
+      },
+      {
+        "id": "8500d9ae-7710-4d69-b637-8066d9343d66|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.81,
+        "positive": true
+      },
+      {
+        "id": "8e0e930c-bc85-45f2-bf67-45ab92c400b4|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": true
+      },
+      {
+        "id": "e9802939-6e20-47c0-a5ab-0fc397b10cbf|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "e9802939-6e20-47c0-a5ab-0fc397b10cbf|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": true
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|19f04d43-466f-47c4-9b97-f9ab72056842",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|439d69f3-b09d-480c-b6cb-748eca9516e8",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.9,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.94,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.92,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": true
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.92,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.99,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.93,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.91,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": true
+      },
+      {
+        "id": "8e0e930c-bc85-45f2-bf67-45ab92c400b4|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      },
+      {
+        "id": "a01953e9-35b5-499e-bed1-8eec01b88e46|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": true
+      },
+      {
+        "id": "a9d505af-a415-413e-a915-762e90d0fd2e|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": true
+      },
+      {
+        "id": "f5eec2bc-2e88-409a-9d44-a4f1eace5c32|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": true
+      }
+    ],
+    "different-veto": [
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|357db488-9a8b-4dbf-9ac8-ba6931e09004",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|6bb15642-455f-4180-b4b2-30a0ca9a4f7e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.06,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|39d8a932-ede9-4fd9-aa61-c52a819f3432",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|6bb15642-455f-4180-b4b2-30a0ca9a4f7e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.07,
+        "positive": false
+      },
+      {
+        "id": "2cbaacd1-dd6c-4be3-a7ae-e12f0902a445|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|4baf9989-9111-4dde-9386-f0f77871e463",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|5e68edf1-b29a-487e-bdcd-3aaac241b4e7",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|659a618c-9856-405c-a81e-f89e23d025d5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a732b52d-d4c9-4dd8-aa5c-e209ef9df740",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.22,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "62534708-0807-46dd-b18a-2498a638b871|659a618c-9856-405c-a81e-f89e23d025d5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "62534708-0807-46dd-b18a-2498a638b871|a732b52d-d4c9-4dd8-aa5c-e209ef9df740",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|d74593c0-d488-46dd-9b1b-d5f3a93d0709",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "659a618c-9856-405c-a81e-f89e23d025d5|69d6372d-b771-42a3-97f7-0f849d657187",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "659a618c-9856-405c-a81e-f89e23d025d5|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "69458c19-91d3-4f2b-a1e4-0377a0b8fb41|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "69458c19-91d3-4f2b-a1e4-0377a0b8fb41|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "a01953e9-35b5-499e-bed1-8eec01b88e46|baca48ea-8c2f-4048-8e1c-14819a8229b6",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "a732b52d-d4c9-4dd8-aa5c-e209ef9df740|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "a732b52d-d4c9-4dd8-aa5c-e209ef9df740|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "c5dea795-dac9-48ec-a8fc-1c764d900c22|e1458dc4-7748-4eff-be50-abc82cc38c6e",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "c5dea795-dac9-48ec-a8fc-1c764d900c22|e9191236-4731-4d70-8338-ac86582a581f",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "d74593c0-d488-46dd-9b1b-d5f3a93d0709|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "e1458dc4-7748-4eff-be50-abc82cc38c6e|e94eba13-5f43-4832-843c-04691d59775c",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "e49b1330-921d-4e46-8563-3a4922149c71|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "e9191236-4731-4d70-8338-ac86582a581f|f3641f51-e3be-4a9b-9b83-1cbb8ecde0b5",
+        "stratum": "low",
+        "weight": 5.0,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.83,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|28aaa48d-0823-4ca8-9da7-50b5e863ab3e",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|439d69f3-b09d-480c-b6cb-748eca9516e8",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.35,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.85,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.76,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.73,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|e94eba13-5f43-4832-843c-04691d59775c",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.68,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.72,
+        "positive": true
+      },
+      {
+        "id": "39d8a932-ede9-4fd9-aa61-c52a819f3432|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.3,
+        "positive": true
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.35,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.82,
+        "positive": false
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.86,
+        "positive": false
+      },
+      {
+        "id": "8500d9ae-7710-4d69-b637-8066d9343d66|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.89,
+        "positive": false
+      },
+      {
+        "id": "8500d9ae-7710-4d69-b637-8066d9343d66|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.81,
+        "positive": false
+      },
+      {
+        "id": "8e0e930c-bc85-45f2-bf67-45ab92c400b4|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.88,
+        "positive": false
+      },
+      {
+        "id": "e9802939-6e20-47c0-a5ab-0fc397b10cbf|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "e9802939-6e20-47c0-a5ab-0fc397b10cbf|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "census",
+        "weight": 1.0,
+        "p": 0.84,
+        "positive": false
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|19f04d43-466f-47c4-9b97-f9ab72056842",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "1643157a-bc51-472c-bd01-93c7c4c1c75a|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|69984b1b-350a-4339-a65e-aad9b82871d5",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "1951bc25-521b-4f38-9e13-601a20516916|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|439d69f3-b09d-480c-b6cb-748eca9516e8",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|63b592dd-fa4e-406f-898b-7c7461c0c2f0",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "19f04d43-466f-47c4-9b97-f9ab72056842|8500d9ae-7710-4d69-b637-8066d9343d66",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.9,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "28aaa48d-0823-4ca8-9da7-50b5e863ab3e|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "357db488-9a8b-4dbf-9ac8-ba6931e09004|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "439d69f3-b09d-480c-b6cb-748eca9516e8|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.92,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "5e68edf1-b29a-487e-bdcd-3aaac241b4e7|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|6b21606f-6391-4432-942e-713c52cdf1df",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|a01953e9-35b5-499e-bed1-8eec01b88e46",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "63b592dd-fa4e-406f-898b-7c7461c0c2f0|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "69984b1b-350a-4339-a65e-aad9b82871d5|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|c5dea795-dac9-48ec-a8fc-1c764d900c22",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "69d6372d-b771-42a3-97f7-0f849d657187|e49b1330-921d-4e46-8563-3a4922149c71",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|744f3f4d-52c9-4dfd-b9b0-219c059315ea",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|8e0e930c-bc85-45f2-bf67-45ab92c400b4",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|e9802939-6e20-47c0-a5ab-0fc397b10cbf",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.91,
+        "positive": false
+      },
+      {
+        "id": "6b21606f-6391-4432-942e-713c52cdf1df|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|a9d505af-a415-413e-a915-762e90d0fd2e",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "744f3f4d-52c9-4dfd-b9b0-219c059315ea|ff9400aa-2979-4c8e-9f8c-3f6d65e01c56",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "8e0e930c-bc85-45f2-bf67-45ab92c400b4|f5eec2bc-2e88-409a-9d44-a4f1eace5c32",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "a01953e9-35b5-499e-bed1-8eec01b88e46|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.96,
+        "positive": false
+      },
+      {
+        "id": "a9d505af-a415-413e-a915-762e90d0fd2e|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "f5eec2bc-2e88-409a-9d44-a4f1eace5c32|fbef8964-2df7-478b-a83a-5825cfdf2b64",
+        "stratum": "high",
+        "weight": 2.7,
+        "p": 0.98,
+        "positive": false
+      }
+    ]
+  },
+  "reproduces_calibration": true,
+  "reproduction_note": ""
+}

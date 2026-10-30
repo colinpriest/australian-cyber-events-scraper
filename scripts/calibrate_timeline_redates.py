@@ -44,6 +44,8 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import timeline_reconciliation as tr  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
 from scripts.calibrate_duplicates import bootstrap, merge_cutoff  # noqa: E402
@@ -103,7 +105,9 @@ def cmd_calibrate(args) -> int:
               "labelled_used": len(rows), "labelled_right": sum(r["same"] for r in rows), "excluded": excluded,
               "labels_file": str(tr.REDATE_LABELS_PATH.relative_to(tr.ROOT)),
               "generated": datetime.now().isoformat(), "curve": curve}
+    result["labelled_rows"] = {"redate": deployment.standard_rows(rows, "same")}
     tr.REDATE_CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("timeline-redates")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: re-dates {chosen['merged_labelled']} labelled conflicts, "
               f"{chosen['correct_labelled']} right; precision {chosen['precision']:.3f}")

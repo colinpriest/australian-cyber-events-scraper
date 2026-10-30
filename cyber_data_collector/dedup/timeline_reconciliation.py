@@ -318,7 +318,9 @@ def active_redate_calibration(path: Path = REDATE_CALIBRATION_PATH) -> Optional[
     if cal.get("cutoff") is None:
         logger.warning("TIMELINE RE-DATING IS REPORT ONLY: no cut-off reached the precision target")
         return None
-    return cal
+    from cyber_data_collector.dedup import deployment
+
+    return deployment.gate("timeline-redates", cal, Path(path))
 
 
 # ---------------------------------------------------------------- reconciliation

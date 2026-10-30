@@ -67,6 +67,8 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import supplier_victims as sv  # noqa: E402
 from cyber_data_collector.utils.llm_models import (  # noqa: E402
     add_model_arguments, apply_model_arguments,
@@ -75,6 +77,8 @@ from scripts.calibrate_event_reality import bootstrap, choose_cutoff  # noqa: E4
 
 SAMPLE_PATH = sv.ROOT / "evaluation" / "supplier_victim_sample.csv"
 KINDS = (sv.KIND_VICTIM, sv.KIND_PAIR)
+#: The deployment rule's name for each kind's automatic action (cyber_data_collector/dedup/deployment.py).
+ACTIONS = {sv.KIND_VICTIM: "victim", sv.KIND_PAIR: "same-incident"}
 
 
 def stratum(p: float) -> str:
@@ -300,7 +304,10 @@ def _print_different(bound: Dict[str, object], precision: float, min_accepts: in
 
 
 def cmd_different_only(args) -> int:
-    """Add ``different_cutoff`` to the existing calibration, leaving everything else in it as it is."""
+    """Add ``different_cutoff`` (and the labelled rows it was chosen on) to the existing calibration.
+
+    Everything else in it is left as it is.
+    """
     sample = read_sample()
     try:
         labels = sv.read_labels(sv.LABELS_PATH)
@@ -324,7 +331,9 @@ def cmd_different_only(args) -> int:
     _print_different(bound, existing.get("precision_target", args.precision),
                      existing.get("min_accepts", args.min_accepts))
     existing[sv.KIND_PAIR].update(bound)
+    existing.setdefault("labelled_rows", {})["different"] = deployment.standard_rows(rows, "positive", invert=True)
     sv.CALIBRATION_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    after_calibration("supplier-victims")
     print(f"Updated {sv.CALIBRATION_PATH}")
     return 0
 
@@ -346,9 +355,13 @@ def cmd_calibrate(args) -> int:
                                  "sample_file": str(SAMPLE_PATH.relative_to(sv.ROOT)),
                                  "precision_target": args.precision, "min_accepts": args.min_accepts,
                                  "generated": datetime.now().isoformat()}
+    labelled_rows: Dict[str, List[Dict]] = {}
     for kind in KINDS:
         probs = sv.stored_final_probabilities(conn, kind)
         rows, unsure, missing = _labelled_rows(kind, sample, labels, probs)
+        labelled_rows[ACTIONS[kind]] = deployment.standard_rows(rows, "positive")
+        if kind == sv.KIND_PAIR:
+            labelled_rows["different"] = deployment.standard_rows(rows, "positive", invert=True)
         chosen, curve, mirrored = accept_cutoff(rows, args.precision, args.min_accepts)
         boot = bootstrap(mirrored, args.precision, args.min_accepts)
         result[kind] = {"cutoff": chosen["cutoff"] if chosen else None, "at_cutoff": chosen,
@@ -368,7 +381,9 @@ def cmd_calibrate(args) -> int:
                   f"acceptances - this kind stays report-only. Bootstrap {boot}")
         print(f"  used {len(rows)} labelled ({result[kind]['labelled_positive']} positive), "
               f"{unsure} unsure, {missing} missing")
+    result["labelled_rows"] = labelled_rows
     sv.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("supplier-victims")
     print(f"Written {sv.CALIBRATION_PATH}")
     return 0
 

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "step": "supplier-victims",
+  "generated": "2026-10-30T16:51:35.044475",
+  "calibration": {
+    "question_version": "supplier-victim-v1+supplier-victim-escalation-v1|same-supplier-incident-v1+same-supplier-incident-escalation-v1",
+    "model": "jev-1.14.0+gpt-5.5-2026-04-23",
+    "evidence": "supplier-victims:ebb4d1ec01a6fb8d",
+    "generated": "2026-10-29T19:24:10.695878"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {},
+  "actions": {
+    "victim": {
+      "cutoff": 0.869999,
+      "reproduces": false,
+      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+    },
+    "same-incident": {
+      "cutoff": 0.889999,
+      "reproduces": false,
+      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+    },
+    "different": {
+      "cutoff": 0.090001,
+      "reproduces": false,
+      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+    }
+  },
+  "rows": {},
+  "reproduces_calibration": false,
+  "reproduction_note": "victim: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.); same-incident: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.); different: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+}

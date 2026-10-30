@@ -32,6 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.dedup import deployment  # noqa: E402
+from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import source_gate as sg  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
 from scripts.calibrate_event_reality import bootstrap, choose_cutoff  # noqa: E402
@@ -89,7 +91,9 @@ def cmd_calibrate(args) -> int:
               "missing": missing, "unjudgeable_excluded": unjudgeable, "min_page_chars": sg.MIN_PAGE_CHARS,
               "calibrated_on_database": Path(args.db).name,
               "generated": datetime.now().isoformat(), "curve": table}
+    result["labelled_rows"] = {"reject": deployment.standard_rows(rows, "not_incident")}
     sg.CALIBRATION_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    after_calibration("source-gate")
     if chosen:
         print(f"Cut-off {chosen['cutoff']:.4f}: removes {chosen['rejected_labelled']} labelled records, "
               f"{chosen['correct_labelled']} correctly; weighted precision {chosen['weighted_precision']:.3f}, "

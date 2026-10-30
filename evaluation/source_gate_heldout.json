@@ -1,0 +1,1019 @@
+{
+  "version": 1,
+  "step": "source-gate",
+  "generated": "2026-10-30T16:50:09.698720",
+  "calibration": {
+    "question_version": "source-gate-v1",
+    "model": "jev-1.14.0",
+    "evidence": "source-gate:228eaa852bc7c565",
+    "generated": "2026-10-27T19:52:28.946088"
+  },
+  "policy_version": "2026-10-30.1",
+  "confidence": 0.95,
+  "folds": 5,
+  "rows_source": {
+    "reject": "extracted from cyber_events.db.backup.20261027_pre_source_gate (stored scores, no API calls)"
+  },
+  "actions": {
+    "reject": {
+      "cutoff": 0.580001,
+      "precision_target": 0.95,
+      "minimum": 10,
+      "labelled_rows": 132,
+      "full": {
+        "acted": 100,
+        "correct": 95,
+        "weighted_precision": 0.9527804101581682,
+        "effective_n": 99.8133,
+        "lower_bound_unweighted": 0.8977466223567255,
+        "lower_bound_effective": 0.901275981969931
+      },
+      "reselected_cutoff": 0.580001,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 101,
+        "correct": 95,
+        "weighted_precision": 0.9461832024004894,
+        "effective_n": 100.7213,
+        "lower_bound_unweighted": 0.8861196967849297,
+        "lower_bound_effective": 0.8931065752419761,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 107,
+            "test": 25,
+            "cutoff": 0.580001,
+            "acted": 21,
+            "correct": 20
+          },
+          {
+            "fold": 1,
+            "train": 109,
+            "test": 23,
+            "cutoff": 0.580001,
+            "acted": 20,
+            "correct": 19
+          },
+          {
+            "fold": 2,
+            "train": 106,
+            "test": 26,
+            "cutoff": 0.600001,
+            "acted": 21,
+            "correct": 18
+          },
+          {
+            "fold": 3,
+            "train": 104,
+            "test": 28,
+            "cutoff": 0.460001,
+            "acted": 15,
+            "correct": 15
+          },
+          {
+            "fold": 4,
+            "train": 102,
+            "test": 30,
+            "cutoff": 0.580001,
+            "acted": 24,
+            "correct": 23
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
+    }
+  },
+  "rows": {
+    "reject": [
+      {
+        "id": "00369c81-93b7-40f4-a7ed-d34b48bcedb7",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "048f41e1-233a-4a8f-bfb5-ffae19c3aa75",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "0490e983-a479-4c92-a9e6-386137b50526",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "0b632fe7-9dd2-456f-8d3a-3687d5a8c2cd",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.22,
+        "positive": true
+      },
+      {
+        "id": "0ca911cd-3b17-4d4f-bd49-d91460e37076",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "0cf72638-42e9-4387-b6df-f2311ebcdd59",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.14,
+        "positive": true
+      },
+      {
+        "id": "0d51a31e-2b50-4c61-9ccd-6ab9bd474746",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "10e29931-c49b-4fbe-951f-0529f526874c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "12496598-6100-46a1-8878-6aa32303235e",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.16,
+        "positive": true
+      },
+      {
+        "id": "17a5e769-2da7-4813-a44a-310183f9d727",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.46,
+        "positive": true
+      },
+      {
+        "id": "1a148611-297f-4fdc-bfa5-b425a7de6915",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "1d128860-cc14-4ef9-bfc9-f622a12a1235",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "1e6c54c9-c9f9-408b-882b-067839e079fa",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "26075b08-0548-4c84-8ea6-1513eb432993",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "29246a03-ad4f-4b57-96ac-aec66bb537f7",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "2a709b80-0f7e-4fb6-adc6-a6bc3af4a85b",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "2f874689-fc0e-4281-8a7f-9249acd0c578",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "3088ec48-9ecf-469b-a3e8-d82d0287b3cb",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "327fc8e7-e817-43bc-9b56-b43737b98dba",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "3638a075-8f31-47f7-93b3-806ff766f2bc",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.4,
+        "positive": true
+      },
+      {
+        "id": "36bd0a28-7972-41bc-a3fb-c2aad79c9d91",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "36e7f872-07eb-4c0f-a3c0-b3e46ac828cf",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "39b43b4b-dd04-4f07-9e1e-717750c7a425",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.42,
+        "positive": true
+      },
+      {
+        "id": "3a88be45-7e72-4a36-834c-23dad147fecf",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "3fa36569-ac33-4d38-9a25-034a366fe037",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "422335ee-64b3-4a43-8077-d02c142a3a6c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "45d6ad09-5146-46bf-bf1a-2b7a8076da74",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "4653f837-8801-494c-b135-677b49f1bcf2",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.46,
+        "positive": true
+      },
+      {
+        "id": "48cfe67b-e8b9-4343-b92a-84e02b475033",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "495ff841-5785-489f-907c-0abe38792e48",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "4acf9bdc-90c2-47dd-bec8-5015bfcee960",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "4ea59887-ed45-416a-b475-0068c19e1132",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "4ecffa57-50c8-4ee5-9b48-8c612c3ce361",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "4f8503df-c08e-4967-8fc7-32ec4eee57e7",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "571e8154-0088-498f-ac9b-dc1a038cab0a",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "589784c2-9d54-4bb5-a2f3-1dcf130ac69e",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "594f041a-de17-4bc9-8af5-e584586fd4e2",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "5ca7e309-c815-4304-8737-f45075d8f829",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "5cea158e-53c4-4c44-a428-10a84d97d1f1",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "60b0aae9-08e3-486d-866c-d8d4689cbefa",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "64e4af32-6571-40e2-9935-a25d990d2981",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.12,
+        "positive": true
+      },
+      {
+        "id": "6dcad063-0d1b-4c19-abce-8707e0e313a2",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "6f57f2be-73e0-4b2b-9886-afb154a81e35",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "715136e3-d7ee-4d2d-8a74-71956c6e48d7",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "7b0fe596-b962-4d3c-8c1d-2c819e705e98",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "7c6e72f7-1fd3-4b13-ad9b-7645b52ffed3",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "7d0af8df-7645-4da5-8d7a-1c50340f4d61",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "7d6b6b92-1256-4db7-a45e-fd34dd454afd",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "7d8479e3-2fd4-45ab-af6b-01f63fbb4e5b",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "7e09089f-ef67-405f-96d9-b5ea12242644",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "7e13db4d-44c5-403f-9d97-ae43b45fdc5c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "7ef3480e-2a6a-4693-8f3e-d457a3344879",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "8a0da253-5651-4e88-9d0f-df31bb07287c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "8e55e7d9-4efc-4d87-90d9-53c3117f14b8",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "8fed7894-f688-4e35-948a-dd70e46766f5",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.08,
+        "positive": true
+      },
+      {
+        "id": "9349fad2-6e65-4cc0-9dfd-8bf0bcd72e8c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "9526339a-9754-40b3-82a1-a93e52aa4862",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.14,
+        "positive": true
+      },
+      {
+        "id": "967630e3-4538-48a4-ac41-feb5862166ec",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.07,
+        "positive": true
+      },
+      {
+        "id": "997b757a-185d-424b-995f-872521627968",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "9ab22c1a-c032-46d0-b093-b35d7ff2f979",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "9bf0ceed-d479-4a8f-a6d4-7282187bf8ef",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.11,
+        "positive": true
+      },
+      {
+        "id": "a2a9e6c0-2a7f-4c29-97b4-2baf63c5c3d5",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "a42a4760-9e7d-4ab2-bd0b-32c5d5eab5a1",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "a6472774-48c4-4165-b8e3-df2d6244baf6",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "a74b1269-80dc-459d-9b9c-72f84e0dbfa4",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.39,
+        "positive": true
+      },
+      {
+        "id": "ac6baf90-1757-43c6-8965-63de0f366a99",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": false
+      },
+      {
+        "id": "ae03fcde-5cff-49e8-88c9-0d4c9dbf8cfc",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "b132b8a3-8738-4646-90af-c75e66b68a48",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "b2b42c3b-488b-43f1-b5fc-5397fb2328c3",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "b557ac66-4833-4793-bedb-358a5fe5cbbc",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "b7f3e99f-b013-456b-bcbb-219fe986c3bd",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.09,
+        "positive": true
+      },
+      {
+        "id": "b991abff-378a-45d0-86d1-7bfcf277088d",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "bf2a38bc-8346-477f-93c8-a0189035fea5",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "c2c741e4-cfab-4cb6-9cb8-04d3f4dd13c9",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "c2e468a1-7d06-4d2d-9aaa-564ce71bbf91",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.33,
+        "positive": false
+      },
+      {
+        "id": "c70b5326-d34c-4bbe-87c7-1085bc2dcf9d",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.3,
+        "positive": true
+      },
+      {
+        "id": "c7ad418d-4f29-44c7-a144-46b49c9f3b2f",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "c8f47421-6b28-4602-8b1d-4145c5a32e85",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "cce103c6-6eae-48e9-a84f-94e90512848a",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "cdc7bab5-d3a8-4852-80b5-663aea2df99d",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "cf27ded5-be18-45b6-b1d8-2127ad104c6c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "d12407a6-543d-4358-9d68-c71ec3e700e6",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "d7efe02e-5a0d-4f84-b1d9-42762e037281",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.18,
+        "positive": true
+      },
+      {
+        "id": "d9418234-bfc6-40bf-a2be-12f0214e8e5a",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.38,
+        "positive": false
+      },
+      {
+        "id": "dd130848-f4da-4cbc-9f62-d7f522e00586",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.15,
+        "positive": true
+      },
+      {
+        "id": "e4caf69d-23d7-415d-9ab2-8aee4b80d58c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "e4f5a9bf-154f-4ad5-87e0-4f52641053ce",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "e78aab94-69b7-4c1d-9ec8-fc7e96e0078b",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "eb8402e2-4577-4a09-b460-e3010851f0ba",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "ed4615e5-21e9-45ea-8e19-a869606c663b",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "ed4e7a80-139a-4f52-9b9b-0ac32d905500",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.03,
+        "positive": true
+      },
+      {
+        "id": "ed763796-a764-4df1-96f0-c6feb0e4e8a2",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.22,
+        "positive": true
+      },
+      {
+        "id": "ee642ead-e629-4c51-9e55-1db48ddbf652",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.06,
+        "positive": true
+      },
+      {
+        "id": "f48e8f11-526a-44cb-a704-8cff68936a04",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "f4aa5e00-adbf-4da1-b377-57311d9f1e30",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.01,
+        "positive": true
+      },
+      {
+        "id": "f815fef5-3bcb-4ee5-9845-6be9cd67cb8c",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.04,
+        "positive": true
+      },
+      {
+        "id": "f8b867e5-7e72-4556-9f3d-9f0e8ed09fae",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.05,
+        "positive": true
+      },
+      {
+        "id": "f9d1bf6e-de39-48aa-b5b0-32d4981558c6",
+        "stratum": "A",
+        "weight": 4.7333,
+        "p": 0.02,
+        "positive": true
+      },
+      {
+        "id": "143341be-afcc-450e-8968-02484c510185",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.69,
+        "positive": true
+      },
+      {
+        "id": "1cca55e8-a332-4f2b-81c5-618ff3cf7550",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.64,
+        "positive": false
+      },
+      {
+        "id": "1d9595a7-e242-45d3-a0ad-aca34abc88e7",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.61,
+        "positive": false
+      },
+      {
+        "id": "32ea6731-bfde-4afd-a979-94ea3f3fa279",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.77,
+        "positive": false
+      },
+      {
+        "id": "4b91837c-c129-4629-aa9f-824d63cd5fb3",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.78,
+        "positive": true
+      },
+      {
+        "id": "554f19f9-a4df-4976-a2d7-c8a4b912ce88",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.64,
+        "positive": true
+      },
+      {
+        "id": "6608cb9c-7d7b-4682-bc05-5a6db9da3d8b",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.6,
+        "positive": false
+      },
+      {
+        "id": "6976196c-b2d1-47a2-922b-0d975a9d7356",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.54,
+        "positive": false
+      },
+      {
+        "id": "812bd0d6-fb1f-423f-aab9-23365dd23298",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.59,
+        "positive": false
+      },
+      {
+        "id": "d2d3039c-b0e3-4e91-990c-d18cb7fb22c9",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.61,
+        "positive": true
+      },
+      {
+        "id": "f0ed68e1-4f4d-421f-94cc-387b92395bc8",
+        "stratum": "B",
+        "weight": 3.28,
+        "p": 0.58,
+        "positive": true
+      },
+      {
+        "id": "014453b6-bf21-4db6-a78b-c22896f035a2",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "059bfd28-01e2-4105-a936-42eaeeabc2d8",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "14297ba1-bdae-4b43-b5da-2a71e54ac51a",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "22bc7c8e-d41d-433b-a9a9-32cb26610a09",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.94,
+        "positive": false
+      },
+      {
+        "id": "2e95dd12-9a91-4036-bdd9-b45f21c4e247",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "33115e94-c593-4c9b-96e7-a580f1bfb5e3",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "361a5a6c-1dfd-48e9-a874-a54700de1b31",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "39418178-7f40-49a4-8e19-8ae4ea2c2ef5",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "458e1eab-74ca-40c8-9871-d053ceaa3998",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "5c990cf5-d410-44b9-8009-f4210d44164f",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "5e09b6cc-e199-4c99-8628-1482008ff126",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "669cbd3b-53bb-4829-9f08-0fbacf7bc6ad",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "73b93eb3-bb56-4c13-becc-0ef06dd555db",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "90a6ab84-a341-46e9-96b7-38fdfb7e351d",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "932d698c-de0b-4306-89ba-ef8b082da12c",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.95,
+        "positive": false
+      },
+      {
+        "id": "96c6f429-b888-441c-99ae-5a32d23c2e74",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.97,
+        "positive": false
+      },
+      {
+        "id": "a9d71510-1173-4454-9628-d31195389bfb",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "c03ca54a-6492-4615-8780-4687990ba531",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.98,
+        "positive": false
+      },
+      {
+        "id": "c4e5b1b2-39ef-438a-a902-1b6a1ddc34c6",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.93,
+        "positive": false
+      },
+      {
+        "id": "d12a576c-f8b5-4d66-8fd9-2cf1067fe5e2",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "e23a1528-370c-4b7e-9824-1e572ebf4701",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "e8e23b90-f475-4091-8982-ee17d8abe2ab",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.99,
+        "positive": false
+      },
+      {
+        "id": "fdc3ee59-6d21-465d-bda9-640b6af668ad",
+        "stratum": "C",
+        "weight": 16.96,
+        "p": 0.97,
+        "positive": false
+      }
+    ]
+  },
+  "reproduces_calibration": true,
+  "reproduction_note": ""
+}
