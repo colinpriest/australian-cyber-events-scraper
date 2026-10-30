@@ -19,6 +19,14 @@ and nothing about it today. A step that must act on a stale score asks again on
 the current evidence - and only where it could change what the step does (see the
 duplicate check's ``calibrated_negatives``); a report that merely shows a score
 says it is out of date.
+
+The state is built **once** per subject and run: the object Jev is asked on is
+the one the escalation is given and the one :func:`record` hashes
+(:func:`frozen`), so nothing that changes in between - a timeline refreshed, a
+record re-enriched, another process - can make the three disagree. A step that
+acts (rejects, splits, merges) builds the state again immediately before acting
+and leaves any subject whose evidence has changed since it was judged for the
+next run (:func:`changed_since`).
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from cyber_data_collector.utils.llm_models import openai_model, typesafe_model
 
@@ -159,6 +167,31 @@ def latest(conn: sqlite3.Connection, step: Step, subject_ids: Optional[Iterable[
         if wanted is None or sid in wanted:
             out[sid] = (float(score), evidence)
     return out
+
+
+def frozen(states: Mapping[str, Mapping[str, Any]], subject_id: str) -> Mapping[str, Any]:
+    """The state ``subject_id`` was judged on, from the ``states`` a step built once for its Jev question.
+
+    A step that shows the escalation and records the decision on the state Jev saw must never build a new one
+    in between (a timeline refreshed or a record re-enriched in the meantime would make the three disagree), so a
+    subject missing from ``states`` is a caller's error, not a reason to read the database again.
+    """
+    try:
+        return states[subject_id]
+    except KeyError:
+        raise ValueError(f"{subject_id!r} has no frozen state: it was not asked on these states") from None
+
+
+def changed_since(states: Mapping[str, Mapping[str, Any]], subject_ids: Iterable[str],
+                  build: Callable[[str], Mapping[str, Any]]) -> List[str]:
+    """The subjects whose evidence now differs from the state they were judged on (``states``).
+
+    Called immediately before a step acts: each subject's state is built again and its :func:`state_hash`
+    compared with the frozen one. A subject whose evidence changed since it was judged (another process,
+    a refreshed timeline, a re-enriched record) has a decision nobody made on its evidence now; the step leaves
+    it for the next run instead of acting on it.
+    """
+    return [sid for sid in subject_ids if state_hash(build(sid)) != state_hash(frozen(states, sid))]
 
 
 def record_scores(conn: sqlite3.Connection, step: Step, subjects: Sequence[Tuple[str, Callable[[], Mapping[str, Any]]]],

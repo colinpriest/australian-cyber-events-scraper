@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from tqdm import tqdm
 
 from cyber_data_collector.models.events import AffectedEntity, CyberEvent, EntityType
+from cyber_data_collector.utils import llm_retry
 from cyber_data_collector.utils.llm_models import chat_params, openai_fast_model
 from .llm_classifier import LLMClassifier, failed_copy
 
@@ -101,40 +102,40 @@ class EntityExtractor:
         )
 
         model_name = openai_fast_model()
-        try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(
-                    lambda: self.llm_classifier.client.chat.completions.create(
-                        **chat_params(model_name),
-                        response_model=ExtractedEntities,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Extract all entities mentioned in this cyber security event. Identify organizations, government agencies, "
-                                    "companies, and individuals. Classify their type and determine if they are Australian entities with confidence scores."
-                                ),
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Extract entities from: {request.model_dump_json()}",
-                            },
-                        ],
-                    )
-                ),
-                timeout=60  # 60 second timeout
+
+        def call() -> ExtractedEntities:
+            return self.llm_classifier.client.chat.completions.create(
+                **chat_params(model_name),
+                response_model=ExtractedEntities,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Extract all entities mentioned in this cyber security event. Identify organizations, government agencies, "
+                            "companies, and individuals. Classify their type and determine if they are Australian entities with confidence scores."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Extract entities from: {request.model_dump_json()}",
+                    },
+                ],
+                max_retries=llm_retry.validation_retries(),
             )
-            # Track token usage from instructor-wrapped response
-            from cyber_data_collector.utils.token_tracker import tracker
-            raw = getattr(response, '_raw_response', None)
-            if raw and hasattr(raw, 'usage') and raw.usage:
-                tracker.record(
-                    model_name, raw.usage.prompt_tokens,
-                    raw.usage.completion_tokens, context="entity_extraction",
-                )
-        except asyncio.TimeoutError:
-            self.logger.warning(f"Entity extraction timed out for event: {event.title[:50]}...")
-            raise
+
+        # The classifier's client times out at the HTTP level and is not retried by the SDK; this one loop
+        # retries transient failures (utils/llm_retry.py), so a slow request is cancelled, never left running.
+        response = await llm_retry.call_with_retries(
+            call, what=f"Entity extraction for {event.title[:50]!r}", logger=self.logger,
+            sleep=getattr(self.llm_classifier, "sleep", asyncio.sleep))
+        # Track token usage from instructor-wrapped response
+        from cyber_data_collector.utils.token_tracker import tracker
+        raw = getattr(response, '_raw_response', None)
+        if raw and hasattr(raw, 'usage') and raw.usage:
+            tracker.record(
+                model_name, raw.usage.prompt_tokens,
+                raw.usage.completion_tokens, context="entity_extraction",
+            )
 
         event_copy = event.model_copy(deep=True)
         enhanced_entities: List[AffectedEntity] = []
