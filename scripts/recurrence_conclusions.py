@@ -319,3 +319,55 @@ def describe_ci_width_sensitivity(rows: Iterable[Mapping[str, Any]], baseline_la
                 f" {narrowing:.0f}% narrower on the log scale ({baseline})."
             )
     return " ".join(sentences)
+
+
+def describe_size_specification(rows: Iterable[Mapping[str, Any]]) -> List[str]:
+    """Sentences on how organisation size is specified, from ``size_specification_comparison`` rows.
+
+    For each banding: whether categorical size fits better than the numeric score (an LRT when the score
+    is nested in it, otherwise AIC alone), whether each headline elapsed-time test reaches the same 5%
+    verdict under both specifications, and what a size-by-phase interaction shows (or why it was not
+    fitted).
+    """
+    table = [dict(r) for r in rows]
+    sentences: List[str] = []
+    for banding in dict.fromkeys(r["banding"] for r in table):
+        by_spec = {r["size_spec"]: r for r in table if r["banding"] == banding}
+        score, categorical = by_spec.get("score"), by_spec.get("categorical")
+        if not score or not categorical:
+            continue
+        bands = score.get("elapsed_bands", banding)
+        aic_s, aic_c = _float(score.get("aic")), _float(categorical.get("aic"))
+        aic = (f"AIC {aic_c:.1f} (categorical) against {aic_s:.1f} (score), lower for the"
+               f" {'categorical' if aic_c < aic_s else 'score'} model")
+        p = _float(categorical.get("p_value"))
+        if categorical.get("nested") and _finite(p):
+            outcome = ("reject" if p < ALPHA else "do not reject")
+            sentences.append(
+                f"Size specification (bands {bands}): categorical size against the numeric size score, LRT p {_p(p)}"
+                f" on {int(_float(categorical.get('df')))} df; at the 5% level the data {outcome} equal log-rate"
+                f" steps between size bands; {aic}.")
+        else:
+            sentences.append(
+                f"Size specification (bands {bands}): categorical size and the numeric score are not nested"
+                f" ({categorical.get('note') or 'no likelihood-ratio test'}), so only AIC compares them: {aic}.")
+        for label, key in (("the adjusted constant-hazard test", "elapsed_constant_hazard_p"),
+                           ("the directional delayed-peak test", "delayed_peak_directional_p")):
+            p_s, p_c = _float(score.get(key)), _float(categorical.get(key))
+            if not (_finite(p_s) and _finite(p_c)):
+                continue
+            change = ("the same verdict at the 5% level" if (p_s < ALPHA) == (p_c < ALPHA)
+                      else "the verdict at the 5% level changes")
+            sentences.append(f"With bands {bands}, {label} gives p {_p(p_s)} with the size score and"
+                             f" p {_p(p_c)} with categorical size: {change}.")
+        interaction = by_spec.get("score_x_phase")
+        if interaction:
+            p_i = _float(interaction.get("p_value"))
+            if _finite(p_i):
+                outcome = ("reject" if p_i < ALPHA else "do not reject")
+                sentences.append(f"Size by elapsed-time phase (the size score's slope in 91-180 and post-180 days"
+                                 f" against 0-90): LRT p {_p(p_i)} on {int(_float(interaction.get('df')))} df; at the"
+                                 f" 5% level the data {outcome} a size effect that is the same in every phase.")
+            else:
+                sentences.append(f"Size by elapsed-time phase was not fitted: {interaction.get('note')}.")
+    return sentences
