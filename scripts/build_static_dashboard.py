@@ -1487,8 +1487,13 @@ def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[d
     Returns (extraction date E, collection start, [(incident, first known)],
     {(year, month): count}) or None when unavailable. E is the date of the
     latest ingest (``get_data_collection_timestamp``), never the wall clock.
-    First-known date of an event is the earliest ``RawEvents.discovered_at``
-    among its member records.
+    First-known date of an event is the earlier of its first publication
+    (``DeduplicatedEvents.first_reported_date``, the earliest publication date
+    of its records) and the earliest ``RawEvents.discovered_at`` among them.
+    Discovery alone measured when *this pipeline* found a report, not when it
+    was reported: the Cyber Daily backfill (2026-10-28/29) found hundreds of
+    2024-26 incidents for the first time, which made the median lag 116 days
+    instead of 5 and grossed recent months up two- to three-fold.
     """
     extraction = _parse_collection_date(get_data_collection_timestamp(conn))
     if extraction is None or extraction < DASHBOARD_START:
@@ -1500,8 +1505,10 @@ def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[d
     try:
         start_row = conn.execute("SELECT MIN(discovered_at) FROM RawEvents").fetchone()
         collection_start = _parse_collection_date(start_row[0] if start_row else None)
+        has_reported = "first_reported_date" in {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
+        reported = "de.first_reported_date" if has_reported else "NULL"
         rows = conn.execute(f"""
-            SELECT de.event_date, MIN(re.discovered_at)
+            SELECT de.event_date, MIN(re.discovered_at), {reported}
             FROM DeduplicatedEvents de
             JOIN EventDeduplicationMap m ON m.deduplicated_event_id = de.deduplicated_event_id
             JOIN EnrichedEvents ee ON ee.enriched_event_id = m.enriched_event_id
@@ -1522,9 +1529,12 @@ def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[d
         return None
 
     events = []
-    for event_date, first_known in rows:
+    for event_date, first_discovered, first_reported in rows:
         incident = _parse_collection_date(event_date)
-        known = _parse_collection_date(first_known)
+        known = _parse_collection_date(first_discovered)
+        published = _parse_collection_date(first_reported)
+        if published is not None and (known is None or published < known):
+            known = published
         if incident is not None and known is not None and incident <= extraction:
             events.append((incident, known))
     monthly_counts = {(int(y), int(m)): int(c) for y, m, c in count_rows if y and m}

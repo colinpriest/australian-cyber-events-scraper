@@ -100,3 +100,28 @@ def test_month_intervals_seeded_and_bracket_observed():
     for (low, high), pm in zip(a, months):
         assert counts.get(pm, 0) <= low <= high
     assert bf_month_intervals(counts, [], E, lags, rate_months(E)) == []
+
+
+def test_first_known_is_the_first_publication_not_a_late_backfill():
+    # A source added later (Cyber Daily, 2026-10-28) finds old incidents for the first time; their lag is how long
+    # they took to be reported, not how long the pipeline took to start reading that source.
+    import sqlite3
+    from scripts.build_static_dashboard import _load_bf_inputs
+
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT PRIMARY KEY, event_date TEXT, status TEXT,
+            is_australian_event INTEGER DEFAULT 1, is_specific_event INTEGER DEFAULT 1, first_reported_date TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        CREATE TABLE EnrichedEvents (enriched_event_id TEXT PRIMARY KEY, raw_event_id TEXT);
+        CREATE TABLE RawEvents (raw_event_id TEXT PRIMARY KEY, discovered_at TEXT);
+        INSERT INTO DeduplicatedEvents VALUES ('old', '2025-03-01', 'Active', 1, 1, '2025-03-04');
+        INSERT INTO DeduplicatedEvents VALUES ('nopub', '2025-03-01', 'Active', 1, 1, NULL);
+        INSERT INTO EventDeduplicationMap VALUES ('e1', 'old'), ('e2', 'nopub');
+        INSERT INTO EnrichedEvents VALUES ('e1', 'r1'), ('e2', 'r2');
+        INSERT INTO RawEvents VALUES ('r1', '2026-10-28 10:00:00'), ('r2', '2026-10-28 10:00:00');
+    """)
+    _extraction, _start, events, _counts = _load_bf_inputs(c)
+    known = {incident_known for _incident, incident_known in events}
+    assert sorted(events) == [(date(2025, 3, 1), date(2025, 3, 4)), (date(2025, 3, 1), date(2026, 10, 28))]
+    assert date(2025, 3, 4) in known
