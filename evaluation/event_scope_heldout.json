@@ -1,12 +1,12 @@
 {
   "version": 1,
   "step": "event-scope",
-  "generated": "2026-10-30T18:35:14.932305",
+  "generated": "2026-10-30T19:25:53.546716",
   "calibration": {
     "question_version": "event-scope-v1+event-scope-escalation-v1",
     "model": "jev-1.14.0+gpt-5.5-2026-04-23",
     "evidence": "event-scope:acfb1f8b110bf55f",
-    "generated": "2026-10-30T18:35:14.921305"
+    "generated": "2026-10-30T19:25:53.529195"
   },
   "policy_version": "2026-10-30.1",
   "confidence": 0.95,
@@ -16,70 +16,70 @@
   },
   "actions": {
     "reject": {
-      "cutoff": 0.720001,
+      "cutoff": 0.680001,
       "precision_target": 0.95,
       "minimum": 10,
-      "labelled_rows": 143,
+      "labelled_rows": 144,
       "full": {
-        "acted": 71,
-        "correct": 68,
-        "weighted_precision": 0.9577464788732394,
-        "effective_n": 71.0,
-        "lower_bound_unweighted": 0.8944017302410808,
-        "lower_bound_effective": 0.8944017302410808
+        "acted": 67,
+        "correct": 64,
+        "weighted_precision": 0.9552238805970149,
+        "effective_n": 67.0,
+        "lower_bound_unweighted": 0.8883224819088371,
+        "lower_bound_effective": 0.8883224819088371
       },
-      "reselected_cutoff": 0.720001,
+      "reselected_cutoff": 0.680001,
       "reproduces": true,
       "reproduction_note": "",
       "heldout": {
-        "acted": 71,
-        "correct": 67,
-        "weighted_precision": 0.9436619718309859,
-        "effective_n": 71.0,
-        "lower_bound_unweighted": 0.8757013896019648,
-        "lower_bound_effective": 0.8757013896019648,
+        "acted": 66,
+        "correct": 62,
+        "weighted_precision": 0.9393939393939394,
+        "effective_n": 66.0,
+        "lower_bound_unweighted": 0.8666569925900329,
+        "lower_bound_effective": 0.8666569925900329,
         "folds": 5,
         "folds_without_cutoff": 0,
         "per_fold": [
           {
             "fold": 0,
-            "train": 109,
+            "train": 110,
             "test": 34,
-            "cutoff": 0.720001,
-            "acted": 17,
-            "correct": 16
+            "cutoff": 0.600001,
+            "acted": 15,
+            "correct": 15
           },
           {
             "fold": 1,
-            "train": 119,
+            "train": 120,
             "test": 24,
-            "cutoff": 0.730001,
-            "acted": 12,
-            "correct": 11
+            "cutoff": 0.720001,
+            "acted": 11,
+            "correct": 10
           },
           {
             "fold": 2,
-            "train": 117,
+            "train": 118,
             "test": 26,
-            "cutoff": 0.680001,
-            "acted": 13,
-            "correct": 13
+            "cutoff": 0.300001,
+            "acted": 11,
+            "correct": 11
           },
           {
             "fold": 3,
             "train": 117,
-            "test": 26,
+            "test": 27,
             "cutoff": 0.730001,
-            "acted": 14,
+            "acted": 15,
             "correct": 12
           },
           {
             "fold": 4,
-            "train": 110,
+            "train": 111,
             "test": 33,
-            "cutoff": 0.680001,
-            "acted": 15,
-            "correct": 15
+            "cutoff": 0.600001,
+            "acted": 14,
+            "correct": 14
           }
         ],
         "fold_key": "sha256(step|subject id) mod folds"

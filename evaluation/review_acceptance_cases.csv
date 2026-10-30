@@ -19,4 +19,3 @@ c5dea795-dac9-48ec-a8fc-1c764d900c22,same_incident_as,e49b1330-921d-4e46-8563-3a
 6bb15642-455f-4180-b4b2-30a0ca9a4f7e,victim,NSW National Parks and Wildlife Service,the text names it (Fire History service); a second OpenAI-agent incident,user 2026-10-29
 e94eba13-5f43-4832-843c-04691d59775c,out_of_scope,,US agencies only (Education Department / SEC / Census Bureau),user 2026-10-29
 39d8a932-ede9-4fd9-aa61-c52a819f3432,out_of_scope,,OpenAI rogue-agent evaluation (Hugging Face and four services); no Australian victim,user 2026-10-29
-e9191236-4731-4d70-8338-ac86582a581f,out_of_scope,,Grok deepfakes; no Australian victim (Australian condemnation only),user 2026-10-29
