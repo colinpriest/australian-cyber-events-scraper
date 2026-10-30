@@ -62,3 +62,36 @@ def test_a_persons_ruling_is_never_voided():
     ledger.split_members("ded-big", ["enr-w2"], reason="checked", actor="human")
     conn.commit()
     assert split_rulings.orphaned(conn) == [] and _active(conn, "enr-w1", "enr-w2") == 1
+
+
+def _victim(conn, event_id, name):
+    row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?", (name,)).fetchone()
+    entity_id = row[0] if row else conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES (?)", (name,)).lastrowid
+    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "VALUES (?, ?, 'victim')", (event_id, entity_id))
+
+
+def test_a_coherence_ruling_goes_when_its_organisation_becomes_the_victim_on_both_sides():
+    """Agrimac's listing left an event that later recorded Agrimac as its victim: the ruling has no basis."""
+    conn, ledger = _world()
+    new = ledger.split_members("ded-big", ["enr-w1"], reason="[coherence] stray record(s) about Agrimac: "
+                               "P(same) 0.080 below the calibrated cut-off (member-coherence-v2)", actor="rule")
+    conn.commit()
+    _victim(conn, new, "Agrimac")
+    conn.commit()
+    assert split_rulings.outgrown_coherence_rulings(conn) == []          # Agrimac is not the big event's victim
+    _victim(conn, "ded-big", "Agrimac")
+    conn.commit()
+    assert len(split_rulings.outgrown_coherence_rulings(conn)) == 3     # w1 against each record that stayed
+    split_rulings.void_orphaned(conn)
+    assert _active(conn, "enr-w1", "enr-big") == 0
+
+
+def test_a_labelled_coherence_ruling_stays():
+    conn, ledger = _world()
+    new = ledger.split_members("ded-big", ["enr-w1"], reason="[coherence] stray record(s) about Agrimac: "
+                               "labelled a different incident", actor="rule")
+    _victim(conn, new, "Agrimac")
+    _victim(conn, "ded-big", "Agrimac")
+    conn.commit()
+    assert split_rulings.outgrown_coherence_rulings(conn) == []
