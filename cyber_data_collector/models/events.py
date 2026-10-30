@@ -169,6 +169,9 @@ class CyberEvent(BaseModel):
     response_actions: List[str] = Field(default_factory=list, description="Response and remediation actions")
     attribution: Optional[str] = Field(None, description="Attack attribution if known")
     data_sources: List[EventSource] = Field(default_factory=list, description="All data sources for this event")
+    source_provenance: Optional[Dict[str, Any]] = Field(
+        None, description="Where the source got this record (e.g. the Perplexity answer item and its sibling "
+                          "citations); stored as RawEvents.source_metadata.provenance")
     confidence: ConfidenceScore = Field(..., description="Data quality confidence scores")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Record creation timestamp")
     processed_at: Optional[datetime] = Field(None, description="Processing completion timestamp")

@@ -132,7 +132,7 @@ Initial discovered events before any LLM processing. One row per discovered arti
 | `publication_date` | TEXT | Yes | NULL | Day the source was published (`YYYY-MM-DD`): the source's own date, else the page's metadata, else a full date in the URL path. Never the incident date. See `processing/publication_dates.py` |
 | `publication_date_source` | TEXT | Yes | NULL | Where `publication_date` came from: `source`, `page metadata: <field>` or `URL path` |
 | `event_date_precision` | TEXT | Yes | NULL | How precisely the source states `event_date`: `day`, `month` or `year`; NULL = not stated |
-| `event_date_basis` | TEXT | Yes | NULL | Where the source's `event_date` comes from (e.g. `Webber list heading (month)`, `stated in the source page`) |
+| `event_date_basis` | TEXT | Yes | NULL | Where the source's `event_date` comes from (e.g. `Webber list heading (month)`, `stated in the source page`, `stated in the Perplexity discovery answer (unverified)` - no precision is recorded for the last) |
 | `discovered_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | When the pipeline discovered this event |
 | `is_processed` | BOOLEAN | No | `FALSE` | Whether this event has been through LLM enrichment |
 | `processing_attempted_at` | TIMESTAMP | Yes | NULL | Timestamp of last enrichment attempt |
@@ -1075,6 +1075,36 @@ Stored in `RawEvents.source_metadata`. Written by the discovery pipeline during 
 | `content_filter_reasoning` | string | Reasoning for the filter decision |
 | `content_filter_stage` | string | Filter stage that processed it |
 | `content_filter_risk_level` | string | Risk level assessment |
+| `provenance` | object | Where the source got the record, when it says (Perplexity discovery; below) |
+
+**`provenance` of a Perplexity record** (`datasources/perplexity.py`, version `perplexity-children-v1`). Each
+article URL a Perplexity answer item cites is its own record; the siblings share `answer_item_id`.
+
+```json
+"provenance": {
+  "origin": "perplexity_answer",
+  "version": "perplexity-children-v1",
+  "query": "Australian cyber attack after:01/01/2025 before:03/31/2025 data breach security incident",
+  "answer_item_id": "3f1c0a9e5b7d2c41",
+  "url_index": 0,
+  "url_count": 2,
+  "sibling_urls": ["https://news.example/acme-breach", "https://other.example/acme"],
+  "skipped_urls": ["https://cybertrackerau.com/"],
+  "recovery": null,
+  "answer": {"title": "...", "description": "...", "event_date": "2025-03-14", "entity_name": "Acme",
+             "event_type": "Data Breach", "impact_description": null, "source_urls": ["..."]}
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `query` | the query as sent, with its `after:/before:` window (a half window when a truncated answer was searched again) |
+| `answer_item_id` | first 16 hex of SHA-256 over the item's fields (URLs cleaned); the same for every sibling and for the same item in another answer |
+| `url_index`, `url_count` | this record's place among the item's article URLs (`null` / `0` for an item citing no article) |
+| `sibling_urls` | every article URL of the item, cleaned of tracking parameters, in answer order |
+| `skipped_urls` | URLs the item cites that are not article addresses (site roots, non-URLs); not stored as sources |
+| `recovery` | how the item was read: `null` (whole answer), `repaired`, `object`, `truncated_object`, `completed` |
+| `answer` | the item's own fields as the answer gave them (`event_date` may be a month or year; only a full day becomes `RawEvents.event_date`) |
 
 ---
 

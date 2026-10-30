@@ -1189,6 +1189,11 @@ class EventDiscoveryEnrichmentPipeline:
                     'publication_date': publication_date.isoformat() if publication_date else None
                 }
             }
+            # Where the record came from, when the source says (a Perplexity answer item and its
+            # sibling citations: one record per cited article, datasources/perplexity.py).
+            provenance = getattr(event, 'source_provenance', None)
+            if provenance:
+                raw_data['metadata']['provenance'] = provenance
 
             # Store in database
             raw_event_id = self.db.add_raw_event(source_type, raw_data)

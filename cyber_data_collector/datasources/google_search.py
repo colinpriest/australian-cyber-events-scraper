@@ -14,6 +14,7 @@ import requests
 from cyber_data_collector.datasources.base import DataSource
 from cyber_data_collector.models.config import DataSourceConfig, DateRange
 from cyber_data_collector.models.events import ConfidenceScore, CyberEvent, CyberEventType, EventSeverity, EventSource
+from cyber_data_collector.processing.fetch_errors import OTHER
 from cyber_data_collector.processing.publication_dates import from_google_item
 from cyber_data_collector.utils import RateLimiter
 
@@ -165,9 +166,12 @@ class GoogleSearchDataSource(DataSource):
                         if "quota" in error_reason.lower() or "quota" in error_message.lower() or "limit" in error_message.lower():
                             self._set_quota_exceeded()
                             return None
-                    except (ValueError, KeyError) as exc:
+                    except (ValueError, KeyError, IndexError, AttributeError) as exc:
                         self.logger.debug("Failed to parse Google API error response: %s", exc)
-                    self.logger.error("Google API returned 403 Forbidden: %s", response.text[:200])
+                    # Not a quota refusal, and not "no more results": the remaining pages of this query
+                    # were not read. The results already collected are kept; the month is searched again.
+                    self.note_failure(f"Google API refused page {page + 1} of query '{query[:60]}' "
+                                      f"(HTTP 403: {response.text[:200]})", error_type=OTHER)
                     break
 
                 response.raise_for_status()
@@ -175,10 +179,16 @@ class GoogleSearchDataSource(DataSource):
 
                 # Check for quota error in successful response (sometimes returned as error object)
                 if "error" in data:
-                    error_msg = str(data.get("error", {}).get("message", ""))
+                    error = data.get("error")
+                    error_msg = str(error.get("message", "") if isinstance(error, dict) else error)
                     if "quota" in error_msg.lower() or "limit" in error_msg.lower():
                         self._set_quota_exceeded()
                         return None
+                    # An error object is not an empty page: its results were not returned.
+                    code = error.get("code") if isinstance(error, dict) else None
+                    self.note_failure(f"Google API returned an error for page {page + 1} of query '{query[:60]}' "
+                                      f"({f'HTTP {code}: ' if code else ''}{error_msg[:200]})")
+                    break
 
                 results = data.get("items", [])
                 if not results:
