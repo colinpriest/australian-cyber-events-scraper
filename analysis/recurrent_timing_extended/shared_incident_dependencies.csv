@@ -1,6 +1,7 @@
 deduplicated_event_id,victim_entities,victim_entity_pairs,supplier_recorded
 00b578aa-ca07-465f-8cd1-1f310577efc5,2,1,False
 0362d1d4-c904-415e-910a-73c4a9ca4e8b,3,3,False
+05a642a0-d7fb-45db-91ef-f58bdf57f4f6,2,1,True
 078ee33c-7f1b-4dbe-a7f3-519cb0086840,7,21,False
 0cb0dd62-58c9-4d47-b094-1a6c1c4505af,3,3,True
 0e521a00-d1ad-4b83-bccb-a9208daae20c,6,15,True
@@ -31,6 +32,7 @@ deduplicated_event_id,victim_entities,victim_entity_pairs,supplier_recorded
 5616abcb-7942-4751-9a45-6b16d43eb520,2,1,False
 65379d75-0968-4895-86ba-555e1490957d,3,3,False
 6787966b-1d75-41f5-bf43-d5845a0ef812,2,1,False
+69112208-203d-472e-ae55-84b3bf584d1d,2,1,False
 6929a3f1-6e80-46b6-b9f2-6506ec36ba38,3,3,True
 6bb2dfff-d323-4d03-8595-5b0830e44fda,7,21,True
 6cde601c-e875-4f34-b635-dc151379e047,3,3,False
@@ -60,7 +62,7 @@ a638633e-aa94-4f53-9677-47dc78b228c5,2,1,False
 adc51b29-8474-4782-84d0-7ca0c26a546b,2,1,False
 af5a96f9-4bb9-42c4-bdff-7e4f71801754,2,1,False
 b03e7ac8-54a8-4b7f-bffe-5f56c73e0347,3,3,False
-b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,5,10,False
+b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,6,15,False
 b5698d4f-528b-4133-8090-b5f55c0589c3,13,78,True
 bcbb5f29-9be0-4705-b6ad-39c2842adad3,4,6,True
 c241c24e-1727-4988-9a38-071cb98b232d,8,28,False
