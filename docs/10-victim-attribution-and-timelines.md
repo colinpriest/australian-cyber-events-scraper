@@ -122,6 +122,38 @@ breach at 0.92, Heritage Bank at 0.75, Commonwealth Bank in a scam story at
 The bootstrap mean (0.944) is just under the 0.95 target - the procedure's
 honest precision is about 94%.
 
+### Census extension (2026-10-30)
+
+The strata above were drawn on 2026-10-27 scores; the acting band is defined on
+the *current* evidence. `calibrate_victim_attribution.py sample --extend-below 0.5
+--extend-stratum D --frame-db <database the sample was drawn on>` scores nothing
+itself: after `check-victim-attribution` has judged every pair of a copy of the
+recalibration database on current evidence (758 pairs; 613 Jev and 106 escalation
+calls, the 145 labelled pairs reused), it adds every unsampled pair of the
+original 636-pair frame scoring below 0.5 as stratum `D`, weight 1, and moves the
+sampled pairs in that region whose weight was above 1 into it with weight 1 (3:
+two from B, one from C). Rows outside the region keep their inclusion
+probabilities, so their weights stay unbiased. The region holds 62 frame pairs:
+55 already labelled, **7 new**. The 122 pairs of the snapshot outside the frame
+belong to events rejected before the sample was drawn (all are rejected in the
+live database) and are left out. The frame is small: the original census had
+already covered almost all of the acting band, so more labels in that band have
+to come from events created after the labelling snapshot.
+
+The 7 were labelled blind (5 `wrong`, 2 `correct`) and the step recalibrated
+on that copy, now `instance/recalibration/victim-attribution.db` (the previous
+copy kept beside it as `victim-attribution.db.before_20261030`):
+
+| Action | Cut-off | Labelled acted on | Lower bound (all labels, n_eff) | Held out | Held-out bound | Deployment rule |
+|---|---|---|---|---|---|---|
+| act (recorded victim wrong) | P < **0.12** | 44/46 | 0.869 (46.0) | 42/44 | 0.864 | acts |
+| replace (sole victim) | choice P >= **0.82** | 21/22 | 0.708 (10.6) | 20/22 | 0.666 | report only: 9 more correct labelled replacements needed |
+
+The cut-off fell from 0.18 because a new `correct` pair (Landmark Insurance,
+recorded under a loose name for Landmark Admin) scores 0.18. Wrong victims are
+demoted or flagged; with the replacement held back by the rule, a sole wrong
+victim is flagged, never replaced.
+
 ### On a copy of the live database
 
 `check-victim-attribution --apply` (after the v2 timelines): 636 event-victim
