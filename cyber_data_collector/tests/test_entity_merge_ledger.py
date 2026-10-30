@@ -273,3 +273,26 @@ def test_the_command_lists_and_unmerges(conn, tmp_path, capsys):
     assert dedup_admin.cmd_unmerge_entity(args) == 1                     # already reversed
     check = sqlite3.connect(path)
     assert check.execute("SELECT entity_name FROM EntitiesV2 WHERE entity_id = 2").fetchone() is not None
+
+
+def test_a_name_folded_into_a_description_is_undone_and_its_alias_ignored(conn):
+    """"Mackay Sugar" was folded into "Australian sugar producer": a description is no organisation."""
+    from cyber_data_collector.dedup import descriptive_names, name_judgement
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver, stored_aliases
+
+    name_judgement.deactivate()
+    before = _state(conn)
+    merge_entities(conn, "Acme Health", ["ACME HEALTH PTY LTD"], source="llm")
+    assert ledger.overturned_merges(conn) == []                          # two names: a verdict of 'same' holds
+    descriptive_names.add(conn, "Acme Health", "a description, not one organisation")
+    (overturned,) = ledger.overturned_merges(conn)
+    assert overturned["verdict"] == "description"
+    assert "ACME HEALTH PTY LTD" not in stored_aliases(conn, ("llm",))   # never resolves to the description
+    reports, refused = ledger.reverse_overturned_merges(conn)
+    assert len(reports) == 1 and refused == []
+    assert {k: v for k, v in _state(conn).items()} == before
+    # A model may not write such an alias again; a person may.
+    EntityResolver(conn).learn_alias(conn, "Other Org", "Acme Health", source="llm")
+    assert conn.execute("SELECT COUNT(*) FROM EntityAliases WHERE raw_name = 'Other Org'").fetchone()[0] == 0
+    EntityResolver(conn).learn_alias(conn, "Other Org", "Acme Health", source="human")
+    assert stored_aliases(conn, ("human",)) == {"Other Org": "Acme Health"}

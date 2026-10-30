@@ -37,8 +37,9 @@ error, exit non-zero), never filled.
 and evidence: the best candidate's probability at or above the calibrated cut-off,
 and the records' text naming it (under any spelling). Labels are ground truth
 (``evaluation/victim_fill_labels.csv``): an event labelled ``none_named`` is never
-filled; one labelled ``named`` takes its labelled victim when that is among the
-candidates, calibrated or not. The change is ledger-snapshotted (reversible) and
+filled; one labelled ``named`` takes its labelled victim, calibrated or not (a
+candidate's spelling when the evidence's candidates include it), unless a person
+has listed that name as a description. The change is ledger-snapshotted (reversible) and
 written to ``VictimFillActions``. Idempotent: a filled event has a victim and
 leaves the population; stored answers are reused.
 """
@@ -322,6 +323,7 @@ def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: 
     One plan per event: ``filled`` (with ``new_victim``) or ``unfilled`` (with the reason). An event whose
     extraction or escalation failed gets no plan and is appended to ``errors`` (raised when None).
     """
+    from cyber_data_collector.dedup import name_judgement
     from cyber_data_collector.dedup.event_organisations import ExtractionFailed
 
     plans = []
@@ -350,12 +352,18 @@ def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: 
         elif label.get("label") == "named":
             hits = [next((c for c in choice["candidates"] if names_match(conn, c["name"], w)), None)
                     for w in wanted_all]
+            # A label is ground truth: the labeller read the event's evidence and found it names this victim,
+            # so it is filled whether or not the extraction listed the name (it missed "Swinburne University of
+            # Technology" behind "Australian university"). A candidate spelling is used when there is one.
+            names = [h["name"] if h is not None else w for w, h in zip(wanted_all, hits)]
             missing = [w for w, h in zip(wanted_all, hits) if h is None]
-            if not wanted_all or hits[0] is None:
-                plan["reason"] = f"labelled victim {wanted!r} is not among the evidence's candidates"
+            if not wanted_all:
+                plan["reason"] = "labelled named with no victim given"
+            elif name_judgement.is_descriptive_name(names[0]):    # only a person's entry outranks the label
+                plan["reason"] = f"labelled victim {names[0]!r} is a description, not the name of one organisation"
             else:
-                plan.update(action="filled", new_victim=hits[0]["name"], reason="labelled", chosen=hits[0],
-                            also=[h["name"] for h in hits[1:] if h is not None])
+                plan.update(action="filled", new_victim=names[0], reason="labelled", chosen=hits[0],
+                            also=names[1:])
                 if missing:
                     plan["reason"] = f"labelled; not among the evidence's candidates: {', '.join(missing)}"
         elif choice["name"] is None:
