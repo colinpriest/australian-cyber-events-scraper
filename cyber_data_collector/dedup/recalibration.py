@@ -366,8 +366,17 @@ def _plan_victim_fill(conn: sqlite3.Connection) -> Plan:
     from scripts import calibrate_victim_fill as cal
 
     labels = vf.load_labels(required=True)
-    wanted = [d for d in _csv_column(cal.SAMPLE_PATH, "deduplicated_event_id")
-              if (labels.get(d) or {}).get("label") in ("named", "none_named")]
+    rows = [r for r in cal.read_sample() if (labels.get(r["deduplicated_event_id"]) or {}).get("label")
+            in ("named", "none_named")]
+    later = sorted({r["frame"] for r in rows} - {cal.PRIMARY_FRAME})
+    if later:
+        # Each frame was labelled on its own snapshot; re-scoring them all here is not implemented, and scoring
+        # frame 1 alone would silently drop the others' labels from the new calibration.
+        raise PrerequisiteMissing(
+            f"victim-fill's labelled sample spans frame(s) {', '.join(later)} besides frame 1, each on its own "
+            "snapshot; recalibrate it with scripts/calibrate_victim_fill.py (score on each frame's snapshot copy, "
+            "then calibrate --frame-db), not here")
+    wanted = [r["deduplicated_event_id"] for r in rows]
     present = {e["deduplicated_event_id"] for e in vf.victimless_events(conn)}
     items = [d for d in wanted if d in present]
 
