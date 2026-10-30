@@ -54,10 +54,12 @@ from scripts.recurrence_conclusions import (
     describe_contrast,
     describe_joint_test,
     describe_lrt,
+    describe_size_specification,
 )
 from scripts.recurrence_extended.spells import (
     DEFAULT_TIE_POLICY,
     TIE_POLICIES,
+    TIE_POLICY_ASSUMPTIONS,
     make_spells as shared_make_spells,
     occurrences,
     overlapping_interval_pairs,
@@ -73,6 +75,16 @@ DELAYED_PEAK_ELAPSED_BOUNDS = (0, 90, 180, 365, 730, 1460, math.inf)
 DEFAULT_CALENDAR_BOUNDS = ("2012-01-01", "2019-01-01", "2022-01-01", "2024-01-01")
 REQUESTED_COVARIATES = ("org_size_score", "org_size_unknown", "sector_proxy", "entity_kind_group", "prior_records_band")
 SIZE_SCORE = {"SMALL": 1.0, "MEDIUM": 2.0, "LARGE": 3.0, "HUGE": 4.0}
+#: How organisation size enters the adjusted models. ``score`` (primary): the ordinal score SMALL=1 ..
+#: HUGE=4 (UNKNOWN mean-imputed) plus an UNKNOWN indicator - equal log-rate steps between bands.
+#: ``categorical``: SMALL / MEDIUM / LARGE / HUGE / UNKNOWN as factor levels (reference: the level with
+#: the most repeats; levels with fewer than 3 repeats pooled, as for every factor). ``score_x_phase``:
+#: ``score`` plus the score's interaction with the delayed-peak phases (91-180 and post-180 days against
+#: 0-90), fitted only where :func:`size_interaction_support` finds the data support it.
+SIZE_SPECS = ("score", "categorical", "score_x_phase")
+#: Repeats every delayed-peak phase needs, at two or more known size bands, for a size-by-phase interaction.
+MIN_INTERACTION_REPEATS = 10
+SIZE_INTERACTION_PHASES = ("immediate_0_90", "peak_91_180", "post_180")
 
 
 @dataclass(frozen=True)
@@ -444,8 +456,59 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
 
 
 # Entity attributes taken from the organisation's representative variant.
-_ENTITY_COLUMNS = ("entity_name", "employee_count", "turnover", "entity_kind", "size_estimate",
-                   "size_confidence", "size_employees", "size_revenue_aud")
+_ENTITY_COLUMNS = ("entity_name", "employee_count", "turnover", "entity_kind")
+# Size attributes, taken together from the variant :func:`reconcile_variant_sizes` chooses.
+_SIZE_COLUMNS = ("size_estimate", "size_confidence", "size_employees", "size_revenue_aud", "size_method")
+#: What decided the size taken for an organisation stored under several names, in priority order.
+SIZE_RULES = ("human size method", "known band over UNKNOWN", "higher size_confidence", "representative variant",
+              "lowest entity id")
+
+
+def _size_key(row: dict[str, Any], representative: int) -> tuple:
+    confidence = pd.to_numeric(pd.Series([row.get("size_confidence")]), errors="coerce").iloc[0]
+    return (str(row.get("size_method") or "").strip().lower() == "human",
+            normalise_size_label(row.get("size_estimate")) != "UNKNOWN",
+            float(confidence) if pd.notna(confidence) else -1.0,
+            int(row["entity_id"]) == representative,
+            -int(row["entity_id"]))
+
+
+def reconcile_variant_sizes(variants: list[dict[str, Any]], representative: int) -> dict[str, Any]:
+    """The size taken for one organisation from every name variant it is stored under.
+
+    Variants are the entity rows :func:`victim_counting.organisation_groups` joined. Order, as in
+    :data:`SIZE_RULES`: a ``human`` size method outranks model research; a known band outranks UNKNOWN;
+    a higher ``size_confidence`` wins; then the representative variant, then the lowest entity id - so
+    the choice is deterministic. The chosen variant's size columns are taken together (band, confidence,
+    employees, revenue, method). Variants giving different known bands are a *conflict*: the rule
+    still chooses, and the conflict is reported.
+    """
+    ranked = sorted(variants, key=lambda row: _size_key(row, representative), reverse=True)
+    chosen = ranked[0]
+    if len(ranked) == 1:
+        rule = "only variant"
+    else:
+        first, second = _size_key(chosen, representative), _size_key(ranked[1], representative)
+        rule = next(name for name, a, b in zip(SIZE_RULES, first, second) if a != b)
+    by_id = {int(row["entity_id"]): row for row in variants}
+    known = sorted({normalise_size_label(row.get("size_estimate")) for row in variants} - {"UNKNOWN"})
+    return {
+        "chosen": chosen,
+        "rule": rule,
+        "conflict": len(known) > 1,
+        "variant_bands": "|".join(f"{row.get('entity_name')}={normalise_size_label(row.get('size_estimate'))}"
+                                  for row in sorted(variants, key=lambda r: int(r["entity_id"]))),
+        "representative_band": normalise_size_label(by_id.get(representative, {}).get("size_estimate")),
+    }
+
+
+def _entity_rows(conn: sqlite3.Connection, ids: list[int], columns: Iterable[str]) -> pd.DataFrame:
+    present = {r[1] for r in conn.execute("PRAGMA table_info(EntitiesV2)")}
+    select = ", ".join(c if c in present else f"NULL AS {c}" for c in columns)
+    frames = [pd.read_sql_query(f"SELECT entity_id, {select} FROM EntitiesV2 "
+                                f"WHERE entity_id IN ({','.join('?' * len(chunk))})", conn, params=chunk)
+              for chunk in (ids[i:i + 500] for i in range(0, len(ids), 500))]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["entity_id", *columns])
 
 
 def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd.DataFrame:
@@ -460,6 +523,12 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
     pair on one event lists the incident twice under the organisation, and a
     variant pair across two events splits a genuine repeat into two
     single-event "organisations".
+
+    Size is reconciled across every variant (:func:`reconcile_variant_sizes`), not read from the
+    representative alone: a researched size on "Singtel Optus Pty Limited" counts when "Optus" is
+    UNKNOWN. Each row carries ``size_source_entity_id``, ``size_rule``, ``size_variants``,
+    ``size_variant_bands``, ``representative_size_estimate`` and ``size_conflict`` (variants giving
+    different known bands).
     """
     from cyber_data_collector.dedup.victim_counting import (
         organisation_groups, unresolved_rows, within_event_duplicates,
@@ -482,13 +551,52 @@ def one_organisation_per_event(conn: sqlite3.Connection, df: pd.DataFrame) -> pd
     df["attribution_unresolved"] = df.groupby(["entity_id", "deduplicated_event_id"])[
         "attribution_unresolved"].transform("max").astype(bool)
     reps = sorted(set(df["entity_id"]))
-    attrs = pd.read_sql_query(
-        f"SELECT entity_id, {', '.join(_ENTITY_COLUMNS)} FROM EntitiesV2 "
-        f"WHERE entity_id IN ({','.join('?' * len(reps))})", conn, params=reps).set_index("entity_id")
+    attrs = _entity_rows(conn, reps, _ENTITY_COLUMNS).set_index("entity_id")
     for column in _ENTITY_COLUMNS:
         if column in df.columns:
             df[column] = df["entity_id"].map(attrs[column])
+    members: dict[int, list[int]] = {}
+    for variant in sorted({int(e) for e in groups} | set(reps)):
+        members.setdefault(int(groups.get(variant, variant)), []).append(variant)
+    sizes = _entity_rows(conn, sorted({v for vs in members.values() for v in vs}),
+                         ("entity_name", *_SIZE_COLUMNS)).to_dict(orient="records")
+    size_rows = {int(row["entity_id"]): row for row in sizes}
+    reconciled = {rep: reconcile_variant_sizes([size_rows[v] for v in members.get(rep, [rep]) if v in size_rows]
+                                               or [{"entity_id": rep}], rep)
+                  for rep in reps}
+    for column in _SIZE_COLUMNS:
+        df[column] = df["entity_id"].map(lambda e: reconciled[e]["chosen"].get(column))
+    df["size_source_entity_id"] = df["entity_id"].map(lambda e: int(reconciled[e]["chosen"]["entity_id"]))
+    df["size_rule"] = df["entity_id"].map(lambda e: reconciled[e]["rule"])
+    df["size_variants"] = df["entity_id"].map(lambda e: len(members.get(e, [e])))
+    df["size_variant_bands"] = df["entity_id"].map(lambda e: reconciled[e]["variant_bands"])
+    df["representative_size_estimate"] = df["entity_id"].map(lambda e: reconciled[e]["representative_band"])
+    df["size_conflict"] = df["entity_id"].map(lambda e: reconciled[e]["conflict"])
     return df.drop_duplicates(["entity_id", "deduplicated_event_id"]).reset_index(drop=True)
+
+
+def size_reconciliation_table(events: pd.DataFrame) -> pd.DataFrame:
+    """One row per organisation stored under several name variants: the size each gives, what was taken."""
+    columns = ["entity_id", "entity_name", "size_variants", "size_variant_bands", "representative_size_estimate",
+               "org_size", "size_source_entity_id", "size_rule", "size_conflict", "changed_from_representative"]
+    if "size_variants" not in events:
+        return pd.DataFrame(columns=columns)
+    table = events[events["size_variants"] > 1].drop_duplicates("entity_id").copy()
+    table["changed_from_representative"] = table["org_size"] != table["representative_size_estimate"]
+    return table[columns].sort_values("entity_id").reset_index(drop=True)
+
+
+def size_reconciliation_summary(events: pd.DataFrame) -> dict[str, Any]:
+    """Data-quality counts for the size reconciliation across name variants."""
+    table = size_reconciliation_table(events)
+    return {
+        "organisations stored under several name variants": int(len(table)),
+        "organisations whose size changed against the representative-only rule": int(
+            table["changed_from_representative"].sum()) if len(table) else 0,
+        "organisations whose variants give conflicting known size bands": int(table["size_conflict"].sum())
+        if len(table) else 0,
+        "deciding rule": {str(k): int(v) for k, v in table["size_rule"].value_counts().items()} if len(table) else {},
+    }
 
 
 UNRESOLVED_ATTRIBUTION_POLICIES = ("include", "exclude")
@@ -604,8 +712,9 @@ def entity_time_points(events: pd.DataFrame, tie_policy: str = DEFAULT_TIE_POLIC
 
     Incidents of one organisation on the same stored date are a *tie*. Under ``collapse`` (the primary
     analysis) they are one time point whose ``event_ids`` / ``event_count`` keep every incident, so no
-    order or gap is invented between them; under ``zero_gap`` each is its own point, one day after the
-    previous. The tie table lists every tie either way. See ``recurrence_extended.spells``.
+    order or gap is invented between them; under ``zero_gap`` and ``interval_spread`` each is its own
+    point (one day apart, or spread across the verified interval they share). The tie table lists every
+    tie either way. See ``recurrence_extended.spells``.
     """
     return occurrences(events, tie_policy, _POINT_AGGREGATIONS), tie_table(events)
 
@@ -615,8 +724,10 @@ def build_spells(events: pd.DataFrame, censor_date: date,
     """Right-censored post-event spells for every victim organisation, and the ties found.
 
     Built by the shared ``recurrence_extended.spells`` code (the same as the extended analyses use).
-    ``tie_policy`` is how the incidents of an organisation on one stored date are treated: ``collapse``
-    (one time point) or ``zero_gap`` (separate incidents one day apart) - see that module.
+    ``tie_policy`` is how the incidents of an organisation on one stored date are treated (one of
+    ``recurrence_extended.spells.TIE_POLICIES``; each states its assumption there). ``prior_event_date``
+    is the placed date the spell starts from, ``prior_event_stored_date`` the stored date; they differ
+    only for tied incidents an interval policy places.
     """
     points, ties = entity_time_points(events, tie_policy)
     raw = shared_make_spells(points, censor_date, tie_policy, carry_next=("titles",))
@@ -640,7 +751,8 @@ def build_spells(events: pd.DataFrame, censor_date: date,
                 "sector_proxy": entity["sector_proxy"] or "other",
                 "prior_records_band": spell.records_bucket or "unknown",
                 "prior_event_number": spell.prior_event_number,
-                "prior_event_date": spell.event_date.isoformat(),
+                "prior_event_date": spell.placed_date.isoformat(),
+                "prior_event_stored_date": spell.event_date.isoformat(),
                 "prior_event_ids": spell.event_ids,
                 "prior_event_count": spell.event_count,
                 "prior_titles": spell.titles,
@@ -651,6 +763,7 @@ def build_spells(events: pd.DataFrame, censor_date: date,
                 "duration_days": spell.duration_days,
                 "event": int(spell.event),
                 "tie_gap": int(spell.tie_gap),
+                "tie_repeat": int(spell.tie_repeat),
                 "event_number_cat": "3+" if spell.prior_event_number >= 3 else str(spell.prior_event_number),
             }
         )
@@ -661,13 +774,31 @@ def build_spells(events: pd.DataFrame, censor_date: date,
     return spells, ties
 
 
-def tie_policy_sensitivity(events: pd.DataFrame, censor_date: date, bounds: tuple[float, ...]) -> pd.DataFrame:
-    """The headline results under each tie policy: separate incidents on one date as one point or as repeats.
+def headline_tests(spells: pd.DataFrame, bounds: tuple[float, ...], censor_date: date,
+                   size_spec: str = "score") -> dict[str, float]:
+    """The adjusted headline elapsed-time tests on ``spells`` with organisation size specified as ``size_spec``.
 
-    One row per policy in ``recurrence_extended.spells.TIE_POLICIES`` with the observed repeats (in total
-    and per elapsed-time band of the run) and the adjusted headline tests - the constant-hazard test
-    for the run's bands and for the 0-90 / 91-180 banding, and the directional delayed-peak test. Both
-    adjust for organisation size like the primary model; ``collapse`` is the primary analysis.
+    The constant-hazard LRT for the run's bands and for the 0-90 / 91-180 banding, and the directional
+    delayed-peak intersection test (see :data:`SIZE_SPECS`).
+    """
+    _, _, adjusted_lrt = fit_adjusted_elapsed_model(spells, bounds, censor_date, size_spec=size_spec)
+    peak_split, _, peak_elapsed_lrt = fit_adjusted_elapsed_model(spells, DELAYED_PEAK_ELAPSED_BOUNDS, censor_date,
+                                                                 size_spec=size_spec)
+    _, _, peak_lrt = fit_delayed_peak_model(peak_split, size_spec=size_spec)
+    return {
+        "adjusted_constant_hazard_p": float(adjusted_lrt["p_value"]),
+        "adjusted_0_90_91_180_banding_p": float(peak_elapsed_lrt["p_value"]),
+        "delayed_peak_directional_p": float(peak_lrt.get("delayed_peak_intersection_p_value", float("nan"))),
+    }
+
+
+def tie_policy_sensitivity(events: pd.DataFrame, censor_date: date, bounds: tuple[float, ...]) -> pd.DataFrame:
+    """The headline results under each tie policy, each with the assumption it makes about tied incidents.
+
+    One row per policy in ``recurrence_extended.spells.TIE_POLICIES`` with the observed repeats (in total,
+    between incidents of one tie, and per elapsed-time band of the run) and the adjusted headline tests
+    (:func:`headline_tests`), adjusted for organisation size like the primary model. ``collapse`` is the
+    primary analysis; no policy bounds the truth (see ``recurrence_extended.spells``).
     """
     labels = band_labels(bounds)
     rows = []
@@ -677,21 +808,130 @@ def tie_policy_sensitivity(events: pd.DataFrame, censor_date: date, bounds: tupl
         by_band = {label: 0 for label in labels}
         for duration in repeats["duration_days"]:
             by_band[labels[elapsed_band_index(duration, bounds)]] += 1
-        adjusted_split, _, adjusted_lrt = fit_adjusted_elapsed_model(spells, bounds, censor_date)
-        peak_split, _, peak_elapsed_lrt = fit_adjusted_elapsed_model(spells, DELAYED_PEAK_ELAPSED_BOUNDS, censor_date)
-        _, _, peak_lrt = fit_delayed_peak_model(peak_split)
         row: dict[str, Any] = {
             "tie_policy": policy,
             "observed_repeats": int(len(repeats)),
-            "repeats_from_ties": int(spells["tie_gap"].sum()),
+            "repeats_from_ties": int(spells["tie_repeat"].sum()),
             "post_event_spells": int(len(spells)),
         }
         row.update({f"repeats_{label}": count for label, count in by_band.items()})
-        row["adjusted_constant_hazard_p"] = float(adjusted_lrt["p_value"])
-        row["adjusted_0_90_91_180_banding_p"] = float(peak_elapsed_lrt["p_value"])
-        row["delayed_peak_directional_p"] = float(peak_lrt.get("delayed_peak_intersection_p_value", float("nan")))
+        row.update(headline_tests(spells, bounds, censor_date))
+        row["assumption"] = TIE_POLICY_ASSUMPTIONS[policy]
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def size_interaction_support(split: pd.DataFrame) -> dict[str, Any]:
+    """Whether the data support a size-by-elapsed-time interaction, and why not when they do not.
+
+    Rule: every delayed-peak phase (0-90, 91-180 and post-180 days) needs at least
+    :data:`MIN_INTERACTION_REPEATS` repeats, and repeats at two or more known size bands - size must vary
+    among the repeats inside the phase, or the phase's size slope is not estimable.
+    """
+    phases: dict[str, Any] = {}
+    reasons: list[str] = []
+    for phase in SIZE_INTERACTION_PHASES:
+        rows = split[split["delayed_peak_phase"] == phase]
+        repeats = int(rows["events"].sum())
+        known = sorted(set(rows.loc[(rows["events"] > 0) & (rows["org_size"] != "UNKNOWN"), "org_size"]))
+        phases[phase] = {"repeats": repeats, "known size bands with repeats": known}
+        if repeats < MIN_INTERACTION_REPEATS:
+            reasons.append(f"{phase}: {repeats} repeats (fewer than {MIN_INTERACTION_REPEATS})")
+        if len(known) < 2:
+            reasons.append(f"{phase}: repeats at {len(known)} known size band(s) (size does not vary)")
+    return {"supported": not reasons,
+            "rule": f"every delayed-peak phase has at least {MIN_INTERACTION_REPEATS} repeats, at two or more "
+                    "known size bands",
+            "phases": phases, "skipped_reason": "; ".join(reasons)}
+
+
+def categorical_nests_score(split: pd.DataFrame) -> tuple[bool, str]:
+    """Is the numeric size score a restriction of the categorical size factor as it is fitted?
+
+    It is when every size band is its own factor level. :func:`add_factor_terms` pools levels with fewer
+    than 3 repeats; once two or more bands share a pooled level, the score (which differs between them)
+    is no longer inside the categorical model and only AIC can compare the two.
+    """
+    totals = split.assign(_level=split["org_size"].fillna("unknown").astype(str)).groupby("_level")["events"].sum()
+    sparse = sorted(totals[totals < 3].index) if len(totals) > 2 else []
+    if len(sparse) >= 2:
+        return False, (f"size bands {', '.join(sparse)} have fewer than 3 repeats each and are pooled into one "
+                       "level, so the score model is not nested in the categorical one")
+    return True, ""
+
+
+def size_specification_comparison(spells: pd.DataFrame, bounds: tuple[float, ...],
+                                  censor_date: date) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """The numeric size score against categorical size, and a size-by-phase interaction.
+
+    For the run's elapsed bands and for the 0-90 / 91-180 banding: the adjusted model with each size
+    specification (:data:`SIZE_SPECS`) - log-likelihood, parameters, AIC - the likelihood-ratio test of
+    the score nested in the categorical factor (when it is nested, :func:`categorical_nests_score`), and
+    the headline elapsed-time tests re-run under each specification. On the 0-90 / 91-180 banding the
+    score-by-phase interaction is fitted when :func:`size_interaction_support` finds the data support it,
+    and reported as skipped, with the reason, when not. ``score`` stays the primary specification.
+    """
+    bandings = [("run", tuple(bounds))]
+    if tuple(bounds) != tuple(DELAYED_PEAK_ELAPSED_BOUNDS):
+        bandings.append(("0-90 / 91-180", tuple(DELAYED_PEAK_ELAPSED_BOUNDS)))
+    rows: list[dict[str, Any]] = []
+    interaction: dict[str, Any] = {}
+
+    def lrt(general: dict[str, Any], restricted: dict[str, Any]) -> tuple[float, int, float]:
+        stat = 2 * (general["log_likelihood"] - restricted["log_likelihood"])
+        df = general["n_params"] - restricted["n_params"]
+        return stat, df, float(stats.chi2.sf(max(stat, 0.0), df)) if df > 0 else math.nan
+
+    for banding, elapsed in bandings:
+        split = adjusted_poisson_split(spells, elapsed, censor_date)
+        peak_banding = elapsed == tuple(DELAYED_PEAK_ELAPSED_BOUNDS)
+        labels = ", ".join(band_labels(elapsed))
+        fits: dict[str, dict[str, Any]] = {}
+        for spec in ("score", "categorical"):
+            full = fit_poisson_glm(split, include_elapsed=True, include_covariates=True, size_spec=spec)
+            reduced = fit_poisson_glm(split, include_elapsed=False, include_covariates=True, size_spec=spec)
+            fits[spec] = full
+            _, _, elapsed_p = lrt(full, reduced)
+            directional = math.nan
+            if peak_banding:
+                _, _, peak = fit_delayed_peak_model(split, size_spec=spec)
+                directional = float(peak.get("delayed_peak_intersection_p_value", math.nan))
+            row = {"banding": banding, "elapsed_bands": labels, "size_spec": spec,
+                   "size_terms": "; ".join(n for n in full["names"] if n.startswith("org_size")),
+                   "log_likelihood": full["log_likelihood"], "parameters": full["n_params"],
+                   "aic": 2 * full["n_params"] - 2 * full["log_likelihood"],
+                   "compared_with": "", "nested": None, "likelihood_ratio": math.nan, "df": math.nan,
+                   "p_value": math.nan, "elapsed_constant_hazard_p": elapsed_p,
+                   "delayed_peak_directional_p": directional, "converged": bool(full["converged"]), "note": ""}
+            if spec == "categorical":
+                nested, note = categorical_nests_score(split)
+                row.update({"compared_with": "score", "nested": nested,
+                            "note": note or "; ".join(c for c in full["covariates_used"] if c.startswith("org_size"))})
+                if nested:
+                    row["likelihood_ratio"], row["df"], row["p_value"] = lrt(full, fits["score"])
+            rows.append(row)
+        if peak_banding:
+            interaction = size_interaction_support(split)
+            row = {"banding": banding, "elapsed_bands": labels, "size_spec": "score_x_phase",
+                   "compared_with": "score", "nested": True, "elapsed_constant_hazard_p": math.nan,
+                   "delayed_peak_directional_p": math.nan, "likelihood_ratio": math.nan, "df": math.nan,
+                   "p_value": math.nan}
+            if interaction["supported"]:
+                full = fit_poisson_glm(split, include_elapsed=True, include_covariates=True, size_spec="score_x_phase")
+                row.update({"size_terms": "; ".join(n for n in full["names"] if n.startswith("org_size")),
+                            "log_likelihood": full["log_likelihood"], "parameters": full["n_params"],
+                            "aic": 2 * full["n_params"] - 2 * full["log_likelihood"],
+                            "converged": bool(full["converged"]), "note": f"fitted: {interaction['rule']}"})
+                row["likelihood_ratio"], row["df"], row["p_value"] = lrt(full, fits["score"])
+            else:
+                row.update({"size_terms": "", "log_likelihood": math.nan, "parameters": math.nan, "aic": math.nan,
+                            "converged": None, "nested": None,
+                            "note": f"skipped ({interaction['rule']} is required): {interaction['skipped_reason']}"})
+            rows.append(row)
+    table = pd.DataFrame(rows)
+    score_aic = table[table["size_spec"] == "score"].set_index("banding")["aic"]
+    table["delta_aic_vs_score"] = [aic - score_aic.get(b, math.nan) for b, aic in zip(table["banding"], table["aic"])]
+    return table, interaction
 
 
 def split_by_elapsed(spells: pd.DataFrame, bounds: tuple[float, ...]) -> pd.DataFrame:
@@ -897,7 +1137,10 @@ def design_matrix(
     include_covariates: bool,
     time_effect: str = "elapsed",
     excluded_covariates: set[str] | None = None,
+    size_spec: str = "score",
 ) -> tuple[np.ndarray, list[str], list[str], dict[str, str]]:
+    if size_spec not in SIZE_SPECS:
+        raise ValueError(f"size_spec must be one of {SIZE_SPECS}, not {size_spec!r}")
     columns = [np.ones(len(adjusted))]
     names = ["intercept"]
     covariates_used: list[str] = []
@@ -941,7 +1184,12 @@ def design_matrix(
         columns.append((adjusted["event_number_cat"] == label).astype(float).to_numpy())
         names.append(f"event_number:{label}")
 
-    if include_covariates:
+    if include_covariates and size_spec == "categorical":
+        if {"org_size_score", "org_size_unknown"} & excluded_covariates:
+            covariates_skipped["org_size"] = "excluded for sensitivity variant"
+        else:
+            add_factor_terms(adjusted, columns, names, "org_size", "org_size", covariates_used, covariates_skipped)
+    elif include_covariates:
         if "org_size_score" in excluded_covariates:
             covariates_skipped["org_size_score"] = "excluded for sensitivity variant"
         elif adjusted["org_size_score"].nunique(dropna=True) > 1:
@@ -961,6 +1209,15 @@ def design_matrix(
         else:
             covariates_skipped["org_size_unknown"] = "only one populated level"
 
+        if size_spec == "score_x_phase" and "org_size_score" in names:
+            score = adjusted["org_size_score"].astype(float)
+            for label in SIZE_INTERACTION_PHASES[1:]:
+                if label in set(adjusted["delayed_peak_phase"]):
+                    columns.append(((score - score.mean()) * (adjusted["delayed_peak_phase"] == label)).to_numpy())
+                    names.append(f"org_size_score:delayed_peak_phase:{label}")
+            covariates_used.append("org_size_score x delayed_peak_phase (reference 0-90 days)")
+
+    if include_covariates:
         for column in REQUESTED_COVARIATES:
             if column in {"org_size_score", "org_size_unknown"}:
                 continue
@@ -986,6 +1243,7 @@ def fit_poisson_glm(
     include_covariates: bool,
     time_effect: str = "elapsed",
     excluded_covariates: set[str] | None = None,
+    size_spec: str = "score",
 ) -> dict[str, Any]:
     x, names, covariates_used, covariates_skipped = design_matrix(
         adjusted,
@@ -993,6 +1251,7 @@ def fit_poisson_glm(
         include_covariates=include_covariates,
         time_effect=time_effect,
         excluded_covariates=excluded_covariates,
+        size_spec=size_spec,
     )
     y = adjusted["events"].to_numpy(dtype=float)
     exposure = adjusted["exposure_days"].to_numpy(dtype=float)
@@ -1040,12 +1299,8 @@ def fit_poisson_glm(
     }
 
 
-def fit_adjusted_elapsed_model(
-    spells: pd.DataFrame,
-    elapsed_bounds: tuple[float, ...],
-    censor_date: date,
-    include_covariates: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+def adjusted_poisson_split(spells: pd.DataFrame, elapsed_bounds: tuple[float, ...], censor_date: date) -> pd.DataFrame:
+    """Exposure and repeats by elapsed band, calendar period and covariates (the adjusted models' data)."""
     min_date = parse_date(spells["prior_event_date"].min())
     calendar_bounds = [min_date]
     for bound in DEFAULT_CALENDAR_BOUNDS[1:]:
@@ -1053,10 +1308,20 @@ def fit_adjusted_elapsed_model(
         if min_date < d < censor_date:
             calendar_bounds.append(d)
     calendar_bounds = sorted(set(calendar_bounds))
+    return split_for_adjusted_poisson(spells, elapsed_bounds, calendar_bounds, censor_date)
 
-    adjusted = split_for_adjusted_poisson(spells, elapsed_bounds, calendar_bounds, censor_date)
-    full = fit_poisson_glm(adjusted, include_elapsed=True, include_covariates=include_covariates)
-    reduced = fit_poisson_glm(adjusted, include_elapsed=False, include_covariates=include_covariates)
+
+def fit_adjusted_elapsed_model(
+    spells: pd.DataFrame,
+    elapsed_bounds: tuple[float, ...],
+    censor_date: date,
+    include_covariates: bool = True,
+    size_spec: str = "score",
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    adjusted = adjusted_poisson_split(spells, elapsed_bounds, censor_date)
+    full = fit_poisson_glm(adjusted, include_elapsed=True, include_covariates=include_covariates, size_spec=size_spec)
+    reduced = fit_poisson_glm(adjusted, include_elapsed=False, include_covariates=include_covariates,
+                              size_spec=size_spec)
     lr = 2 * (full["log_likelihood"] - reduced["log_likelihood"])
     df = full["n_params"] - reduced["n_params"]
     lrt = {
@@ -1275,6 +1540,7 @@ def fit_delayed_peak_model(
     adjusted: pd.DataFrame,
     include_covariates: bool = True,
     excluded_covariates: set[str] | None = None,
+    size_spec: str = "score",
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     summary = delayed_peak_summary(adjusted)
     needed = {"immediate_0_90", "peak_91_180", "post_180"}
@@ -1291,12 +1557,14 @@ def fit_delayed_peak_model(
         include_covariates=include_covariates,
         time_effect="delayed_peak_phase",
         excluded_covariates=excluded_covariates,
+        size_spec=size_spec,
     )
     reduced = fit_poisson_glm(
         model_data,
         include_elapsed=False,
         include_covariates=include_covariates,
         excluded_covariates=excluded_covariates,
+        size_spec=size_spec,
     )
     lr = 2 * (full["log_likelihood"] - reduced["log_likelihood"])
     df = full["n_params"] - reduced["n_params"]
@@ -1648,6 +1916,7 @@ def write_report(
     weibull_lrt: dict[str, float],
     plot_paths: dict[str, Path],
     tie_sensitivity: pd.DataFrame | None = None,
+    size_comparison: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Write the Markdown report; return its generated conclusion sentences by topic."""
     best = model_table.sort_values("aic").iloc[0]
@@ -1741,8 +2010,11 @@ def write_report(
         "The primary model includes recorded organisation size. Size is a proxy for "
         "differences in visibility, attack exposure and target value, not a direct measure "
         "of those factors; residual confounding remains possible. The ordinal size term "
-        "assumes equal log-rate steps between categories, UNKNOWN has a separate indicator, "
-        "and current recorded size may differ from size at an incident's date. "
+        "assumes equal log-rate steps between categories (compared with categorical size and a "
+        "size-by-elapsed-time interaction under Organisation Size Specification), UNKNOWN has a "
+        "separate indicator, an organisation stored under several names takes the size its variants "
+        "support best (`organisation_size_reconciliation.csv`), and current recorded size may differ "
+        "from size at an incident's date. "
         "Unadjusted rates, plots, parametric models and size-dropped variants below are "
         "descriptive diagnostics and do not control for this confounding.",
         "",
@@ -1753,21 +2025,61 @@ def write_report(
         lines.append(f"- {key}: {value}")
 
     if tie_sensitivity is not None and not tie_sensitivity.empty:
+        tie_sentences = [
+            describe_lrt(f"Under `{row['tie_policy']}`, the adjusted piecewise model",
+                         row["adjusted_constant_hazard_p"], "a constant elapsed-time hazard",
+                         events=int(row["observed_repeats"]))
+            for row in tie_sensitivity.to_dict(orient="records")
+        ]
+        conclusions["tie_policies"] = tie_sentences
         lines.extend(
             [
                 "",
                 "## Same-Date Ties And Unknown Ordering",
                 "",
                 "Several distinct incidents of one organisation can carry the same stored date; nothing orders "
-                "them, and a date stored as the 1st of a month may only mean that month. The primary analysis "
-                "(`collapse`) makes the tied incidents one time point - their ids and count are kept in "
-                "`entity_date_ties.csv`, and no order or gap between them is invented - which can understate "
-                "repeats. The `zero_gap` sensitivity counts each as its own incident one day after the "
-                "previous, a repeat in the first band, which can overstate them (a tie may be one incident "
-                "filed twice or a month placeholder). The truth lies between; both are adjusted for organisation "
-                "size like the primary model.",
+                "them, and a date stored as the 1st of a month may only mean that month. Each tie policy makes "
+                "one stated assumption about the tied incidents (every tie, with its incident ids and the "
+                "length of any verified interval its incidents share, is in `entity_date_ties.csv`):",
                 "",
-                tie_sensitivity.to_markdown(index=False, floatfmt=".4g"),
+                *(f"- `{policy}`{' (primary)' if policy == DEFAULT_TIE_POLICY else ''}: "
+                  f"{TIE_POLICY_ASSUMPTIONS[policy]}." for policy in tie_sensitivity["tie_policy"]),
+                "",
+                "None of these bounds the truth: a tie that is one incident filed twice is represented only by "
+                "`collapse`; two incidents really weeks apart within a verified month are represented exactly by "
+                "none; and a tie whose dates are unverified has no interval to place its incidents in, so "
+                "`interval_spread` places it as `zero_gap` does. Agreement across the policies shows only that a "
+                "result does not hinge on these assumptions. Every policy is adjusted for organisation size like "
+                "the primary model.",
+                "",
+                *(f"- {sentence}" for sentence in tie_sentences),
+                "",
+                tie_sensitivity.drop(columns=["assumption"]).to_markdown(index=False, floatfmt=".4g"),
+                "",
+            ]
+        )
+
+    if size_comparison is not None and not size_comparison.empty:
+        size_sentences = describe_size_specification(size_comparison.to_dict(orient="records"))
+        conclusions["size_specification"] = size_sentences
+        shown = ["banding", "size_spec", "log_likelihood", "parameters", "aic", "delta_aic_vs_score", "nested",
+                 "likelihood_ratio", "df", "p_value", "elapsed_constant_hazard_p", "delayed_peak_directional_p"]
+        lines.extend(
+            [
+                "",
+                "## Organisation Size Specification",
+                "",
+                "The primary model enters size as a numeric score (SMALL=1 to HUGE=4, UNKNOWN mean-imputed, plus "
+                "an UNKNOWN indicator), which assumes equal log-rate steps between bands. It is compared here with "
+                "size as a categorical factor (reference: the band with the most repeats; bands with fewer than 3 "
+                f"repeats pooled) and, where every delayed-peak phase has at least {MIN_INTERACTION_REPEATS} "
+                "repeats at two or more known size bands, with the score's interaction with the delayed-peak "
+                "phases. The score stays primary; the headline tests are re-run under categorical size. Full "
+                "table: `size_specification_comparison.csv`.",
+                "",
+                *(f"- {sentence}" for sentence in size_sentences),
+                "",
+                size_comparison[shown].to_markdown(index=False, floatfmt=".4g"),
                 "",
             ]
         )
@@ -2196,8 +2508,9 @@ def main() -> int:
         default=DEFAULT_TIE_POLICY,
         help="How incidents of one organisation on the same stored date are treated: 'collapse' "
              "(default) is one time point with every incident id kept and no order invented; "
-             "'zero_gap' makes each its own point, one day after the previous (a repeat in the first "
-             "band). Both are always reported in tie_policy_sensitivity.csv.",
+             "'zero_gap' makes them distinct incidents one day apart; 'interval_spread' spreads them "
+             "evenly across the verified interval they share (as zero_gap when they share none). All "
+             "are always reported in tie_policy_sensitivity.csv.",
     )
     parser.add_argument(
         "--dashboard-out",
@@ -2246,6 +2559,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         raise RuntimeError("No victim events remain after excluding unresolved attributions.")
     spells, ties = build_spells(events, censor_date, args.ties)
     tie_sensitivity = tie_policy_sensitivity(events, censor_date, elapsed_bounds)
+    size_comparison, size_interaction = size_specification_comparison(spells, elapsed_bounds, censor_date)
+    size_reconciliation = size_reconciliation_table(events)
     spells["elapsed_band"] = [
         band_labels(elapsed_bounds)[elapsed_band_index(v, elapsed_bounds)]
         for v in spells["duration_days"]
@@ -2288,6 +2603,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     spells.to_csv(out_dir / "recurrent_event_spells.csv", index=False)
     ties.to_csv(out_dir / "entity_date_ties.csv", index=False)
     tie_sensitivity.to_csv(out_dir / "tie_policy_sensitivity.csv", index=False)
+    size_comparison.to_csv(out_dir / "size_specification_comparison.csv", index=False)
+    size_reconciliation.to_csv(out_dir / "organisation_size_reconciliation.csv", index=False)
     piecewise.to_csv(out_dir / "piecewise_elapsed_hazard.csv", index=False)
     adjusted_split.to_csv(out_dir / "adjusted_piecewise_exposure.csv", index=False)
     adjusted_coef.to_csv(out_dir / "adjusted_piecewise_coefficients.csv", index=False)
@@ -2347,10 +2664,12 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
             str(k): int(v) for k, v in events.get("date_precision", pd.Series(dtype=object))
             .fillna("unverified").value_counts().items()},
         "tie policy (several incidents of one organisation on one date)": args.ties,
-        "same-date ties": {**tie_summary(ties), "repeats added by the zero_gap policy in this run": int(spells["tie_gap"].sum())},
+        "same-date ties": {**tie_summary(ties),
+                           "repeats between tied incidents in this run": int(spells["tie_repeat"].sum())},
         "incidents not ordered by their dates (different stored dates, overlapping verified intervals)":
             overlapping_interval_pairs(events),
         "covariate coverage": covariate_coverage,
+        "organisation size across name variants": size_reconciliation_summary(events),
         "unresolved victim attributions": {**unresolved_info, "repeats": unresolved_sensitivity},
     }
 
@@ -2379,6 +2698,8 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         "weibull_vs_exponential_lrt": weibull_lrt,
         "tie_policy": args.ties,
         "tie_policy_sensitivity": records_for_json(tie_sensitivity),
+        "size_specification_comparison": records_for_json(size_comparison),
+        "size_interaction_support": size_interaction,
         "best_aic_model": str(model_table.iloc[0]["model"]),
         "outputs": {key: str(value) for key, value in plot_paths.items()},
     }
@@ -2406,6 +2727,7 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         weibull_lrt,
         plot_paths,
         tie_sensitivity,
+        size_comparison,
     )
     summary["conclusions"] = conclusions
     (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

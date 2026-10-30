@@ -72,10 +72,84 @@ def test_an_incident_after_the_censoring_date_never_ends_a_spell():
         assert (out.event.tolist(), out.duration_days.tolist(), out.next_event_ids.tolist()) == ([0], [51], [""])
 
 
-def test_a_tie_on_the_censoring_date_has_no_spell():
+def test_a_tie_on_the_censoring_date_is_one_point_under_collapse_and_an_observed_repeat_otherwise():
     frame = events([("a", "1", "2024-03-01"), ("a", "2", "2024-03-01")])
-    for policy in spells.TIE_POLICIES:
-        assert spells.make_spells(spells.occurrences(frame, policy), date(2024, 3, 1), policy).empty
+    censor = date(2024, 3, 1)
+    assert spells.make_spells(spells.occurrences(frame, "collapse"), censor, "collapse").empty
+    for policy in ("zero_gap", "interval_spread"):
+        out = spells.make_spells(spells.occurrences(frame, policy), censor, policy)
+        # both incidents are on or before the censoring date, so the repeat between them is observed
+        assert (out.event.tolist(), out.duration_days.tolist(), out.tie_repeat.tolist()) == ([1], [1], [1])
+
+
+def test_a_repeat_into_a_tie_on_the_censoring_date_and_the_one_inside_it_are_both_kept():
+    frame = events([("a", "0", "2024-01-01"), ("a", "1", "2024-03-01"), ("a", "2", "2024-03-01")])
+    out = spells.make_spells(spells.occurrences(frame, "zero_gap"), date(2024, 3, 1), "zero_gap")
+    assert out.event.tolist() == [1, 1]
+    assert out.duration_days.tolist() == [60, 1]
+    assert out.tie_repeat.tolist() == [0, 1]
+
+
+def month_tie(rows, earliest="2024-06-01", latest="2024-06-30"):
+    frame = events(rows)
+    frame["event_date_earliest"] = [earliest if p == "month" else (d if p == "day" else None)
+                                    for _, _, d, p in rows]
+    frame["event_date_latest"] = [latest if p == "month" else (d if p == "day" else None) for _, _, d, p in rows]
+    return frame
+
+
+def test_interval_spread_places_a_verified_month_tie_evenly_across_the_month():
+    frame = month_tie([("a", "1", "2024-06-01", "month"), ("a", "2", "2024-06-01", "month"),
+                       ("a", "3", "2024-06-01", "month"), ("a", "4", "2024-09-10", "day")])
+    out = spells.make_spells(spells.occurrences(frame, "interval_spread"), CENSOR, "interval_spread")
+    assert [d.isoformat() for d in out.placed_date] == ["2024-06-01", "2024-06-11", "2024-06-21", "2024-09-10"]
+    assert out.duration_days.tolist() == [10, 10, 81, 112]      # 30 days / 3 incidents; the last spell from 21 June
+    assert out.tie_repeat.tolist() == [1, 1, 0, 0]
+    assert out.tie_gap.sum() == 0
+    zero = spells.make_spells(spells.occurrences(frame, "zero_gap"), CENSOR, "zero_gap")
+    assert zero.event.sum() == out.event.sum()                  # the same repeats, at different elapsed times
+    ties = spells.tie_table(frame)
+    assert ties.shared_interval_days.tolist() == [30]
+    assert spells.tie_summary(ties)[
+        "ties with a shared verified interval longer than a day (spread by interval_spread)"] == 1
+
+
+def test_interval_spread_is_zero_gap_for_a_tie_with_no_shared_verified_interval():
+    rows = [("a", "1", "2024-06-01", None), ("a", "2", "2024-06-01", "month"), ("b", "3", "2024-06-05", "day"),
+            ("b", "4", "2024-06-05", "day"), ("b", "5", "2024-08-01", None)]
+    frame = month_tie(rows)
+    spread = spells.make_spells(spells.occurrences(frame, "interval_spread"), CENSOR, "interval_spread")
+    zero = spells.make_spells(spells.occurrences(frame, "zero_gap"), CENSOR, "zero_gap")
+    columns = ["entity_id", "event_ids", "duration_days", "event", "placed_date"]
+    pd.testing.assert_frame_equal(spread[columns], zero[columns])
+    shared = spells.tie_table(frame).set_index("entity_id").shared_interval_days
+    assert pd.isna(shared["a"]) and shared["b"] == 1          # unverified: no interval; a verified day: 1 day
+
+
+def test_interval_spread_never_places_an_incident_after_the_censoring_date():
+    frame = month_tie([("a", "1", "2024-06-01", "month"), ("a", "2", "2024-06-01", "month")])
+    out = spells.make_spells(spells.occurrences(frame, "interval_spread"), date(2024, 6, 10), "interval_spread")
+    assert [d.isoformat() for d in out.placed_date] == ["2024-06-01", "2024-06-06"]   # 10 days to the censor / 2
+    assert out.event.tolist() == [1, 0] and out.duration_days.tolist() == [5, 4]
+
+
+def test_interval_draw_needs_an_rng_and_stays_inside_the_shared_interval():
+    frame = month_tie([("a", "1", "2024-06-01", "month"), ("a", "2", "2024-06-01", "month")])
+    points = spells.occurrences(frame, "interval_draw")
+    with pytest.raises(ValueError):
+        spells.make_spells(points, CENSOR, "interval_draw")
+    rng = np.random.default_rng(4)
+    for _ in range(20):
+        out = spells.make_spells(points, CENSOR, "interval_draw", rng=rng)
+        assert all(date(2024, 6, 1) <= d <= date(2024, 6, 30) for d in out.placed_date)
+        assert out.event.sum() == 1
+    assert "interval_draw" not in spells.TIE_POLICIES and "interval_draw" in spells.ALL_TIE_POLICIES
+
+
+def test_every_policy_states_its_assumption_and_none_claims_to_bound_the_truth():
+    assert set(spells.TIE_POLICY_ASSUMPTIONS) == set(spells.ALL_TIE_POLICIES)
+    assert "between the two" not in (spells.__doc__ or "")
+    assert "None of these bounds the truth" in (spells.__doc__ or "")
 
 
 def test_unknown_policy_is_an_error():
@@ -206,7 +280,9 @@ def test_date_scenarios_include_the_verified_interval_scenario():
 def test_tie_policy_sensitivity_reports_both_policies():
     frame = annotated(TIED)
     frame["_analysis_size"] = "LARGE"
-    table = timing_precision.tie_policy_sensitivity(frame, CENSOR, {"LARGE": 1.0})
-    assert set(table.tie_policy) == set(spells.TIE_POLICIES)
+    table = timing_precision.tie_policy_sensitivity(frame, CENSOR, {"LARGE": 1.0}, seed=1, draws=3)
+    assert set(table.tie_policy) == set(spells.ALL_TIE_POLICIES)
+    assert table.assumption.notna().all()
+    assert set(table.loc[table.tie_policy == "interval_draw", "draws"]) == {3}
     first_band = table[(table.scheme == "pre_specified") & (table.band == "1-90")].set_index("tie_policy")
     assert first_band.loc["zero_gap", "events"] - first_band.loc["collapse", "events"] == 2
