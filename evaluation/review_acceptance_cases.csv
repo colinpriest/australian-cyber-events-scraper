@@ -18,3 +18,13 @@ c5dea795-dac9-48ec-a8fc-1c764d900c22,same_incident_as,e49b1330-921d-4e46-8563-3a
 69d6372d-b771-42a3-97f7-0f849d657187,same_incident_as,e49b1330-921d-4e46-8563-3a4922149c71,the AI agent (Claude via OpenClaw) that exploited an Australian gym's booking system; not the Medicare incident,user 2026-10-29
 6bb15642-455f-4180-b4b2-30a0ca9a4f7e,victim,NSW National Parks and Wildlife Service,the text names it (Fire History service); a second OpenAI-agent incident,user 2026-10-29
 e94eba13-5f43-4832-843c-04691d59775c,out_of_scope,,US agencies only (Education Department / SEC / Census Bureau),user 2026-10-29
+cd66c581-81e2-4544-bbbd-12825a162cbf,same_incident_as,ce7b53f2-6db4-41dd-93c0-c4b6d4487a2e,Agrimac's Storm leak-site listing and the Macquarrie Corporation (Agrimac) ransomware incident,user 2026-10-31
+2cd2cd89-4701-4002-a789-734d9f0a2a47,same_incident_as,d15a7aa2-5bed-4e8e-bb3d-cad18918f684,Ambulance Victoria People@AV intranet page exposing paramedics' mobile numbers (April/May 2024),user 2026-10-31
+e05ed49b-0064-4a85-ba53-fe384a807ed2,same_incident_as,f6b9e8fe-040e-44c7-adc4-d5d4ef8b267c,Department of Finance MAS panel disclosure and its Information management notice (2 Nov 2023),user 2026-10-31
+b883ceeb-9fae-4323-84e9-22369560da00,same_incident_as,54b73e7f-bcd1-4bd0-ac7c-ee76a1435a87,CBA 2016 record with no usable evidence and the domain-misspelling leak of 10000 customers,user 2026-10-31
+c4971deb-9989-4a50-a667-a02094409d7c,same_incident_as,c5356fc1-b790-46e5-9880-20b4d497203e,Monash Health's January 2024 incident is the ZircoDATA breach (its Monash Health records),user 2026-10-31
+5c8c930d-0a42-4c6a-a8ec-b67e3eccf9a7,same_incident_as,439d69f3-b09d-480c-b6cb-748eca9516e8,PM's criticism of OpenAI is coverage of the Medicare statistics portal incident,user 2026-10-31
+4f6211e9-999d-470f-a12e-025462cf9910,same_incident_as,a4870635-3352-40f1-a9bf-a8d5e245181d,the two Feb 2026 youX events (MongoDB Atlas theft),user 2026-10-31
+662f9854-a4c0-486e-957f-d74ef263a44f,victim,Mackay Sugar,the reports name Mackay Sugar; 'Australian sugar producer' is a description,user 2026-10-31
+5f077fd9-773d-4bb5-9239-d412c0c25208,victim,AustralianSuper,"the reports name the funds (AustralianSuper, Rest, Hostplus, Insignia, Australian Retirement Trust); 'Australian Super Funds' is a description",user 2026-10-31
+fe9f77dc-d02e-49bf-90c7-e53b3ebd3e0d,victim,NSW Health,NSW Health's Accellion breach; not Allens or Singtel,user 2026-10-31
