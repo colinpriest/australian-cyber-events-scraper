@@ -7,6 +7,8 @@ requests<3
 beautifulsoup4>=4.12
 beautifulsoup4<5
 instructor>=1.11.0
+tenacity>=8.2
+tenacity<10
 openai>=1.30
 openai<2
 pandas>=2.0

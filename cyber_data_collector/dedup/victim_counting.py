@@ -158,10 +158,38 @@ class AcronymPolicy:
 
 
 def with_acronym_policy(conn: sqlite3.Connection, resolver: EntityResolver) -> EntityResolver:
-    """Attach (once) the :class:`AcronymPolicy` of ``conn`` to ``resolver``; returns it."""
+    """Attach (once) the :class:`AcronymPolicy` and the recorded distinct pairs of ``conn`` to ``resolver``."""
     if getattr(resolver, "acronym_policy", None) is None:
         resolver.acronym_policy = AcronymPolicy.from_connection(conn)
+    if getattr(resolver, "distinct_pairs", None) is None:
+        resolver.distinct_pairs = distinct_pairs(conn)
+    if getattr(resolver, "descriptive_names", None) is None:
+        from cyber_data_collector.dedup.name_judgement import descriptive_names
+        resolver.descriptive_names = descriptive_names(conn) if _has_table(conn, "ModelJudgements") else set()
     return resolver
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
+
+
+def _pair(a: str, b: str) -> Tuple[str, str]:
+    return (a, b) if a <= b else (b, a)
+
+
+def distinct_pairs(conn: sqlite3.Connection) -> set:
+    """Name pairs a reusable alias decision says are not one entity (``different``, ``related``,
+    ``parent_subsidiary``; a person's decision outranks a model's - :func:`entity_alias_verification.stored_verdicts`).
+
+    Perplexity had already judged Monash Health / Monash IVF and Ambulance Victoria / Ambulance Tasmania
+    ``different`` while the name tests below still counted them as one victim. A database without the
+    decisions table has none.
+    """
+    from cyber_data_collector.dedup.entity_alias_verification import CONFLICT_VERDICTS, stored_verdicts
+
+    if not _has_table(conn, "EntityAliasDecisions"):
+        return set()
+    return {pair for pair, stored in stored_verdicts(conn).items() if stored["verdict"] in CONFLICT_VERDICTS}
 
 
 _IGNORED = {"the", "pty", "ltd", "limited", "inc", "incorporated", "llc", "plc", "corp", "corporation", "co"}
@@ -187,13 +215,32 @@ def same_organisation(resolver: EntityResolver, left: Optional[str], right: Opti
     Limited, Meta / Meta Platforms, Inc. and BlueScope / BlueScope Steel.
     """
     from cyber_data_collector.dedup.entity_merge import (
-        _PLACE_TOKENS, _tokens, distinctive_core, lines_of_business_conflict, same_organisation_by_structure,
+        _PLACE_TOKENS, _tokens, distinctive_core, is_organisation_list, lines_of_business_conflict,
+        same_organisation_by_structure,
     )
 
     if not left or not right:
         return False
+    # A recorded verdict that the two are different (or related) entities outranks every name test below.
+    if _pair(left, right) in getattr(resolver, "distinct_pairs", ()):
+        return False
     if resolver.key_for(left) and resolver.key_for(left) == resolver.key_for(right):
         return True
+    # A name the proper-name judgement calls a description ("ANZ customer", "Australian super fund", "UC staff")
+    # denotes no one organisation, so it is the same as no other name (:mod:`name_judgement`).
+    descriptive = getattr(resolver, "descriptive_names", ())
+    if left.strip().lower() in descriptive or right.strip().lower() in descriptive:
+        return False
+    # A list of organisations ("ANZ, NAB, Westpac Banking Corporation, Commonwealth Bank") is none of them.
+    if is_organisation_list(left) != is_organisation_list(right):
+        return False
+    # Two names each scoped to a place, to different places, are two organisations: the structural test
+    # drops place words, so it made "Ambulance Victoria" "Ambulance Tasmania" and "Melbourne TAFE" "TAFE SA"
+    # (2026-10-30 victims). A place in one name only ("Hertz Australia") is left to the tests below.
+    places_l = {t for t in _tokens(left) if t in _PLACE_TOKENS}
+    places_r = {t for t in _tokens(right) if t in _PLACE_TOKENS}
+    if places_l and places_r and places_l != places_r:
+        return False
     words_l = [t for t in _tokens(left) if t not in _IGNORED]
     words_r = [t for t in _tokens(right) if t not in _IGNORED]
     if words_l and words_l == words_r:

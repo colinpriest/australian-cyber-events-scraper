@@ -249,8 +249,8 @@ def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
     Cases are things the reviewer said must hold of the published data, each from a real fragment of the
     database. ``victim <name>``: the (active) event the id now resolves to has a ``victim`` role for that
     organisation, after alias resolution. ``same_incident_as <id>``: both ids resolve to the same Active
-    event. ``out_of_scope`` cases belong to the scope check and are not read here. A case whose event no
-    longer exists or cannot be traced is *unchecked*, never a pass. Warnings only: they say how far the
+    event. ``out_of_scope``: the event the id resolves to is Rejected (an Active one is a failure - it is
+    still published). A case whose event no longer exists or cannot be traced is *unchecked*, never a pass. Warnings only: they say how far the
     rules have come, they do not close the gate.
     """
     from cyber_data_collector.dedup.victim_fill import names_match
@@ -266,7 +266,7 @@ def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
             """SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
                JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.relationship_type = 'victim'"""):
         victims[event_id].append(name)
-    failed: Dict[str, List[str]] = {"victim": [], "same_incident_as": []}
+    failed: Dict[str, List[str]] = {"victim": [], "same_incident_as": [], "out_of_scope": []}
     checked = Counter()
     unchecked: Dict[str, int] = defaultdict(int)
     for row in rows:
@@ -275,6 +275,11 @@ def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
             unchecked[f"{kind or 'blank'} (not read here)"] += 1
             continue
         now, status = resolver.resolve(event_id)
+        if kind == "out_of_scope" and status in ("Active", "Rejected"):
+            checked[kind] += 1
+            if status == "Active":
+                failed[kind].append(f"{event_id[:8]}: still Active as {now[:8]} (expected out of scope)")
+            continue
         if status != "Active":
             unchecked[f"event {status}"] += 1
             continue
@@ -293,7 +298,7 @@ def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
     n_unchecked = sum(unchecked.values())
     breakdown = ", ".join(f"{k} {v}" for k, v in sorted(unchecked.items())) or "none"
     out: Dict[str, Measurement] = {}
-    for kind, name in (("victim", "victim"), ("same_incident_as", "same_incident")):
+    for kind, name in (("victim", "victim"), ("same_incident_as", "same_incident"), ("out_of_scope", "scope")):
         out[f"acceptance.{name}.failures"] = Measurement(
             value=len(failed[kind]), examples=failed[kind][:EXAMPLES],
             detail=f"{len(failed[kind])} of {checked[kind]} checkable {kind} case(s) not satisfied")

@@ -390,8 +390,20 @@ def test_the_acceptance_check_resolves_aliases_and_merged_events(conn, tmp_path)
     found = regression.measure_acceptance(conn, evaluation_dir=tmp_path)
     assert found["acceptance.victim.failures"].value == 0           # the alias resolves
     assert found["acceptance.same_incident.failures"].value == 1    # two Active events
-    assert found["acceptance.unchecked"].value == 1                 # out_of_scope is the scope check's
+    assert found["acceptance.unchecked"].value == 1                 # no event x: unchecked, never a pass
     conn.execute("UPDATE DeduplicatedEvents SET status = 'Merged' WHERE deduplicated_event_id = 'b'")
     conn.execute("UPDATE EventDeduplicationMap SET deduplicated_event_id = 'a' WHERE deduplicated_event_id = 'b'")
     conn.execute("UPDATE DeduplicatedEvents SET master_enriched_event_id = 'b-r' WHERE deduplicated_event_id = 'b'")
     assert regression.measure_acceptance(conn, evaluation_dir=tmp_path)["acceptance.same_incident.failures"].value == 0
+
+
+def test_an_out_of_scope_case_fails_while_its_event_is_active(conn, tmp_path):
+    from cyber_data_collector.quality import regression
+
+    _event(conn, "a", "page", victims=["OpenAI"])
+    (tmp_path / regression.ACCEPTANCE_FILE).write_text(
+        "deduplicated_event_id,expectation,value,note,source\na,out_of_scope,,no Australian victim,t\n", encoding="utf-8")
+    assert regression.measure_acceptance(conn, evaluation_dir=tmp_path)["acceptance.scope.failures"].value == 1
+    conn.execute("UPDATE DeduplicatedEvents SET status = 'Rejected' WHERE deduplicated_event_id = 'a'")
+    found = regression.measure_acceptance(conn, evaluation_dir=tmp_path)
+    assert found["acceptance.scope.failures"].value == 0 and found["acceptance.checked"].value == 1

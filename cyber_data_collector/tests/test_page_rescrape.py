@@ -282,3 +282,13 @@ def test_runs_as_a_pipeline_step_inside_the_pipelines_event_loop(tmp_path):
 
     assert asyncio.run(pipeline()) == 2
     assert run_full_pipeline.run_step(step, ["a"]) == 1                          # no loop: called directly
+
+
+def test_only_web_addresses_are_queued_for_a_fetch(conn):
+    # A research record's identifier is not a page: the browser used to be sent to "perplexity://research/...".
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, raw_content, source_url) "
+                 "VALUES ('research', 'PerplexityResearch', '', 'perplexity://research/2025-08-01/c04896af1ba2')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, status, is_australian_event, "
+                 "is_specific_event) VALUES ('e-research', 'research', 't', 'Active', 1, 1)")
+    assert pr.queue_pages(conn, ["research", "perplexity"]) == ["perplexity"]
+    assert "research" not in {p["raw_event_id"] for p in pr.short_pages(conn)}

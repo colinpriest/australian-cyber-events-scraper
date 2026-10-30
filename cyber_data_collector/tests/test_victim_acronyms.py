@@ -193,3 +193,51 @@ def test_reports_of_the_same_supplier_incident_link_by_organisation_not_by_word(
     rows = one_row_per_organisation([(i, e) for i, _n, e in _victims(conn)
                                      if i in groups and _n != "ProctorU"], groups)
     assert sum(1 for _o, e in rows if e == "p1") == 8 and sum(1 for _o, e in rows if e == "p2") == 2
+
+
+# --- different organisations whose names share a generic core (2026-10-30 victims) --------------------------------
+
+def _groups(names, decisions=()):
+    conn, ids = _db(names, [("e%d" % i, n, "victim") for i, n in enumerate(names)])
+    if decisions:
+        from cyber_data_collector.dedup.entity_alias_verification import PROMPT_VERSION, ensure_schema
+        from cyber_data_collector.utils.llm_models import perplexity_model
+        ensure_schema(conn)
+        conn.executemany("INSERT INTO EntityAliasDecisions (name, other_name, verdict, model, prompt_version, "
+                         "decided_at) VALUES (?, ?, ?, ?, ?, '2026-10-30T00:00:00+00:00')",
+                         [(*sorted((a, b)), v, perplexity_model(), PROMPT_VERSION) for a, b, v in decisions])
+    groups = organisation_groups(conn, ids.values())
+    return lambda a, b: groups[ids[a]] == groups[ids[b]]
+
+
+@pytest.mark.parametrize("left,right", [
+    ("Ambulance Victoria", "Ambulance Tasmania"),
+    ("Melbourne TAFE", "TAFE SA"),
+])
+def test_names_scoped_to_different_places_are_two_organisations(left, right):
+    assert not _groups([left, right])(left, right)
+
+
+@pytest.mark.parametrize("left,right", [
+    ("Hertz", "Hertz Australia"),
+    ("Medibank", "Medibank Private Limited"),
+    ("Rural Fire Service", "NSW Rural Fire Service"),
+])
+def test_a_name_inside_the_other_still_joins(left, right):
+    assert _groups([left, right])(left, right)
+
+
+def test_a_list_of_organisations_is_none_of_them():
+    listed = "Australia and New Zealand Banking Group Limited, Westpac Banking Corporation, Commonwealth Bank of Australia"
+    assert not _groups(["Westpac Banking Corporation", listed])("Westpac Banking Corporation", listed)
+
+
+def test_a_recorded_different_verdict_outranks_the_name_tests():
+    # Name structure cannot tell Monash Health / Monash IVF from Genea Fertility / Genea IVF; the verdict can.
+    assert _groups(["Monash Health", "Monash IVF"])("Monash Health", "Monash IVF")
+    assert not _groups(["Monash Health", "Monash IVF"],
+                       decisions=[("Monash Health", "Monash IVF", "different")])("Monash Health", "Monash IVF")
+    same = _groups(["Hertz", "Hertz Australia"], decisions=[("Hertz", "Hertz Australia", "parent_subsidiary")])
+    assert not same("Hertz", "Hertz Australia")
+    unsure = _groups(["Hertz", "Hertz Australia"], decisions=[("Hertz", "Hertz Australia", "unsure")])
+    assert unsure("Hertz", "Hertz Australia")

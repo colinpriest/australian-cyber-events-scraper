@@ -83,8 +83,8 @@ RECOVERY_COMPLETED = "completed"                # filled in by the completion ca
 
 #: A date window is split in two while each half is at least this long ...
 MIN_WINDOW_DAYS = 3
-#: ... and at most this many times (a 3-month window reaches about 3 days).
-MAX_SPLIT_DEPTH = 5
+#: ... and at most this many times: 3 levels, at most 15 searches for one query (a 3-month window reaches about 11 days).
+MAX_SPLIT_DEPTH = 3
 
 
 class PerplexityEvent(BaseModel):

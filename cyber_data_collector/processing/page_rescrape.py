@@ -111,7 +111,9 @@ def queue_pages(conn: sqlite3.Connection, raw_event_ids: Sequence[str]) -> List[
     queued = []
     for raw_id in raw_event_ids:
         row = conn.execute("SELECT source_url FROM RawEvents WHERE raw_event_id = ?", (raw_id,)).fetchone()
-        if row is None or not (row[0] or "").strip():
+        # Only a web address is a page that can be fetched; a record with another kind of identifier
+        # ("perplexity://research/...") is left to the other evidence routes.
+        if row is None or not _is_web_url(row[0]):
             continue
         if conn.execute("SELECT 1 FROM PageRescrapes WHERE raw_event_id = ?", (raw_id,)).fetchone():
             continue
@@ -119,6 +121,10 @@ def queue_pages(conn: sqlite3.Connection, raw_event_ids: Sequence[str]) -> List[
                      "VALUES (?, ?, 0, ?, ?)", (raw_id, row[0], STATUS_QUEUED, datetime.now().isoformat()))
         queued.append(raw_id)
     return queued
+
+
+def _is_web_url(url: Optional[str]) -> bool:
+    return (url or "").strip().lower().startswith(("http://", "https://"))
 
 
 def short_pages(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -142,7 +148,7 @@ def short_pages(conn: sqlite3.Connection, limit: Optional[int] = None) -> List[D
           AND EXISTS (SELECT 1 FROM EnrichedEvents e
                       WHERE e.raw_event_id = r.raw_event_id AND e.status = 'Active')
           AND (i.raw_event_id IS NOT NULL OR LENGTH(TRIM(COALESCE(r.raw_content, ''))) < ?)
-          AND COALESCE(r.source_url, '') != ''
+          AND (r.source_url LIKE 'http://%' OR r.source_url LIKE 'https://%')
           AND COALESCE(p.status, '') != '{STATUS_GAVE_UP}'
         ORDER BY COALESCE(p.attempts, 0), r.raw_event_id
     """
