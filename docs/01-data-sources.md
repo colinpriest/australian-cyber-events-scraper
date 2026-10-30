@@ -153,7 +153,7 @@ not recorded as searched and is searched again (an answer nothing could read is 
 
 A cut-off answer is first searched again over the two halves of its date window (the `after:/before:`
 filter; the halves share their middle day), recursively while each half is at least `MIN_WINDOW_DAYS` (3)
-long and at most `MAX_SPLIT_DEPTH` (5) times - a 3-month window reaches windows of 3 to 6 days. The halves'
+long and at most `MAX_SPLIT_DEPTH` (3) times - at most 15 searches for one query; a 3-month window reaches windows of about 11 days. The halves'
 answers replace the cut-off one; a half that fails is noted and the cut-off answer's incidents are kept.
 Only a window that cannot be split and is still cut off is kept as read and recorded incomplete.
 

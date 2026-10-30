@@ -1187,6 +1187,18 @@ resolves without a model. On the 2026-10-29 copy no count changed (893
 organisations, 69 with a repeat, 123 repeats). Detail:
 [docs/10-supplier-incidents.md](docs/10-supplier-incidents.md).
 
+Name tests alone joined different organisations whose names share a generic
+word (2026-10-30: 26 multi-name groups, among them Ambulance Victoria /
+Ambulance Tasmania, Melbourne TAFE / TAFE SA, Monash Health / Monash IVF, a
+four-bank list with Westpac, "Australian super fund" with Super SA and Media
+Super). Three rules now come first: a stored alias verdict that two names are
+`different`, `related` or `parent_subsidiary` (`EntityAliasDecisions`, a
+person's outranking a model's) keeps them apart; a name the proper-name
+judgement calls a description joins no other name; and two names scoped to
+different places are two organisations. A list of organisations is none of
+them. On the live copy 7 groups remain; Optus / Optus Stadium (no verdict yet)
+and "ANZ customer" (not judged a description) are still joined.
+
 ### Stray records: event coherence
 
 The opposite of a missed merge: an event holding records about a *different*

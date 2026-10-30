@@ -190,7 +190,7 @@ def test_a_window_still_truncated_at_the_smallest_split_is_kept_and_recorded_inc
     source._base_queries = lambda: ["Australian cyber attack {date_range}"]
     events = asyncio.run(source.collect_events(MARCH_2025))
     leaves = len(source.collection_failures)
-    assert leaves == len(events) and leaves >= 16           # 89 days -> 44 -> 22 -> 11 -> 5 (not split again)
+    assert leaves == len(events) and leaves == 2 ** pp.MAX_SPLIT_DEPTH   # 89 days -> 44 -> 22 -> 11 (MAX_SPLIT_DEPTH 3)
     assert set(source.collection_error_types) == {INCOMPLETE}
     assert all("incomplete" in f for f in source.collection_failures)
     assert len(completions.calls) == 2 * leaves - 1
