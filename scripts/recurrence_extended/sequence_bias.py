@@ -106,8 +106,9 @@ def prepare_events(events: pd.DataFrame, censor_date: date, labels: dict[str, st
     """An organisation's incidents as time points, without inventing the order or attack type of ties.
 
     Under ``collapse`` (default) incidents on one stored date are one point: their attack types, if they
-    differ, become ``AMBIGUOUS``. Under ``zero_gap`` each is a point of its own, ordered arbitrarily by id,
-    so a transition between two tied incidents depends on that arbitrary order (a sensitivity bound only).
+    differ, become ``AMBIGUOUS``. Under a policy that separates ties each is a point of its own, in the order
+    that policy assumes (by id, or by placed date), so a transition between two tied incidents depends on
+    that assumed order - a sensitivity check, not a finding.
     """
     required = {"entity_id", "deduplicated_event_id", "event_date"}
     missing = required - set(events.columns)
