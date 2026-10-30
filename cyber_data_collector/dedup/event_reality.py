@@ -31,7 +31,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.utils.llm_models import typesafe_model
@@ -392,6 +392,28 @@ def protected_events(path: Path = LABELS_PATH) -> set:
 LABELLED_NON_INCIDENT_MAX_P = 0.5
 
 
+def resolve_labelled(conn: sqlite3.Connection, ids: Iterable[str]) -> set:
+    """The events labelled ids stand for **now**: a labelled event merged into another is that event.
+
+    Labels are keyed by the event id at labelling time; a later merge moves the labelled records into another
+    event, and a protection keyed on the old id protected nothing - Northern Minerals' BianLian attack, labelled
+    real, was merged into an event that event reality then rejected (2026-10-30). Ids that cannot be traced to
+    one current event are dropped (the quality gate reports them as unchecked)."""
+    from cyber_data_collector.quality.regression import EventResolver
+
+    ids = list(ids)
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    out = {did for did in ids if status.get(did) in ("Active", "Rejected")}
+    merged = [did for did in ids if status.get(did) == "Merged"]
+    if merged:      # only a merged id needs following (through its master record)
+        resolver = EventResolver(conn)
+        for did in merged:
+            now, now_status = resolver.resolve(did)
+            if now and now_status in ("Active", "Rejected"):
+                out.add(now)
+    return out
+
+
 def labelled_non_incidents(path: Path = LABELS_PATH) -> set:
     """Events the labelled set says are not incidents (ground truth, like ``protected_events``)."""
     import csv
@@ -518,7 +540,7 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
 
     # Labels decide first: an event the labels say is real is never rejected, whatever it scores, so it is not
     # (re-)asked about. Read first, so unreadable labels stop the run before anything is spent.
-    protected = protected_events(labels_path) if apply else set()
+    protected = resolve_labelled(conn, protected_events(labels_path)) if apply else set()
     events = [d for d in active_events(conn) if d not in protected]
     screen = judge_events(conn, events, judge=judge, version=SCREEN_VERSION)
     corroborated = corroborate_low(conn, screen, search=search)
@@ -544,9 +566,12 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
     labelled_out: List[Dict[str, Any]] = []
     needs_review: List[Dict[str, Any]] = []
     by_score = {f["deduplicated_event_id"] for f in below}     # rejections a score decides (not a label alone)
-    if cutoff is not None and apply:
+    # Labels decide whether or not a calibration may act: rejecting a labelled non-incident rests on the label,
+    # not on the model's precision, so a step held report-only by the deployment rule still applies its labels.
+    if apply:
         already = {f["deduplicated_event_id"] for f in below}
-        candidates = sorted(labelled_non_incidents(labels_path) & set(probabilities) - already - protected)
+        candidates = sorted(resolve_labelled(conn, labelled_non_incidents(labels_path)) & set(probabilities)
+                            - already - protected)
         gained = gained_since_labelling(conn, candidates, labelling_snapshot(conn, cal, snapshot_path))
         for did in candidates:
             entry = {"deduplicated_event_id": did, "title": titles.get(did), "p_real": probabilities[did],
@@ -556,7 +581,8 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
                 by_score.add(did)
             (labelled_out if unchanged or probabilities[did] < LABELLED_NON_INCIDENT_MAX_P
              else needs_review).append(entry)
-        for did in sorted(labelled_out_of_scope(labels_path) & set(probabilities) - already - protected):
+        for did in sorted(resolve_labelled(conn, labelled_out_of_scope(labels_path)) & set(probabilities)
+                          - already - protected):
             labelled_out.append({"deduplicated_event_id": did, "title": titles.get(did),
                                  "p_real": probabilities[did], "label": "out_of_scope"})
         below = below + labelled_out
@@ -571,7 +597,7 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
         for f in evidence_changed:
             logger.warning("NOT REJECTED: the evidence of %s changed after it was judged (P(real) %.3f); it is "
                            "judged again next run", f["deduplicated_event_id"], f["p_real"])
-    applied = bool(apply and cal and below)
+    applied = bool(apply and below)
     if applied:
         reject_events(conn, below)
     restored = restore_protected(conn, protected) if apply else []

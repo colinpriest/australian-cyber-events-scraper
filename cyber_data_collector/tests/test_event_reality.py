@@ -270,3 +270,15 @@ def test_an_out_of_scope_event_is_rejected_however_real(conn, tmp_path, monkeypa
     assert [(f["deduplicated_event_id"], f["label"]) for f in result["labelled_rejections"]] == [("lush", "out_of_scope")]
     status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
     assert status == {"act": "Active", "lush": "Rejected"}
+
+
+def test_a_label_follows_its_event_through_a_merge():
+    # Northern Minerals' attack, labelled real, was merged into an event that was then rejected unprotected.
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT PRIMARY KEY, status TEXT, master_enriched_event_id TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        INSERT INTO DeduplicatedEvents VALUES ('old', 'Merged', 'r1'), ('new', 'Rejected', 'r2'), ('act', 'Active', 'r3');
+        INSERT INTO EventDeduplicationMap VALUES ('r1', 'new'), ('r2', 'new'), ('r3', 'act');
+    """)
+    assert er.resolve_labelled(c, ["old", "act", "gone"]) == {"new", "act"}
