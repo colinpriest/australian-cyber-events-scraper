@@ -1720,31 +1720,40 @@ def cmd_check_same_organisation(args) -> int:
 
 
 def cmd_resolve_label_contradictions(args) -> int:
-    """Split labelled-different pairs that were merged into one event.
+    """Split labelled-different pairs merged into one event; merge labelled-same pairs still two.
 
     See :mod:`cyber_data_collector.dedup.label_contradictions`. The quality gate's
-    ``labels.duplicates.contradictions``: a pair labelled 'different' that now
-    resolves to one Active event. The records of each labelled event (read from
-    the database it was labelled on, ``--snapshot`` or the registry's
-    'duplicates' entry) are separated again through the ledger: snapshotted,
-    reversible, with 'different' rulings cached. No API calls. Exit 2 when the
-    snapshot is needed and missing (the contradictions are still listed).
+    ``labels.duplicates.contradictions``. Which records each labelled event held
+    is read from ``evaluation/duplicate_label_members.csv``, else from the
+    database it was labelled on (``--snapshot`` or the registry's 'duplicates'
+    entry); ``--record-members`` writes that file from the snapshot. Splits and
+    merges go through the ledger: snapshotted, reversible. No API calls. Exit 2
+    when the records are needed and neither source exists.
     """
     from cyber_data_collector.dedup import label_contradictions, recalibration
 
+    snapshot = None
+    try:
+        snapshot = recalibration.registered_snapshot(
+            "duplicates", Path(args.db), {"duplicates": args.snapshot} if args.snapshot else None)
+    except recalibration.PrerequisiteMissing as exc:
+        if args.record_members:
+            print(f"resolve-label-contradictions: {exc}", file=sys.stderr)
+            return 2
+    if args.record_members:
+        rows = label_contradictions.record_members(snapshot)
+        print(f"Wrote {rows} labelled-event record(s) from {snapshot} to {label_contradictions.MEMBERS_PATH}")
+        return 0
     conn = _connect(args.db)
     refresher = _make_refresher(args)
     try:
-        found = label_contradictions.find(conn)
-        if not found:
-            print("No labelled-different pair is merged into one event.")
+        if not label_contradictions.find(conn) and not label_contradictions.find_same(conn):
+            print("No labelled-different pair is one event and no labelled-same pair is two.")
             return 0
-        snapshot = None
-        try:
-            snapshot = recalibration.registered_snapshot(
-                "duplicates", Path(args.db), {"duplicates": args.snapshot} if args.snapshot else None)
-        except recalibration.PrerequisiteMissing as exc:
-            print(f"resolve-label-contradictions: {exc}", file=sys.stderr)
+        has_members = bool(label_contradictions.labelled_members())
+        if snapshot is None and not has_members:
+            print("resolve-label-contradictions: no labelling-time snapshot and no "
+                  f"{label_contradictions.MEMBERS_PATH.name}", file=sys.stderr)
         ledger = DedupLedger(conn, role_refresher=refresher)
         result = label_contradictions.resolve(conn, snapshot, apply=not args.dry_run, ledger=ledger)
     finally:
@@ -1752,17 +1761,25 @@ def cmd_resolve_label_contradictions(args) -> int:
         conn.close()
     unresolved = 0
     for c in result:
-        print(f"\n{c.a[:8]} vs {c.b[:8]} (labelled different) are both in event {c.event[:8]}")
+        if c.kind == "same":
+            print(f"\n{c.a[:8]} vs {c.b[:8]} (labelled same) are two events: {c.event[:8]} and {c.source[:8]}")
+        else:
+            print(f"\n{c.a[:8]} vs {c.b[:8]} (labelled different) are both in event {c.event[:8]}")
         if c.unresolved:
             unresolved += 1
             print(f"    UNRESOLVED: {c.unresolved}")
-            continue
-        print(f"    {len(c.side_a)} record(s) from {c.a[:8]}, {len(c.side_b)} from {c.b[:8]}; "
-              f"{'would split' if args.dry_run else 'split'} out {len(c.leaving)}"
-              + (f" as {c.new_event[:8]}" if c.new_event else ""))
+        elif c.kind == "same":
+            print(f"    {'would merge' if args.dry_run else 'merged'} {c.source[:8]} ({len(c.side_b)} record(s)) "
+                  f"into {c.event[:8]} ({len(c.side_a)})")
+        else:
+            print(f"    {len(c.side_a)} record(s) from {c.a[:8]}, {len(c.side_b)} from {c.b[:8]}; "
+                  f"{'would split' if args.dry_run else 'split'} out {len(c.leaving)}"
+                  + (f" as {c.new_event[:8]}" if c.new_event else ""))
     if args.dry_run:
         print("\nDRY RUN - nothing changed.")
-    return 2 if snapshot is None else (1 if unresolved else 0)
+    if snapshot is None and not has_members:
+        return 2
+    return 1 if unresolved else 0
 
 
 NEIGHBOURHOOD_SUMMARY = Path("instance/dedup_candidate_neighbourhoods.json")
@@ -4408,9 +4425,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_check_same_organisation)
 
     p = sub.add_parser("resolve-label-contradictions",
-                       help="Split pairs labelled different that were merged into one event (ledger split, "
-                            "reversible; no API calls)")
-    p.add_argument("--dry-run", action="store_true", help="List what would be split; change nothing")
+                       help="Split pairs labelled different that were merged into one event, and merge pairs "
+                            "labelled same that are still two (ledger, reversible; no API calls)")
+    p.add_argument("--dry-run", action="store_true", help="List what would be split or merged; change nothing")
+    p.add_argument("--record-members", action="store_true",
+                   help="Write evaluation/duplicate_label_members.csv (each labelled event's records when "
+                        "labelled) from the labelling snapshot, then stop")
     p.add_argument("--snapshot", default=None,
                    help="The database the duplicate labels were made on (default: evaluation/"
                         "calibration_snapshots.json, 'duplicates')")

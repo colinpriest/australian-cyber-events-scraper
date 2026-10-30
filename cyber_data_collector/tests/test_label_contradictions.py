@@ -9,6 +9,7 @@ import pytest
 from cyber_data_collector.dedup import label_contradictions as lc
 from cyber_data_collector.dedup import schema
 from cyber_data_collector.dedup.ledger import DedupLedger
+from cyber_data_collector.dedup.models import OverrideVerdict
 from cyber_data_collector.quality import regression
 from cyber_data_collector.tests.test_dedup_v3 import BASE_DDL, _add_event
 
@@ -155,3 +156,129 @@ def test_labels_other_than_different_are_ignored(world, tmp_path, monkeypatch):
     monkeypatch.setattr(lc, "LABELS_PATH", _labels(tmp_path, [("ded-a", "ded-b")], label="same"))
     _merge_anyway(conn)
     assert lc.find(conn) == []
+
+
+# --- labelled-same pairs still apart, and labelled events that were split ----------------------------------------
+
+
+@pytest.fixture
+def apart(tmp_path, monkeypatch):
+    """``a`` (two records) and ``b`` (one) labelled the same incident but stored as two events."""
+    conn = _db()
+    for key, title in (("a", "Acme ransomware"), ("a2", "Acme confirms ransomware"), ("b", "Mining cyber article")):
+        _add_event(conn, key, title, f"https://x/{key}", victim="Acme Ltd", date="2024-03-01")
+    from cyber_data_collector.dedup.backfill import run_backfill
+    run_backfill(conn)
+    DedupLedger(conn).merge_events("ded-a", "ded-a2", reason="same incident", respect_overrides=False)
+    conn.commit()
+    snapshot = tmp_path / "labelling.db"
+    target = sqlite3.connect(snapshot)
+    conn.backup(target)
+    target.close()
+    labels = _labels(tmp_path, [("ded-a", "ded-b")], label="same")
+    monkeypatch.setattr(lc, "LABELS_PATH", labels)
+    monkeypatch.setattr(lc, "MEMBERS_PATH", tmp_path / "duplicate_label_members.csv")
+    return conn, snapshot, labels
+
+
+def _event_of(conn, record):
+    return conn.execute("SELECT deduplicated_event_id FROM EventDeduplicationMap WHERE enriched_event_id = ?",
+                        (record,)).fetchone()[0]
+
+
+def test_a_labelled_same_pair_still_apart_is_merged_into_the_larger_event(apart):
+    conn, snapshot, labels = apart
+    assert [c.pair_id for c in lc.find_same(conn)] == ["ded-a|ded-b"]
+    assert regression.check_duplicates(conn, regression.EventResolver(conn), labels)[
+        "labels.duplicates.contradictions"].value == 1
+    plan = lc.resolve(conn, snapshot, apply=False)
+    assert plan[0].kind == "same" and plan[0].event == "ded-a" and plan[0].source == "ded-b"
+    assert len(lc.find_same(conn)) == 1                      # a plan changes nothing
+    lc.resolve(conn, snapshot, apply=True)
+    assert lc.find_same(conn) == [] and _event_of(conn, "enr-b") == "ded-a"
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'ded-b'").fetchone()[0] == "Merged"
+    assert lc.resolve(conn, snapshot, apply=True) == []      # idempotent
+
+
+def test_an_event_holding_unlabelled_records_is_not_merged(apart):
+    conn, snapshot, _ = apart
+    _add_event(conn, "c", "Another mining article", "https://x/c", victim="Acme Ltd", date="2025-01-01")
+    from cyber_data_collector.dedup.backfill import run_backfill
+    run_backfill(conn)
+    DedupLedger(conn).merge_events("ded-b", "ded-c", reason="x", respect_overrides=False)
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert result[0].unresolved and "neither labelled event" in result[0].unresolved
+    assert _event_of(conn, "enr-b") == "ded-b"
+
+
+def test_a_ruling_against_the_merge_is_reported_not_forced(apart):
+    conn, snapshot, _ = apart
+    DedupLedger(conn).add_override("enr-a", "enr-b", OverrideVerdict.DIFFERENT, reason="checked")
+    conn.commit()
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert result[0].unresolved and "ruling blocks" in result[0].unresolved and _event_of(conn, "enr-b") == "ded-b"
+
+
+def test_a_page_the_source_gate_ruled_out_leaves_and_the_event_merges(apart):
+    """The source gate split ``b``'s page out of ``a`` (no incident report); the label says ``b`` is ``a``'s
+    incident. The page goes, as the gate ruled, and the event joins: no split-merge loop."""
+    conn, snapshot, labels = apart
+    conn.execute("ALTER TABLE EnrichedEvents ADD COLUMN status TEXT DEFAULT 'Active'")
+    DedupLedger(conn).add_override("enr-b", "enr-a", OverrideVerdict.DIFFERENT,
+                                   reason="split: source-gate-v1: page does not report an incident",
+                                   created_by="rule")
+    conn.commit()
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert result[0].unresolved is None and result[0].leaving == ["enr-b"]
+    assert conn.execute("SELECT status FROM EnrichedEvents WHERE enriched_event_id = 'enr-b'").fetchone()[0] == "Inactive"
+    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'ded-b'").fetchone()[0] == "Merged"
+    assert regression.check_duplicates(conn, regression.EventResolver(conn), labels)[
+        "labels.duplicates.contradictions"].value == 0
+    assert lc.resolve(conn, snapshot, apply=True) == []
+
+
+def test_a_split_labelled_event_resolves_to_where_most_of_its_records_went(tmp_path, monkeypatch):
+    """Labelled event ``x`` (three records) lost its lead record to a split; the other two now sit with ``a``,
+    so the label "x is a" holds, though following the lead record says the two are still apart."""
+    conn = _db()
+    for key, title in (("a", "Optus 2022 breach"), ("x", "White Pages finding"), ("x2", "Optus class action"),
+                       ("x3", "Optus hacked")):
+        _add_event(conn, key, title, f"https://x/{key}", victim="Optus", date="2022-09-20")
+    from cyber_data_collector.dedup.backfill import run_backfill
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    for key in ("x2", "x3"):
+        ledger.merge_events("ded-x", f"ded-{key}", reason="t", respect_overrides=False)
+    conn.commit()
+    snapshot = tmp_path / "labelling.db"
+    target = sqlite3.connect(snapshot)
+    conn.backup(target)
+    target.close()
+    labels = _labels(tmp_path, [("ded-a", "ded-x")], label="same")
+    monkeypatch.setattr(lc, "LABELS_PATH", labels)
+    monkeypatch.setattr(lc, "MEMBERS_PATH", tmp_path / "duplicate_label_members.csv")
+    lc.record_members(snapshot)
+    new = ledger.split_members("ded-x", ["enr-x2", "enr-x3"], reason="t", actor="rule")
+    ledger.merge_events("ded-a", new, reason="t", respect_overrides=False)
+    conn.commit()
+    # Followed by its lead record, x is still its own Active event apart from a.
+    assert regression.EventResolver(conn).resolve("ded-x") == ("ded-x", "Active")
+    assert lc.SideResolver(conn).resolve("ded-x") == ("ded-a", "Active")
+    assert regression.check_duplicates(conn, regression.EventResolver(conn), labels)[
+        "labels.duplicates.contradictions"].value == 0
+    assert lc.find_same(conn) == []
+
+
+def test_without_a_majority_a_labelled_event_is_ambiguous(apart):
+    conn, snapshot, _ = apart
+    lc.record_members(snapshot)                              # a: {enr-a, enr-a2}
+    DedupLedger(conn).split_members("ded-a", ["enr-a2"], reason="t", actor="rule")
+    conn.commit()
+    assert lc.SideResolver(conn).resolve("ded-a") == (None, "ambiguous")
+    assert lc.find_same(conn) == []                          # not checked rather than guessed
+
+
+def test_record_members_writes_every_labelled_event(apart):
+    conn, snapshot, _ = apart
+    assert lc.record_members(snapshot) == 3
+    assert lc.labelled_members() == {"ded-a": {"enr-a", "enr-a2"}, "ded-b": {"enr-b"}}

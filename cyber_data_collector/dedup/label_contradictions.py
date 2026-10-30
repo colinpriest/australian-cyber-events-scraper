@@ -26,6 +26,34 @@ Two things close that:
   smaller side leaves (a tie: the second event of the pair id), together, as
   one new event.
 
+* **Labelled-same pairs still apart.** :func:`find_same` finds pairs labelled
+  *same* whose two sides are two Active events, and :func:`resolve` merges the
+  smaller event into the larger through the ledger - only when every active
+  record of the event merged away belonged to a labelled event (otherwise the
+  extra records' incident is not labelled and the pair is reported). Nothing
+  else merged these: the duplicate check only asks about pairs its candidate
+  generation proposes, and a labelled event with no victim link (a generic
+  sector article labelled as covering one company's incident) is never one.
+  A merge blocked only by the source gate's own rulings ("page does not report
+  an incident", made when it split a junk page out of the event) takes that
+  page out - the gate's verdict - and merges the event: the label says the
+  event is the incident, the gate says the page is no evidence of it, and both
+  hold. Any other 'different' ruling (a person's, a model's) blocks the merge
+  and is reported.
+
+**Where a labelled event is now.** An event's id is followed through merges by
+its records, but a labelled event can be split as well as merged: Optus's
+labelled "White Pages (2019)" event had seven records, four of which are now in
+the September 2022 event and its lead record (about the 2015 White Pages
+finding) alone. Following the lead record read that as "still two events".
+The records each labelled event held when labelled are kept in
+``evaluation/duplicate_label_members.csv`` (written from the labelling-time
+snapshot by ``resolve-label-contradictions --record-members``), and a labelled
+event resolves to the Active event that now holds a strict majority of those
+of its records still active (:class:`SideResolver`); no majority is
+*ambiguous* and not checked. An event the file does not list is followed as
+before. The quality gate reads labels the same way.
+
 Limits: the labelled events could themselves hold strays or misdated copies
 (WSU's second event held a record dated August 2024), and those travel with
 their side; the same-organisation coherence check and the duplicate check
@@ -39,6 +67,7 @@ from __future__ import annotations
 import csv
 import logging
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -48,6 +77,7 @@ from cyber_data_collector.dedup.event_reality import ROOT
 logger = logging.getLogger(__name__)
 
 LABELS_PATH = ROOT / "evaluation" / "duplicate_labels.csv"
+MEMBERS_PATH = ROOT / "evaluation" / "duplicate_label_members.csv"
 
 
 class LabelsUnreadable(RuntimeError):
@@ -56,6 +86,15 @@ class LabelsUnreadable(RuntimeError):
 
 def labelled_different_pairs(path: Optional[Path] = None) -> List[Tuple[str, str]]:
     """The labelled-different pairs, as ordered ``(a, b)`` event ids."""
+    return labelled_pairs(path, "different")
+
+
+def labelled_same_pairs(path: Optional[Path] = None) -> List[Tuple[str, str]]:
+    """The labelled-same pairs, as ordered ``(a, b)`` event ids."""
+    return labelled_pairs(path, "same")
+
+
+def labelled_pairs(path: Optional[Path], label: str) -> List[Tuple[str, str]]:
     path = Path(path or LABELS_PATH)
     try:
         with Path(path).open(encoding="utf-8", newline="") as fh:
@@ -64,7 +103,7 @@ def labelled_different_pairs(path: Optional[Path] = None) -> List[Tuple[str, str
         raise LabelsUnreadable(f"duplicate labels {path} unreadable: {exc}") from exc
     pairs = []
     for row in rows:
-        if (row.get("label") or "").strip() != "different":
+        if (row.get("label") or "").strip() != label:
             continue
         parts = (row.get("pair_id") or "").strip().split("|")
         if len(parts) == 2 and all(parts):
@@ -86,15 +125,81 @@ def ai_labelled_different_pairs() -> List[Tuple[str, str]]:
     return labelled_different_pairs(ai_duplicates.LABELS_PATH)
 
 
-def _resolver(conn: sqlite3.Connection):
-    from cyber_data_collector.quality.regression import EventResolver
-
-    previous = conn.row_factory
-    conn.row_factory = None
+def labelled_members(path: Optional[Path] = None) -> Dict[str, Set[str]]:
+    """``{labelled event id: its enriched ids when labelled}`` from the members file; none when it is absent."""
+    path = Path(path or MEMBERS_PATH)
+    if not path.exists():
+        return {}
     try:
-        return EventResolver(conn)
-    finally:
-        conn.row_factory = previous
+        with path.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+    except (OSError, csv.Error, UnicodeDecodeError) as exc:
+        raise LabelsUnreadable(f"labelled-event members {path} unreadable: {exc}") from exc
+    members: Dict[str, Set[str]] = {}
+    for row in rows:
+        event_id = (row.get("deduplicated_event_id") or "").strip()
+        record = (row.get("enriched_event_id") or "").strip()
+        if event_id and record:
+            members.setdefault(event_id, set()).add(record)
+    return members
+
+
+def record_members(snapshot: Path, labels_path: Optional[Path] = None, out_path: Optional[Path] = None) -> int:
+    """Write the labelling-time records of every labelled event to the members file; the rows written.
+
+    Idempotent: the file is rewritten from the snapshot, sorted.
+    """
+    labels_path, out_path = Path(labels_path or LABELS_PATH), Path(out_path or MEMBERS_PATH)
+    events = sorted({e for label in ("same", "different") for pair in labelled_pairs(labels_path, label)
+                     for e in pair})
+    members = _snapshot_members(snapshot, events)
+    rows = sorted((e, r) for e, records in members.items() for r in records)
+    with out_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh, lineterminator="\n")
+        writer.writerow(["deduplicated_event_id", "enriched_event_id"])
+        writer.writerows(rows)
+    return len(rows)
+
+
+class SideResolver:
+    """Where a labelled event is now: the Active event holding a strict majority of its labelling-time records.
+
+    An event the members file does not list, or none of whose recorded records is still active, is followed
+    through merges by :class:`quality.regression.EventResolver`.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, members: Optional[Dict[str, Set[str]]] = None):
+        from cyber_data_collector.processing.active_evidence import member_condition
+        from cyber_data_collector.quality.regression import EventResolver
+
+        previous = conn.row_factory
+        conn.row_factory = None
+        try:
+            self.events = EventResolver(conn)
+            self.members = labelled_members() if members is None else members
+            self.active_event: Dict[str, Set[str]] = {}
+            if self.members:
+                for record, event_id in conn.execute(
+                        f"""SELECT m.enriched_event_id, m.deduplicated_event_id FROM EventDeduplicationMap m
+                            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                            JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+                            WHERE d.status = 'Active' {member_condition(conn)}"""):
+                    self.active_event.setdefault(record, set()).add(event_id)
+        finally:
+            conn.row_factory = previous
+
+    def resolve(self, event_id: str) -> Tuple[Optional[str], str]:
+        recorded = self.members.get(event_id)
+        if recorded:
+            held = Counter(e for r in recorded for e in self.active_event.get(r, ()))
+            if held:
+                (top, count), = held.most_common(1)
+                return (top, "Active") if count * 2 > sum(held.values()) else (None, "ambiguous")
+        return self.events.resolve(event_id)
+
+
+def _resolver(conn: sqlite3.Connection):
+    return SideResolver(conn)
 
 
 def conflict(conn: sqlite3.Connection, target: str, source: str, path: Optional[Path] = None) -> Optional[str]:
@@ -157,6 +262,8 @@ class Contradiction:
     leaving: List[str] = field(default_factory=list)
     unresolved: Optional[str] = None
     new_event: Optional[str] = None
+    kind: str = "different"         # 'same': a labelled-same pair still two events, ``event`` the target
+    source: Optional[str] = None    # 'same': the event merged into ``event``
 
 
 def find(conn: sqlite3.Connection, path: Optional[Path] = None) -> List[Contradiction]:
@@ -168,6 +275,60 @@ def find(conn: sqlite3.Connection, path: Optional[Path] = None) -> List[Contradi
         if a_status == "Active" and b_status == "Active" and a_now == b_now:
             found.append(Contradiction(f"{a}|{b}", a, b, a_now))
     return found
+
+
+def find_same(conn: sqlite3.Connection, path: Optional[Path] = None) -> List[Contradiction]:
+    """Labelled-same pairs whose sides are two Active events (target chosen by :func:`plan_merge`)."""
+    resolver = _resolver(conn)
+    found = []
+    for a, b in labelled_same_pairs(path):
+        (a_now, a_status), (b_now, b_status) = resolver.resolve(a), resolver.resolve(b)
+        if a_status == "Active" and b_status == "Active" and a_now != b_now:
+            found.append(Contradiction(f"{a}|{b}", a, b, a_now, kind="same", source=b_now))
+    return found
+
+
+def plan_merge(conn: sqlite3.Connection, c: Contradiction, labelled: Dict[str, Set[str]]) -> Contradiction:
+    """Target the event with more active records; the one merged away must hold only labelled records."""
+    live_a, live_b = _active_members(conn, c.event), _active_members(conn, c.source)
+    if len(live_b) > len(live_a):
+        c.event, c.source, live_a, live_b = c.source, c.event, live_b, live_a
+    c.side_a, c.side_b = sorted(live_a), sorted(live_b)
+    labelled_records = labelled.get(c.a, set()) | labelled.get(c.b, set())
+    if not labelled_records:
+        c.unresolved = "no record of which records the labelled events held (members file or snapshot)"
+        return c
+    extra = live_b - labelled_records
+    if extra:
+        c.unresolved = (f"event {c.source[:8]} also holds {len(extra)} record(s) that were in neither labelled "
+                        "event; their incident is not labelled")
+    return c
+
+
+def _blocking_rulings(conn: sqlite3.Connection, target: str, source: str) -> List[Tuple[str, str, str, str]]:
+    """Active 'different' rulings between a member of ``source`` and one of ``target``:
+    ``(source record, target record, reason, created_by)``."""
+    rows = conn.execute(
+        """SELECT o.left_enriched_event_id, o.right_enriched_event_id, COALESCE(o.reason, ''),
+                  COALESCE(o.created_by, '')
+           FROM DedupOverrides o WHERE o.active = 1 AND o.verdict = 'different'""").fetchall()
+    src = {r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?", (source,))}
+    tgt = {r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?", (target,))}
+    out = []
+    for left, right, reason, by in rows:
+        if left in src and right in tgt:
+            out.append((left, right, reason, by))
+        elif right in src and left in tgt:
+            out.append((right, left, reason, by))
+    return out
+
+
+def _is_source_gate_ruling(reason: str, created_by: str) -> bool:
+    from cyber_data_collector.dedup.source_gate import QUESTION_VERSION
+
+    return created_by == "rule" and reason.startswith(f"split: {QUESTION_VERSION}:")
 
 
 def _snapshot_members(snapshot: Path, event_ids: Sequence[str]) -> Dict[str, Set[str]]:
@@ -209,19 +370,24 @@ def plan_split(conn: sqlite3.Connection, c: Contradiction, labelled_members: Dic
 
 def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = False, ledger=None,
             path: Optional[Path] = None) -> List[Contradiction]:
-    """Split every labelled-different pair that is now one event; ``apply`` False only plans.
+    """Split every labelled-different pair that is one event, merge every labelled-same pair that is two;
+    ``apply`` False only plans.
 
-    ``snapshot`` is the database the pairs were labelled on; None makes every contradiction
-    unresolved (it is still listed). Each split is a ledger split: snapshotted, reversible,
-    'different' rulings cached between the departing records and those that stay.
+    Which records each labelled event held is read from the members file, else from ``snapshot`` (the
+    database the pairs were labelled on); with neither, the contradiction is listed as unresolved. Splits and
+    merges go through the ledger (snapshotted, reversible); a split caches 'different' rulings, and a merge
+    the ledger refuses (a 'different' ruling or label) is reported, never forced.
     """
     from cyber_data_collector.dedup.ledger import DedupLedger
 
     contradictions = find(conn, path)
-    if not contradictions:
+    same = find_same(conn, path)
+    if not contradictions and not same:
         return []
-    members = _snapshot_members(snapshot, sorted({e for c in contradictions for e in (c.a, c.b)})) \
-        if snapshot else {}
+    ids = sorted({e for c in contradictions + same for e in (c.a, c.b)})
+    recorded = labelled_members()
+    members = _snapshot_members(snapshot, [e for e in ids if e not in recorded]) if snapshot else {}
+    members.update({e: recorded[e] for e in ids if e in recorded})
     previous = conn.row_factory
     conn.row_factory = sqlite3.Row      # the ledger reads columns by name
     try:
@@ -230,7 +396,7 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
             # An earlier split in this run may have separated this pair already.
             if not find_still(conn, c):
                 continue
-            if not snapshot:
+            if not members.get(c.a) and not members.get(c.b):
                 c.unresolved = "no labelling-time snapshot to say which records belong to which labelled event"
                 continue
             plan_split(conn, c, members)
@@ -240,6 +406,35 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
                       f"one event; the {len(c.leaving)} record(s) of the "
                       f"{'second' if c.leaving == c.side_b else 'first'} labelled event leave together")
             c.new_event = ledger.split_members(c.event, c.leaving, reason=reason, actor="rule")
+        for c in same:
+            # An earlier merge in this run may have joined this pair already.
+            now = [x for x in find_same(conn, path) if x.pair_id == c.pair_id]
+            if not now:
+                continue
+            c.event, c.source = now[0].event, now[0].source
+            plan_merge(conn, c, members)
+            if c.unresolved or not apply:
+                continue
+            reason = (f"[label-contradiction] labelled the same incident ({c.a[:8]} vs {c.b[:8]}) but stored as "
+                      f"two events; the {len(c.side_b)} record(s) of {c.source[:8]} join {c.event[:8]}")
+            rulings = _blocking_rulings(conn, c.event, c.source)
+            other = [r for r in rulings if not _is_source_gate_ruling(r[2], r[3])]
+            if other:
+                left, right, why, _ = other[0]
+                c.unresolved = (f"a 'different' ruling blocks the merge ({left[:8]} vs {right[:8]}: {why or 'no reason'})")
+                continue
+            labelled = conflict(conn, c.event, c.source)
+            if labelled:
+                c.unresolved = f"the merge would join a labelled-different pair ({labelled})"
+                continue
+            junk = sorted({r[0] for r in rulings})
+            if junk:
+                # The source gate ruled these pages no evidence of the incident; take them out as it would have.
+                conn.executemany("UPDATE EnrichedEvents SET status = 'Inactive' WHERE enriched_event_id = ?",
+                                 [(r,) for r in junk])
+                c.leaving = junk
+                reason += f"; {len(junk)} page(s) the source gate ruled no incident report taken out"
+            ledger.merge_events(c.event, c.source, reason=reason, actor="rule", respect_overrides=not junk)
         if apply:
             conn.commit()
     except Exception:
@@ -247,7 +442,7 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
         raise
     finally:
         conn.row_factory = previous
-    return contradictions
+    return contradictions + same
 
 
 def find_still(conn: sqlite3.Connection, c: Contradiction) -> List[Contradiction]:
