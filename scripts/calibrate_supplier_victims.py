@@ -46,9 +46,18 @@ Three steps, each reproducible from committed files:
                (no API calls), after checking they still reproduce its merge
                cut-off.
 
+``extend``     Adds items to one stratum of an existing sample when a cut-off rests on too few labelled
+               actions for the deployment rule (``cyber_data_collector/dedup/deployment.py``): a seeded
+               random draw from the current candidates that Jev's own score (on their current evidence)
+               places in the stratum and that are not sampled yet. The stratum's old and new items are one
+               random sample of it and are all re-weighted to ``population / items``; other strata are
+               untouched. The new items are judged in full (final scores stored) and written with
+               ``round`` N, so ``packet --round N`` gives a blind packet of the new items only.
+
 Usage (from the project root):
     python scripts/calibrate_supplier_victims.py --db <db> sample
-    python scripts/calibrate_supplier_victims.py --db <db> packet --out <dir>
+    python scripts/calibrate_supplier_victims.py --db <db> extend --kind victim --stratum high --add 30         --round 2 --seed <seed> [--judge] [--dry-run]
+    python scripts/calibrate_supplier_victims.py --db <db> packet --out <dir> [--round 2]
     python scripts/calibrate_supplier_victims.py --db <db> calibrate --precision 0.95
 """
 
@@ -120,12 +129,132 @@ def cmd_sample(args) -> int:
     return 0
 
 
-def read_sample(path: Path = SAMPLE_PATH) -> Dict[Tuple[str, str], Dict[str, str]]:
+def read_sample(path: Optional[Path] = None) -> Dict[Tuple[str, str], Dict[str, str]]:
+    path = path or SAMPLE_PATH
     try:
         with Path(path).open(encoding="utf-8", newline="") as fh:
             return {(r["kind"], r["subject_id"]): r for r in csv.DictReader(fh)}
     except OSError as exc:
         raise SystemExit(f"Sample file {path} cannot be read ({exc}); run the sample step first")
+
+
+SAMPLE_COLUMNS = ["kind", "subject_id", "stratum", "weight", "round"]
+
+
+def extend_stratum(rows: List[Dict[str, str]], kind: str, name: str, scores: Dict[str, float], add: int,
+                   rng: random.Random, round_no: int) -> Tuple[List[Dict[str, str]], Dict[str, object]]:
+    """Add up to ``add`` items to one existing stratum of the sample, drawn at random from the current candidates
+    of ``kind`` that Jev's own score puts in that stratum and that are not sampled yet.
+
+    The stratum keeps its population, the number of candidates it held when the sample was drawn (the sum of its
+    weights, which is what the weights represent), unless more candidates are in it now than that leaves room for,
+    in which case the population is the items sampled plus the eligible ones. Every item of the stratum, old and
+    new, then carries the weight ``population / items sampled in it``: the old and new draws together are one
+    random sample of the stratum, so they are weighted alike, and the other strata are untouched. Like
+    :func:`cmd_sample`, membership is decided by Jev's score (which exists before any escalation), never by the
+    final score being calibrated. Returns the new rows (in order) and a summary.
+    """
+    if add < 1:
+        raise ValueError("add must be at least 1")
+    mine = [r for r in rows if r["kind"] == kind and r["stratum"] == name]
+    if not mine:
+        raise ValueError(f"the sample has no {kind} stratum {name!r} to extend")
+    sampled = {r["subject_id"] for r in rows if r["kind"] == kind}
+    eligible = sorted(sid for sid, p in scores.items() if sid not in sampled and stratum(p) == name)
+    chosen = sorted(rng.sample(eligible, min(add, len(eligible))))
+    labelling_population = round(sum(float(r["weight"]) for r in mine))
+    population = max(labelling_population, len(mine) + len(eligible))
+    size = len(mine) + len(chosen)
+    weight = round(max(population / size, 1.0), 4) if size else 0.0
+    out = []
+    for r in rows:
+        r = {**r, "round": r.get("round") or "1"}
+        if r["kind"] == kind and r["stratum"] == name:
+            r["weight"] = str(weight)
+        out.append(r)
+    out += [{"kind": kind, "subject_id": sid, "stratum": name, "weight": str(weight), "round": str(round_no)}
+            for sid in chosen]
+    return out, {"kind": kind, "stratum": name, "eligible": len(eligible), "added": len(chosen),
+                 "labelling_population": labelling_population, "population": population,
+                 "sampled_before": len(mine), "weight_before": float(mine[0]["weight"]), "weight": weight,
+                 "chosen": chosen}
+
+
+def _write_sample(rows: List[Dict[str, str]], path: Path) -> None:
+    with Path(path).open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=SAMPLE_COLUMNS)
+        w.writeheader()
+        w.writerows({c: r.get(c) or "" for c in SAMPLE_COLUMNS} for r in rows)
+
+
+def _current_items(conn: sqlite3.Connection, kind: str) -> List[Tuple[str, Dict]]:
+    g = sv.gather(conn)
+    return g.victim_items(conn) if kind == sv.KIND_VICTIM else g.pair_items(conn)
+
+
+def _current_jev(conn: sqlite3.Connection, kind: str, items: List[Tuple[str, Dict]]) -> Dict[str, float]:
+    """Jev's stored answer on each item's **current** evidence (its input hash), as the judge would reuse it."""
+    from cyber_data_collector.utils.jev import ensure_schema, input_hash
+    from cyber_data_collector.utils.llm_models import typesafe_model
+
+    ensure_schema(conn)
+    qid, q =((sv.VICTIM_QUESTION_ID, sv.victim_question()) if kind == sv.KIND_VICTIM
+              else (sv.PAIR_QUESTION_ID, sv.pair_question()))
+    out: Dict[str, float] = {}
+    for sid, state in items:
+        row = conn.execute("SELECT value FROM ModelJudgements WHERE question_id = ? AND input_hash = ? "
+                           "ORDER BY rowid DESC LIMIT 1", (qid, input_hash(state, q, typesafe_model()))).fetchone()
+        if row is not None:
+            out[sid] = float(row[0])
+    return out
+
+
+def cmd_extend(args) -> int:
+    """Extend one stratum of the sample with new items for blind labelling (see :func:`extend_stratum`).
+
+    Every current candidate needs Jev's score on its current evidence to be placed in a stratum; with ``--judge``
+    the missing ones are asked (Jev only: the strata never depend on an escalation), without it the step refuses.
+    The new items are then judged in full (Jev, and the escalation in the middle band) so that their final scores
+    are stored for the calibration, and written to the sample with ``round`` = ``--round``.
+    """
+    rows = list(read_sample().values())
+    conn = sqlite3.connect(args.db)
+    kind = args.kind
+    items = _current_items(conn, kind)
+    scores = _current_jev(conn, kind, items)
+    missing = [(sid, st) for sid, st in items if sid not in scores]
+    if missing and not args.judge:
+        print(f"{len(missing)} current {kind} candidate(s) have no Jev score on their current evidence, so their "
+              "stratum is unknown; rerun with --judge to ask Jev (paid) or the stratum would be drawn from a "
+              "biased subset.")
+        return 2
+    if missing:
+        result = sv.judge(conn, missing, kind, escalate_band=False)
+        if result.failed:
+            print(f"Jev failed on {len(result.failed)} candidate(s) (first: {result.failed[0]}); nothing written")
+            return 1
+        scores = _current_jev(conn, kind, items)
+    if any(r.get("round") == str(args.round) and r["kind"] == kind and r["stratum"] == args.stratum for r in rows):
+        print(f"The sample already holds round {args.round} items in {kind} {args.stratum}; choose another --round")
+        return 2
+    new_rows, summary = extend_stratum(rows, kind, args.stratum, scores, args.add, random.Random(args.seed),
+                                       args.round)
+    by_id = dict(items)
+    chosen = [(sid, by_id[sid]) for sid in summary["chosen"]]
+    if args.dry_run:
+        print(json.dumps({k: v for k, v in summary.items() if k != "chosen"}))
+        return 0
+    final = sv.judge(conn, chosen, kind)
+    if final.failed or final.undecided:
+        bad = final.failed + final.undecided
+        print(f"{len(bad)} new item(s) could not be judged or escalated (first: {bad[0]}); sample not written")
+        return 1
+    _write_sample(new_rows, SAMPLE_PATH)
+    print(f"{kind} {args.stratum}: added {summary['added']} of {summary['eligible']} eligible (round {args.round}); "
+          f"population {summary['population']} (labelling-time {summary['labelling_population']}), weight "
+          f"{summary['weight_before']} -> {summary['weight']} for all {summary['sampled_before'] + summary['added']} "
+          f"items of the stratum. Seed {args.seed}. Written {SAMPLE_PATH}")
+    return 0
 
 
 def _compact_event(state: dict) -> dict:
@@ -143,6 +272,12 @@ def _compact_event(state: dict) -> dict:
 
 def cmd_packet(args) -> int:
     sample = read_sample()
+    if getattr(args, "round", None):
+        # Only the items added in one extension round (the rest are labelled already).
+        sample = {k: v for k, v in sample.items() if (v.get("round") or "1") == str(args.round)}
+        if not sample:
+            print(f"The sample holds no round {args.round} items")
+            return 2
     conn = sqlite3.connect(args.db)
     g = sv.gather(conn)
     by_id = g.by_id
@@ -399,10 +534,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--sample-low", type=int, default=15)
     p.add_argument("--seed", type=int, default=20261027)
     p.set_defaults(func=cmd_sample)
+    p = sub.add_parser("extend", help="add items to one stratum of the sample for blind labelling")
+    p.add_argument("--kind", required=True, choices=list(KINDS))
+    p.add_argument("--stratum", required=True, choices=["low", "mid", "high"])
+    p.add_argument("--add", type=int, required=True, help="How many new items to draw into the stratum")
+    p.add_argument("--round", type=int, required=True, help="Extension round written to the sample (the original "
+                                                             "sample is round 1)")
+    p.add_argument("--seed", type=int, required=True)
+    p.add_argument("--judge", action="store_true", help="Ask Jev (paid) for candidates with no score on their "
+                                                        "current evidence; without it the step refuses")
+    p.add_argument("--dry-run", action="store_true", help="Say what would be added (placing candidates still needs --judge for unscored ones); "
+                                                         "judge no chosen item, write nothing")
+    p.set_defaults(func=cmd_extend)
     p = sub.add_parser("packet")
     p.add_argument("--out", required=True, help="Directory for the blind labelling packet")
     p.add_argument("--chunks", type=int, default=4)
     p.add_argument("--seed", type=int, default=20261027)
+    p.add_argument("--round", type=int, default=None, help="Only the items added in this extension round")
     p.set_defaults(func=cmd_packet)
     p = sub.add_parser("calibrate")
     p.add_argument("--precision", type=float, default=0.95)

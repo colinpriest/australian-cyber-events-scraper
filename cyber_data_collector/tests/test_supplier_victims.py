@@ -842,3 +842,101 @@ def test_a_stored_score_is_read_only_on_the_evidence_it_was_judged_on(conn, monk
     assert sv.stored_final_probabilities(conn, sv.KIND_VICTIM, [("s1", state)]) == {"s1": 0.9}
     changed = {**state, "candidate": {"name": "UWA", "kind": "organisation"}}
     assert sv.stored_final_probabilities(conn, sv.KIND_VICTIM, [("s1", changed)]) == {}
+
+
+# ----------------------------------------------------------------------
+# Extending a stratum of the sample (more blind labels for the deployment rule)
+# ----------------------------------------------------------------------
+
+def _sample_rows():
+    return ([{"kind": "victim", "subject_id": f"old{i}", "stratum": "high", "weight": "2.5"} for i in range(4)]
+            + [{"kind": "victim", "subject_id": "lowA", "stratum": "low", "weight": "8.0"},
+               {"kind": "same_incident", "subject_id": "pair1", "stratum": "high", "weight": "1.0"}])
+
+
+def test_extend_draws_only_unsampled_items_of_the_stratum_and_reweights_it_alone():
+    import random
+
+    from scripts.calibrate_supplier_victims import extend_stratum
+
+    # Population of the high stratum at sampling: 4 x 2.5 = 10. Current Jev scores: 3 unsampled high items, one
+    # already sampled (old0), one mid and one low item.
+    scores = {"old0": 0.95, "n1": 0.9, "n2": 0.85, "n3": 0.99, "m1": 0.5, "l1": 0.1}
+    rows, summary = extend_stratum(_sample_rows(), "victim", "high", scores, 2, random.Random(1), 2)
+    new = [r for r in rows if r["round"] == "2"]
+    assert len(new) == 2 and {r["subject_id"] for r in new} <= {"n1", "n2", "n3"}
+    assert all(r["stratum"] == "high" and r["kind"] == "victim" for r in new)
+    # 10 in the stratum, 6 sampled now: every high item (old and new) weighs 10/6; other strata are untouched.
+    high = [r for r in rows if r["kind"] == "victim" and r["stratum"] == "high"]
+    assert len(high) == 6 and {r["weight"] for r in high} == {str(round(10 / 6, 4))}
+    assert next(r for r in rows if r["subject_id"] == "lowA")["weight"] == "8.0"
+    assert next(r for r in rows if r["subject_id"] == "pair1")["weight"] == "1.0"
+    assert all(r["round"] == "1" for r in rows if r not in new)
+    assert summary["eligible"] == 3 and summary["population"] == 10
+    again, _ = extend_stratum(_sample_rows(), "victim", "high", scores, 2, random.Random(1), 2)
+    assert again == rows          # deterministic for a seed
+
+
+def test_extend_grows_the_population_when_the_stratum_holds_more_than_it_did():
+    import random
+
+    from scripts.calibrate_supplier_victims import extend_stratum
+
+    scores = {f"n{i}": 0.9 for i in range(10)}          # 4 sampled + 10 eligible > the 10 the weights represent
+    rows, summary = extend_stratum(_sample_rows(), "victim", "high", scores, 3, random.Random(2), 2)
+    assert summary["population"] == 14 and summary["added"] == 3
+    assert {r["weight"] for r in rows if r["stratum"] == "high" and r["kind"] == "victim"} == {str(round(14 / 7, 4))}
+
+
+def test_extend_refuses_a_stratum_the_sample_does_not_have():
+    import random
+
+    from scripts.calibrate_supplier_victims import extend_stratum
+
+    with pytest.raises(ValueError, match="no same_incident stratum 'low'"):
+        extend_stratum(_sample_rows(), "same_incident", "low", {"x": 0.1}, 1, random.Random(1), 2)
+
+
+def test_extend_command_needs_scores_for_every_candidate_then_judges_and_writes_the_new_items(conn, tmp_path,
+                                                                                            monkeypatch):
+    from scripts import calibrate_supplier_victims as cal
+
+    db = tmp_path / "work.db"
+    out = sqlite3.connect(db)
+    conn.backup(out)
+    sv.ensure_schema(out)      # a stored search naming a second customer: two victim candidates
+    out.execute("INSERT INTO SupplierIncidentSearches VALUES ('e1', 'h1', 'q', 'sonar', ?, '[]', '2026-10-28')",
+                ("AFFECTED: Monash University | exam records | https://y",))
+    out.commit()
+    out.close()
+    items = cal._current_items(sqlite3.connect(db), sv.KIND_VICTIM)
+    assert len(items) == 2
+    first = items[0][0]
+    sample = tmp_path / "sample.csv"
+    sample.write_text(f"kind,subject_id,stratum,weight\nvictim,{first},high,3.0\n", encoding="utf-8")
+    monkeypatch.setattr(cal, "SAMPLE_PATH", sample)
+    fake = FakeTypeSafe(p=0.95)
+    monkeypatch.setattr("cyber_data_collector.utils.jev.JevJudge._get_client", lambda self: fake)
+    args = SimpleNamespace(db=str(db), kind=sv.KIND_VICTIM, stratum="high", add=1, round=2, seed=7, judge=False,
+                           dry_run=False)
+    # Unscored candidates have no stratum: refuse rather than draw from a biased subset; nothing is asked.
+    assert cal.cmd_extend(args) == 2 and fake.calls == 0
+    args.judge = True
+    assert cal.cmd_extend(args) == 0
+    rows = list(cal.read_sample(sample).values())
+    new = [r for r in rows if r["round"] == "2"]
+    assert len(new) == 1 and new[0]["subject_id"] != first and new[0]["stratum"] == "high"
+    # The stratum held 3 at sampling (3.0 x 1), 2 are sampled now: both weigh 1.5.
+    assert {r["weight"] for r in rows} == {"1.5"}
+    # The new item's final score is stored on its current evidence, for the calibration.
+    state = dict(items)[new[0]["subject_id"]]
+    assert sv.stored_final_probabilities(sqlite3.connect(db), sv.KIND_VICTIM,
+                                         [(new[0]["subject_id"], state)]) == {new[0]["subject_id"]: 0.95}
+    # The same round cannot be drawn twice into the stratum.
+    assert cal.cmd_extend(args) == 2
+    # The packet of the round holds the new item only, without any score.
+    packet = tmp_path / "packet"
+    assert cal.cmd_packet(SimpleNamespace(db=str(db), out=str(packet), chunks=1, seed=1, round=2)) == 0
+    lines = (packet / "supplier_packet_1.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(x)["subject_id"] for x in lines] == [new[0]["subject_id"]]
+    assert "0.95" not in lines[0]
