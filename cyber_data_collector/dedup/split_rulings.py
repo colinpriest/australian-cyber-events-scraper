@@ -131,10 +131,61 @@ def withdrawn_label_rulings(conn: sqlite3.Connection, labels_path=None) -> List[
     return found
 
 
+COHERENCE_SPLIT = re.compile(r"^split: \[coherence\] stray record\(s\) about (.+?): P\(same\) ")
+
+
+def outgrown_coherence_rulings(conn: sqlite3.Connection) -> List[Orphan]:
+    """Model-scored coherence rulings whose basis is gone.
+
+    A coherence split moves a record out because the organisation it is about is not the event's (and the model
+    scored it below the cut-off). When that organisation is now a victim of the Active events holding *both*
+    records, the record is about the event's own organisation after all (Agrimac's Storm-leak listing was split
+    out of an event that later recorded Agrimac as its victim), and the ruling must not veto a merge the
+    calibrated duplicate check makes. Rulings from a label ("labelled a different incident") are kept.
+    """
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    if not _has_rulings(conn):
+        return []
+    rows = conn.execute(
+        """SELECT override_id, left_enriched_event_id, right_enriched_event_id, COALESCE(reason, '')
+           FROM DedupOverrides WHERE active = 1 AND verdict = 'different' AND created_by = 'rule'
+             AND reason LIKE 'split: [coherence]%P(same)%'""").fetchall()
+    if not rows:
+        return []
+    event_of: Dict[str, str] = {}
+    for record, event_id in conn.execute(
+            """SELECT m.enriched_event_id, m.deduplicated_event_id FROM EventDeduplicationMap m
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+               WHERE d.status = 'Active'"""):
+        event_of[record] = event_id
+    victims: Dict[str, List[str]] = {}
+    for event_id, name in conn.execute(
+            """SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.relationship_type = 'victim'"""):
+        victims.setdefault(event_id, []).append(name)
+    found = []
+    for override_id, left, right, reason in rows:
+        m = COHERENCE_SPLIT.match(reason)
+        el, er = event_of.get(left), event_of.get(right)
+        if not (m and el and er):
+            continue
+        orgs = [o.strip() for o in m.group(1).split(",") if o.strip()]
+        if any(all(any(names_match(conn, org, v) for v in victims.get(e, ())) for e in (el, er)) for org in orgs):
+            found.append(Orphan(override_id, left, right, "", reason))
+    return found
+
+
 def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
     """Deactivate the rulings :func:`orphaned` and :func:`withdrawn_label_rulings` find; ``apply`` False only
     lists them."""
     withdrawn = withdrawn_label_rulings(conn)
+    outgrown = outgrown_coherence_rulings(conn)
+    if apply and outgrown:
+        conn.executemany(
+            "UPDATE DedupOverrides SET active = 0, reason = reason || ' [void: the organisation it was about is now "
+            "a victim of both records'' events]' WHERE override_id = ?", [(o.override_id,) for o in outgrown])
+        conn.commit()
     if apply and withdrawn:
         conn.executemany(
             "UPDATE DedupOverrides SET active = 0, reason = reason || ' [void: the pair is no longer labelled "
@@ -148,4 +199,4 @@ def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
         conn.commit()
         logger.info("Voided %d split ruling(s) between records that both left the event they were split from",
                     len(found))
-    return withdrawn + found
+    return withdrawn + outgrown + found
