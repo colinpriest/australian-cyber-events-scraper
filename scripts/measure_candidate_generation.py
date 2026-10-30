@@ -22,6 +22,7 @@ the labelled pairs still exist, and on a copy of the live database for the sizes
     python scripts/measure_candidate_generation.py --db instance/calibration_duplicates.db --route organisation
     python scripts/measure_candidate_generation.py --synthetic 2000      # one group of 2,000 events, no database
     python scripts/measure_candidate_generation.py --synthetic 20000 --no-enumeration
+    python scripts/measure_candidate_generation.py --synthetic 20000 --no-enumeration --common-keys
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from cyber_data_collector.dedup import ai_duplicates as ad  # noqa: E402
 from cyber_data_collector.dedup import bounded_candidates as bounded  # noqa: E402
 from cyber_data_collector.dedup import candidate_ranking as ranking  # noqa: E402
 from cyber_data_collector.dedup import duplicate_judgement as dj  # noqa: E402
+from cyber_data_collector.dedup import neighbourhoods as nb  # noqa: E402
 
 PATHS = ("enumerate", "retrieve", "retrieve-forced")
 
@@ -157,6 +159,8 @@ def measure_database(db: str, route: str, labels_path: Optional[str] = None) -> 
         kept_by_path[name] = ids
         out["paths"][name] = {"pairs_built": built, "pairs_kept": len(ids), "seconds": round(seconds, 3),
                               "peak_mib": round(peak, 2), "bounded_groups": stats.get("bounded_groups", 0),
+                              "pairs_scored_by_retrieval": stats.get("pairs_scored", 0),
+                              "events_at_retrieval_budget": stats.get("events_at_retrieval_budget", 0),
                               "recall": recall(ids, exists, labels)}
     base = kept_by_path["enumerate"]
     for name in PATHS[1:]:
@@ -169,22 +173,56 @@ def measure_database(db: str, route: str, labels_path: Optional[str] = None) -> 
     return out
 
 
-def synthetic(n: int, seed: int = 7, with_enumeration: bool = True) -> Dict[str, Any]:
-    """One group of ``n`` events (5% undated, 10% sharing a rare word with two others): the enumerated path against
-    retrieval, on a group too big for the database to show the growth."""
+def synthetic_group(n: int, seed: int = 7, common_keys: bool = False
+                    ) -> Tuple[List[bounded.Span], ranking.Corpus]:
+    """One group of ``n`` events: 5% undated, 10% sharing a rare word with two others. With ``common_keys`` the
+    group is also given what makes posting lists long: a fifth of the dated events have month and a tenth year
+    precision, four vendors each carried by 10% of the events, four records-affected figures by 5% each and six
+    rare words by 3% each."""
     rng = random.Random(seed)
     days = rng.sample(range(0, max(6000, n * 3)), n)
     start = date(2015, 1, 1)
-    spans = [bounded.Span(f"e{i:06d}", None, None) if i < n // 20 else
-             bounded.Span(f"e{i:06d}", start + timedelta(days=days[i]), start + timedelta(days=days[i]))
-             for i in range(n)]
+    spans: List[bounded.Span] = []
+    for i in range(n):
+        event_id = f"e{i:06d}"
+        if i < n // 20:
+            spans.append(bounded.Span(event_id, None, None))
+            continue
+        day = start + timedelta(days=days[i])
+        precision = rng.random() if common_keys else 0.0
+        if precision > 0.9:
+            spans.append(bounded.Span(event_id, date(day.year, 1, 1), date(day.year, 12, 31)))
+        elif precision > 0.7:
+            first = day.replace(day=1)
+            last = (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            spans.append(bounded.Span(event_id, first, last))
+        else:
+            spans.append(bounded.Span(event_id, day, day))
     ids = [s.event_id for s in spans]
     feats = {i: ranking.EventFeatures(i) for i in ids}
     families = [rng.sample(ids, 3) for _ in range(n // 10)]
+    rare = {f"word{k}" for k in range(len(families))}
     for k, family in enumerate(families):
         for i in family:
             feats[i].tokens.add(f"word{k}")
-    corpus = ranking.Corpus(feats, {f"word{k}" for k in range(len(families))}, set())
+    if common_keys:
+        for v in range(4):
+            for i in rng.sample(ids, n // 10):
+                feats[i].vendor = feats[i].vendor or f"vendor{v}"
+        for r in range(4):
+            for i in rng.sample(ids, n // 20):
+                feats[i].records_affected = feats[i].records_affected or 1000 * (r + 1)
+        for t in range(6):
+            rare.add(f"common{t}")
+            for i in rng.sample(ids, max(2, (3 * n) // 100)):
+                feats[i].tokens.add(f"common{t}")
+    return spans, ranking.Corpus(feats, rare, set())
+
+
+def synthetic(n: int, seed: int = 7, with_enumeration: bool = True, common_keys: bool = False) -> Dict[str, Any]:
+    """The enumerated path against retrieval on :func:`synthetic_group`, a group too big for the database to show
+    the growth; and the supplier links (:func:`neighbourhoods.supplier_pairs`) of its vendors."""
+    spans, corpus = synthetic_group(n, seed, common_keys)
 
     def make(a, b, gap, group):
         return {"pair_id": bounded.pair_id(a.event_id, b.event_id), "a": a.event_id, "b": b.event_id,
@@ -198,21 +236,28 @@ def synthetic(n: int, seed: int = 7, with_enumeration: bool = True) -> Dict[str,
 
     def retrieve():
         counter = Counter(make)
-        kept, _ = bounded.rank_groups(corpus, {0: spans}, counter)
-        return kept, counter.built
+        kept, stats = bounded.rank_groups(corpus, {0: spans}, counter)
+        return kept, counter.built, stats
 
-    out: Dict[str, Any] = {"events": n, "pairs_that_exist": n * (n - 1) // 2}
+    out: Dict[str, Any] = {"events": n, "common_keys": common_keys, "pairs_that_exist": n * (n - 1) // 2}
     kept_ids: Dict[str, Set[str]] = {}
-    for name, fn in (("retrieve", retrieve), ("enumerate", enumerate_)):
-        if name == "enumerate" and not with_enumeration:
-            continue
-        (kept, built), seconds, peak = _measured(fn)
-        kept_ids[name] = {p["pair_id"] for p in kept}
-        out[name] = {"pairs_built": built, "pairs_kept": len(kept), "seconds": round(seconds, 2),
-                     "peak_mib": round(peak, 1)}
+    (kept, built, stats), seconds, peak = _measured(retrieve)
+    kept_ids["retrieve"] = {p["pair_id"] for p in kept}
+    out["retrieve"] = {"pairs_built": built, "pairs_kept": len(kept), "seconds": round(seconds, 2),
+                       "peak_mib": round(peak, 1),
+                       "pairs_scored": stats.get("pairs_scored", 0),
+                       "events_at_retrieval_budget": stats.get("events_at_retrieval_budget", 0)}
     if with_enumeration:
+        (kept, built), seconds, peak = _measured(enumerate_)
+        kept_ids["enumerate"] = {p["pair_id"] for p in kept}
+        out["enumerate"] = {"pairs_built": built, "pairs_kept": len(kept), "seconds": round(seconds, 2),
+                            "peak_mib": round(peak, 1)}
         out["only_in_enumerated"] = len(kept_ids["enumerate"] - kept_ids["retrieve"])
         out["only_in_retrieved"] = len(kept_ids["retrieve"] - kept_ids["enumerate"])
+    intervals = {s.event_id: (s.start, s.end) if s.start is not None else None for s in spans}
+    (pairs, subdivided), seconds, peak = _measured(lambda: nb.supplier_pairs(corpus, intervals))
+    out["supplier_links"] = {"pairs": len(pairs), "suppliers_subdivided": subdivided,
+                             "seconds": round(seconds, 2), "peak_mib": round(peak, 1)}
     return out
 
 
@@ -224,10 +269,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--synthetic", type=int, metavar="N", help="measure one group of N synthetic events instead")
     parser.add_argument("--no-enumeration", action="store_true",
                         help="with --synthetic, do not also build every pair (it needs gigabytes beyond ~3,000 events)")
+    parser.add_argument("--common-keys", action="store_true",
+                        help="with --synthetic, add month/year-precision dates and vendors, figures and rare words "
+                             "carried by many events (long posting lists)")
     parser.add_argument("--save", help="write the result as JSON")
     args = parser.parse_args(argv)
     if args.synthetic:
-        result: Any = synthetic(args.synthetic, with_enumeration=not args.no_enumeration)
+        result: Any = synthetic(args.synthetic, with_enumeration=not args.no_enumeration,
+                                common_keys=args.common_keys)
     elif args.db:
         routes = ("organisation", "ai") if args.route == "both" else (args.route,)
         result = [measure_database(args.db, r, args.labels) for r in routes]

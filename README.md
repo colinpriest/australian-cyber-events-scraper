@@ -1322,6 +1322,10 @@ linked groups (nothing links them but the supplier), and 2 more sit three or
 more links apart inside the 420-event group, so no neighbourhood shows both;
 linking the events that record the same supplier (`supplier_pairs`, on by
 default, `--no-supplier-links` to drop it) adds 71 links and joins them. A
+supplier with more than 100 events is not skipped (it was): each of its events
+is linked to its 8 neighbours either side in date order (undated ones in id
+order), so the work is linear and the count is reported
+(`supplier_links.suppliers_subdivided`). A
 full cover costs about 1.6 times the calls of the old slicing; the budget
 bounds it, not the group size.
 
@@ -2118,18 +2122,38 @@ though paid calls stayed bounded. A group of up to 60 events is ranked by
 enumeration (all its pairs, at most 1,770); a larger one (`dedup/bounded_candidates.py`) retrieves a
 limited set per event through indexes - the events citing the same non-hub
 source, naming the same vendor, sharing a corpus-rare word or the same
-records-affected figure, the nearest by date interval (sorted lists and
-`bisect`), and the smallest pair ids among undated partners - and keeps the same
-best partners and the same reserved route for strong long-gap or undated pairs.
-Pairs it does not keep are never built; the counts before the cap are computed
+records-affected figure, the nearest by date interval, and the smallest pair ids
+among undated partners - and keeps the same best partners and the same reserved
+route for strong long-gap or undated pairs. CPU and memory are bounded, not only
+paid calls: every posting list longer than 24 events (a vendor, a figure, a URL
+or a rare word many events carry) is followed to its 24 nearest in date and its
+24 undated members through a date-interval index built once per list (`bisect`
+and a walk outwards; exactly the nearest a full sort gave, without sorting the
+list for every event that carries it), an event's keys are followed rarest first
+up to 1,024 candidates (`events_at_retrieval_budget` counts any that stop
+there), each retrieved pair is scored once into a small tuple, and a pair dict
+is built only for a pair that is kept. The counts before the cap are computed
 arithmetically. `scripts/measure_candidate_generation.py` measures it against
-the enumerated ranking and the labelled pairs. On one synthetic group of 2,000
-events the enumerated path built 1,999,000 pairs in 30 s and 1.24 GB at peak; the
-retrieved path built 31,721 in 1.1 s and 19 MB, and kept the identical 9,235
-pairs (20,000 events: 317,920 pairs built of 199,990,000, 12 s, 189 MB). On the
-2026-10-29 database the largest organisation group is 7 events and the AI group
-36, so nothing there is large enough to need retrieval yet: forced onto every
-group it keeps exactly what the capped enumeration keeps. Recall on the
+the enumerated ranking and the labelled pairs (`--synthetic N`, `--common-keys`
+for long posting lists; times under `tracemalloc`):
+
+| One synthetic group | Enumerated | Retrieved, before 2026-10-30 | Retrieved now |
+|---|---|---|---|
+| 2,000 events | 1,999,000 pairs built, 28 s, 1.24 GB | 31,721 built, 1.0 s, 19 MB | 31,721 scored, 9,235 built, 0.9 s, 20 MB (the same 9,235 kept as enumeration) |
+| 2,000, common keys | 1,999,000 built, 29 s, 1.26 GB | 59,603 built, 2.1 s, 36 MB | 61,018 scored, 11,893 built, 1.8 s, 20 MB |
+| 20,000 events | - | 317,920 built, 11 s, 189 MB | 317,920 scored, 92,538 built, 8.3 s, 110 MB (same kept) |
+| 20,000, common keys | - | 1,567,078 built, 80 s, 967 MB | 852,134 scored, 122,367 built, 25 s, 254 MB |
+
+"Common keys": four vendors on 10% of the events each, four figures on 5%, six
+rare words on 3%, and a fifth of the dates month and a tenth year intervals.
+There the kept set differs from enumeration in ties at gap 0 (overlapping
+intervals break on start order here, pair id there), as before. The 4 suppliers
+of 2,000 events each used to be skipped by the supplier links; they are now
+subdivided by date (63,467 links, 0.4 s). On the 2026-10-30 database the largest
+organisation group is 9 events and the AI group 17, so nothing there needs
+retrieval yet: forced onto every group it keeps exactly what the capped
+enumeration keeps, and the kept pairs and labelled-pair recall are unchanged by
+the bounds on the live copy and both labelling-time snapshots. Recall on the
 labelling-time snapshots, organisation route: the cap alone kept 11 of the 17
 labelled-`same` pairs and 36 of 138 labelled-`different`; with no cap below 60
 events all 17 and all 138 are candidates (49 -> 157 pairs on the snapshot; 75 ->

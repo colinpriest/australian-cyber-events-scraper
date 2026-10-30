@@ -88,14 +88,46 @@ def test_a_candidate_the_ranking_cannot_score_is_kept_when_the_caller_screened_i
     assert boosted[nb.pair_key("a", "b")].score == 0.7
 
 
-def test_supplier_pairs_pair_every_report_of_a_supplier_and_skip_a_name_that_common():
+def test_supplier_pairs_pair_every_report_of_a_supplier():
     features = {f"e{i}": ranking.EventFeatures(f"e{i}", vendor="canvas" if i < 4 else ("" if i < 6 else "x"))
                 for i in range(8)}
     corpus = ranking.Corpus(features, set(), set())
-    pairs, skipped = nb.supplier_pairs(corpus)
-    assert len(pairs) == 7 and skipped == 0          # four canvas reports (6 pairs) and two reports of x
-    assert nb.supplier_pairs(corpus, max_group=3) == ([("e6", "e7")], 1)
-    assert nb.supplier_pairs(corpus, ids=["e0", "e1", "e7"])[0] == [("e0", "e1")]
+    pairs, subdivided = nb.supplier_pairs(corpus, {})
+    assert len(pairs) == 7 and subdivided == 0       # four canvas reports (6 pairs) and two reports of x
+    assert nb.supplier_pairs(corpus, {}, ids=["e0", "e1", "e7"])[0] == [("e0", "e1")]
+
+
+def test_a_supplier_with_many_reports_is_subdivided_by_date_not_skipped():
+    """A supplier above the exhaustive limit used to be skipped, so its reports were never linked by the clue."""
+    from datetime import date, timedelta
+
+    n = 400
+    features = {f"e{i:03d}": ranking.EventFeatures(f"e{i:03d}", vendor="bigvendor") for i in range(n)}
+    features["solo"] = ranking.EventFeatures("solo", vendor="other")
+    corpus = ranking.Corpus(features, set(), set())
+    day0 = date(2024, 1, 1)
+    # Reverse date order against the ids, every tenth report undated.
+    intervals = {f"e{i:03d}": None if i % 10 == 0 else (day0 + timedelta(days=n - i), day0 + timedelta(days=n - i))
+                 for i in range(n)}
+    pairs, subdivided = nb.supplier_pairs(corpus, intervals, max_group=100, neighbours=3)
+    assert subdivided == 1
+    assert len(pairs) < n * 4 * 3                                   # linear in the reports, not 400 * 399 / 2
+    linked = {frozenset(p) for p in pairs}
+    assert frozenset(("e001", "e002")) in linked                     # neighbours in date
+    assert frozenset(("e001", "e399")) not in linked                 # a year apart
+    assert all(any("e%03d" % i in p for p in pairs) for i in range(n))     # nothing is left out, undated included
+    # Linked through each other: one connected component.
+    parent = {i: i for i in features if i != "solo"}
+
+    def find(x):
+        while parent[x] != x:
+            x = parent[x]
+        return x
+    for a, b in pairs:
+        parent[find(a)] = find(b)
+    assert len({find(i) for i in parent}) == 1
+    small, none_subdivided = nb.supplier_pairs(corpus, intervals, max_group=n)
+    assert none_subdivided == 0 and len(small) == n * (n - 1) // 2
 
 
 # ---------------------------------------------------------------------------
