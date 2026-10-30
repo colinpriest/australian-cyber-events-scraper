@@ -140,6 +140,20 @@ live database) and are left out. The frame is small: the original census had
 already covered almost all of the acting band, so more labels in that band have
 to come from events created after the labelling snapshot.
 
+The 7 were labelled blind (5 `wrong`, 2 `correct`) and the step recalibrated
+on that copy, now `instance/recalibration/victim-attribution.db` (the previous
+copy kept beside it as `victim-attribution.db.before_20261030`):
+
+| Action | Cut-off | Labelled acted on | Lower bound (all labels, n_eff) | Held out | Held-out bound | Deployment rule |
+|---|---|---|---|---|---|---|
+| act (recorded victim wrong) | P < **0.12** | 44/46 | 0.869 (46.0) | 42/44 | 0.864 | acts |
+| replace (sole victim) | choice P >= **0.82** | 21/22 | 0.708 (10.6) | 20/22 | 0.666 | report only: 9 more correct labelled replacements needed |
+
+The cut-off fell from 0.18 because a new `correct` pair (Landmark Insurance,
+recorded under a loose name for Landmark Admin) scores 0.18. Wrong victims are
+demoted or flagged; with the replacement held back by the rule, a sole wrong
+victim is flagged, never replaced.
+
 ### On a copy of the live database
 
 `check-victim-attribution --apply` (after the v2 timelines): 636 event-victim
