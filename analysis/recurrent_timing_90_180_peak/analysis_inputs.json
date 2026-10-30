@@ -1,0 +1,15 @@
+{
+  "snapshot_id": "snap-20261030171144-6ec80265ee2a",
+  "snapshot_sha256": "6ec80265ee2a327c0c6ca21e09bca1377ba26959d52f5e2e156b741f5d6ec677",
+  "snapshot_taken_at": "2026-10-30T17:11:44",
+  "source_database": "D:\\dev\\australian-cyber-events-scraper\\instance\\cyber_events.db",
+  "retained_copy": "snapshots/snap-20261030171144-6ec80265ee2a.db.gz",
+  "reproduce": "--snapshot-id snap-20261030171144-6ec80265ee2a",
+  "recorded_at": "2026-10-30T17:18:39",
+  "analysis": "repeat-event timing",
+  "censor_date": "2026-10-30",
+  "elapsed_bounds": "(0.0, 90.0, 180.0, 365.0, 730.0, 1460.0, inf)",
+  "bootstrap_replicates": 500,
+  "seed": 20260805,
+  "unresolved_attributions": "include"
+}

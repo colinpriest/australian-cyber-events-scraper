@@ -1,3 +1,5 @@
 date_precision_basis,victim_event_attributions
-ambiguous_first_of_month,193
-unknown,484
+ambiguous_first_of_month,146
+explicit_day,240
+explicit_month,234
+unknown,508

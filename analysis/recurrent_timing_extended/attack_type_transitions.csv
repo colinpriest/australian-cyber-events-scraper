@@ -1,20 +1,43 @@
 prior_attack_type,next_attack_type,transitions,organisations,share_of_prior_type
-Data Breach,Data Breach,26,21,0.6046511627906976
-Data Breach,Denial of Service,2,2,0.046511627906976744
-Data Breach,Infrastructure Attack,1,1,0.023255813953488372
-Data Breach,Other,6,6,0.13953488372093023
-Data Breach,Ransomware,2,2,0.046511627906976744
-Data Breach,State-Sponsored Attack,2,2,0.046511627906976744
-Data Breach,Supply Chain Attack,1,1,0.023255813953488372
-Data Breach,Unknown,3,3,0.06976744186046512
-Denial of Service,Data Breach,2,2,1.0
-Multiple or ambiguous,Data Breach,1,1,1.0
-Other,Data Breach,1,1,0.3333333333333333
-Other,Other,2,2,0.6666666666666666
-Ransomware,Data Breach,1,1,0.3333333333333333
-Ransomware,Other,1,1,0.3333333333333333
-Ransomware,Ransomware,1,1,0.3333333333333333
+Data Breach,Data Breach,77,45,0.6209677419354839
+Data Breach,Denial of Service,5,4,0.04032258064516129
+Data Breach,Infrastructure Attack,1,1,0.008064516129032258
+Data Breach,Insider Threat,3,2,0.024193548387096774
+Data Breach,Malware,1,1,0.008064516129032258
+Data Breach,Other,19,18,0.1532258064516129
+Data Breach,Phishing,3,3,0.024193548387096774
+Data Breach,Ransomware,8,8,0.06451612903225806
+Data Breach,State-Sponsored Attack,2,2,0.016129032258064516
+Data Breach,Supply Chain Attack,2,2,0.016129032258064516
+Data Breach,Vulnerability Exploit,3,3,0.024193548387096774
+Denial of Service,Data Breach,4,4,0.6666666666666666
+Denial of Service,Denial of Service,1,1,0.16666666666666666
+Denial of Service,Phishing,1,1,0.16666666666666666
+Financial Fraud,Data Breach,1,1,0.3333333333333333
+Financial Fraud,Identity Theft,1,1,0.3333333333333333
+Financial Fraud,Other,1,1,0.3333333333333333
+Identity Theft,Data Breach,1,1,1.0
+Infrastructure Attack,Other,1,1,1.0
+Insider Threat,Data Breach,1,1,0.5
+Insider Threat,Ransomware,1,1,0.5
+Malware,Other,1,1,1.0
+Multiple or ambiguous,Vulnerability Exploit,1,1,1.0
+Other,Data Breach,9,8,0.5294117647058824
+Other,Multiple or ambiguous,1,1,0.058823529411764705
+Other,Other,4,4,0.23529411764705882
+Other,Phishing,1,1,0.058823529411764705
+Other,State-Sponsored Attack,1,1,0.058823529411764705
+Other,Supply Chain Attack,1,1,0.058823529411764705
+Phishing,Data Breach,2,2,0.5
+Phishing,Other,1,1,0.25
+Phishing,Vulnerability Exploit,1,1,0.25
+Ransomware,Data Breach,7,7,0.5833333333333334
+Ransomware,Other,2,2,0.16666666666666666
+Ransomware,Phishing,1,1,0.08333333333333333
+Ransomware,Ransomware,2,2,0.16666666666666666
 State-Sponsored Attack,Data Breach,2,2,0.5
-State-Sponsored Attack,Other,1,1,0.25
+State-Sponsored Attack,Ransomware,1,1,0.25
 State-Sponsored Attack,State-Sponsored Attack,1,1,0.25
-Unknown,Ransomware,1,1,1.0
+Unknown,Data Breach,1,1,1.0
+Vulnerability Exploit,Data Breach,1,1,0.2
+Vulnerability Exploit,Vulnerability Exploit,4,2,0.8

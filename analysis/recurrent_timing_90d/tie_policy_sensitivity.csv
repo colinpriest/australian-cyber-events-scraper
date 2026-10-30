@@ -1,0 +1,3 @@
+tie_policy,observed_repeats,repeats_from_ties,post_event_spells,repeats_0-90,repeats_91-365,repeats_366-730,repeats_731-1460,repeats_>1460,adjusted_constant_hazard_p,adjusted_0_90_91_180_banding_p,delayed_peak_directional_p
+collapse,182,0,1123,25,57,33,43,24,0.36571201165263245,0.20480832398471152,0.23798956556639767
+zero_gap,187,5,1128,30,57,33,43,24,0.13210405492191066,0.07477693103457561,0.4780936479145056
