@@ -716,6 +716,63 @@ Move a multi-record incident out with one `split` naming all its records:
 splitting them one at a time caches rulings *between* them, and the safeguard
 then (correctly) refuses to regroup them.
 
+**A ruling holds only while its basis does** (`dedup/split_rulings.py`, run first by `check-duplicates` and
+`resolve-label-contradictions`). A rule-made split ruling says "this record is not about that event's incident",
+not "these two records are different incidents", and it is deactivated (kept, with a note) when:
+
+* both records left the same still-Active event as strays, in separate runs (the first split ruled the second,
+  then still present, different from the first): Optus's two White Pages 2019 records were barred from each other
+  this way, and the duplicate check's 0.98 could not merge them (3,743 such rulings on 2026-10-31);
+* it was made by the label repair from a pair that is no longer labelled different (an owner's correction);
+* it is a model-scored coherence split and the organisation the stray was about is now a victim of the events
+  holding both records (Agrimac's leak-site listing, 0.86 same incident, held by a 0.08 split made before Agrimac
+  was its event's victim).
+
+A person's ruling and a label-based ruling are never voided. Voiding merges nothing: the pair is then decided by
+the calibrated duplicate check.
+
+**Labelled-same pairs still apart are merged** by `resolve-label-contradictions` (the smaller event into the larger,
+only when the event merged away holds nothing but labelled records; a merge blocked only by the source gate's own
+page rulings takes that page out). A labelled event is found where the strict majority of the records it held when
+labelled now are (`evaluation/duplicate_label_members.csv`, written by `--record-members`), so a split-off lead
+record no longer reads as "still two events".
+
+### Close-together pairs are exceptions, not ties
+
+Two separate incidents at one organisation on the same day, or within overlapping possible periods, are rare; two
+reports of one incident that deduplication did not join are common. `dashboard/close_pairs.html`
+(`scripts/build_close_pairs_report.py`, published with the other outputs) lists every pair of Active events of one
+organisation with the same stored date or overlapping possible periods (an unverified date stored as the 1st counts
+as its month), with the duplicate check's decision on current evidence and what stopped the merge. The recurrence
+reports point to it instead of treating a tie as several incidents.
+
+The duplicate question (`same-incident-v4-thin-evidence`) states both facts: separate incidents close together are
+rare, and an event that says little about what happened is not evidence of a different incident - "different"
+needs evidence of a separate attack, system, data set, attacker or date. Its escalation band is (0.2, 0.9): with
+(0.2, 0.8) and a cut-off of 0.81 a Jev score of 0.80 was neither re-judged nor merged (Ambulance Victoria), and a
+calibration whose cut-off lies outside its band no longer applies. Recalibrated 2026-10-31 on 155 labelled pairs:
+cut-off 0.80, 16/16 labelled merges correct, held-out lower bound 0.819.
+
+### Names that are descriptions; a person's alias
+
+`DescriptiveNames` (`dedup/descriptive_names.py`) remembers names that describe organisations instead of naming one
+("Australian university", "Australian sugar producer", "Australian Super Funds"): a person's entries
+(`dedup_admin.py descriptive-name add NAME --reason ...`, never replaced by a model), every name labelled
+`descriptive` and every name the calibrated proper-name judgement scores below its cut-off (`descriptive-name
+sync`). Every check of whether a name is descriptive reads it. `fill-victims` first demotes a description recorded
+as a victim (role `affected`, audited in `DescriptiveVictimDemotions`) so the event is filled with the organisation
+its evidence names; a victim-fill label may name several co-equal victims (`AustralianSuper; Rest; Hostplus`).
+
+`dedup_admin.py alias add VARIANT CANONICAL --reason ...` records a person's alias (`EntityAliases` source `human`
+and a `human` decision): folded by `canonicalise-entities` as a reviewed alias, never re-asked or reversed by a
+model ("NSW Ministry of Health" is NSW Health, owner 2026-10-31).
+
+**Folds reached by chaining are verified.** A model fold whose two names have no verdict of their own (A = B and
+B = C confirmed, C folded into A unasked) is put to Perplexity by `canonicalise-entities` and undone unless `same`.
+A case caption ("ASIC v Fortnum Private Wealth Ltd ...") names two parties and counts as a list of organisations:
+never folded, and a fold touching one is undone. On 2026-10-30 ASIC had been folded into Fortnum Private Wealth
+through such a caption.
+
 ### Calibrated data-quality filters
 
 Every refresh cleans the data after deduplication and before the recurrence
@@ -1123,7 +1180,17 @@ Every Jev and escalation answer is stored in `ModelJudgements` with the
 question as sent, a hash of the input, the version that answered and the full
 distribution, and reused unless the question, the input or the model changes.
 
-### Supplier incidents: every affected organisation, one incident
+### Supplier incidents: one event per customer, linked
+
+Owner decision (2026-10-31): a supplier breach is stored as the supplier's own event plus one event per affected
+customer (victim the customer, vendor the supplier), never as one event of co-equal victims, and the events are
+joined in `SupplierIncidents` / `SupplierIncidentLinks` (`dedup/supplier_links.py`) for reporting aggregated by
+supplier (`dedup_admin.py supplier-incidents`). The calibrated same-incident and victim judgements below now decide
+*links*, not merges or co-victims; `find-supplier-victims --apply` reverses earlier co-victim attachments into links
+and splits events that held several customers' records per customer. The section below describes the earlier
+co-victim convention, kept for the calibrations it measured.
+
+### Supplier incidents: every affected organisation, one incident (superseded)
 
 A supplier breach (ProctorU 2020 and ten universities; Frontier Software's
 payroll; Canvas/Instructure; HWL Ebsworth's clients) is one incident with
