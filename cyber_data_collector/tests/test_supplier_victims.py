@@ -246,30 +246,6 @@ def test_escalation_replaces_the_middle_band(conn, monkeypatch):
 # Applying: refuse without labels and a matching calibration
 # ----------------------------------------------------------------------
 
-def test_apply_refuses_without_labels(conn, tmp_path):
-    with pytest.raises(sv.CalibrationError, match="cannot be read"):
-        sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                 labels_path=tmp_path / "missing.csv",
-                                 calibration_path=_calibration(tmp_path))
-
-
-def test_apply_refuses_malformed_labels(conn, tmp_path):
-    with pytest.raises(sv.CalibrationError, match="malformed"):
-        sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                 labels_path=_labels(tmp_path, [("victim", "e1|3", "maybe")]),
-                                 calibration_path=_calibration(tmp_path))
-
-
-def test_apply_refuses_a_calibration_for_another_model(conn, tmp_path):
-    with pytest.raises(sv.CalibrationError, match="recalibrate"):
-        sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                 labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                 calibration_path=_calibration(tmp_path, identity={"model": "old",
-                                                                                   "question_version": "v0"}))
-    assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEventEntities WHERE relationship_type = 'victim'"
-                        ).fetchone()[0] == 3
-
-
 def test_report_only_changes_nothing(conn):
     result = sv.find_supplier_victims(conn, apply=False, judge_client=_judge(conn))
     assert result["applied"] is False and result["attached"] == [] and result["merged"] == []
@@ -286,62 +262,6 @@ def _victims(conn, did):
         """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id)
            WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""", (did,)))
 
-
-def test_apply_merges_the_same_incident_and_attaches_victims(conn, tmp_path, merge_events):
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                      labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                      calibration_path=_calibration(tmp_path))
-    assert merge_events.calls == [("e1", "e2")]
-    assert _victims(conn, "e1") == ["Curtin University", "University of Sydney", "University of Tasmania"]
-    audit = conn.execute("SELECT entity_name, decided_by, merged_from FROM SupplierVictimAttachments "
-                         "ORDER BY entity_name").fetchall()
-    assert [tuple(a) for a in audit] == [("Curtin University", "merge", "e2"),
-                                         ("University of Tasmania", "jev", None)]
-    assert [a["victim"] for a in result["attached"]] == ["University of Tasmania"]
-    # Idempotent: a second run finds nothing left to do.
-    again = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                     labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                     calibration_path=_calibration(tmp_path))
-    assert again["attached"] == [] and [m for m in again["merged"] if "refused" not in m] == []
-
-
-def test_labels_are_ground_truth(conn, tmp_path, merge_events):
-    labels = _labels(tmp_path, [("victim", "e1|3", "not_affected"), ("same_incident", "e1|e2", "different")])
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=0.99),
-                                      labels_path=labels, calibration_path=_calibration(tmp_path))
-    assert merge_events.calls == [] and result["attached"] == []
-    assert _victims(conn, "e1") == ["University of Sydney"]
-    # ... and a positive label acts even below the cut-off.
-    labels = _labels(tmp_path, [("victim", "e1|3", "affected"), ("same_incident", "e1|e2", "different")])
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=0.05),
-                                      labels_path=labels, calibration_path=_calibration(tmp_path))
-    assert [(a["victim"], a["decided_by"]) for a in result["attached"]] == [("University of Tasmania", "label")]
-
-
-def test_no_cutoff_means_no_model_action(conn, tmp_path, merge_events):
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=0.99),
-                                      labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                      calibration_path=_calibration(tmp_path, victim=None, same=None))
-    assert merge_events.calls == [] and result["attached"] == []
-
-
-def test_a_refused_merge_holds_the_victim_back(conn, tmp_path, merge_events):
-    """Curtin's own event is the same incident but a cached ruling forbids the merge: attaching
-    Curtin to the supplier incident as well would count it twice."""
-    merge_events.refused.add(("e1", "e2"))
-    conn.execute("INSERT INTO EnrichedEventEntities VALUES ('r1', 4, 'affected_customer', NULL)")
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                      labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                      calibration_path=_calibration(tmp_path))
-    assert [m.get("refused") is not None for m in result["merged"]] == [True]
-    assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
-    assert "ruled the same incident (model) but not merged" in result["held"][0]["why"]
-    assert "Curtin University" not in _victims(conn, "e1")
-
-
-# ----------------------------------------------------------------------
-# A victim with its own event near the incident: decided by the ruling on that pair
-# ----------------------------------------------------------------------
 
 def _curtin_is_a_candidate(conn):
     """Curtin is linked on the supplier incident's record, and has its own event e2 (pair e1|e2)."""
@@ -361,78 +281,6 @@ def _apply_curtin(conn, tmp_path, p, pair_label=None, calibration=None, victim_l
     return sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=p),
                                     labels_path=_labels(tmp_path, rows),
                                     calibration_path=calibration or _calibration(tmp_path))
-
-
-def test_own_event_ruled_the_same_by_override_is_merged_not_held(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    _override(conn, "same")
-    result = _apply_curtin(conn, tmp_path, p=0.05)   # the model alone would say a different incident
-    assert merge_events.calls == [("e1", "e2")]
-    assert result["held"] == []
-    assert "Curtin University" in _victims(conn, "e1")
-    assert conn.execute("SELECT decided_by FROM SupplierVictimAttachments WHERE entity_name = 'Curtin University'"
-                        ).fetchone()[0] == "merge"
-
-
-def test_own_event_ruled_the_same_by_label_is_merged_not_held(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
-    assert merge_events.calls == [("e1", "e2")]
-    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
-
-
-def test_own_event_ruled_the_same_by_the_model_is_merged_not_held(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    result = _apply_curtin(conn, tmp_path, p=0.95)
-    assert merge_events.calls == [("e1", "e2")]
-    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
-
-
-@pytest.mark.parametrize("how", ["override", "label", "model"])
-def test_own_event_ruled_different_attaches_the_customer(conn, tmp_path, merge_events, how):
-    _curtin_is_a_candidate(conn)
-    if how == "override":
-        _override(conn, "different")
-    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="different" if how == "label" else None)
-    assert merge_events.calls == [] and result["held"] == []
-    assert "Curtin University" in _victims(conn, "e1")
-    attached = next(a for a in result["attached"] if a["victim"] == "Curtin University")
-    assert [(r["own_event"], r["verdict"], r["basis"]) for r in attached["own_events_ruled_different"]] == [
-        ("e2", "different", how)]
-    # Its own event stays, as a separate incident.
-    assert conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = 'e2'"
-                        ).fetchone()[0] == "Active"
-
-
-def test_a_different_override_beats_a_confident_model(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    _override(conn, "different")
-    result = _apply_curtin(conn, tmp_path, p=0.99)
-    assert result["held"] == [] and "Curtin University" in _victims(conn, "e1")
-
-
-def test_conflicting_rulings_are_held_with_the_reason(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    _override(conn, "different")
-    result = _apply_curtin(conn, tmp_path, p=0.05, pair_label="same")
-    assert merge_events.calls == []
-    assert [(h["victim"], h["own_event"]) for h in result["held"]] == [("Curtin University", "e2")]
-    assert "conflicting rulings: label says same, override says different" in result["held"][0]["why"]
-    assert "Curtin University" not in _victims(conn, "e1")
-
-
-def test_no_cutoff_leaves_an_unruled_pair_held(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    result = _apply_curtin(conn, tmp_path, p=0.95, calibration=_calibration(tmp_path, same=None))
-    assert merge_events.calls == []
-    assert "no calibrated same-incident cut-off" in result["held"][0]["why"]
-
-
-def test_an_inactive_override_is_no_ruling(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    _override(conn, "different", active=0)
-    result = _apply_curtin(conn, tmp_path, p=0.95)
-    assert merge_events.calls == [("e1", "e2")] and result["held"] == []
 
 
 def test_a_pair_nobody_judged_is_held_and_says_why(conn):
@@ -472,30 +320,6 @@ def test_without_a_different_bound_a_model_score_never_rules_different(conn):
     assert sv.rule_on_own_event(conn, "e1", "e2", {("same_incident", "e1|e2"): "different"},
                                 sv.Scores(final={"e1|e2": 0.05}), 0.87).verdict == sv.RULED_DIFFERENT
 
-
-def test_apply_holds_a_pair_in_the_band_and_attaches_one_below_the_different_bound(conn, tmp_path, merge_events):
-    _curtin_is_a_candidate(conn)
-    cal = _calibration(tmp_path, same=0.95, different=0.82)
-    # The pair scores 0.9: under the 0.95 merge cut-off, above the 0.82 'different' bound -> in the band.
-    held = _apply_curtin(conn, tmp_path, p=0.9, calibration=cal)
-    assert merge_events.calls == [] and "Curtin University" not in _victims(conn, "e1")
-    assert [h["victim"] for h in held["held"]] == ["Curtin University"]
-    assert "between the calibrated 'different' bound (0.82) and the merge cut-off (0.95)" in held["held"][0]["why"]
-    assert held["cutoffs"]["different"] == 0.82
-    # Below the bound the same pair (its stored 0.9 is reused) is a different incident: the customer is attached.
-    attached = _apply_curtin(conn, tmp_path, p=0.9, calibration=_calibration(tmp_path, same=0.95, different=0.92))
-    assert attached["held"] == [] and "Curtin University" in _victims(conn, "e1")
-    # With no 'different' bound recorded (an older calibration) the same score is held.
-    conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'e1' AND entity_id = 4")
-    older = _apply_curtin(conn, tmp_path, p=0.9, calibration=_calibration(tmp_path, same=0.95, different=None))
-    assert [h["victim"] for h in older["held"]] == ["Curtin University"]
-    assert "no calibrated bound for 'different'" in older["held"][0]["why"]
-
-
-
-# ----------------------------------------------------------------------
-# Counting once per organisation
-# ----------------------------------------------------------------------
 
 from cyber_data_collector.dedup.victim_counting import (  # noqa: E402
     one_row_per_organisation, organisation_groups, same_organisation,
@@ -624,21 +448,6 @@ def test_same_within_event(left, right, same):
                                       ("Bush Heritage Australia", True), ("Block (ASX:SQ2)", True)])
 def test_descriptions_are_not_victims(name, ok):
     assert sv.is_candidate_organisation(name, "organisation") is ok
-
-
-def test_another_name_for_a_victim_is_not_attached(conn, tmp_path, merge_events):
-    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name, entity_kind) VALUES "
-                 "(20, 'Acme Research Society', 'organisation')")
-    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name, entity_kind) VALUES "
-                 "(21, 'Acme Research', 'organisation')")
-    conn.execute("INSERT INTO DeduplicatedEventEntities VALUES ('e1', 21, 'victim', NULL, 1)")
-    conn.execute("INSERT INTO EnrichedEventEntities VALUES ('r1', 20, 'affected_customer', NULL)")
-    result = sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
-                                      labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
-                                      calibration_path=_calibration(tmp_path))
-    assert [(v["candidate"], v["victim"]) for v in result["variants"]] == [
-        ("Acme Research Society", "Acme Research")]
-    assert "Acme Research Society" not in _victims(conn, "e1")
 
 
 def test_within_event_duplicates_keep_one_name():
@@ -940,3 +749,202 @@ def test_extend_command_needs_scores_for_every_candidate_then_judges_and_writes_
     lines = (packet / "supplier_packet_1.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(x)["subject_id"] for x in lines] == [new[0]["subject_id"]]
     assert "0.95" not in lines[0]
+
+
+# ----------------------------------------------------------------------
+# One event per customer, linked (owner decision 2026-10-31)
+# ----------------------------------------------------------------------
+
+from cyber_data_collector.dedup import supplier_links as sl  # noqa: E402
+
+
+def _apply(conn, tmp_path, p=0.99, rows=(("victim", "x|1", "unsure"),), calibration=None):
+    return sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn, p=p),
+                                    labels_path=_labels(tmp_path, rows),
+                                    calibration_path=calibration or _calibration(tmp_path))
+
+
+def _links(conn):
+    return sorted((r[0], r[1], r[2]) for r in conn.execute(
+        "SELECT customer_name, customer_event_id, basis FROM SupplierIncidentLinks"))
+
+
+def test_apply_links_customers_and_never_attaches_or_merges(conn, tmp_path, merge_events):
+    """ProctorU: USyd's event e1 and Curtin's event e2 are linked to one supplier incident, not merged;
+    Tasmania, named as affected with no event of its own, is linked with no event."""
+    _curtin_is_a_candidate(conn)
+    result = _apply(conn, tmp_path, rows=[("victim", "e1|3", "affected"), ("same_incident", "e1|e2", "same")])
+    assert merge_events.calls == [] and result["attached"] == [] and result["merged"] == []
+    assert conn.execute("SELECT COUNT(*) FROM SupplierVictimAttachments").fetchone()[0] == 0
+    assert _victims(conn, "e1") == ["University of Sydney"] and _victims(conn, "e2") == ["Curtin University"]
+    assert _links(conn) == [("Curtin University", "e2", "label"), ("University of Sydney", "e1", "vendor-recorded"),
+                            ("University of Tasmania", None, "customer-named")]
+    [incident] = sl.supplier_incident_summary(conn)
+    assert incident["supplier"] == "ProctorU" and incident["supplier_event"] is None
+    assert sorted(c["event"] for c in incident["customer_events"]) == ["e1", "e2"]
+    assert [n["customer"] for n in incident["named_customers_without_event"]] == ["University of Tasmania"]
+    # Idempotent: nothing is created or changed the second time.
+    again = _apply(conn, tmp_path, rows=[("victim", "e1|3", "affected"), ("same_incident", "e1|e2", "same")])
+    assert again["written"] == {"incidents_created": 0, "incidents_updated": 0, "links_created": 0,
+                                "links_updated": 0}
+
+
+def test_a_pair_labelled_different_is_not_one_supplier_incident(conn, tmp_path, merge_events):
+    """Curtin's event records ProctorU as its vendor, but the pair is labelled different incidents:
+    it is linked to a ProctorU incident of its own, not to USyd's."""
+    _curtin_is_a_candidate(conn)
+    _apply(conn, tmp_path, rows=[("same_incident", "e1|e2", "different")])
+    by_customer = {r[0]: r[1] for r in conn.execute(
+        "SELECT customer_name, supplier_incident_id FROM SupplierIncidentLinks WHERE customer_event_id IS NOT NULL")}
+    assert set(by_customer) == {"University of Sydney", "Curtin University"}
+    assert by_customer["University of Sydney"] != by_customer["Curtin University"]
+
+
+def test_report_only_plans_the_links_and_writes_nothing(conn, tmp_path):
+    result = sv.find_supplier_victims(conn, apply=False, judge_client=_judge(conn, p=0.99),
+                                      labels_path=_labels(tmp_path, [("same_incident", "e1|e2", "same")]))
+    assert {l["customer_name"] for l in result["links"]} >= {"University of Sydney", "Curtin University"}
+    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidentLinks").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidents").fetchone()[0] == 0
+
+
+def test_apply_refuses_without_labels_or_a_matching_calibration(conn, tmp_path):
+    with pytest.raises(sv.CalibrationError):
+        sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
+                                 labels_path=tmp_path / "missing.csv", calibration_path=_calibration(tmp_path))
+    with pytest.raises(sv.CalibrationError):
+        sv.find_supplier_victims(conn, apply=True, judge_client=_judge(conn),
+                                 labels_path=_labels(tmp_path, [("victim", "x|1", "unsure")]),
+                                 calibration_path=_calibration(tmp_path, identity={"model": "other"}))
+    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidentLinks").fetchone()[0] == 0
+
+
+def _attach_the_old_way(conn, entity_id=4, decided_by="jev", previous_role=None, merged_from=None):
+    """An attachment an earlier version made: a customer made a victim of the supplier incident e1."""
+    if previous_role:
+        conn.execute("INSERT INTO DeduplicatedEventEntities VALUES ('e1', ?, ?, NULL, 1)", (entity_id, previous_role))
+    assert sv.attach_victim(conn, "e1", entity_id, decided_by, subject_id=f"e1|{entity_id}", probability=0.91,
+                            cutoff=0.87, question_version=sv.VICTIM_VERSION, merged_from=merged_from)
+    conn.commit()
+
+
+def test_an_attachment_is_converted_into_a_link(conn, tmp_path, merge_events):
+    """Curtin, attached as a co-victim of e1 by an earlier version, loses the role and is linked with
+    its own event e2; Tasmania, with no event of its own, is linked with none."""
+    _curtin_is_a_candidate(conn)
+    _attach_the_old_way(conn)
+    _attach_the_old_way(conn, entity_id=3)
+    result = _apply(conn, tmp_path, p=0.05)
+    assert sorted(r["victim"] for r in result["reversed"]) == ["Curtin University", "University of Tasmania"]
+    assert result["attachments_converted"] == 2
+    assert _victims(conn, "e1") == ["University of Sydney"] and _victims(conn, "e2") == ["Curtin University"]
+    # Curtin's own event records ProctorU as vendor, which outranks the converted attachment.
+    assert _links(conn) == [("Curtin University", "e2", "vendor-recorded"),
+                            ("University of Sydney", "e1", "vendor-recorded"),
+                            ("University of Tasmania", None, "converted-attachment")]
+    audit = conn.execute("SELECT entity_name, action, reason FROM SupplierVictimReversals ORDER BY entity_name"
+                         ).fetchall()
+    assert [tuple(a) for a in audit] == [("Curtin University", "reversed", sv.OWNER_DECISION),
+                                         ("University of Tasmania", "reversed", sv.OWNER_DECISION)]
+    # The record's links go back to customers; nothing is reversed twice.
+    assert sorted(r[0] for r in conn.execute(
+        "SELECT relationship_type FROM EnrichedEventEntities WHERE enriched_event_id = 'r1' AND entity_id IN (3, 4)")
+    ) == ["affected_customer", "affected_customer"]
+    again = _apply(conn, tmp_path, p=0.05)
+    assert again["reversed"] == [] and again["written"]["links_created"] == 0
+
+
+def test_a_reversal_restores_the_role_the_event_had(conn):
+    _curtin_is_a_candidate(conn)
+    _attach_the_old_way(conn, previous_role="affected_customer")
+    [done] = sv.reverse_attachments(conn)
+    assert done["restored_role"] == "affected_customer"
+    assert conn.execute("SELECT relationship_type FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'e1' "
+                        "AND entity_id = 4").fetchone()[0] == "affected_customer"
+
+
+def test_the_suppliers_own_events_each_anchor_their_own_incident(conn, tmp_path, merge_events):
+    """Ivanti-like: two of the supplier's own events months apart are two incidents, never merged."""
+    for did, date in (("v1", "2024-01-10"), ("v2", "2024-10-01")):
+        _event(conn, did, f"ProctorU systems breached {date}", date, victim="ProctorU", vendor="ProctorU",
+               records=[(f"r{did}", "ProctorU breach", f"https://news.example/{did}", "ProctorU LLC",
+                         [(1, "victim")])])
+        conn.execute("INSERT INTO DeduplicatedEventEntities VALUES (?, 1, 'victim', NULL, 1)", (did,))
+    result = _apply(conn, tmp_path)
+    assert merge_events.calls == []
+    anchored = sorted(r[0] for r in conn.execute(
+        "SELECT supplier_event_id FROM SupplierIncidents WHERE supplier_event_id IS NOT NULL"))
+    assert anchored == ["v1", "v2"]
+    assert all(c["customer"] != "ProctorU" for i in sl.supplier_incident_summary(conn) for c in i["customer_events"])
+    assert result["applied"]
+
+
+def test_multi_customer_events_are_listed(conn):
+    _curtin_is_a_candidate(conn)
+    assert sv.multi_customer_events(conn) == []
+    _attach_the_old_way(conn)
+    [event] = sv.multi_customer_events(conn)
+    assert event["deduplicated_event_id"] == "e1" and event["victims_now"] == ["Curtin University",
+                                                                              "University of Sydney"]
+
+
+# --- splitting an event joined across customers, on the full schema ---
+
+@pytest.fixture
+def full():
+    from cyber_data_collector.dedup import schema as dedup_schema
+    from cyber_data_collector.dedup.backfill import run_backfill
+    from cyber_data_collector.tests.test_dedup_v3 import BASE_DDL, _add_event
+
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript(BASE_DDL)
+    dedup_schema.migrate(c)
+    c.execute("ALTER TABLE EnrichedEvents ADD COLUMN perplexity_enrichment_data TEXT")
+    for name in ("ZircoDATA", "Monash Health", "Department of Home Affairs"):
+        c.execute("INSERT INTO EntitiesV2 (entity_name) VALUES (?)", (name,))
+    ids = {r[1]: r[0] for r in c.execute("SELECT entity_id, entity_name FROM EntitiesV2")}
+    # One event (victim Monash Health, vendor ZircoDATA) holding ZircoDATA's own breach and two customers.
+    records = [("z1", "ZircoDATA"), ("z2", "ZircoDATA"), ("m1", "Monash Health"), ("m2", "Monash Health"),
+               ("h1", "Department of Home Affairs")]
+    for key, org in records:
+        _add_event(c, key, f"{org} ransomware {key}", f"https://x/{key}", victim="Monash Health", date="2024-01-24")
+        c.execute("UPDATE EnrichedEvents SET perplexity_enrichment_data = ? WHERE enriched_event_id = ?",
+                  (json.dumps({"formal_entity_name": org}), f"enr-{key}"))
+    run_backfill(c)
+    ledger = DedupLedger(c)
+    for key, _ in records[1:]:
+        ledger.merge_events("ded-z1", f"ded-{key}", reason="test", respect_overrides=False)
+    c.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = 'ZircoDATA', title = "
+              "'ZircoDATA ransomware breach involving Monash Health (January 2024)' WHERE deduplicated_event_id = 'ded-z1'")
+    c.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'ded-z1'")
+    c.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+              "VALUES ('ded-z1', ?, 'vendor'), ('ded-z1', ?, 'victim'), ('ded-z1', ?, 'victim')",
+              (ids["ZircoDATA"], ids["Monash Health"], ids["Department of Home Affairs"]))
+    c.commit()
+    return c
+
+
+def _event_of(c, record):
+    return c.execute("SELECT m.deduplicated_event_id FROM EventDeduplicationMap m JOIN DeduplicatedEvents d "
+                     "USING (deduplicated_event_id) WHERE m.enriched_event_id = ? AND d.status = 'Active'",
+                     (record,)).fetchone()[0]
+
+
+def test_an_event_holding_the_supplier_and_its_customers_is_split_per_customer(full):
+    """ZircoDATA's own records keep the event; Monash Health's and Home Affairs' leave as their own events."""
+    g = sv.gather(full)
+    registry = sl.Registry(full, g.resolver)
+    plan = sl.convert(full, g, registry, apply=False)
+    assert sorted((s["customer"], s["records"]) for s in plan["splits"]) == [
+        ("Department of Home Affairs", 1), ("Monash Health", 2)]
+    assert _event_of(full, "enr-m1") == "ded-z1"                       # planning changes nothing
+    done = sl.convert(full, g, registry, apply=True)
+    assert {s["stays"] for s in done["splits"]} == {"ZircoDATA"}
+    assert _event_of(full, "enr-z1") == _event_of(full, "enr-z2") == "ded-z1"
+    monash, home = _event_of(full, "enr-m1"), _event_of(full, "enr-h1")
+    assert monash == _event_of(full, "enr-m2") and len({"ded-z1", monash, home}) == 3
+    assert full.execute("SELECT COUNT(*) FROM SupplierLinkActions WHERE action = 'split'").fetchone()[0] == 2
+    # Idempotent: the parts hold one customer each now.
+    g2 = sv.gather(full)
+    assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True)["splits"] == []
