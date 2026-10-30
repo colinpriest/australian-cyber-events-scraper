@@ -1173,6 +1173,17 @@ be replayed. `recalibrate` re-scores them on `instance/calibration_supplier_vict
 stored searches, and refuses below 65% coverage. `--apply` refuses (exit 2)
 without readable labels and a matching calibration.
 
+**2026-10-30: 59 more blind labels and the deployment rule.** Re-scored on
+current evidence, every action failed the deployment rule on its held-out bound
+only, so `calibrate_supplier_victims.py extend` drew 59 more items into the
+strata where the actions act (round 2 of the sample) and they were labelled
+blind. Recalibrated on 102 victim and 97 pair labels: co-victims at **0.85**
+(52/54 right, lower bound 0.888; held out 53/56, 0.854), same-incident merges at
+**0.87** (33/34, 0.868; held out 34/37, 0.804) and "different" below **0.09**
+(44/44, 0.925; held out 46/49, 0.849). All three act. The merge action passes
+narrowly and its candidate pairs are all labelled now. Details:
+[docs/10-supplier-incidents.md](docs/10-supplier-incidents.md).
+
 The analysis and the by-entity dashboard count a multi-victim incident once per
 victim organisation and never twice for one organisation stored under two
 names (`dedup/victim_counting.py`). Distinct affected organisations stay

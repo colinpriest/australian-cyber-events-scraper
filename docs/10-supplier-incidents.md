@@ -103,6 +103,18 @@ and never acted on, and Jev's raw score is not used in its place.
    choose-then-test procedure is the out-of-sample precision. Written to
    `evaluation/supplier_victim_calibration.json` with the question versions
    and models. A question with no cut-off reaching 95% stays report-only.
+5. `extend --kind K --stratum S --add N --round R --seed X [--judge]` - when a
+   cut-off rests on too few labelled actions for the deployment rule, adds up
+   to N items to one stratum: a seeded random draw from the current
+   candidates that Jev's own score (on their current evidence) puts in the
+   stratum and that are not sampled yet (`--judge` asks Jev for candidates
+   with no such score; without it the step refuses, since placing only the
+   scored ones would bias the draw). Old and new items of the stratum are one
+   random sample of it and all weigh `population / items` (population: the
+   stratum's size at sampling, or more if it now holds more); other strata
+   are unchanged. The new items are judged in full (final scores stored) and
+   written with `round` R; `packet --round R` is the blind packet of those
+   items only.
 
 `--apply` reads the labels and the calibration first and **refuses (exit 2)
 and says why** when the labels are missing, unreadable or malformed, or the
@@ -212,6 +224,38 @@ calibration has no `different_cutoff`, leaves the pair unresolved. `python
 scripts/calibrate_supplier_victims.py calibrate --different-only` adds the field
 to an existing calibration, after checking the stored judgements still
 reproduce its merge cut-off.
+
+### More labels for the deployment rule (2026-10-30)
+
+The deployment rule (`dedup/deployment.py`) lets an action run only when the
+exact one-sided 95% lower bound on its precision is at least 0.80 on all labels
+and on 5-fold held-out labels, with at least 15 labelled actions. Re-scored on
+current evidence (FinalDecisions; a copy of the labelling snapshot with the live
+stored searches, timelines and supplier answers carried in, 134 Jev calls and
+39 escalations), the 2026-10-27 labels gave usable scores for 73 of 103 victim
+candidates and 69 of 71 pairs. Every action then failed on the held-out bound
+alone: victims 22/24 held out (0.76), merges 30/33 (0.78), "different" 24/26
+(0.78).
+
+`extend` added 59 items (round 2, seed 20261030), every current candidate first
+scored by Jev on its current evidence (about 540 Jev calls): victim high +30 of
+125 eligible (weight 2.83 -> 2.06), same-incident high +4 and mid +5 (both
+strata are now a census), same-incident low +20 of 150 (weight 10.4 -> 4.71).
+They were labelled blind (same packet format and conventions, 2026-10-30): 27
+affected, 1 already recorded, 1 not affected, 1 unsure; 6 same, 22 different, 1
+unsure. Calibrated on the copy (`instance/recalibration/supplier-victims.db`),
+no further calls:
+
+| Question | Labelled used (positive) | Cut-off | Labelled at cut-off (lower bound) | Held out (lower bound) | Weighted recall | Bootstrap (mean / p05) |
+|---|---|---|---|---|---|---|
+| victim | 102 (71) | **0.85** | 52 of 54 right (0.888) | 53 of 56 (0.854) | 0.73 | 0.94 / 0.81 |
+| same incident, merge | 97 (42) | **0.87** | 33 of 34 (0.868) | 34 of 37 (0.804) | 0.79 | 0.95 / 0.81 |
+| same incident, "different" below | 97 (42) | **0.09** | 44 of 44 (0.925 at n_eff 38.5) | 46 of 49 (0.849) | 0.94 | 0.99 / 0.96 |
+
+All three pass the rule and act. The merge action passes by the smallest
+margin (held-out 0.804): its candidate population is exhausted (every high and
+mid pair is labelled), so one more wrong merge in a later recalibration would
+switch it off until new pairs exist to label.
 
 ## 5. Applying
 

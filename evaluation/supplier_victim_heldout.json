@@ -1,35 +1,234 @@
 {
   "version": 1,
   "step": "supplier-victims",
-  "generated": "2026-10-30T16:51:35.044475",
+  "generated": "2026-10-30T19:01:42.935170",
   "calibration": {
     "question_version": "supplier-victim-v1+supplier-victim-escalation-v1|same-supplier-incident-v1+same-supplier-incident-escalation-v1",
     "model": "jev-1.14.0+gpt-5.5-2026-04-23",
     "evidence": "supplier-victims:ebb4d1ec01a6fb8d",
-    "generated": "2026-10-29T19:24:10.695878"
+    "generated": "2026-10-30T19:00:49.765912"
   },
   "policy_version": "2026-10-30.1",
   "confidence": 0.95,
   "folds": 5,
-  "rows_source": {},
+  "rows_source": {
+    "victim": "calibration file",
+    "same-incident": "calibration file",
+    "different": "calibration file"
+  },
   "actions": {
     "victim": {
-      "cutoff": 0.869999,
-      "reproduces": false,
-      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+      "cutoff": 0.849999,
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 102,
+      "full": {
+        "acted": 54,
+        "correct": 52,
+        "weighted_precision": 0.965859151561052,
+        "effective_n": 51.4816,
+        "lower_bound_unweighted": 0.8879633084111759,
+        "lower_bound_effective": 0.8893832939121045
+      },
+      "reselected_cutoff": 0.849999,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 56,
+        "correct": 53,
+        "weighted_precision": 0.9386499856462441,
+        "effective_n": 53.1748,
+        "lower_bound_unweighted": 0.867321678697869,
+        "lower_bound_effective": 0.8540622775176947,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 88,
+            "test": 14,
+            "cutoff": 0.849999,
+            "acted": 2,
+            "correct": 2
+          },
+          {
+            "fold": 1,
+            "train": 82,
+            "test": 20,
+            "cutoff": 0.849999,
+            "acted": 11,
+            "correct": 10
+          },
+          {
+            "fold": 2,
+            "train": 84,
+            "test": 18,
+            "cutoff": 0.849999,
+            "acted": 10,
+            "correct": 10
+          },
+          {
+            "fold": 3,
+            "train": 74,
+            "test": 28,
+            "cutoff": 0.849999,
+            "acted": 17,
+            "correct": 16
+          },
+          {
+            "fold": 4,
+            "train": 80,
+            "test": 22,
+            "cutoff": 0.829999,
+            "acted": 16,
+            "correct": 15
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
     },
     "same-incident": {
-      "cutoff": 0.889999,
-      "reproduces": false,
-      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+      "cutoff": 0.869999,
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 97,
+      "full": {
+        "acted": 34,
+        "correct": 33,
+        "weighted_precision": 0.9705882352941176,
+        "effective_n": 34.0,
+        "lower_bound_unweighted": 0.867926174868522,
+        "lower_bound_effective": 0.867926174868522
+      },
+      "reselected_cutoff": 0.869999,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 37,
+        "correct": 34,
+        "weighted_precision": 0.918918918918919,
+        "effective_n": 37.0,
+        "lower_bound_unweighted": 0.8035710601755338,
+        "lower_bound_effective": 0.8035710601755338,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 79,
+            "test": 18,
+            "cutoff": 0.809999,
+            "acted": 12,
+            "correct": 10
+          },
+          {
+            "fold": 1,
+            "train": 82,
+            "test": 15,
+            "cutoff": 0.869999,
+            "acted": 7,
+            "correct": 7
+          },
+          {
+            "fold": 2,
+            "train": 79,
+            "test": 18,
+            "cutoff": 0.869999,
+            "acted": 5,
+            "correct": 5
+          },
+          {
+            "fold": 3,
+            "train": 74,
+            "test": 23,
+            "cutoff": 0.869999,
+            "acted": 5,
+            "correct": 5
+          },
+          {
+            "fold": 4,
+            "train": 74,
+            "test": 23,
+            "cutoff": 0.839999,
+            "acted": 8,
+            "correct": 7
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
     },
     "different": {
       "cutoff": 0.090001,
-      "reproduces": false,
-      "reproduction_note": "rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+      "precision_target": 0.95,
+      "minimum": 5,
+      "labelled_rows": 97,
+      "full": {
+        "acted": 44,
+        "correct": 44,
+        "weighted_precision": 1.0,
+        "effective_n": 38.4771,
+        "lower_bound_unweighted": 0.934181228855066,
+        "lower_bound_effective": 0.9250962359390296
+      },
+      "reselected_cutoff": 0.090001,
+      "reproduces": true,
+      "reproduction_note": "",
+      "heldout": {
+        "acted": 49,
+        "correct": 46,
+        "weighted_precision": 0.9832402702785746,
+        "effective_n": 40.4631,
+        "lower_bound_unweighted": 0.8492936030173008,
+        "lower_bound_effective": 0.9003374687592829,
+        "folds": 5,
+        "folds_without_cutoff": 0,
+        "per_fold": [
+          {
+            "fold": 0,
+            "train": 79,
+            "test": 18,
+            "cutoff": 0.090001,
+            "acted": 5,
+            "correct": 5
+          },
+          {
+            "fold": 1,
+            "train": 82,
+            "test": 15,
+            "cutoff": 0.090001,
+            "acted": 7,
+            "correct": 7
+          },
+          {
+            "fold": 2,
+            "train": 79,
+            "test": 18,
+            "cutoff": 0.090001,
+            "acted": 11,
+            "correct": 11
+          },
+          {
+            "fold": 3,
+            "train": 74,
+            "test": 23,
+            "cutoff": 0.780001,
+            "acted": 17,
+            "correct": 14
+          },
+          {
+            "fold": 4,
+            "train": 74,
+            "test": 23,
+            "cutoff": 0.090001,
+            "acted": 9,
+            "correct": 9
+          }
+        ],
+        "fold_key": "sha256(step|subject id) mod folds"
+      }
     }
   },
   "rows": {},
-  "reproduces_calibration": false,
-  "reproduction_note": "victim: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.); same-incident: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.); different: rows could not be extracted from stored scores (RecalibrationError: 7 labelled victim item(s) could not be judged or escalated (first: 0e521a00-d1ad-4b83-bccb-a9208daae20c|2319); see the log. Nothing was calibrated.)"
+  "reproduces_calibration": true,
+  "reproduction_note": ""
 }
