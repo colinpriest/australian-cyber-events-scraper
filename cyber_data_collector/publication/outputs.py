@@ -334,6 +334,24 @@ def build_dedup(ctx: BuildContext) -> List[Path]:
     return [path]
 
 
+def build_close_pairs(ctx: BuildContext) -> List[Path]:
+    """``close_pairs.html``: same-date or overlapping events of one organisation still apart, and why."""
+    from datetime import datetime, timezone
+
+    from cyber_data_collector.dedup import close_pairs
+    from scripts import build_close_pairs_report as module
+
+    conn = sqlite3.connect(ctx.db)
+    try:
+        pairs = close_pairs.find(conn)
+    finally:
+        conn.close()
+    path = ctx.dashboard_dir / "close_pairs.html"
+    path.write_text(module.build_html(pairs, f"from snapshot {ctx.snapshot.snapshot_id}, "
+                                             f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"), encoding="utf-8")
+    return [path]
+
+
 def build_recurrence(ctx: BuildContext) -> List[Path]:
     """``recurrence.html`` from the analysis folders, naming the snapshot each was computed on."""
     from scripts import build_recurrence_dashboard as module
@@ -361,6 +379,7 @@ DEFAULT_BUILDERS: Dict[str, Callable[[BuildContext], List[Path]]] = {
     "entities": build_entities,
     "timelines": build_timelines,
     "dedup": build_dedup,
+    "close_pairs": build_close_pairs,
     "recurrence": build_recurrence,
     "risk_matrix": build_risk_matrices,
 }

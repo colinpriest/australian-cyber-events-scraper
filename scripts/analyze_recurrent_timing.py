@@ -2075,10 +2075,12 @@ def write_report(
                 "",
                 "## Same-Date Ties And Unknown Ordering",
                 "",
-                "Several distinct incidents of one organisation can carry the same stored date; nothing orders "
-                "them, and a date stored as the 1st of a month may only mean that month. Each tie policy makes "
-                "one stated assumption about the tied incidents (every tie, with its incident ids and the "
-                "length of any verified interval its incidents share, is in `entity_date_ties.csv`):",
+                "A same-date tie is far more likely one incident that deduplication has not joined than two "
+                "incidents on one day. Every such pair, and every pair whose possible periods overlap, is an "
+                "exception listed with the reason it is still two events in `dashboard/close_pairs.html`; the "
+                "merging steps are fixed when one is a missed duplicate. Until a tie is resolved, each tie "
+                "policy makes one stated assumption about it (every tie, with its incident ids and the length "
+                "of any verified interval its incidents share, is in `entity_date_ties.csv`):",
                 "",
                 *(f"- `{policy}`{' (primary)' if policy == DEFAULT_TIE_POLICY else ''}: "
                   f"{TIE_POLICY_ASSUMPTIONS[policy]}." for policy in tie_sensitivity["tie_policy"]),
