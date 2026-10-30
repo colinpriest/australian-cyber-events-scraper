@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from cyber_data_collector.dedup.date_selection import derive_event_date
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.dedup.title_selection import derive_title
+from cyber_data_collector.utils.timestamps import utc_now_iso
 from cyber_data_collector.dedup.models import (
     DecidedBy,
     DedupAction,
@@ -695,17 +696,17 @@ class DedupLedger:
             """
             INSERT INTO DedupOverrides (override_id, pair_key,
                 left_enriched_event_id, right_enriched_event_id, verdict,
-                reason, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                reason, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(pair_key) DO UPDATE SET
                 verdict = excluded.verdict,
                 reason = excluded.reason,
                 created_by = excluded.created_by,
-                created_at = CURRENT_TIMESTAMP,
+                created_at = excluded.created_at,
                 active = 1
             """,
             (override_id, pair_key(left_enriched_id, right_enriched_id),
-             left_enriched_id, right_enriched_id, verdict.value, reason, created_by),
+             left_enriched_id, right_enriched_id, verdict.value, reason, created_by, utc_now_iso()),
         )
         logger.info(
             "Override recorded: %s vs %s -> %s",

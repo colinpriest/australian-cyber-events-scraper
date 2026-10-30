@@ -53,10 +53,10 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.dedup.entity_resolution import canonical_key, normalize_name
+from cyber_data_collector.utils.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ def migrate_contextual_aliases(conn: sqlite3.Connection) -> List[Tuple[str, str]
 def add_contextual_alias(conn: sqlite3.Connection, raw: str, canonical: str, source: str = "llm") -> None:
     ensure_schema(conn)
     conn.execute("INSERT OR IGNORE INTO ContextualEntityAliases VALUES (?, ?, ?, ?)",
-                 (raw, canonical, source, datetime.now().isoformat(timespec="seconds")))
+                 (raw, canonical, source, utc_now_iso()))
 
 
 def contextual_aliases(conn: sqlite3.Connection) -> Dict[str, List[str]]:
@@ -424,7 +424,7 @@ def _entity_id(conn: sqlite3.Connection, name: str, create: bool) -> Optional[in
     if not create:
         return None
     return conn.execute("INSERT INTO EntitiesV2 (entity_name, created_at, updated_at) VALUES (?, ?, ?)",
-                        (name, datetime.now().isoformat(), datetime.now().isoformat())).lastrowid
+                        (name, utc_now_iso(), utc_now_iso())).lastrowid
 
 
 def _active_links(conn: sqlite3.Connection, table: str, column: str, entity_id: int) -> List[Tuple[str, str]]:
@@ -446,7 +446,7 @@ def _record(conn: sqlite3.Connection, table: str, subject: str, raw: str, resolu
             moved_from: Optional[str]) -> None:
     conn.execute("INSERT OR REPLACE INTO EntityMentionResolutions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                  (table, subject, raw, resolution.canonical, resolution.method, resolution.probability,
-                  moved_from, datetime.now().isoformat(timespec="seconds")))
+                  moved_from, utc_now_iso()))
 
 
 def _events_of(conn: sqlite3.Connection, table: str, subject: str) -> List[str]:

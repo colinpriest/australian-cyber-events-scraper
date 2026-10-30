@@ -102,7 +102,7 @@ def _probabilities(conn: sqlite3.Connection, ids: List[str],
             """SELECT value FROM ModelJudgements
                WHERE subject_type = 'deduplicated_event' AND subject_id = ? AND question_id = ?
                  AND question_version = ? AND model_requested = ?
-               ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+               ORDER BY rowid DESC LIMIT 1""",
             (did, er.QUESTION_ID, version, typesafe_model())).fetchone()
         if row is not None:
             out[did] = float(row[0])
