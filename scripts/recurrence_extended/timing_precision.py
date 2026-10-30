@@ -797,8 +797,9 @@ def run(events: pd.DataFrame, db_path: Path, censor_date: date, out_dir: Path,
                             for policy in (*TIE_POLICIES, *RANDOM_TIE_POLICIES))
     tie_text = (
         "### Same-date ties and unknown ordering\n\n"
-        "Several distinct incidents of one organisation can share a stored date, and nothing orders them; a "
-        "1st of the month may be only a month placeholder. Each tie policy states one assumption about them "
+        "A same-date tie is far more likely one incident deduplication has not joined than two incidents on "
+        "one day; every such pair is listed, with the reason it is still two events, in "
+        "`dashboard/close_pairs.html`. Until a tie is resolved, each tie policy states one assumption about it "
         "(`collapse`, the primary treatment, keeps every id in `timing_entity_date_ties.csv`):\n\n"
         f"{assumptions}\n\n"
         "None of these bounds the truth: a tie that is one incident filed twice is represented only by "
