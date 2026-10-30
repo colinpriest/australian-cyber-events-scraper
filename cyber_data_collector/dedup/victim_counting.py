@@ -163,6 +163,9 @@ def with_acronym_policy(conn: sqlite3.Connection, resolver: EntityResolver) -> E
         resolver.acronym_policy = AcronymPolicy.from_connection(conn)
     if getattr(resolver, "distinct_pairs", None) is None:
         resolver.distinct_pairs = distinct_pairs(conn)
+    if getattr(resolver, "anti_aliases", None) is None:
+        from cyber_data_collector.dedup.anti_aliases import pair_set
+        resolver.anti_aliases = pair_set(conn)
     if getattr(resolver, "descriptive_names", None) is None:
         from cyber_data_collector.dedup.name_judgement import descriptive_names
         resolver.descriptive_names = descriptive_names(conn) if _has_table(conn, "ModelJudgements") else set()
@@ -221,8 +224,11 @@ def same_organisation(resolver: EntityResolver, left: Optional[str], right: Opti
 
     if not left or not right:
         return False
-    # A recorded verdict that the two are different (or related) entities outranks every name test below.
+    # A recorded verdict or anti-alias that the two are different (or related) entities outranks every name test.
     if _pair(left, right) in getattr(resolver, "distinct_pairs", ()):
+        return False
+    from cyber_data_collector.dedup.anti_aliases import is_anti_alias
+    if is_anti_alias(getattr(resolver, "anti_aliases", set()), left, right):
         return False
     if resolver.key_for(left) and resolver.key_for(left) == resolver.key_for(right):
         return True

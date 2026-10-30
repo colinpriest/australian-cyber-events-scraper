@@ -183,13 +183,21 @@ TRUSTED_ALIAS_SOURCES = ("human", "llm")
 
 
 def stored_aliases(conn: sqlite3.Connection, sources: Sequence[str] = TRUSTED_ALIAS_SOURCES) -> Dict[str, str]:
-    """``{raw_name: canonical_name}`` from ``EntityAliases`` for the given sources."""
+    """``{raw_name: canonical_name}`` from ``EntityAliases`` for the given sources.
+
+    An alias whose pair is listed in ``EntityAntiAliases`` (:mod:`anti_aliases`) is left out: the listing says
+    the two are different entities, and a person cannot list a pair a ``human`` alias joins.
+    """
+    from cyber_data_collector.dedup.anti_aliases import is_anti_alias, pair_set
+
     marks = ", ".join("?" for _ in sources)
     try:
-        return dict(conn.execute(f"SELECT raw_name, canonical_name FROM EntityAliases WHERE source IN ({marks})",
-                                 tuple(sources)).fetchall())
+        rows = conn.execute(f"SELECT raw_name, canonical_name FROM EntityAliases WHERE source IN ({marks})",
+                            tuple(sources)).fetchall()
     except sqlite3.Error:
         return {}
+    anti = pair_set(conn)
+    return {raw: canonical for raw, canonical in rows if not is_anti_alias(anti, raw, canonical)}
 
 
 def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str],
@@ -274,6 +282,9 @@ class EntityResolver:
             logger.debug("EntityAliases unavailable (%s); using rules only", exc)
             return 0
 
+        from cyber_data_collector.dedup.anti_aliases import is_anti_alias, pair_set
+        anti = pair_set(conn)
+        rows = [r for r in rows if not is_anti_alias(anti, r[0], r[1])]
         for raw_name, canonical_name, key in rows:
             self._aliases[normalize_name(raw_name)] = key
             self._canonical_names[key] = canonical_name

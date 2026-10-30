@@ -459,12 +459,19 @@ def list_merges(conn: sqlite3.Connection, status: Optional[str] = None) -> List[
 
 
 def overturned_merges(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    """Applied folds a model decided whose pair now has a verdict other than ``same``."""
+    """Applied folds a model decided whose pair now has a verdict other than ``same``, or is listed as an
+    anti-alias (:mod:`anti_aliases`)."""
+    from cyber_data_collector.dedup.anti_aliases import is_anti_alias, pair_set
+
     ensure_schema(conn)
+    anti = pair_set(conn)
     out = []
     for entry in _rows(conn, "SELECT merge_id, kept_name, dropped_name, source FROM EntityMerges "
                              "WHERE status = 'applied' ORDER BY rowid"):
         if entry["source"] not in REVERSIBLE_SOURCES:
+            continue
+        if is_anti_alias(anti, entry["kept_name"], entry["dropped_name"]):
+            out.append({**entry, "verdict": "anti-alias", "reason": "listed in EntityAntiAliases"})
             continue
         verdict = _decision(conn, entry["kept_name"], entry["dropped_name"])
         if verdict and verdict["verdict"] in NOT_SAME:

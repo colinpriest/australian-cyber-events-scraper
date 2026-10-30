@@ -2482,12 +2482,18 @@ def cmd_canonicalise_entities(args) -> int:
     )
     from cyber_data_collector.utils.jev import JevUnavailable
 
+    from cyber_data_collector.dedup import anti_aliases
     from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
     from cyber_data_collector.dedup.entity_merge_ledger import reverse_overturned_merges
 
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
+        if not args.dry_run:
+            synced = anti_aliases.sync_from_verdicts(conn)
+            conn.commit()
+            print(f"Anti-aliases from stored verdicts: {synced.added} listed, {synced.removed} removed "
+                  "(a later 'same' verdict)")
         resolver = EntityResolver()
 
         def reverse_overturned() -> None:
@@ -2568,6 +2574,20 @@ def cmd_canonicalise_entities(args) -> int:
                     print(f"ERROR: proposed folds cannot be verified: {exc}; none applied", file=sys.stderr)
                     return 2
                 merged += fold(confirmed, "llm")
+                # Names victim counting still joins on shape alone are put to the same question; what Perplexity
+                # says is not one organisation becomes an anti-alias (dedup/anti_aliases.py), as every
+                # not-the-same verdict does.
+                try:
+                    anti = anti_aliases.learn_from_counting(conn)
+                except AliasVerificationUnavailable as exc:
+                    print(f"ERROR: counting joins cannot be verified: {exc}", file=sys.stderr)
+                    return 2
+                print(f"Anti-aliases: {anti.candidates} name pair(s) joined by counting on name shape alone, "
+                      f"{anti.asked} asked; {len(anti.listed)} listed as different, {len(anti.confirmed_same)} "
+                      f"confirmed the same, {len(anti.failed)} undecided")
+                for a, b, relation in anti.listed:
+                    print(f"  anti-alias: {a!r} / {b!r} ({relation})")
+                report.failed.extend(anti.failed)
                 reverse_overturned()       # an alias verification just removed leaves its earlier fold behind
                 for name, other, verdict in report.rejected:
                     print(f"  not folded: {name!r} / {other!r} ({verdict})")
@@ -2602,6 +2622,70 @@ def cmd_canonicalise_entities(args) -> int:
         print(f"ERROR: {len(links.failed)} acronym mention(s) could not be decided (escalation failed) "
               "and were left where they were; rerun to retry", file=sys.stderr)
     return 1 if report.failed or links.failed else 0
+
+
+def cmd_anti_alias(args) -> int:
+    """Names that look alike but are different entities (:mod:`cyber_data_collector.dedup.anti_aliases`).
+
+    ``list``: every entry. ``add A B --reason``: a person's entry (refused when a reviewed alias joins the pair).
+    ``remove A B``: delete an entry. ``sync``: list every stored not-the-same verdict. ``learn``: put the name pairs
+    victim counting joins on shape alone to Perplexity and list those it says differ (also run by
+    ``canonicalise-entities``); exit 2 without PERPLEXITY_API_KEY, 1 when a pair could not be decided.
+    """
+    from cyber_data_collector.dedup import anti_aliases as aa
+    from cyber_data_collector.dedup.entity_alias_verification import AliasVerificationUnavailable
+
+    conn = _connect(args.db)
+    try:
+        aa.ensure_schema(conn)
+        if args.action == "list":
+            rows = aa.entries(conn)
+            for r in rows:
+                print(f"  {r['name_a']!r} / {r['name_b']!r}: {r['relation']} [{r['source']}] {r['reason'] or ''}"[:220])
+            print(f"{len(rows)} anti-alias(es)")
+            return 0
+        if args.action in ("add", "remove") and not (args.name_a and args.name_b):
+            print("ERROR: add and remove need two names", file=sys.stderr)
+            return 2
+        if args.action == "add":
+            try:
+                changed = aa.add(conn, args.name_a, args.name_b, args.reason or "", relation=args.relation)
+            except aa.AntiAliasError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            conn.commit()
+            print(f"{'listed' if changed else 'already listed'}: {args.name_a!r} / {args.name_b!r} ({args.relation}, human)")
+            return 0
+        if args.action == "remove":
+            removed = aa.remove(conn, args.name_a, args.name_b)
+            conn.commit()
+            print(f"{'removed' if removed else 'not listed'}: {args.name_a!r} / {args.name_b!r}")
+            return 0 if removed else 1
+        if args.action == "sync":
+            report = aa.sync_from_verdicts(conn)
+            conn.commit()
+            print(f"{report.added} listed from stored verdicts, {report.removed} removed (a later 'same' verdict)")
+            return 0
+        if args.dry_run:
+            pairs = aa.counting_joins(conn)
+            for a, b in pairs:
+                print(f"  {a!r} / {b!r}")
+            print(f"{len(pairs)} name pair(s) joined by counting on name shape alone; nothing asked")
+            return 0
+        try:
+            report = aa.learn_from_counting(conn, limit=args.limit or None)
+        except AliasVerificationUnavailable as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        for a, b, relation in report.listed:
+            print(f"  anti-alias: {a!r} / {b!r} ({relation})")
+        for a, b in report.failed:
+            print(f"  undecided: {a!r} / {b!r}", file=sys.stderr)
+        print(f"{report.candidates} pair(s), {report.asked} asked: {len(report.listed)} listed, "
+              f"{len(report.confirmed_same)} the same, {len(report.failed)} undecided")
+        return 1 if report.failed else 0
+    finally:
+        conn.close()
 
 
 def cmd_unmerge_entity(args) -> int:
@@ -4168,6 +4252,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Apply only the folds EXPLICIT_ALIASES names (no structural matching)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_canonicalise_entities)
+
+    p = sub.add_parser("anti-alias",
+                       help="Names that look alike but are different entities ('Optus' / 'Optus Stadium'): list, "
+                            "add (human, --reason), remove, sync (from stored verdicts), learn (Perplexity)")
+    p.add_argument("action", choices=["list", "add", "remove", "sync", "learn"])
+    p.add_argument("name_a", nargs="?")
+    p.add_argument("name_b", nargs="?")
+    p.add_argument("--reason", help="add: why they are different (required)")
+    p.add_argument("--relation", default="different", choices=["different", "related", "parent_subsidiary"])
+    p.add_argument("--limit", type=int, default=0, help="learn: ask about at most this many pairs")
+    p.add_argument("--dry-run", action="store_true", help="learn: list the pairs; ask nothing")
+    p.set_defaults(func=cmd_anti_alias)
 
     p = sub.add_parser("unmerge-entity",
                        help="Undo a recorded entity fold (see entity-merges) and restore it exactly")
