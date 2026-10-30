@@ -71,11 +71,12 @@ from scripts.evaluate_calibrations import after_calibration  # noqa: E402
 from cyber_data_collector.dedup import victim_fill as vf  # noqa: E402
 from cyber_data_collector.utils.llm_models import add_model_arguments, apply_model_arguments  # noqa: E402
 from scripts.calibrate_victim_attribution import replacement_bootstrap, replacement_threshold  # noqa: E402
+from scripts.calibration_frames import (  # noqa: E402
+    PRIMARY_FRAME, earlier_connections, frame_databases, parse_frame_dbs, row_frame, stratum_name)
 
 SAMPLE_PATH = vf.ROOT / "evaluation" / "victim_fill_sample.csv"
 BANDS = (("A", 0.0, 0.5), ("B", 0.5, 0.8), ("C", 0.8, 0.95), ("D", 0.95, 1.0001))
 QUOTAS = {"A": 20, "B": 40, "C": 40, "D": 60}
-PRIMARY_FRAME = "1"
 SAMPLE_COLUMNS = ["deduplicated_event_id", "stratum", "weight", "frame"]
 
 
@@ -84,7 +85,7 @@ SAMPLE_COLUMNS = ["deduplicated_event_id", "stratum", "weight", "frame"]
 def read_sample(path: Optional[Path] = None) -> List[Dict[str, str]]:
     """The sample rows; a row written before frames existed belongs to frame 1."""
     with Path(path or SAMPLE_PATH).open(encoding="utf-8", newline="") as fh:
-        return [{**r, "frame": (r.get("frame") or PRIMARY_FRAME).strip()} for r in csv.DictReader(fh)]
+        return [{**r, "frame": row_frame(r)} for r in csv.DictReader(fh)]
 
 
 def write_sample(rows: Sequence[Mapping[str, object]], path: Optional[Path] = None) -> None:
@@ -92,20 +93,6 @@ def write_sample(rows: Sequence[Mapping[str, object]], path: Optional[Path] = No
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(SAMPLE_COLUMNS)
         w.writerows([[r[c] for c in SAMPLE_COLUMNS] for r in rows])
-
-
-def parse_frame_dbs(values: Optional[Sequence[str]]) -> Dict[str, str]:
-    """``["2=path", ...]`` -> ``{"2": "path"}``; a malformed or repeated entry raises."""
-    out: Dict[str, str] = {}
-    for value in values or ():
-        frame, sep, path = value.partition("=")
-        frame, path = frame.strip(), path.strip()
-        if not sep or not frame or not path:
-            raise ValueError(f"expected FRAME=PATH, got {value!r}")
-        if frame in out:
-            raise ValueError(f"frame {frame} given twice")
-        out[frame] = path
-    return out
 
 
 def frame_population(conn: sqlite3.Connection, earlier: Mapping[str, sqlite3.Connection]) -> List[str]:
@@ -119,33 +106,21 @@ def frame_population(conn: sqlite3.Connection, earlier: Mapping[str, sqlite3.Con
 def stratified_rows(ids: Sequence[str], probs: Mapping[str, float], rng: random.Random,
                     frame: str = PRIMARY_FRAME) -> List[Dict[str, object]]:
     """Rows for one frame: each band sampled up to its quota, weighted back to the band (of this frame)."""
-    prefix = "" if frame == PRIMARY_FRAME else frame
     rows: List[Dict[str, object]] = []
     for name, lo, hi in BANDS:
         band = sorted(i for i in ids if i in probs and lo <= probs[i] < hi)
         chosen = sorted(rng.sample(band, min(QUOTAS[name], len(band))))
         weight = len(band) / len(chosen) if chosen else 0.0
-        rows.extend({"deduplicated_event_id": i, "stratum": prefix + name, "weight": round(weight, 4),
+        rows.extend({"deduplicated_event_id": i, "stratum": stratum_name(frame, name), "weight": round(weight, 4),
                      "frame": frame} for i in chosen)
-        print(f"Frame {frame} stratum {prefix + name} ({lo}-{hi}): {len(chosen)} of {len(band)} events "
+        print(f"Frame {frame} stratum {stratum_name(frame, name)} ({lo}-{hi}): {len(chosen)} of {len(band)} events "
               f"(weight {weight:.2f})")
     return rows
 
 
 def _earlier_connections(args, existing_frames: Sequence[str]) -> Dict[str, sqlite3.Connection]:
     """Read-only connections to every earlier frame's snapshot; every existing frame must be given."""
-    given = parse_frame_dbs(args.earlier_frame_db)
-    missing = sorted(set(existing_frames) - set(given))
-    if missing:
-        raise SystemExit(f"frame(s) {', '.join(missing)} are already in the sample: pass "
-                         + " ".join(f"--earlier-frame-db {f}=<its snapshot>" for f in missing)
-                         + " so frame " + args.frame + "'s population excludes theirs")
-    out = {}
-    for frame, path in given.items():
-        if not Path(path).is_file():
-            raise SystemExit(f"snapshot for frame {frame} not found: {path}")
-        out[frame] = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
-    return out
+    return earlier_connections(args.frame, args.earlier_frame_db, existing_frames)
 
 
 def _existing_frames(path: Optional[Path] = None) -> List[str]:
@@ -248,16 +223,6 @@ def cmd_packets(args) -> int:
     (out / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print(f"Wrote {len(index)} packets (no scores) to {out}")
     return 0
-
-
-def frame_databases(primary: str, frame_dbs: Mapping[str, str], needed: Sequence[str]) -> Dict[str, str]:
-    """The database of every frame in ``needed``: frame 1 is ``primary``; any other must be given."""
-    paths = {PRIMARY_FRAME: primary, **frame_dbs}
-    missing = sorted(f for f in set(needed) if f not in paths)
-    if missing:
-        raise ValueError(f"labelled rows of frame(s) {', '.join(missing)} need their snapshot: pass "
-                         + " ".join(f"--frame-db {f}=<path>" for f in missing))
-    return {f: paths[f] for f in needed}
 
 
 def cmd_calibrate(args) -> int:

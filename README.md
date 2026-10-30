@@ -1304,6 +1304,15 @@ the record's own content shows a separate incident, `same` for any first report,
 follow-up, notification, regulator statement or class action about the event's
 incident, even with a wrong date.
 
+The first snapshot's census of the acting band is used up (every candidate
+below 0.5 is labelled), so the sample, like victim fill's, holds later
+*frames* (`scripts/calibration_frames.py`): frame 2's candidates are those of a
+later snapshot that were no candidate in frame 1 (`score --frame 2
+--earlier-frame-db 1=...`, then `sample --frame 2 ...`), weighted to their own
+population, and calibration reads each frame on its own snapshot
+(`calibrate --frame-db 2=...`; `recalibrate` refuses a multi-frame sample
+rather than drop a frame).
+
 **Labelled-different pairs are never merged, and merged ones are undone.**
 `DedupLedger.merge_events` now refuses (`ValueError`, like a cached ruling) to
 join two events when a pair labelled `different` in
