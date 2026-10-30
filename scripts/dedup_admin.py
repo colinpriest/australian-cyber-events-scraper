@@ -3682,7 +3682,9 @@ def cmd_check_duplicates(args) -> int:
         return 0
     for p in result["proposals"]:
         gap = f"{p['gap_days']}d" if isinstance(p['gap_days'], int) else "undated"
-        print(f"  {p['p_same']:.3f}  {(p.get('organisation') or '(AI pair)')[:30]:30}  {gap}  {p['pair_id'][:8]}|...")
+        # A pair a label settled is proposed without being asked, so it has no score.
+        score = f"{p['p_same']:.3f}" if p.get('p_same') is not None else f"label:{p.get('label')}"
+        print(f"  {score:>5}  {(p.get('organisation') or '(AI pair)')[:30]:30}  {gap}  {p['pair_id'][:8]}|...")
     print(f"{len(result['merged'])} merge(s) applied of {len(result['proposals'])} proposed pair(s) at "
           f"cut-off {result['cutoff']}; findings in {out}")
     return _escalation_failures(result)
