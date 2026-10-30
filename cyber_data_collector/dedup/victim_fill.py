@@ -341,15 +341,23 @@ def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: 
                 "best": choice["best"], "best_probability": choice["best_probability"],
                 "action": "unfilled", "new_victim": None}
         by_name = {c["name"]: c for c in choice["candidates"]}
-        wanted = (label.get("correct_victim") or "").strip()
+        # A label may name several co-equal victims ("AustralianSuper; Rest; Hostplus"): one incident of several
+        # organisations, each filled when the evidence names it.
+        wanted_all = [w.strip() for w in (label.get("correct_victim") or "").split(";") if w.strip()]
+        wanted = wanted_all[0] if wanted_all else ""
         if label.get("label") == "none_named":
             plan["reason"] = "labelled none_named: the evidence names no victim"
         elif label.get("label") == "named":
-            hit = next((c for c in choice["candidates"] if names_match(conn, c["name"], wanted)), None)
-            if hit is None:
+            hits = [next((c for c in choice["candidates"] if names_match(conn, c["name"], w)), None)
+                    for w in wanted_all]
+            missing = [w for w, h in zip(wanted_all, hits) if h is None]
+            if not wanted_all or hits[0] is None:
                 plan["reason"] = f"labelled victim {wanted!r} is not among the evidence's candidates"
             else:
-                plan.update(action="filled", new_victim=hit["name"], reason="labelled", chosen=hit)
+                plan.update(action="filled", new_victim=hits[0]["name"], reason="labelled", chosen=hits[0],
+                            also=[h["name"] for h in hits[1:] if h is not None])
+                if missing:
+                    plan["reason"] = f"labelled; not among the evidence's candidates: {', '.join(missing)}"
         elif choice["name"] is None:
             plan["reason"] = ("the evidence names no candidate" if not choice["candidates"]
                               else "no candidate chosen over none")
@@ -397,6 +405,14 @@ def apply_fills(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal: 
             entity_id = replacement_entity(conn, did, plan["new_victim"], 0)
             stored = apply_victim(conn, did, None, plan["new_victim"], entity_id=entity_id)
             plan["new_victim"] = stored
+            for other in plan.get("also") or ():
+                other_id = replacement_entity(conn, did, other, 0)
+                updated = conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
+                                       "WHERE deduplicated_event_id = ? AND entity_id = ?", (did, other_id)).rowcount
+                if not updated:
+                    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, "
+                                 "relationship_type) VALUES (?, ?, 'victim')", (did, other_id))
+                stored = f"{stored}; {other}"
             conn.execute(
                 "INSERT INTO VictimFillActions (batch_id, deduplicated_event_id, action, new_victim, "
                 "choice_probability, cutoff, candidates_json, replaced_json, calibration_json, reason, "

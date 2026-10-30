@@ -1782,6 +1782,93 @@ def cmd_resolve_label_contradictions(args) -> int:
     return 1 if unresolved else 0
 
 
+def cmd_descriptive_name(args) -> int:
+    """Names that are descriptions, not names (:mod:`cyber_data_collector.dedup.descriptive_names`).
+
+    ``list``: every entry. ``add NAME --reason``: a person's entry (never replaced by a model). ``remove NAME``.
+    ``sync``: list every labelled and calibrated-model description. ``demote``: take descriptions recorded as
+    victims off their events (``--dry-run`` lists them); fill-victims also does this before filling.
+    """
+    from cyber_data_collector.dedup import descriptive_names as dn
+
+    conn = _connect(args.db)
+    try:
+        dn.ensure_schema(conn)
+        if args.action == "list":
+            rows = dn.entries(conn)
+            for r in rows:
+                print(f"  {r['name']!r} [{r['source']}] {r['reason'] or ''}"[:200])
+            print(f"{len(rows)} descriptive name(s)")
+            return 0
+        if args.action in ("add", "remove") and not args.name:
+            print("ERROR: add and remove need a name", file=sys.stderr)
+            return 2
+        if args.action == "add":
+            try:
+                changed = dn.add(conn, args.name, args.reason or "")
+            except dn.DescriptiveNameError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            print(f"{'listed' if changed else 'already listed'}: {args.name!r} (human)")
+            return 0
+        if args.action == "remove":
+            removed = dn.remove(conn, args.name)
+            print(f"{'removed' if removed else 'not listed'}: {args.name!r}")
+            return 0 if removed else 1
+        if args.action == "sync":
+            report = dn.sync(conn)
+            print(f"{report.added} listed, {report.removed} removed")
+            return 0
+        from cyber_data_collector.dedup import name_judgement
+        name_judgement.activate(conn)
+        report = dn.demote_victims(conn, apply=not args.dry_run)
+        for d in report.demoted:
+            print(f"  {d.deduplicated_event_id[:8]}: {d.name!r}" + (" (scalar cleared)" if d.scalar_cleared else ""))
+        print(f"{len(report.demoted)} descriptive victim(s) {'would be ' if args.dry_run else ''}demoted")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_alias(args) -> int:
+    """A person's alias: VARIANT is the organisation CANONICAL (``EntityAliases`` source ``human``).
+
+    A person's alias is applied by ``canonicalise-entities`` as a reviewed fold (never re-asked of a model,
+    never reversed by one), and its 'same' decision is stored as the person's (``EntityAliasDecisions`` model
+    ``human``). Refused when the pair is listed as an anti-alias. ``list`` shows the people's aliases.
+    """
+    from cyber_data_collector.dedup import anti_aliases
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+    from cyber_data_collector.utils.timestamps import utc_now_iso
+
+    conn = _connect(args.db)
+    try:
+        if args.action == "list":
+            rows = conn.execute("SELECT raw_name, canonical_name, created_at FROM EntityAliases "
+                                "WHERE source = 'human' ORDER BY canonical_name, raw_name").fetchall()
+            for raw, canonical, at in rows:
+                print(f"  {raw!r} -> {canonical!r} ({at})")
+            print(f"{len(rows)} alias(es) set by a person")
+            return 0
+        if not (args.variant and args.canonical and (args.reason or "").strip()):
+            print("ERROR: alias add needs VARIANT CANONICAL --reason", file=sys.stderr)
+            return 2
+        if anti_aliases.is_anti_alias(anti_aliases.pair_set(conn), args.variant, args.canonical):
+            print(f"ERROR: {args.variant!r} / {args.canonical!r} is listed as an anti-alias; remove that first",
+                  file=sys.stderr)
+            return 2
+        EntityResolver(conn).learn_alias(conn, args.variant, args.canonical, source="human")
+        a, b = sorted((args.variant, args.canonical))
+        conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
+                     "model, prompt_version, decided_at) VALUES (?, ?, 'same', ?, ?, 'human', 'human', ?)",
+                     (a, b, args.canonical, args.reason.strip(), utc_now_iso()))
+        conn.commit()
+        print(f"alias (human): {args.variant!r} -> {args.canonical!r}; run canonicalise-entities to fold")
+        return 0
+    finally:
+        conn.close()
+
+
 NEIGHBOURHOOD_SUMMARY = Path("instance/dedup_candidate_neighbourhoods.json")
 
 
@@ -2496,6 +2583,7 @@ def cmd_canonicalise_entities(args) -> int:
     )
     from cyber_data_collector.dedup.entity_alias_verification import (
         AliasVerificationUnavailable, VerificationReport, verified_groups, verify_stored_aliases,
+        verify_unverified_folds,
     )
     from cyber_data_collector.utils.jev import JevUnavailable
 
@@ -2577,6 +2665,9 @@ def cmd_canonicalise_entities(args) -> int:
                     print(f"  {a!r} / {b!r} (victims of two records of one event)")
             else:
                 try:
+                    unverified = verify_unverified_folds(conn, report=report)
+                    print(f"Model folds with no verdict of their own: {len(unverified)} asked; "
+                          f"{sum(1 for *_, v in unverified if v not in (None, 'same'))} not the same (undone below)")
                     stored = verify_stored_aliases(conn, report=report)
                     print(f"Stored rule-made aliases: {stored.checked} checked, {stored.spelling_only} spelling "
                           f"variants kept, {len(stored.confirmed)} confirmed, {len(stored.removed)} removed")
@@ -4309,6 +4400,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--limit", type=int, default=0, help="learn: ask about at most this many pairs")
     p.add_argument("--dry-run", action="store_true", help="learn: list the pairs; ask nothing")
     p.set_defaults(func=cmd_anti_alias)
+
+    p = sub.add_parser("alias", help="A person's alias: VARIANT is the organisation CANONICAL (add --reason; list)")
+    p.add_argument("action", choices=["add", "list"])
+    p.add_argument("variant", nargs="?")
+    p.add_argument("canonical", nargs="?")
+    p.add_argument("--reason", help="why they are one organisation (required)")
+    p.set_defaults(func=cmd_alias)
+
+    p = sub.add_parser("descriptive-name",
+                       help="Names that are descriptions, not names ('Australian university'): list, add (human, "
+                            "--reason), remove, sync (labels + calibrated verdicts), demote (victims that are "
+                            "descriptions)")
+    p.add_argument("action", choices=["list", "add", "remove", "sync", "demote"])
+    p.add_argument("name", nargs="?")
+    p.add_argument("--reason", help="add: why it is a description (required)")
+    p.add_argument("--dry-run", action="store_true", help="demote: list only")
+    p.set_defaults(func=cmd_descriptive_name)
 
     p = sub.add_parser("unmerge-entity",
                        help="Undo a recorded entity fold (see entity-merges) and restore it exactly")

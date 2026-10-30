@@ -306,6 +306,37 @@ def verify_stored_aliases(conn: sqlite3.Connection, search: Optional[Search] = N
     return out
 
 
+def verify_unverified_folds(conn: sqlite3.Connection, search: Optional[Search] = None,
+                            report: Optional[VerificationReport] = None) -> List[Tuple[str, str, Optional[str]]]:
+    """Ask about every applied model fold that has no verdict of its own between its two names.
+
+    Folds chain: A was confirmed the same as B, B as C, and C was folded into A with no question ever put
+    about A and C ("Australian Securities and Investments Commission" reached "Fortnum Private Wealth" through
+    the caption of a case between them). Each such pair is asked now (:func:`verify_pair`, stored); a verdict
+    other than ``same`` makes the fold overturned, and the caller's reversal undoes it. A person's alias and a
+    fold of a list or caption (reversed by structure) are not asked. Returns ``(kept, dropped, verdict)``.
+    """
+    from cyber_data_collector.dedup.entity_merge import is_organisation_list
+    from cyber_data_collector.dedup.entity_merge_ledger import REVERSIBLE_SOURCES
+
+    search = search or perplexity_search
+    report = report if report is not None else VerificationReport()
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'EntityMerges'").fetchone():
+        return []
+    known = stored_verdicts(conn)
+    human = {r[0].lower() for r in conn.execute("SELECT raw_name FROM EntityAliases WHERE source = 'human'")}
+    out = []
+    for kept, dropped, source in conn.execute(
+            "SELECT kept_name, dropped_name, source FROM EntityMerges WHERE status = 'applied' ORDER BY rowid"
+            ).fetchall():
+        if source not in REVERSIBLE_SOURCES or dropped.lower() in human or _pair(kept, dropped) in known:
+            continue
+        if is_organisation_list(kept) or is_organisation_list(dropped):
+            continue
+        out.append((kept, dropped, verify_pair(conn, kept, dropped, search, known, report)))
+    return out
+
+
 #: Stored verdicts that say two names are not one entity. ``unsure`` settles nothing either way.
 CONFLICT_VERDICTS = ("different", "parent_subsidiary", "related")
 
