@@ -948,3 +948,25 @@ def test_an_event_holding_the_supplier_and_its_customers_is_split_per_customer(f
     # Idempotent: the parts hold one customer each now.
     g2 = sv.gather(full)
     assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True)["splits"] == []
+
+
+def test_the_events_own_victim_is_never_reversed_and_a_past_reversal_is_restored(conn):
+    """"Medical information leaked in NSW Health hack" lost NSW Health: the attachment named the event's own
+    victim (its only victim role, exactly its scalar victim), not a customer attached to another's event."""
+    conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'e1' AND relationship_type = 'victim'")
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'Curtin University' "
+                 "WHERE deduplicated_event_id = 'e1'")
+    _curtin_is_a_candidate(conn)
+    _attach_the_old_way(conn)
+    assert sv.reverse_attachments(conn) == []
+    assert _victims(conn, "e1") == ["Curtin University"]
+    # A reversal an earlier version made of such an attachment is given back, once.
+    conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = 'e1' AND entity_id = 4")
+    (aid,) = conn.execute("SELECT attachment_id FROM SupplierVictimAttachments").fetchone()
+    conn.execute("INSERT INTO SupplierVictimReversals VALUES (?, 'e1', 4, 'Curtin University', 'reversed', NULL, "
+                 "'[]', 'test', 'b', '2026-10-31')", (aid,))
+    assert [r["victim"] for r in sv.restore_own_victims(conn, apply=False)] == ["Curtin University"]
+    sv.restore_own_victims(conn)
+    assert _victims(conn, "e1") == ["Curtin University"]
+    assert sv.restore_own_victims(conn) == []
+    assert sv.reverse_attachments(conn) == []

@@ -645,6 +645,7 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool) -> Dic
     rows = {r[0]: r for r in conn.execute(
         "SELECT attachment_id, probability, decided_by FROM SupplierVictimAttachments")} \
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'SupplierVictimAttachments'").fetchone() else {}
+    sv.restore_own_victims(conn, apply=apply)       # a reversal never takes the event's own victim
     reversed_ = sv.reverse_attachments(conn, apply=apply)
     plans, ambiguous = plan_splits(conn, g.resolver, vendors_of)
     splits: List[Dict[str, Any]] = []

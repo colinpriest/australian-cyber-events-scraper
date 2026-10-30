@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS SupplierVictimReversals (
     deduplicated_event_id TEXT NOT NULL,
     entity_id             INTEGER NOT NULL,
     entity_name           TEXT NOT NULL,
-    action                TEXT NOT NULL,      -- 'reversed'
+    action                TEXT NOT NULL,      -- 'reversed'; 'restored' when it took the event's own victim
     restored_role         TEXT,               -- NULL: the event link was removed
     own_events_json       TEXT NOT NULL,      -- the organisation's other Active events as victim
     reason                TEXT NOT NULL,
@@ -1143,8 +1143,73 @@ OWNER_DECISION = ("owner decision 2026-10-31: one event per customer; a supplier
 _UNRECORDED_MEMBER_ROLE = "affected_customer"
 
 
+def _own_victim(conn: sqlite3.Connection, did: str, entity_id: int, name: str) -> bool:
+    """The organisation is the event's own victim, not a customer attached to it: the event's only victim
+    role and exactly its scalar victim ("Medical information leaked in NSW Health hack" - NSW Health)."""
+    scalar = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                          (did,)).fetchone()
+    if not (scalar and scalar[0] and scalar[0].strip().lower() == (name or "").strip().lower()):
+        return False
+    others = conn.execute("SELECT COUNT(*) FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? "
+                          "AND relationship_type = 'victim' AND entity_id != ?", (did, entity_id)).fetchone()[0]
+    return others == 0
+
+
+def restore_own_victims(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
+    """Give back the victim role a reversal took from the event's own victim.
+
+    The 2026-10-31 conversion reversed every attachment, including those naming the organisation the event
+    itself is about, and left events such as "Western Sydney University cyber incident" with no victim. A
+    reversal is restored when its Active event now has no victim role and its scalar victim is exactly the
+    organisation (the event-level role, and member links the reversal changed); snapshotted through the
+    ledger, and the reversal row is marked ``restored`` so it is never reversed again.
+    """
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    ensure_schema(conn)
+    rows = conn.execute(
+        """SELECT r.attachment_id, r.deduplicated_event_id, r.entity_id, r.entity_name, r.restored_role
+           FROM SupplierVictimReversals r
+           JOIN DeduplicatedEvents d ON d.deduplicated_event_id = r.deduplicated_event_id
+           WHERE r.action = 'reversed' AND d.status = 'Active'
+             AND LOWER(TRIM(d.victim_organization_name)) = LOWER(TRIM(r.entity_name))
+             AND NOT EXISTS (SELECT 1 FROM DeduplicatedEventEntities x
+                             WHERE x.deduplicated_event_id = r.deduplicated_event_id AND x.relationship_type = 'victim')
+           ORDER BY r.created_at, r.attachment_id""").fetchall()
+    out: List[Dict[str, Any]] = []
+    done: Set[Tuple[str, int]] = set()
+    for attachment_id, did, entity_id, name, previous in rows:
+        if (did, entity_id) in done:
+            continue
+        done.add((did, entity_id))
+        out.append({"attachment_id": attachment_id, "deduplicated_event_id": did, "victim": name})
+        if not apply:
+            continue
+        DedupLedger(conn).snapshot_event(f"supplier-victims-restore-{datetime.now().strftime('%Y%m%d%H%M%S')}-"
+                                         f"{did[:8]}", did)
+        if not conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
+                            "WHERE deduplicated_event_id = ? AND entity_id = ?", (did, entity_id)).rowcount:
+            conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                         "VALUES (?, ?, 'victim')", (did, entity_id))
+        members = [r[0] for r in conn.execute(
+            "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = ?", (did,))]
+        if members:
+            conn.execute(f"UPDATE EnrichedEventEntities SET relationship_type = 'victim' WHERE entity_id = ? "
+                         f"AND relationship_type = ? AND enriched_event_id IN ({','.join('?' * len(members))})",
+                         (entity_id, previous or _UNRECORDED_MEMBER_ROLE, *members))
+        conn.execute("UPDATE SupplierVictimReversals SET action = 'restored' WHERE deduplicated_event_id = ? "
+                     "AND entity_id = ? AND action = 'reversed'", (did, entity_id))
+        logger.info("Restored %r as the victim of %s: the event's own victim, not an attached customer", name, did)
+    if apply and out:
+        conn.commit()
+    return out
+
+
 def reverse_attachments(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
     """Undo every victim role this module attached that is still on its Active event.
+
+    Except the event's own victim (:func:`_own_victim`): one event per customer means the event keeps the
+    customer it is about; only the customers attached to another's event are reversed.
 
     The event-level role goes back to the attachment's ``previous_role`` (the link is removed when
     there was none). Member links the attachment set to ``victim`` go back to ``previous_role`` or,
@@ -1174,6 +1239,8 @@ def reverse_attachments(conn: sqlite3.Connection, apply: bool = True) -> List[Di
         if (did, entity_id) in done:
             continue
         done.add((did, entity_id))
+        if _own_victim(conn, did, entity_id, name):
+            continue
         others = sorted(e for e, _ in own.get(entity_id, []) if e != did)
         out.append({"attachment_id": attachment_id, "deduplicated_event_id": did, "victim": name,
                     "decided_by": decided_by, "restored_role": previous, "own_events": others,
