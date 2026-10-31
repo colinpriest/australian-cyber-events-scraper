@@ -1284,6 +1284,15 @@ Second owner review (2026-10-31):
   again (`roles-status`: "victim split out").
 * "OracleCMS" fits "Oracle Customer Management Solutions" (a word followed by the initials of the rest), so the
   vendor under its spelled-out name is put to the verification and, ruled `same`, is not its own customer.
+* **A foreign victim is moved to vendor only when it is foreign** (`localise_victim`, `entity-roles-v5`): its
+  researched profile's `jurisdiction` decides, and only an organisation with none falls back to the extraction's
+  `is_australian` flag, which had called youX FinTech, OracleCMS and Nissan Oceania foreign. The replacement is
+  never a description: youX's own breach was filed under "lenders" with youX as its vendor.
+
+**Coherence splits (2026-11-01).** `check-coherence` and `check-same-organisation` re-read an event once a split
+in the same run has happened (a split that re-attaches a record can merge a later event away; the run failed on
+WSU's SSO event), and a label made on an event that has since been merged carries to the event that holds the
+record now (`coherence.follow_merged_labels`), so a labelled stray is not kept by a merge.
 * **One customer is listed once.** Names listed under one supplier incident, and the supplier's own name, are put
   to the alias verification with the incident's context when they share a distinctive word, one abbreviates the
   other, or their profiles place them together (`alias_learning.supplier_pair_proposals` /

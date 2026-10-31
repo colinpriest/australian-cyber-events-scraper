@@ -618,8 +618,11 @@ def test_a_word_followed_by_an_abbreviation_fits_the_spelled_out_name():
     assert not al.abbreviation_fits("ActionAid", "Action Aid International")
 
 
-def _classified(conn, did, version="entity-roles-v4"):
+def _classified(conn, did, version=None):
     from cyber_data_collector.dedup import role_maintenance as rm
+    from cyber_data_collector.dedup.entity_classification import ROLES_PROMPT_VERSION
+
+    version = version or ROLES_PROMPT_VERSION
 
     members = [r[0] for r in conn.execute("SELECT enriched_event_id FROM EventDeduplicationMap "
                                           "WHERE deduplicated_event_id = ?", (did,))]
@@ -688,3 +691,40 @@ def test_the_role_classifier_is_shown_the_sentences_that_name_each_entity():
     EntityRoleClassifier(openai_client=Client).classify("t", "d", list(mentions), mentions=mentions)
     assert 'named in: "(Supplied: Accenture)"' in seen["prompt"]
     assert "Cyber Security Agency of Singapore\n    (named in no sentence" in seen["prompt"]
+
+
+# --- localising a victim: researched jurisdiction outranks the extraction flag; no description (2026-11-01) ---
+
+def _localise_db():
+    from cyber_data_collector.dedup import descriptive_names, entity_profiles
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("""
+        CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY, entity_name TEXT, is_australian INTEGER,
+                                 entity_kind TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        CREATE TABLE EnrichedEventEntities (enriched_event_id TEXT, entity_id INTEGER, relationship_type TEXT);
+        INSERT INTO EntitiesV2 VALUES (1, 'youX FinTech', 0, 'organisation'), (2, 'lenders', 1, 'organisation'),
+                                      (3, 'Cisco Systems', 0, 'organisation'), (4, 'National Australia Bank', 1, 'organisation');
+        INSERT INTO EventDeduplicationMap VALUES ('r1', 'ev');
+        INSERT INTO EnrichedEventEntities VALUES ('r1', 2, 'victim'), ('r1', 4, 'affected_customer');
+    """)
+    entity_profiles.ensure_schema(c)
+    descriptive_names.add(c, "lenders", reason="a description of the borrowers' lenders")
+    return c
+
+
+def test_a_victim_researched_as_australian_is_not_localised():
+    from cyber_data_collector.dedup import entity_classification as ec, entity_profiles
+    c = _localise_db()
+    entity_profiles.set_profile(c, "youX FinTech", "jurisdiction", "Australia", reason="Sydney fintech")
+    assert ec.localise_victim(c, "youX FinTech", None, "ev") == ("youX FinTech", None)
+
+
+def test_a_foreign_victim_is_localised_to_a_named_organisation_never_a_description():
+    from cyber_data_collector.dedup import entity_classification as ec
+    c = _localise_db()
+    # no profile: the extraction flag still marks Cisco foreign; "lenders" is listed as a description
+    assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("National Australia Bank", "Cisco Systems")
+    c.execute("DELETE FROM EnrichedEventEntities WHERE entity_id = 4")
+    assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("Cisco Systems", None)

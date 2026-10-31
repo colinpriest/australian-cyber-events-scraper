@@ -199,7 +199,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v4"
+ROLES_PROMPT_VERSION = "entity-roles-v5"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -207,6 +207,9 @@ ROLES_PROMPT_VERSION = "entity-roles-v4"
 # v4 (2026-10-31): each entity is listed with the sentences of the reporting that name it (entity_mentions). Under
 # v3 the model still saw only the names and the descriptions, so Accenture (named only in "(Supplied: Accenture)")
 # and the Cyber Security Agency of Singapore (named nowhere in the TPG event's text) stayed vendors.
+# v5 (2026-11-01): the victim is localised only when its researched jurisdiction (or, with none, the extraction
+# flag) is foreign, and never to a description: youX's own breach had been filed under "lenders" with youX as the
+# vendor, OracleCMS's under one of its customers. No prompt text changed; the version re-resolves those events.
 #: Sentences shown per entity, and characters per sentence.
 MENTIONS_PER_ENTITY = 2
 MENTION_CHARS = 240
@@ -631,6 +634,16 @@ def foreign_vendor_not_victim(conn, victim, vendor, deduplicated_event_id):
     return None, (vendor or victim)
 
 
+def researched_australian(conn, name: str) -> Optional[bool]:
+    """Whether ``name``'s researched profile places it in Australia; None when it has no jurisdiction on record."""
+    from cyber_data_collector.dedup.entity_profiles import profile_for
+
+    places = profile_for(conn, name).get("jurisdiction") or []
+    if not places:
+        return None
+    return any("australia" in p.lower() for p in places)
+
+
 def localise_victim(conn, victim, vendor, deduplicated_event_id):
     """Prefer the Australian organisation as the victim of a foreign breach.
 
@@ -649,18 +662,31 @@ def localise_victim(conn, victim, vendor, deduplicated_event_id):
     foreign victim, because a collective noun is a worse answer than a foreign
     company (see is_non_organisation).
 
+    Whether the victim is foreign is read from its researched entity profile
+    (``jurisdiction``) when it has one, and only otherwise from the extraction's
+    ``is_australian`` flag: the flag called youX FinTech, OracleCMS and Nissan
+    Oceania foreign, and youX's own breach was filed under "lenders" (2026-11-01).
+    A description ("lenders") is never the replacement.
+
     Returns ``(victim, vendor)``, unchanged when no swap applies.
     """
     if not victim:
         return victim, vendor
 
-    row = conn.execute(
-        "SELECT is_australian FROM EntitiesV2 WHERE entity_name = ? LIMIT 1",
-        (victim,)).fetchone()
-    # Only act on entities explicitly recorded as non-Australian; unknown
-    # provenance is not evidence.
-    if row is None or row["is_australian"] != 0:
+    researched = researched_australian(conn, victim)
+    if researched is None:
+        row = conn.execute(
+            "SELECT is_australian FROM EntitiesV2 WHERE entity_name = ? LIMIT 1",
+            (victim,)).fetchone()
+        # Only act on entities explicitly recorded as non-Australian; unknown
+        # provenance is not evidence.
+        if row is None or row["is_australian"] != 0:
+            return victim, vendor
+    elif researched:
         return victim, vendor
+
+    from cyber_data_collector.dedup import descriptive_names
+    descriptions = descriptive_names.described(conn)
 
     for candidate in conn.execute(
         """
@@ -679,7 +705,8 @@ def localise_victim(conn, victim, vendor, deduplicated_event_id):
     ):
         name = candidate["n"]
         if (is_non_organisation(name) or is_never_victim(name)
-                or is_threat_actor(name) or _is_collective_phrase(name)):
+                or is_threat_actor(name) or _is_collective_phrase(name)
+                or is_descriptive_name(name) or descriptive_names.is_listed(descriptions, name)):
             continue
         # Skip when the "Australian" candidate is really the same company under
         # another spelling (JBS / JBS S.A., Prosura / Prosura Pty Ltd). Swapping
