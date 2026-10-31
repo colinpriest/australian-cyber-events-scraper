@@ -750,6 +750,9 @@ class UnifiedPipeline:
         cited_refresh = ["refresh-cited-documents", "--limit", str(getattr(args, 'cited_refresh_limit', 25))]
         if getattr(args, 'report_event_rejections', False):
             cited_refresh.append("--dry-run")
+        retitle = ["retitle", "--generate"]
+        if getattr(args, 'report_event_rejections', False):
+            retitle.append("--dry-run")
         steps = [identity, evidence, recovery, ["rescrape-short-pages"], cited_refresh, ["publication-dates"],
                  ["canonicalise-entities"],
                  ["research-timelines"],
@@ -760,6 +763,10 @@ class UnifiedPipeline:
                  ["classify-entities", "--stale-only"], names, ["check-victims"], attribution, fill,
                  coherence, same_org, duplicates, suppliers, label_contradictions,
                  ["classify-entities", "--stale-only"],
+                 # Titles: the best member headline, and one written from the evidence where every candidate is
+                 # a stored LLM paragraph, a placeholder or page furniture (the Optus White Pages event's title was
+                 # a 528-character Perplexity answer).
+                 retitle,
                  ["reconcile-timelines", "--queue-gaps"],
                  ["publication-dates", "--no-fetch"], ["recover-evidence", "--status-only"]]
         if not getattr(args, 'skip_recalibration', False):

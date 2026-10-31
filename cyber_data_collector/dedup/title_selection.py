@@ -62,6 +62,8 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 
 IDEAL_MIN_LENGTH = 20
 IDEAL_MAX_LENGTH = 95
+#: Subtracted from a candidate :func:`needs_regeneration` rejects, so a usable headline always wins.
+UNUSABLE_PENALTY = 40.0
 
 
 def clean_title(title: Optional[str]) -> str:
@@ -177,16 +179,21 @@ def derive_title(
     tokens = victim_tokens(victim)
     candidates: List[tuple] = []
 
+    def scored(title: Optional[str], is_label: bool = False) -> float:
+        # A title that cannot serve as a headline (a stored LLM paragraph, a placeholder, page furniture) loses to
+        # any that can: the Optus White Pages event carried a 528-character Perplexity answer as its title.
+        penalty = UNUSABLE_PENALTY if needs_regeneration(clean_title(title)) else 0.0
+        return score_title(title, tokens, is_label) - penalty
+
     if incident_label:
-        candidates.append((score_title(incident_label, tokens, True),
-                           clean_title(incident_label)))
+        candidates.append((scored(incident_label, True), clean_title(incident_label)))
     for title in member_titles:
         cleaned = clean_title(title)
         if cleaned:
-            candidates.append((score_title(title, tokens), cleaned))
+            candidates.append((scored(title), cleaned))
 
     current_clean = clean_title(current_title)
-    current_score = score_title(current_title, tokens) if current_clean else -100.0
+    current_score = scored(current_title) if current_clean else -100.0
 
     if not candidates:
         return current_clean
