@@ -159,6 +159,15 @@ def resolve_event(conn: sqlite3.Connection, event_id: Optional[str], resolver=No
            WHERE m1.deduplicated_event_id = ? AND d.status = 'Active'
            GROUP BY m2.deduplicated_event_id ORDER BY COUNT(*) DESC, m2.deduplicated_event_id LIMIT 1""",
         (event_id,)).fetchone()
+    if held is None:
+        # A merge moves the merged event's mapped records to the event it joined, so its master record is what
+        # still names it (Nissan's split-off event add9ab5b, merged back into 05a642a0, resolved to nothing).
+        held = conn.execute(
+            """SELECT m.deduplicated_event_id FROM DeduplicatedEvents x
+               JOIN EventDeduplicationMap m ON m.enriched_event_id = x.master_enriched_event_id
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+               WHERE x.deduplicated_event_id = ? AND d.status = 'Active'
+               ORDER BY m.deduplicated_event_id LIMIT 1""", (event_id,)).fetchone()
     return held[0] if held else None
 
 
@@ -223,7 +232,16 @@ class Registry:
                 inc.events.add(event)       # so a pair label against a stored member keeps an event out
 
     def key(self, supplier: str) -> str:
-        return self.resolver.key_for(supplier)
+        """The supplier's key; an organisation already stored under another spelling keeps that incident's key."""
+        from cyber_data_collector.dedup.supplier_victims import same_org
+
+        key = self.resolver.key_for(supplier)
+        if any(inc.supplier_key == key for inc in self.incidents.values()):
+            return key
+        for inc in sorted(self.incidents.values(), key=lambda i: i.supplier_incident_id):
+            if same_org(self.resolver, inc.supplier_name, supplier):
+                return inc.supplier_key
+        return key
 
     def incident(self, supplier: str, event_date: Optional[str], anchor: str,
                  supplier_event: Optional[str] = None, apart=None) -> Incident:
@@ -380,13 +398,24 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
       customer. Two incidents that each have the supplier's own event (Ivanti's separate campaigns), or
       whose events a pair label rules different, are not merged; the shared event is reported.
 
-    An incident left with no link and no supplier event is removed.
+    * a link whose customer is the supplier's own organisation (``same_org``): a supplier is not its own customer.
+      v7 recorded Nissan Oceania as the vendor of Nissan's own breach, and the per-customer split filed Nissan under
+      a "Nissan Oceania" supplier incident;
+    * incidents of one organisation under two spellings ("Oracle CMS", "OracleCMS"; ``key_for`` differs) are given
+      one supplier key, so they are grouped (and merged when they share an event) like any other pair.
+
+    An incident is removed with its links once nothing supports it: not the supplier's own event, not a link from a
+    label or a same-incident judgement, and no linked event that still records the supplier as its vendor. The
+    other links (rule placements, splits, conversions, named customers) all came from some event recording the
+    supplier as vendor, so they lapse with it. The "Delta Air Lines" incident of 16 named customers outlived
+    Delta's correction from CrowdStrike's vendor to a co-victim, ESET's and the Singapore agency's their removal as
+    vendors, and the "Nissan Oceania" incident the correction of Nissan's arm from Nissan's vendor.
     """
     from cyber_data_collector.dedup import supplier_victims as sv
 
     ensure_schema(conn)
     report: Dict[str, Any] = {"stale_links_removed": [], "incidents_merged": [], "incidents_removed": [],
-                              "shared_not_merged": []}
+                              "shared_not_merged": [], "own_organisation_links_removed": [], "keys_joined": []}
     incidents = {r[0]: {"key": r[1], "name": r[2], "event": r[3], "first": r[4]} for r in conn.execute(
         "SELECT supplier_incident_id, supplier_key, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
     for sid, entity_id, name, event_id in conn.execute(
@@ -404,6 +433,28 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                      (sid, entity_id))
         report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                               "customer": name, "event": now})
+
+    for sid, entity_id, name in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_name FROM SupplierIncidentLinks").fetchall():
+        inc = incidents.get(sid)
+        if inc is None or not sv.same_org(resolver, inc["name"], name):
+            continue
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                     (sid, entity_id))
+        report["own_organisation_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                                         "customer": name})
+
+    first_name: Dict[str, str] = {}
+    for sid, inc in sorted(incidents.items(), key=lambda kv: (kv[1]["key"], kv[0])):
+        joined = next((k for k, n in first_name.items()
+                       if k != inc["key"] and sv.same_org(resolver, n, inc["name"])), None)
+        if joined is None:
+            first_name.setdefault(inc["key"], inc["name"])
+            continue
+        conn.execute("UPDATE SupplierIncidents SET supplier_key = ?, updated_at = ? WHERE supplier_incident_id = ?",
+                     (joined, _now(), sid))
+        report["keys_joined"].append({"supplier_incident_id": sid, "supplier": inc["name"], "key": joined})
+        inc["key"] = joined
 
     different: Set[str] = set()
     for (kind, pair), label in (labels or {}).items():
@@ -460,12 +511,15 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
             break
 
     for sid, inc in list(incidents.items()):
-        has_links = conn.execute("SELECT 1 FROM SupplierIncidentLinks WHERE supplier_incident_id = ? LIMIT 1",
-                                 (sid,)).fetchone()
-        if not has_links and not inc["event"]:
-            conn.execute("DELETE FROM SupplierIncidents WHERE supplier_incident_id = ?", (sid,))
-            report["incidents_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"]})
-            incidents.pop(sid)
+        if _supported(conn, resolver, sid, inc["name"], inc["event"]):
+            continue
+        named = [r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks "
+                                            "WHERE supplier_incident_id = ? ORDER BY customer_name", (sid,))]
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ?", (sid,))
+        conn.execute("DELETE FROM SupplierIncidents WHERE supplier_incident_id = ?", (sid,))
+        report["incidents_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                            "named_customers_dropped": named})
+        incidents.pop(sid)
     # The span is what is linked now, not what a removed or merged link once contributed.
     for sid in incidents:
         linked = sorted(events_of(sid))
@@ -479,6 +533,24 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                          "WHERE supplier_incident_id = ? AND NOT (first_date IS ? AND last_date IS ?)",
                          (dates[0], dates[-1], _now(), sid, dates[0], dates[-1]))
     return report
+
+
+def _supported(conn: sqlite3.Connection, resolver, sid: str, supplier: str, own_event: Optional[str]) -> bool:
+    """Whether anything still supports a supplier incident (see :func:`repair_registry`)."""
+    from cyber_data_collector.dedup import supplier_victims as sv
+
+    if own_event and resolve_event(conn, own_event):
+        return True
+    events: Set[str] = set()
+    for event_id, basis in conn.execute("SELECT customer_event_id, basis FROM SupplierIncidentLinks "
+                                        "WHERE supplier_incident_id = ? AND customer_event_id IS NOT NULL", (sid,)):
+        now = resolve_event(conn, event_id)
+        if now is None:
+            continue
+        if basis in (BASIS_LABEL, BASIS_JUDGED):
+            return True
+        events.add(now)
+    return any(sv.same_org(resolver, supplier, v) for e in sorted(events) for v in _event_vendors(conn, e))
 
 
 def _drop_rule_links(conn: sqlite3.Connection, sids: Set[str], conflicts: List[Tuple[str, str]]

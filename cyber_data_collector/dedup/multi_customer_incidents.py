@@ -175,6 +175,12 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
     out: List[Incident] = []
     for sid, vendor, own_event, first, _last in conn.execute(
             "SELECT supplier_incident_id, supplier_name, supplier_event_id, first_date, last_date FROM SupplierIncidents"):
+        # An attack is listed under a named supplier: "IT service provider" and "Australian sole trader" were
+        # recorded as vendors and each got a card. A supplier name judged a description, or not yet judged, is not.
+        vendor_key = " ".join((vendor or "").split()).lower()
+        if (not vendor or descriptive_names.is_listed(described, vendor) or vendor_key in judged_descriptive
+                or vendor_key not in judged):
+            continue
         customers: List[Customer] = []
         outside: List[str] = []
         unplaced: List[str] = []

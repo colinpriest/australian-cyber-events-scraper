@@ -1598,13 +1598,14 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                 failed += 1
         result["customer_jurisdictions"] = {"looked_up": looked, "failed": failed,
                                             "unplaced": len(multi_customer_incidents.unplaced_customers(conn))}
-        # Whether each named customer is an organisation at all ("The College" is a description), and whether two
-        # names listed under one incident are one customer (asked with the incident's context): the report reads
-        # both. Then a description of each attack the report lists.
+        # Whether each named customer and supplier is an organisation at all ("The College", "IT service provider"
+        # are descriptions), and whether two names listed under one incident are one customer (asked with the
+        # incident's context): the report reads both. Then a description of each attack the report lists.
         from cyber_data_collector.dedup import alias_learning, name_judgement
 
         done = name_judgement.stored_probabilities(conn)
-        todo = sorted({n.strip() for (n,) in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")
+        todo = sorted({n.strip() for (n,) in conn.execute("SELECT customer_name FROM SupplierIncidentLinks "
+                                                          "UNION SELECT supplier_name FROM SupplierIncidents")
                        if n and n.strip() and " ".join(n.split()).lower() not in done})
         result["customer_names_judged"] = len(name_judgement.judge_names(
             conn, [(n, name_judgement.sentence_for(conn, n)) for n in todo], judge=judge_client))
