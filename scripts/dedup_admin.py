@@ -1840,7 +1840,9 @@ def cmd_alias(args) -> int:
 
     A person's alias is applied by ``canonicalise-entities`` as a reviewed fold (never re-asked of a model,
     never reversed by one), and its 'same' decision is stored as the person's (``EntityAliasDecisions`` model
-    ``human``). Refused when a person listed the pair as an anti-alias; a model's anti-alias for the pair (a
+    ``human``). ``--contextual`` keeps a generic name ("Department of Education" for the Victorian department,
+    owner 2026-10-31) out of a global fold: the canonical is its contextual candidate, placed record by record
+    where the record's text names it, and the pair's decision still makes the supplier report count them once. Refused when a person listed the pair as an anti-alias; a model's anti-alias for the pair (a
     Perplexity ``parent_subsidiary`` verdict on Medlab Pathology and Australian Clinical Labs) gives way to the
     person, as every model decision does. ``list`` shows the people's aliases.
     """
@@ -1866,13 +1868,19 @@ def cmd_alias(args) -> int:
                       "remove that first", file=sys.stderr)
                 return 2
             print(f"removed the model's anti-alias {args.variant!r} / {args.canonical!r}: a person's alias outranks it")
-        EntityResolver(conn).learn_alias(conn, args.variant, args.canonical, source="human")
+        if getattr(args, "contextual", False):
+            from cyber_data_collector.dedup.contextual_aliases import add_contextual_alias
+
+            add_contextual_alias(conn, args.variant, args.canonical, source="human")
+        else:
+            EntityResolver(conn).learn_alias(conn, args.variant, args.canonical, source="human")
         a, b = sorted((args.variant, args.canonical))
         conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
                      "model, prompt_version, decided_at) VALUES (?, ?, 'same', ?, ?, 'human', 'human', ?)",
                      (a, b, args.canonical, args.reason.strip(), utc_now_iso()))
         conn.commit()
-        print(f"alias (human): {args.variant!r} -> {args.canonical!r}; run canonicalise-entities to fold")
+        print(f"alias (human{', contextual' if getattr(args, 'contextual', False) else ''}): {args.variant!r} -> "
+              f"{args.canonical!r}; run canonicalise-entities to apply")
         return 0
     finally:
         conn.close()
@@ -4083,8 +4091,13 @@ def cmd_find_supplier_victims(args) -> int:
     if places:
         print(f"Looked up the jurisdiction of {places['looked_up']} named customer(s); {places['failed']} failed, "
               f"{places['unplaced']} still unplaced (left out of the supplier report until researched).")
+    pairs = result.get("customer_pairs") or {}
+    if result.get("customer_pairs") is not None:
+        print(f"Judged {result.get('customer_names_judged', 0)} customer name(s); customer pairs in one incident: "
+              f"{pairs['asked']} asked, {pairs['reused']} reused, {pairs['failed']} failed; descriptions "
+              f"{result.get('descriptions')}")
     problems = (len(result["failed"]["victim"]) + len(result["failed"]["same_incident"])
-                + len(result["search_failures"]) + places.get("failed", 0))
+                + len(result["search_failures"]) + places.get("failed", 0) + pairs.get("failed", 0))
     undecided = len(result["undecided"]["victim"]) + len(result["undecided"]["same_incident"])
     if undecided:
         print(f"WARNING: {undecided} item(s) in the escalation band have no escalated answer and are "
@@ -4513,13 +4526,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("variant", nargs="?")
     p.add_argument("canonical", nargs="?")
     p.add_argument("--reason", help="why they are one organisation (required)")
+    p.add_argument("--contextual", action="store_true",
+                   help="VARIANT is a generic name (\"Department of Education\"): CANONICAL is its candidate only where "
+                        "the record's own text names CANONICAL, never a fold everywhere")
     p.set_defaults(func=cmd_alias)
 
     p = sub.add_parser("validation-exception",
                        help="The owner's reported wrong results, kept as tests: add KIND EVENT VALUE --note; list; check")
     p.add_argument("action", choices=["add", "list", "check", "root-cause", "revise"])
     p.add_argument("kind", nargs="?", help="victim | not_victim | same_incident_as | different_incident_from | incident_month "
-                                            "| same_supplier_incident_as | not_supplier_customer "
+                                            "| same_supplier_incident_as | not_supplier_customer | supplier_customers_once (A|B) | not_vendor "
                                             "(root-cause / revise: the exception id)")
     p.add_argument("event", nargs="?", help="the event id the owner reported (root-cause: the cause found; "
                                              "revise: the new kind)")

@@ -1489,7 +1489,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                           judge_client=None, escalation_client=None, search=None,
                           labels_path: Path = LABELS_PATH, calibration_path: Path = CALIBRATION_PATH,
                           role_refresher=None, limit: Optional[int] = None, split: bool = False,
-                          profile_search=None) -> Dict[str, Any]:
+                          profile_search=None, describer=None) -> Dict[str, Any]:
     """Detect supplier incidents, judge their customers and other events, and report or write the links.
 
     One event per customer (owner decision 2026-10-31): nothing here attaches a co-victim or merges
@@ -1598,4 +1598,18 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                 failed += 1
         result["customer_jurisdictions"] = {"looked_up": looked, "failed": failed,
                                             "unplaced": len(multi_customer_incidents.unplaced_customers(conn))}
+        # Whether each named customer is an organisation at all ("The College" is a description), and whether two
+        # names listed under one incident are one customer (asked with the incident's context): the report reads
+        # both. Then a description of each attack the report lists.
+        from cyber_data_collector.dedup import alias_learning, name_judgement
+
+        done = name_judgement.stored_probabilities(conn)
+        todo = sorted({n.strip() for (n,) in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")
+                       if n and n.strip() and " ".join(n.split()).lower() not in done})
+        result["customer_names_judged"] = len(name_judgement.judge_names(
+            conn, [(n, name_judgement.sentence_for(conn, n)) for n in todo], judge=judge_client))
+        name_judgement.activate(conn)
+        pairs = alias_learning.verify_supplier_pairs(conn)
+        result["customer_pairs"] = {"asked": pairs.asked, "reused": pairs.reused, "failed": len(pairs.failed)}
+        result["descriptions"] = multi_customer_incidents.describe_incidents(conn, describer=describer)
     return result

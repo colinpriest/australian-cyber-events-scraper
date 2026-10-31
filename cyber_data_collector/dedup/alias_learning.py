@@ -123,6 +123,105 @@ def coreference_proposals(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
     return sorted(pairs)
 
 
+def _abbreviations(name: str) -> List[str]:
+    """Tokens of ``name`` written as an abbreviation (two or more capitals making up at least half the letters:
+    "NAB", "RMIT", "PwC", "CS"; not a camel-cased brand such as "ActionAid"), as the lower-case letters of their
+    capitals."""
+    import re
+
+    return [("".join(ch for ch in tok if ch.isupper())).lower() for tok in re.findall(r"[A-Za-z&]+", name or "")
+            if sum(ch.isupper() for ch in tok) >= 2 and 2 * sum(ch.isupper() for ch in tok) >= len(tok)]
+
+
+def _initials(name: str) -> str:
+    """The initial of every word of ``name`` and of every capitalised part inside one ("PricewaterhouseCoopers"
+    gives p, c), lower case."""
+    import re
+
+    out = []
+    for word in re.findall(r"[A-Za-z]+", name or ""):
+        parts = re.findall(r"[A-Z][a-z]*|[a-z]+", word) or [word]
+        out.extend(p[0].lower() for p in parts)
+    return "".join(out)
+
+
+def abbreviation_fits(short: str, long: str) -> bool:
+    """One of ``short``'s abbreviations is the initials of ``long`` taken in order from its first word
+    ("ANZ" / "Australia and New Zealand Banking Group", "RMIT University" / "Royal Melbourne Institute of
+    Technology"). A proposal test only: the verification decides."""
+    initials = _initials(long)
+    for abbr in _abbreviations(short):
+        if len(abbr) < 2 or not initials or abbr[0] != initials[0]:
+            continue
+        it = iter(initials)
+        if all(ch in it for ch in abbr):
+            return True
+    return False
+
+
+def supplier_pair_proposals(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
+    """Pairs of names listed under one supplier incident - two customers, or the supplier and a customer - that may
+    be one organisation (or one a part of the other), as ``(a, b)`` with ``a < b``.
+
+    The owner's review of the supplier report (2026-10-31) found one customer under two names in one incident
+    (NAB and "National Australia Bank (NAB)", "RMIT University" and "Royal Melbourne Institute of Technology",
+    "Ministry of Health" and NSW Health), the ACT Health Directorate beside the ACT Government whose gateway was
+    breached, and the supplier as its own customer ("PricewaterhouseCoopers (PwC)" under PwC). Nothing compared
+    them: no structure rule paired them across the whole table. Within one incident they are proposed when they
+    share a distinctive word, one abbreviates the other, or they share a word and their profiles agree
+    (:func:`entity_profiles.agreement`). Only a proposal: the verification decides.
+    """
+    from cyber_data_collector.dedup.entity_merge import _PLACE_TOKENS, _tokens, distinctive_core
+    from cyber_data_collector.dedup.entity_profiles import domain_of, profile_for
+
+    def profiles_place_together(a: str, b: str) -> bool:
+        # The same website, or the same jurisdiction below country level ("Australia, New South Wales"): two
+        # national charities both "Australia" are not thereby one organisation.
+        pa, pb = profile_for(conn, a), profile_for(conn, b)
+        if domain_of(pa) and domain_of(pa) == domain_of(pb):
+            return True
+        ja, jb = (pa.get("jurisdiction") or [None])[0], (pb.get("jurisdiction") or [None])[0]
+        return bool(ja and ja == jb and "," in ja)
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"SupplierIncidents", "SupplierIncidentLinks"} <= tables:
+        return []
+    names_of: Dict[str, Set[str]] = defaultdict(set)
+    for sid, vendor in conn.execute("SELECT supplier_incident_id, supplier_name FROM SupplierIncidents"):
+        names_of[sid].add(vendor)
+    for sid, name in conn.execute("SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks"):
+        if name:
+            names_of[sid].add(name)
+    pairs: Set[Tuple[str, str]] = set()
+    for names in names_of.values():
+        for a, b in itertools.combinations(sorted(names), 2):
+            if a.lower() == b.lower():
+                continue
+            if (distinctive_core(a) & distinctive_core(b) or abbreviation_fits(a, b) or abbreviation_fits(b, a)
+                    or ((set(_tokens(a)) & set(_tokens(b))) - set(_PLACE_TOKENS)
+                        and profiles_place_together(a, b))):
+                pairs.add((a, b))
+    return sorted(pairs)
+
+
+def verify_supplier_pairs(conn: sqlite3.Connection, search: Optional[eav.Search] = None,
+                          report: Optional[eav.VerificationReport] = None) -> eav.VerificationReport:
+    """Ask the alias verification about every :func:`supplier_pair_proposals` pair (stored verdicts reused).
+
+    Folds nothing. A verdict here was asked with the incident's context and holds for the names as listed in that
+    incident: the supplier report reads them to count one customer once (:mod:`multi_customer_incidents`). A
+    global fold would carry a generic name ("Ministry of Health", "Department of Education") into every other
+    incident, so none is made from these pairs.
+    """
+    search = search or eav.perplexity_search
+    report = report if report is not None else eav.VerificationReport()
+    eav.ensure_schema(conn)
+    known = eav.stored_verdicts(conn)
+    for a, b in supplier_pair_proposals(conn):
+        eav.verify_pair(conn, a, b, search, known, report)
+    return report
+
+
 def score(conn: sqlite3.Connection, a: str, b: str) -> int:
     """How likely a proposed pair is to be one organisation, for deciding which to ask about first.
 

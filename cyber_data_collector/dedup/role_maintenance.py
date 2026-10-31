@@ -112,23 +112,31 @@ def _role_rows(conn: sqlite3.Connection) -> List[Dict[str, object]]:
         """
     ).fetchall()
     victims = _usable_victim_names(conn)
+    try:
+        vendors = {r[0] for r in conn.execute(
+            "SELECT DISTINCT deduplicated_event_id FROM DeduplicatedEventEntities WHERE relationship_type = 'vendor'")}
+    except sqlite3.OperationalError:
+        vendors = set()
     return [{"id": r[0], "stored": r[1], "version": r[2], "has_version_column": _has_version_column(conn),
-             "members": (r[3] or "").split(",") if r[3] else [], "has_victim": r[0] in victims} for r in rows]
+             "members": (r[3] or "").split(",") if r[3] else [], "has_victim": r[0] in victims,
+             "has_vendor": r[0] in vendors} for r in rows]
 
 
 def _state(row: Dict[str, object]) -> str:
     """``never`` / ``outdated`` (membership) / ``prompt`` / ``current`` for one event's roles.
 
-    ``prompt``: classified under an older role prompt and left without a victim - the footprint of the
-    defect the newer prompt fixes (an incident event whose every entity was a bystander). Events that
-    have a victim keep the roles they have; ``roles-status --invalidate-all`` redoes everything.
+    ``prompt``: classified under an older role prompt and left without a victim (v2's fix: an incident event
+    whose every entity was a bystander), or recording a vendor (v3's fix: a security firm, agency or photo
+    credit recorded as the supplier). Other events keep the roles they have; ``roles-status --invalidate-all``
+    redoes everything.
     """
     stored = row["stored"]
     if stored is None or not str(stored).strip():
         return "never"
     if stored != signature_for_members(row["members"]):
         return "outdated"
-    if row["has_version_column"] and row["version"] != _prompt_version() and not row["has_victim"]:
+    if row["has_version_column"] and row["version"] != _prompt_version() and (
+            not row["has_victim"] or row.get("has_vendor")):
         return "prompt"
     return "current"
 

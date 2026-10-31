@@ -60,7 +60,9 @@ def build_html(incidents: List[mci.Incident], generated: str) -> str:
     cards = []
     for inc in incidents:
         rows = "".join(
-            f"<tr><td>{html.escape(c.name)}</td>"
+            f"<tr><td>{html.escape(c.name)}"
+            + (f'<br><span class="meta">also listed as {html.escape(", ".join(c.also))}</span>' if c.also else "")
+            + "</td>"
             f'<td class="ev">{html.escape(c.event_title or "named in the reporting; no event of its own")}'
             + (f'<br><code>{html.escape(c.event_id)}</code>' if c.event_id else "")
             + "</td></tr>"
@@ -70,23 +72,27 @@ def build_html(incidents: List[mci.Incident], generated: str) -> str:
             left_out.append(f"{len(inc.outside)} named organisation(s) outside Australia: "
                             + html.escape(", ".join(inc.outside)))
         if inc.unplaced:
-            left_out.append(f"{len(inc.unplaced)} named organisation(s) whose jurisdiction is not yet researched: "
+            left_out.append(f"{len(inc.unplaced)} named organisation(s) whose name or jurisdiction is not yet checked: "
                             + html.escape(", ".join(inc.unplaced)))
+        description = inc.description or "No description yet: written by the next supplier step."
+        if inc.description and not inc.description_current:
+            description += " (written from older evidence)"
         note = (f'<div class="meta" style="margin-top:6px">Not listed: {"; ".join(left_out)}.</div>'
                 if left_out else "")
         cards.append(
             f'<div class="card"><div class="vendor">{html.escape(inc.vendor)}</div>'
             f'<div class="meta">attack dated {html.escape(mci.attack_label(inc))} &middot; '
             f"{len(inc.customers)} Australian customers affected</div>"
-            f'<div class="desc">{html.escape(inc.description or "No description recorded.")}</div>'
+            f'<div class="desc">{html.escape(description)}</div>'
             f"<table><tr><th>Customer</th><th class=\"ev\">Customer's event</th></tr>{rows}"
             f"</table>{note}</div>")
     intro = (f"{len(incidents)} attack(s) on a known vendor that affected more than one of the vendor's Australian "
              "customers, ordered by vendor name, date of attack and customer name. Each attack has one date: the "
              "vendor's own event's date, else the earliest of its customers' events. A customer is listed once "
              "whether it has its own event or is only named in the reporting; one only named is listed when its "
-             "researched jurisdiction is Australian. The vendor itself, descriptions such as \"Australian "
-             f"charities\" and lists of organisations are not counted. Generated {html.escape(generated)}.")
+             "researched jurisdiction is Australian. Other names of a customer, and parts of it (a directorate of "
+             "a government), are shown with it. The vendor itself, descriptions such as \"Australian charities\" "
+             f"and lists of organisations are not counted. Generated {html.escape(generated)}.")
     return PAGE.format(intro=intro, cards="\n".join(cards) or "<p>No vendor attack with several customers.</p>")
 
 

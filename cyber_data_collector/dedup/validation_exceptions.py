@@ -22,7 +22,10 @@ Kinds:
   (``SupplierIncidents``), and to no other incident of it - so the supplier report shows the attack once, with one
   date;
 * ``not_supplier_customer``: no supplier incident linking the event lists ``value`` as a customer in the supplier
-  report (:mod:`multi_customer_incidents`).
+  report (:mod:`multi_customer_incidents`);
+* ``supplier_customers_once``: ``value`` is ``A|B``, two names of one customer: no supplier incident linking the
+  event lists them as two customers;
+* ``not_vendor``: the event records no vendor (column or role) that is ``value``.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from typing import Dict, List, Optional, Sequence
 from cyber_data_collector.utils.timestamps import utc_now_iso
 
 KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month",
-         "same_supplier_incident_as", "not_supplier_customer")
+         "same_supplier_incident_as", "not_supplier_customer", "supplier_customers_once", "not_vendor")
 PAIR_KINDS = ("same_incident_as", "different_incident_from", "same_supplier_incident_as")
 
 SCHEMA = """
@@ -150,7 +153,7 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
     """Whether the data now satisfies one exception."""
     from cyber_data_collector.dedup.victim_fill import names_match
 
-    eid, kind = row["exception_id"], row["kind"]
+    eid, kind, value_text = row["exception_id"], row["kind"], row["value"]
     now = current_event(conn, json.loads(row["record_ids_json"]))
     if now is None:
         return Result(eid, kind, "unchecked", "no single Active event holds the reported records")
@@ -169,6 +172,33 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         ok = hit if kind == "victim" else not hit
         return Result(eid, kind, "pass" if ok else "fail",
                       f"event {now[:8]} victims: {', '.join(victims) or 'none'}")
+    if kind == "not_vendor":
+        row = conn.execute("SELECT vendor_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                           (now,)).fetchone()
+        vendors = ([row[0]] if row and row[0] else []) + [r[0] for r in conn.execute(
+            """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (now,))]
+        hit = [v for v in vendors if names_match(conn, v, value_text)]
+        return Result(eid, kind, "fail" if hit else "pass",
+                      f"event {now[:8]} vendors: {', '.join(vendors) or 'none'}")
+    if kind == "supplier_customers_once":
+        from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+        mine = _supplier_incidents(conn, now)
+        if not mine:
+            return Result(eid, kind, "unchecked", f"event {now[:8]} is in no supplier incident")
+        first, _, second = value_text.partition("|")
+        twice = []
+        for inc in mci.find(conn):
+            if inc.supplier_incident_id not in mine:
+                continue
+            holders = [{i for i, c in enumerate(inc.customers) if any(names_match(conn, n, name)
+                                                                     for n in [c.name, *c.also])}
+                       for name in (first, second)]
+            if holders[0] and holders[1] and not (holders[0] & holders[1]):
+                twice.append(inc.vendor)
+        return Result(eid, kind, "fail" if twice else "pass",
+                      f"listed as two customers under {', '.join(twice)}" if twice else "listed once (or not listed)")
     if kind == "not_supplier_customer":
         from cyber_data_collector.dedup import multi_customer_incidents as mci
 
