@@ -2428,6 +2428,11 @@ def cmd_classify_entities(args) -> int:
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
+        from cyber_data_collector.dedup.backfill import link_unlinked_events
+
+        unlinked = link_unlinked_events(conn, apply=not getattr(args, "dry_run", False))
+        if unlinked:
+            print(f"{len(unlinked)} event(s) with no entity link took their members' links")
         classifier = EntityRoleClassifier()
 
         rows = conn.execute("""

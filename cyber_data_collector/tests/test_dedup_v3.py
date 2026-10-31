@@ -754,3 +754,21 @@ def test_backfill_prunes_sources_left_behind_by_a_split(conn):
     assert urls == {"https://x/toyota"}
     assert conn.execute("SELECT total_data_sources FROM DeduplicatedEvents WHERE deduplicated_event_id=?",
                         (ded_a,)).fetchone()[0] == 1
+
+
+def test_an_event_with_no_entity_link_takes_its_members_links_and_no_other_event_changes(conn):
+    from cyber_data_collector.dedup.backfill import link_unlinked_events
+
+    _, e1, d1 = _add_event(conn, "u1", "NSW Health Accellion breach", "https://x/1")
+    _, e2, d2 = _add_event(conn, "u2", "ASIC Accellion breach", "https://x/2")
+    conn.executemany("INSERT INTO EventDeduplicationMap (map_id, enriched_event_id, deduplicated_event_id, "
+                     "contribution_type) VALUES (?, ?, ?, 'master')", [("m1", e1, d1), ("m2", e2, d2)])
+    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name) VALUES (7, 'NSW Health'), (8, 'Allens')")
+    conn.executemany("INSERT INTO EnrichedEventEntities VALUES (?, ?, 'victim', 0.9)", [(e1, 7), (e2, 8)])
+    conn.execute("INSERT INTO DeduplicatedEventEntities VALUES (?, 8, 'affected', 0.9, 1)", (d2,))   # reversed role
+    assert link_unlinked_events(conn, apply=False) == [d1]
+    link_unlinked_events(conn)
+    roles = {tuple(r) for r in conn.execute(
+        "SELECT deduplicated_event_id, entity_id, relationship_type FROM DeduplicatedEventEntities")}
+    assert roles == {(d1, 7, "victim"), (d2, 8, "affected")}
+    assert link_unlinked_events(conn) == []
