@@ -199,7 +199,11 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v2"
+ROLES_PROMPT_VERSION = "entity-roles-v3"
+# v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
+# researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
+# ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
+# prompt that record a vendor are classified again (role_maintenance).
 #: Characters of detail the classifier is shown (v1: 700).
 DETAIL_CHARS = 1200
 
@@ -243,7 +247,12 @@ SYSTEM_PROMPT = (
     "the listed organisation that runs that service or programme is the "
     "victim.\n"
     "- vendor: a third-party supplier, contractor or software provider whose "
-    "compromise caused the victim's exposure.\n"
+    "own system, product or service was compromised or attacked, and whose "
+    "compromise caused the victim's exposure. NOT a vendor: a security firm, "
+    "researcher or agency that reported, researched, investigated, advised or "
+    "responded (bystander, or regulator for an authority); an organisation "
+    "credited for a photo, quote or data (bystander); a provider whose product "
+    "failed or had an outage without being attacked (bystander).\n"
     "- affected_customer: an organisation harmed because a vendor it uses was "
     "breached.\n"
     "- regulator: an authority investigating or responding (OAIC, ACSC, "

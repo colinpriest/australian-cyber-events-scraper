@@ -148,7 +148,8 @@ def names_to_judge(conn: sqlite3.Connection) -> List[str]:
 
     * every name recorded as a victim, role or scalar, of an active event;
     * every organisation linked to an active event that has no victim role (the candidates for it);
-    * every name a stored text extraction (:mod:`event_organisations`) offered as a possible victim.
+    * every name a stored text extraction (:mod:`event_organisations`) offered as a possible victim;
+    * every customer a supplier incident links (``SupplierIncidentLinks``).
     """
     names: Dict[str, str] = {}
 
@@ -176,6 +177,13 @@ def names_to_judge(conn: sqlite3.Connection) -> List[str]:
                                  WHERE x.deduplicated_event_id = d.deduplicated_event_id
                                    AND x.relationship_type = 'victim')"""):
         add(n)
+    try:
+        # Customers a supplier incident names (the supplier report lists them): "The College" and "Early Learning"
+        # came from a search answer and were never judged (owner review 2026-10-31).
+        for (n,) in conn.execute("SELECT customer_name FROM SupplierIncidentLinks"):
+            add(n)
+    except sqlite3.OperationalError:
+        pass
     try:
         for (answer,) in conn.execute("SELECT answer FROM ModelJudgements WHERE question_id = 'event_named_organisations'"):
             try:

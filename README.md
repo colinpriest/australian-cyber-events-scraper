@@ -776,6 +776,9 @@ the text extraction did not list it.
 and a `human` decision): folded by `canonicalise-entities` as a reviewed alias, never re-asked or reversed by a
 model ("NSW Ministry of Health" is NSW Health, owner 2026-10-31) A model's anti-alias for the pair gives way to it (Medlab Pathology is
 Australian Clinical Labs, owner 2026-10-31, over a model's `parent_subsidiary`); a person's anti-alias does not.
+`alias add ... --contextual` is for a generic name ("Department of Education" for the Victorian department,
+"Department of Health" for WA's, owner 2026-10-31): the canonical becomes the name's contextual candidate, placed
+record by record where the record's text names it, never a fold of every "Department of Education".
 
 **An acronym two organisations fold into is contextual.** "National Australia Bank" -> "NAB" stays global: a full
 name means one organisation. "Top Education Group" -> "TEG" and Ticketek's parent "TEG Pty Ltd" -> "TEG" filed both
@@ -788,7 +791,9 @@ acronym's own name with a qualifier ("TEG Pty Ltd") stays global (`contextual_al
 (`dedup/validation_exceptions.py`) with the owner's words, anchored on the event's record ids (event ids change
 with merges and splits): `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`,
 `same_supplier_incident_as` (two events linked to one supplier incident and no other) and `not_supplier_customer`
-(the supplier report does not list an organisation under the event's supplier incident).
+(the supplier report does not list an organisation under the event's supplier incident), `supplier_customers_once`
+(`A|B`: two names of one customer are not listed as two customers) and `not_vendor` (the event records no vendor
+that is the organisation).
 `dedup_admin.py validation-exception add KIND EVENT VALUE --note ...`, `list`, `check` (exit 1 when any fails) and
 `root-cause ID TEXT`. The quality report counts the failures (`acceptance.exceptions.failures`, a warning). They are
 tests, never inputs: run `check` before and after changing any dedup, victim or supplier algorithm.
@@ -1260,6 +1265,30 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
 * **One date per attack**: the supplier's own event's date, else the earliest of its customers' events, at its
   verified precision ("December 2020"; an unverified one says so). Customers' own event dates are report dates and
   are no longer shown as attack dates.
+
+Second owner review (2026-10-31):
+
+* **A vendor is a supplier that was compromised** (role prompt `entity-roles-v3`). ESET (a researcher), the Cyber
+  Security Agency of Singapore and Accenture (a photo credit on the ABC's Tasmanian ambulance pager-leak story,
+  which filed that leak under Accenture's LockBit attack) were recorded as vendors; so was CrowdStrike, whose 2024
+  outage was not an attack. An event classified under an older prompt that records a vendor is classified again
+  (`role_maintenance`), and the registry repair then drops the links that no longer hold.
+* **One customer is listed once.** Names listed under one supplier incident, and the supplier's own name, are put
+  to the alias verification with the incident's context when they share a distinctive word, one abbreviates the
+  other, or their profiles place them together (`alias_learning.supplier_pair_proposals` /
+  `verify_supplier_pairs`, run by `find-supplier-victims --research --apply`). A `same` verdict (NAB and "National
+  Australia Bank (NAB)") or `parent_subsidiary` (the ACT Health Directorate under the ACT Government) lists them as
+  one customer ("also listed as"); a `same` verdict with the supplier ("PricewaterhouseCoopers (PwC)" under PwC)
+  removes it. These verdicts fold nothing globally: a generic name decided in one incident's context ("Ministry of
+  Health" for NSW Health) must not carry into another. A person's alias or decision outranks them.
+* **A description is not a customer.** Customer names are put to the proper-name judgement (`name_judgement`,
+  calibrated); "The College" and "Early Learning" are descriptions. A name not yet judged is left out as not checked.
+* **A description of each attack**: 2-3 sentences by the fast OpenAI model from the records of the supplier's and
+  customers' events (`EventDescriptions`, purpose `supplier-incident`), rewritten only when that evidence changes;
+  an older one is marked. No event carries a description of its own, so the report used to say "No description
+  recorded" for every attack.
+* **The main dashboard** has a chart of these attacks per half-year of the attack (undated ones counted in its
+  subtitle), reconciled against the report's list.
 
 ### Supplier incidents: every affected organisation, one incident (superseded)
 

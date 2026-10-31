@@ -1102,6 +1102,37 @@ def get_ai_involvement_by_half_year(conn: sqlite3.Connection, start_date: str, e
             'available': True, 'report': AI_REPORT_FILE}
 
 
+SUPPLIER_REPORT_FILE = "supplier_incidents.html"
+
+
+def get_vendor_attacks_by_half_year(conn: sqlite3.Connection, start_date: str, end_date: str) -> Dict[str, Any]:
+    """Attacks on a known vendor that affected two or more Australian customers, per half-year of the attack.
+
+    The same attacks as ``supplier_incidents.html`` (:func:`multi_customer_incidents.find`: one per attack, its
+    Australian customers counted once, the vendor's own event's date or the earliest customer event's). Every
+    half-year in the window is listed, with zeros; ``undated`` counts attacks with no date and ``outside`` those
+    dated outside the window (neither is plotted).
+    """
+    from cyber_data_collector.dedup import multi_customer_incidents
+
+    period = ReportingPeriod.from_iso(start_date, end_date)
+    periods = [p.label for p in half_years_between(period.start.year, period.end)]
+    counts = dict.fromkeys(periods, 0)
+    undated = outside = 0
+    for incident in multi_customer_incidents.find(conn):
+        date = str(incident.attack_date or "")[:10]
+        if not date:
+            undated += 1
+            continue
+        if not (start_date <= date <= end_date):
+            outside += 1
+            continue
+        half = f"{date[:4]} {'H1' if int(date[5:7]) <= 6 else 'H2'}"
+        counts[half] = counts.get(half, 0) + 1
+    return {'periods': periods, 'counts': [counts[p] for p in periods], 'undated': undated, 'outside': outside,
+            'report': SUPPLIER_REPORT_FILE}
+
+
 # ---------------------------------------------------------------------------
 # Partial half-year estimate: Bornhuetter-Ferguson with a reporting-lag curve
 # ---------------------------------------------------------------------------
@@ -2810,6 +2841,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     ai_inv = script_json(data.get('ai_involvement') or {'periods': [], 'attacker': [], 'vulnerability': [],
                                                         'misuse': [], 'unjudged': 0, 'available': False,
                                                         'report': AI_REPORT_FILE})
+    vendor_attacks = script_json(data.get('vendor_attacks') or {'periods': [], 'counts': [], 'undated': 0,
+                                                                 'outside': 0, 'report': SUPPLIER_REPORT_FILE})
     mcs = script_json(data['monthly_counts_stats'])
     etc = script_json(data['event_type_correlation'])
     oaic_comp = script_json(data.get('oaic_comparison', {'periods': [], 'database_counts': [], 'oaic_counts': []}))
@@ -2954,6 +2987,15 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           <div id="aiInvolvementSubtitle" style="font-size: 0.9rem; color: #6b7280; margin-top: -8px; margin-bottom: 6px; text-align: center;"></div>
           <div style="height: 320px; position: relative;">
             <canvas id="aiInvolvementChart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6 col-md-12">
+        <div class="chart-container" style="height: 420px;">
+          <div class="chart-title">Database: Vendor Attacks Affecting Several Australian Customers per Half-Year</div>
+          <div id="vendorAttacksSubtitle" style="font-size: 0.9rem; color: #6b7280; margin-top: -8px; margin-bottom: 6px; text-align: center;"></div>
+          <div style="height: 320px; position: relative;">
+            <canvas id="vendorAttacksChart"></canvas>
           </div>
         </div>
       </div>
@@ -3107,6 +3149,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     const maxRecordsPerMonth = __MRP__;
     const recordsByAttackType = __RBAT__;
     const aiInvolvement = __AI_INV__;
+    const vendorAttacks = __VENDOR_ATTACKS__;
     const monthlyCountsStats = __MCS__;
     const eventTypeCorrelation = __ETC__;
     const oaicComparison = __OAIC_COMP__;
@@ -4792,6 +4835,32 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         }
       });
     })();
+
+    // 15) Attacks on a known vendor that affected two or more Australian customers, per half-year
+    (function() {
+      const d = vendorAttacks;
+      const sub = document.getElementById('vendorAttacksSubtitle');
+      const total = (d.counts || []).reduce((a, b) => a + b, 0);
+      const parts = [`${total.toLocaleString()} vendor attack(s) in the window`];
+      if (d.undated) parts.push(`${d.undated.toLocaleString()} undated (not plotted)`);
+      if (d.outside) parts.push(`${d.outside.toLocaleString()} dated outside the window`);
+      sub.innerHTML = parts.join('; ') + ` &middot; <a href="${d.report}">List of vendor attacks</a>`;
+      new Chart(document.getElementById('vendorAttacksChart').getContext('2d'), {
+        type: 'bar',
+        data: { labels: d.periods,
+                datasets: [{ label: 'Vendor attacks with two or more Australian customers', data: d.counts,
+                             backgroundColor: '#7c3aed' }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          scales: {
+            x: { title: { display: true, text: 'Half-year of the attack' } },
+            y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: 'Vendor attacks' } }
+          }
+        }
+      });
+    })();
   </script>
 </body>
 </html>
@@ -4821,6 +4890,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             .replace('__SBAT__', sbat)
             .replace('__RBAT__', rbat)
             .replace('__AI_INV__', ai_inv)
+            .replace('__VENDOR_ATTACKS__', vendor_attacks)
             .replace('__MCS__', mcs)
             .replace('__ETC__', etc)
             .replace('__OAIC_COMP__', oaic_comp)
@@ -5024,6 +5094,17 @@ def build_reconciliation_checks(
             "AI involvement per half-year", ai_incidents,
             sum(sum_counts(ai_chart.get(k, [])) for k in ('attacker', 'vulnerability', 'misuse', 'uncertain')),
             "incidents labelled AI-attacker, AI-vulnerability, AI-misuse or AI-uncertain"))
+
+    vendor_chart = data.get('vendor_attacks')
+    if vendor_chart is not None:
+        from cyber_data_collector.dedup import multi_customer_incidents
+
+        attacks = multi_customer_incidents.find(conn)
+        checks.append(ReconciliationCheck(
+            "Vendor attacks per half-year", len(attacks),
+            sum_counts(vendor_chart.get('counts', [])) + vendor_chart.get('undated', 0)
+            + vendor_chart.get('outside', 0),
+            "attacks listed in supplier_incidents.html (plotted + undated + outside the window)"))
     return checks
 
 
@@ -5133,6 +5214,7 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             'severity_by_attack_type': get_severity_by_attack_type(conn, start_date, end_date),
             'records_by_attack_type': get_records_affected_by_attack_type(conn, start_date, end_date),
             'ai_involvement': get_ai_involvement_by_half_year(conn, start_date, end_date),
+            'vendor_attacks': get_vendor_attacks_by_half_year(conn, start_date, end_date),
             'monthly_counts_stats': compute_monthly_counts_stats(monthly_counts),
             'event_type_correlation': compute_event_type_correlation_matrix(event_type_mix),
             'oaic_comparison': oaic_comparison,

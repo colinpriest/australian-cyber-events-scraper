@@ -21,6 +21,23 @@ from cyber_data_collector.dedup.entity_resolution import EntityResolver
 from cyber_data_collector.dedup.ledger import DedupLedger, repair_departed_links
 from cyber_data_collector.tests.test_dedup_v3 import BASE_DDL, _add_event
 
+import pytest
+
+
+class _Every(dict):
+    """Every name has a proper-name verdict (the fixtures' named customers are organisations)."""
+
+    def __contains__(self, key):
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _names_judged(monkeypatch):
+    from cyber_data_collector.dedup import name_judgement
+
+    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: _Every())
+    monkeypatch.setattr(name_judgement, "descriptive_names", lambda conn, *a, **k: set())
+
 
 def _world(records, victim="South Australian Government"):
     """One event ``ded-<first>`` holding ``records`` [(key, entity, role)], each record linked to its entity."""
@@ -424,3 +441,129 @@ def test_customer_events_on_one_date_with_and_without_a_precision_sort():
     conn.execute("UPDATE DeduplicatedEvents SET event_date_precision = 'month' WHERE deduplicated_event_id = 'ded-a'")
     [inc] = [i for i in mci.find(conn) if i.vendor == "Accellion"]
     assert inc.attack_date == "2020-12-01"
+
+
+def test_proposals_pair_names_of_one_customer_within_an_incident_and_not_unrelated_ones():
+    """Owner review 2026-10-31: RMIT, ANZ, PwC, the ACT Health Directorate; TEG is not Ticketek."""
+    from cyber_data_collector.dedup import alias_learning as al
+
+    assert al.abbreviation_fits("RMIT University", "Royal Melbourne Institute of Technology")
+    assert al.abbreviation_fits("ANZ", "Australia and New Zealand Banking Group Limited")
+    assert al.abbreviation_fits("PwC", "PricewaterhouseCoopers")
+    assert not al.abbreviation_fits("TEG", "Ticketek")
+    conn, _ = _accellion()
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-a', ?, ?, NULL, 'customer-named', 0.9, 'jev', "
+                     "'x', 'x')",
+                     [(20, "ACT Government"), (21, "ACT Health Directorate"), (22, "RMIT University"),
+                      (23, "Royal Melbourne Institute of Technology"), (24, "ActionAid Australia"),
+                      (25, "Amnesty International Australia"), (26, "Ticketek"), (27, "TEG")])
+    pairs = set(al.supplier_pair_proposals(conn))
+    assert ("ACT Government", "ACT Health Directorate") in pairs
+    assert ("RMIT University", "Royal Melbourne Institute of Technology") in pairs
+    assert ("ActionAid Australia", "Amnesty International Australia") not in pairs
+    assert ("TEG", "Ticketek") not in pairs
+
+
+def _verdict(conn, a, b, verdict, model="sonar-pro"):
+    from cyber_data_collector.dedup import entity_alias_verification as eav
+
+    eav.ensure_schema(conn)
+    a, b = sorted((a, b))
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, model, prompt_version, decided_at) "
+                 "VALUES (?, ?, ?, ?, 'entity-alias-v1', '2026-10-31')", (a, b, verdict, model))
+
+
+def test_one_customer_under_two_names_or_with_its_part_is_listed_once_and_the_vendor_is_no_customer(monkeypatch):
+    """NAB / National Australia Bank (NAB); ACT Government / ACT Health Directorate; the vendor under another name;
+    "The College" is a description."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci, name_judgement
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    _jurisdictions(conn, {n: "Australia" for n in range(30, 36)})
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-a', ?, ?, NULL, 'customer-named', 0.9, 'jev', "
+                     "'x', 'x')",
+                     [(30, "NAB"), (31, "National Australia Bank (NAB)"), (32, "ACT Health Directorate"),
+                      (33, "Accellion Inc"), (34, "The College"), (35, "ACT Government")])
+    _verdict(conn, "NAB", "National Australia Bank (NAB)", "same")
+    _verdict(conn, "ACT Government", "ACT Health Directorate", "parent_subsidiary")
+    _verdict(conn, "Accellion", "Accellion Inc", "same", model="human")
+    monkeypatch.setattr(name_judgement, "descriptive_names", lambda conn, *a, **k: {"the college"})
+    [inc] = [i for i in mci.find(conn) if i.vendor == "Accellion"]
+    rows = {c.name: c.also for c in inc.customers}
+    assert rows.get("ACT Government") == ["ACT Health Directorate"]
+    assert rows.get("NAB") == ["National Australia Bank (NAB)"]
+    assert "Accellion Inc" not in rows and "The College" not in rows and "The College" not in inc.unplaced
+
+
+def test_a_named_customer_with_no_name_verdict_is_not_listed_until_judged(monkeypatch):
+    from cyber_data_collector.dedup import multi_customer_incidents as mci, name_judgement
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    _jurisdictions(conn, {40: "Australia"})
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-a', 40, 'Early Learning', NULL, 'customer-named', "
+                 "0.9, 'jev', 'x', 'x')")
+    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: {"asic": 0.9})
+    [inc] = [i for i in mci.find(conn) if i.vendor == "Accellion"]
+    assert "Early Learning" not in [c.name for c in inc.customers] and "Early Learning" in inc.unplaced
+
+
+def test_each_attack_gets_a_description_rewritten_only_when_its_evidence_changes():
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    calls = []
+
+    def describer(state):
+        calls.append(state)
+        return f"Accellion's file transfer appliance was attacked ({len(state['accounts'])} accounts)."
+
+    assert mci.describe_incidents(conn, describer=describer, model="m")["written"] == 1
+    assert mci.describe_incidents(conn, describer=describer, model="m")["current"] == 1 and len(calls) == 1
+    conn.execute("UPDATE EnrichedEvents SET description = 'ASIC confirms the Accellion breach' "
+                 "WHERE enriched_event_id = 'enr-a'")
+    assert mci.describe_incidents(conn, describer=describer, model="m")["written"] == 1 and len(calls) == 2
+
+
+def test_an_event_recording_a_vendor_under_the_old_role_prompt_is_classified_again():
+    """v3: ESET, an agency and a photo credit were recorded as suppliers."""
+    from cyber_data_collector.dedup import role_maintenance as rm
+
+    conn, _ = _accellion()
+    entity = conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('ESET')").lastrowid
+    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "VALUES ('ded-a', ?, 'vendor')", (entity,))
+    members = [r[0] for r in conn.execute("SELECT enriched_event_id FROM EventDeduplicationMap "
+                                          "WHERE deduplicated_event_id = 'ded-a'")]
+    conn.execute("UPDATE DeduplicatedEvents SET roles_member_signature = ?, roles_prompt_version = 'entity-roles-v2' "
+                 "WHERE deduplicated_event_id = 'ded-a'", (rm.signature_for_members(members),))
+    assert "ded-a" in rm.stale_event_ids(conn)
+
+
+def test_vendor_and_customer_once_exceptions():
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    _jurisdictions(conn, {30: "Australia", 31: "Australia"})
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-a', ?, ?, NULL, 'customer-named', 0.9, 'jev', "
+                     "'x', 'x')", [(30, "NAB"), (31, "National Australia Bank (NAB)")])
+    once = ve.add(conn, "supplier_customers_once", "ded-t", "NAB|National Australia Bank (NAB)", note="owner")
+    vendor = ve.add(conn, "not_vendor", "ded-t", "ESET", note="owner")
+    results = {r.exception_id: r.result for r in ve.check(conn)}
+    assert results[once] == "fail" and results[vendor] == "pass"
+    _verdict(conn, "NAB", "National Australia Bank (NAB)", "same", model="human")
+    conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = 'ESET' WHERE deduplicated_event_id = 'ded-t'")
+    results = {r.exception_id: r.result for r in ve.check(conn)}
+    assert results[once] == "pass" and results[vendor] == "fail"
+
+
+def test_the_dashboard_counts_vendor_attacks_per_half_year_of_the_attack():
+    from scripts.build_static_dashboard import get_vendor_attacks_by_half_year
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    chart = get_vendor_attacks_by_half_year(conn, "2020-01-01", "2021-12-31")
+    assert dict(zip(chart["periods"], chart["counts"]))["2020 H2"] == 1
+    assert sum(chart["counts"]) == 1 and chart["undated"] == 0 and chart["outside"] == 0
+    assert get_vendor_attacks_by_half_year(conn, "2022-01-01", "2022-12-31")["outside"] == 1
