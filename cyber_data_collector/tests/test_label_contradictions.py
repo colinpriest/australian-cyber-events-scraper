@@ -284,6 +284,27 @@ def test_record_members_writes_every_labelled_event(apart):
     assert lc.labelled_members() == {"ded-a": {"enr-a", "enr-a2"}, "ded-b": {"enr-b"}}
 
 
+def test_a_pair_labelled_after_the_snapshot_takes_its_records_from_the_live_database_once(apart, tmp_path,
+                                                                                          monkeypatch):
+    """The owner's Department of Finance pair (2026-10-31) names events the labelling snapshot does not hold, so
+    its one record read as 'in neither labelled event' and the labelled-same pair was never merged."""
+    conn, snapshot, _ = apart
+    _add_event(conn, "c", "Department of Finance cyber incident", "https://x/c", victim="Acme Ltd", date="2024-03-01")
+    from cyber_data_collector.dedup.backfill import run_backfill
+    run_backfill(conn)
+    conn.commit()
+    monkeypatch.setattr(lc, "LABELS_PATH", _labels(tmp_path, [("ded-a", "ded-b"), ("ded-a", "ded-c")], label="same"))
+    assert lc.record_members(snapshot) == 3                  # ded-c is not in the snapshot: nothing known
+    assert lc.record_members(snapshot, live=conn) == 4
+    assert lc.labelled_members()["ded-c"] == {"enr-c"}
+    _add_event(conn, "c2", "Later article", "https://x/c2", victim="Acme Ltd", date="2024-03-01")
+    run_backfill(conn)
+    DedupLedger(conn).merge_events("ded-c", "ded-c2", reason="t", respect_overrides=False)
+    conn.commit()
+    assert lc.record_members(snapshot, live=conn) == 4       # frozen: a record joining later is not labelled
+    assert lc.labelled_members()["ded-c"] == {"enr-c"}
+
+
 def test_a_split_made_from_a_label_that_has_changed_no_longer_blocks(world, tmp_path, monkeypatch):
     """The pair was split because it was labelled different; the owner relabels it same: the split's rulings go
     and the pair is merged again."""

@@ -144,15 +144,27 @@ def labelled_members(path: Optional[Path] = None) -> Dict[str, Set[str]]:
     return members
 
 
-def record_members(snapshot: Path, labels_path: Optional[Path] = None, out_path: Optional[Path] = None) -> int:
+def record_members(snapshot: Path, labels_path: Optional[Path] = None, out_path: Optional[Path] = None,
+                   live: Optional[sqlite3.Connection] = None) -> int:
     """Write the labelling-time records of every labelled event to the members file; the rows written.
 
-    Idempotent: the file is rewritten from the snapshot, sorted.
+    An event the snapshot holds takes its records there. One it does not hold was labelled later, against the
+    live database (the owner's Department of Finance pair, 2026-10-31): it keeps the records the file already
+    lists for it, else takes its Active records from ``live`` now, once - later runs keep them, so a record
+    joining the event afterwards is not taken for a labelled one. Idempotent; sorted.
     """
     labels_path, out_path = Path(labels_path or LABELS_PATH), Path(out_path or MEMBERS_PATH)
     events = sorted({e for label in ("same", "different") for pair in labelled_pairs(labels_path, label)
                      for e in pair})
     members = _snapshot_members(snapshot, events)
+    kept = labelled_members(out_path) if out_path.exists() else {}
+    for event in events:
+        if members.get(event):
+            continue
+        if kept.get(event):
+            members[event] = kept[event]
+        elif live is not None:
+            members[event] = _active_members(live, event)
     rows = sorted((e, r) for e, records in members.items() for r in records)
     with out_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh, lineterminator="\n")
