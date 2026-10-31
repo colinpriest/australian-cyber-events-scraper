@@ -52,6 +52,11 @@ def member_signature(conn: sqlite3.Connection, deduplicated_event_id: str) -> st
     return signature_for_members([r[0] for r in rows])
 
 
+def _reclassify_versions():
+    from cyber_data_collector.dedup.entity_classification import RECLASSIFY_VERSIONS
+    return RECLASSIFY_VERSIONS
+
+
 def _prompt_version() -> str:
     from cyber_data_collector.dedup.entity_classification import ROLES_PROMPT_VERSION
     return ROLES_PROMPT_VERSION
@@ -161,7 +166,7 @@ def _state(row: Dict[str, object]) -> str:
     if stored != signature_for_members(row["members"]):
         return "outdated"
     if row["has_version_column"] and row["version"] != _prompt_version() and (
-            not row["has_victim"] or row.get("has_vendor")):
+            not row["has_victim"] or row.get("has_vendor") or row["version"] in _reclassify_versions()):
         return "prompt"
     if row.get("victim_departed"):
         return "departed"

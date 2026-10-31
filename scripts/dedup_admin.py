@@ -2523,6 +2523,12 @@ def cmd_classify_entities(args) -> int:
         if departed:
             print(f"{sum(n for _, n in departed)} link(s) only split-out records carried removed from "
                   f"{len(departed)} event(s)")
+        if not getattr(args, "dry_run", False):
+            from cyber_data_collector.dedup.entity_classification import repair_stale_vendors
+            stale_vendors = repair_stale_vendors(conn)
+            conn.commit()
+            if stale_vendors:
+                print(f"{stale_vendors} stale event-level vendor link(s) no classification supports set to affected")
         classifier = EntityRoleClassifier()
 
         rows = conn.execute("""

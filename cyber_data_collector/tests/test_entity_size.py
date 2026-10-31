@@ -245,6 +245,17 @@ def test_unavailable_rows_are_retried_without_refresh(conn):
     assert [r["entity_id"] for r in pending_entities(conn)] == [entity_id]
 
 
+def test_a_rule_answer_is_revisited_once_the_rule_no_longer_gives_it(conn):
+    """The Australian Government was read as a place name and sized UNKNOWN by rule (owner 2026-11-01: HUGE)."""
+    stale = _add_entity(conn, "Australian Government", kind="government_body")
+    still = _add_entity(conn, "Australian hospitals")
+    for entity_id in (stale, still):
+        store_estimate(conn, entity_id, {"size": EntitySize.UNKNOWN, "confidence": 0.9, "method": "rule",
+                                         "basis": "Not a sizeable organisation.", "sources": []})
+    assert rule_size("Australian Government", "government_body") is None
+    assert [r["entity_name"] for r in pending_entities(conn)] == ["Australian Government"]
+
+
 def test_human_rulings_are_never_overwritten(conn):
     entity_id = _add_entity(conn, "Corrected By Hand Pty Ltd")
     store_estimate(conn, entity_id, {"size": EntitySize.SMALL, "confidence": 1.0,

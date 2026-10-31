@@ -693,8 +693,9 @@ def test_the_role_classifier_is_shown_the_sentences_that_name_each_entity():
     assert "Cyber Security Agency of Singapore\n    (named in no sentence" in seen["prompt"]
 
 
-def test_a_vendor_label_must_quote_a_listed_sentence():
-    """v6: the Singapore agency (named nowhere) and an unquoted Accenture are bystanders; a quoted vendor stays."""
+def test_a_vendor_label_must_quote_the_reporting_it_was_shown():
+    """v7: the Singapore agency (named nowhere), an unquoted Accenture and a quote that is not in the text shown are
+    bystanders; Pareto Phone, quoted from the description without its name, and a quoted Accellion stay vendors."""
     from cyber_data_collector.dedup.entity_classification import (EntityAssignment, EntityKind, EntityRole,
                                                                   EventEntityRoles, grounded_vendors)
 
@@ -706,18 +707,42 @@ def test_a_vendor_label_must_quote_a_listed_sentence():
         vendor("Cyber Security Agency of Singapore", "The agency investigated the breach."),
         vendor("Accenture"),
         vendor("Mandiant", "Its cybersecurity adviser Mandiant discovered the breach"),
-        vendor("Accellion", "“Hackers exploited a flaw in Accellion's file transfer appliance.”"),
+        vendor("Accellion", "“Hackers exploited a flaw in Accellion’s file transfer appliance.”"),
+        vendor("Pareto Phone", "After the company fell victim to ransomware gang LockBit in August"),
     ])
     mentions = {
         "Cyber Security Agency of Singapore": [],
         "Accenture": ["(Supplied: Accenture)"],
         "Mandiant": ["The breach was found by Mandiant.", "Mandiant reported it."],
         "Accellion": ["Hackers exploited a flaw in Accellion's file transfer appliance."],
+        "Pareto Phone": ["Red Cross donors' data was held by telemarketer Pareto Phone."],
     }
-    assert grounded_vendors(result, mentions) == ["Cyber Security Agency of Singapore", "Accenture", "Mandiant"]
+    shown = ["Red Cross caught up in breach",
+             "After the company fell victim to ransomware gang LockBit in August, data was posted."]
+    assert grounded_vendors(result, mentions, shown=shown) == [
+        "Cyber Security Agency of Singapore", "Accenture", "Mandiant"]
     roles = {a.name: a.role for a in result.assignments}
-    assert roles["Accellion"] == EntityRole.VENDOR
-    assert roles["Mandiant"] == EntityRole.BYSTANDER
+    assert roles["Accellion"] == EntityRole.VENDOR and roles["Pareto Phone"] == EntityRole.VENDOR
+
+
+def test_a_vendor_link_no_classification_supports_is_cleared():
+    """Visa stayed the event-level vendor of American Express's card-dump event after reclassification."""
+    from cyber_data_collector.dedup.entity_classification import clear_stale_vendors
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE EntitiesV2 (entity_id INTEGER PRIMARY KEY, entity_name TEXT);
+        CREATE TABLE DeduplicatedEventEntities (deduplicated_event_id TEXT, entity_id INTEGER, relationship_type TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        CREATE TABLE EnrichedEventEntities (enriched_event_id TEXT, entity_id INTEGER, relationship_type TEXT);
+        INSERT INTO EntitiesV2 VALUES (1, 'Visa'), (2, 'Pareto Phone'), (3, 'Accellion');
+        INSERT INTO EventDeduplicationMap VALUES ('r1', 'ev');
+        INSERT INTO DeduplicatedEventEntities VALUES ('ev', 1, 'vendor'), ('ev', 2, 'vendor'), ('ev', 3, 'vendor');
+        INSERT INTO EnrichedEventEntities VALUES ('r1', 1, 'victim'), ('r1', 2, 'vendor'), ('r1', 3, 'bystander');
+    """)
+    assert clear_stale_vendors(c, "ev", "Accellion") == 1
+    roles = dict(c.execute("SELECT e.entity_name, l.relationship_type FROM DeduplicatedEventEntities l "
+                           "JOIN EntitiesV2 e USING (entity_id)").fetchall())
+    assert roles == {"Visa": "affected", "Pareto Phone": "vendor", "Accellion": "vendor"}
 
 
 def test_the_answer_schema_does_not_call_a_failed_product_a_vendor():
@@ -771,3 +796,19 @@ def test_an_australian_co_victim_is_the_victim_and_the_foreign_one_is_not_its_ve
     c = _localise_db()
     c.execute("UPDATE EnrichedEventEntities SET relationship_type = 'victim' WHERE entity_id = 4")
     assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("National Australia Bank", None)
+
+
+def test_victim_size_exception():
+    """Owner 2026-11-01: the Australian Government is HUGE, not UNKNOWN."""
+    conn, _ = _accellion()
+    have = {r[1] for r in conn.execute("PRAGMA table_info(EntitiesV2)")}
+    if "size_estimate" not in have:
+        conn.execute("ALTER TABLE EntitiesV2 ADD COLUMN size_estimate TEXT")
+    entity = conn.execute("INSERT INTO EntitiesV2 (entity_name, size_estimate) "
+                          "VALUES ('Australian Government', 'UNKNOWN')").lastrowid
+    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "VALUES ('ded-a', ?, 'victim')", (entity,))
+    size = ve.add(conn, "victim_size", "ded-a", "Australian Government=HUGE", note="owner")
+    assert {r.exception_id: r.result for r in ve.check(conn)}[size] == "fail"
+    conn.execute("UPDATE EntitiesV2 SET size_estimate = 'HUGE' WHERE entity_id = ?", (entity,))
+    assert {r.exception_id: r.result for r in ve.check(conn)}[size] == "pass"

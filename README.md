@@ -1295,6 +1295,17 @@ Second owner review (2026-10-31):
   software caused" the exposure, against the prompt, and now matches it. Each vendor label quotes the sentence,
   among those listed for the entity, that shows its own system, product or service was attacked or compromised; a
   label whose quote is not one of them (or an entity named in no sentence) is a bystander.
+* **v7** (`entity-roles-v7`): v6's check demoted genuine suppliers (Pareto Phone, RMS Cloud, ZircoDATA) whose quote
+  came from the incident description rather than one of the entity's own two sentences; the quote may now come
+  from anything the model was shown, and every event classified under v6 is classified again
+  (`RECLASSIFY_VERSIONS`). A supplier compromised in another incident that the report mentions as background is not
+  this incident's vendor: ASIC's 2023 roundup of its own errors ("Prior to 2022, ASIC was a named victim of the
+  hack on ... Accellion") had been filed as a second Accellion attack.
+* **Stale event-level vendor links are cleared** (`clear_stale_vendors`, and `repair_stale_vendors` at the start of
+  every `classify-entities`). Event-level roles were written only for the chosen victim and vendor, so a vendor link
+  from an earlier classification outlived it: Visa stayed the "vendor" of American Express in a card-dump event
+  (Visa supplies nothing to Amex), and the supplier report reads these links. A link keeps `vendor` only for the
+  event's chosen vendor or an entity a member record still labels vendor.
 
 **Coherence splits (2026-11-01).** `check-coherence` and `check-same-organisation` re-read an event once a split
 in the same run has happened (a split that re-attaches a record can merge a later event away; the run failed on
@@ -1811,7 +1822,12 @@ those are settled by rule at no API cost — about 44% of the table. A row whose
 research could not be *reached* is marked `unavailable` and retried next run, so
 an outage never hardens into a settled UNKNOWN. A `human` method is never
 overwritten. Incremental by default, and run automatically after each
-deduplication (`--skip-entity-sizing` to opt out).
+deduplication (`--skip-entity-sizing` to opt out). A rule answer is kept only
+while the current rule still gives it: "Australian Government" and
+"Commonwealth" were listed as place names and sized UNKNOWN (owner 2026-11-01:
+the Commonwealth Government is HUGE), and Citrix, Facebook, Salesforce and
+LinkedIn were left UNKNOWN by rules since changed; such rows are researched
+again on the next run.
 
 ### Other deduplication repair commands
 

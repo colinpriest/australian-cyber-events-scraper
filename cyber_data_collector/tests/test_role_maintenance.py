@@ -370,3 +370,13 @@ def test_splitting_a_sole_member_is_refused(conn):
     target, master = _add_event(conn, "a")
     with pytest.raises(ValueError, match="only member"):
         DedupLedger(conn).split_member(target, master, reason="nonsense")
+
+
+def test_every_event_classified_under_a_withdrawn_prompt_is_classified_again():
+    """v6 demoted genuine vendors (Pareto Phone): its events are redone even with a victim and no vendor."""
+    from cyber_data_collector.dedup import role_maintenance as rm
+
+    row = {"stored": rm.signature_for_members(["a", "b"]), "members": ["a", "b"], "has_version_column": True,
+           "version": "entity-roles-v6", "has_victim": True, "has_vendor": False}
+    assert rm._state(row) == "prompt"
+    assert rm._state(dict(row, version="entity-roles-v5")) == "current"
