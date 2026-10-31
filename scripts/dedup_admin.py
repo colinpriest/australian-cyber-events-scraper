@@ -1726,7 +1726,8 @@ def cmd_resolve_label_contradictions(args) -> int:
     ``labels.duplicates.contradictions``. Which records each labelled event held
     is read from ``evaluation/duplicate_label_members.csv``, else from the
     database it was labelled on (``--snapshot`` or the registry's 'duplicates'
-    entry); ``--record-members`` writes that file from the snapshot. Splits and
+    entry); ``--record-members`` writes that file from the snapshot (a pair labelled later, against the live
+    database, from the live database once). Splits and
     merges go through the ledger: snapshotted, reversible. No API calls. Exit 2
     when the records are needed and neither source exists.
     """
@@ -1741,7 +1742,11 @@ def cmd_resolve_label_contradictions(args) -> int:
             print(f"resolve-label-contradictions: {exc}", file=sys.stderr)
             return 2
     if args.record_members:
-        rows = label_contradictions.record_members(snapshot)
+        live = sqlite3.connect(f"file:{Path(args.db).as_posix()}?mode=ro", uri=True)
+        try:
+            rows = label_contradictions.record_members(snapshot, live=live)
+        finally:
+            live.close()
         print(f"Wrote {rows} labelled-event record(s) from {snapshot} to {label_contradictions.MEMBERS_PATH}")
         return 0
     conn = _connect(args.db)
