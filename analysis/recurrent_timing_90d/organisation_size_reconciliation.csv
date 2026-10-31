@@ -1,4 +1,9 @@
 entity_id,entity_name,size_variants,size_variant_bands,representative_size_estimate,org_size,size_source_entity_id,size_rule,size_conflict,changed_from_representative
 391,University of Adelaide,2,University of Adelaide=LARGE|The University of Adelaide=LARGE,LARGE,LARGE,24269,higher size_confidence,False,False
+2455,"Department for Education, Children and Young People",2,"Department for Education, Children and Young People=HUGE|Department for Education, Children and Young People, Tasmania=HUGE",HUGE,HUGE,2455,higher size_confidence,False,False
 5289,Bunnings Group Limited,2,Bunnings Group Limited=HUGE|Bunnings customers=UNKNOWN,HUGE,HUGE,5289,known band over UNKNOWN,False,False
 5902,TMA Group of Companies,2,TMA Group of Companies=UNKNOWN|TMA=SMALL,UNKNOWN,SMALL,29331,known band over UNKNOWN,False,True
+8937,Victorian Schools,2,Victorian Schools=UNKNOWN|Victorian schools=UNKNOWN,UNKNOWN,UNKNOWN,8937,representative variant,False,False
+19211,Mount Barker Co-operative,2,Mount Barker Co-operative=SMALL|MOUNT BARKER CO-OPERATIVE LIMITED=MEDIUM,SMALL,SMALL,19211,higher size_confidence,True,False
+24968,UC staff,2,UC staff=UNKNOWN|University of Canberra staff=UNKNOWN,UNKNOWN,UNKNOWN,24968,representative variant,False,False
+24969,UC students,2,UC students=UNKNOWN|University of Canberra students=UNKNOWN,UNKNOWN,UNKNOWN,24969,representative variant,False,False
