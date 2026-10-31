@@ -437,6 +437,67 @@ def load_label_incidents(path: Path = LABELS_PATH) -> Dict[str, str]:
             if (row.get("incident") or "").strip()}
 
 
+def follow_merged_labels(conn: sqlite3.Connection, labels: Dict[str, str],
+                         incidents: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """``labels`` (and ``incidents``) with each label on a since-merged event carried to the event holding it now.
+
+    A label says a record is (not) about its event's incident. When that event is merged into another, its
+    incident is the other event's, so the label still holds - for the record, while the record is a member of
+    the event the labelled one was merged into (resolved through its master record,
+    :class:`quality.regression.EventResolver`). Without this a merge silently dropped the label: WSU's Isilon
+    report, labelled a separate incident from the SSO event, stayed in that event once a split merged the SSO
+    event into another (2026-11-01). A label made on the current event outranks a carried one.
+    """
+    from cyber_data_collector.quality.regression import EventResolver
+
+    incidents = dict(incidents or {})
+    out = dict(labels)
+    events = {sid.split("|", 1)[0] for sid in labels}
+    status = {did: s for did, s in conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents")
+              if did in events}
+    merged = [did for did, s in status.items() if s == "Merged"]
+    if not merged:
+        return out, incidents
+    resolver = EventResolver(conn)
+    now = {did: resolver.resolve(did) for did in merged}
+    for sid, label in labels.items():
+        did, eid = sid.split("|", 1)
+        target, target_status = now.get(did, (None, None))
+        if target_status != "Active" or eid not in resolver.members_of.get(target, ()):
+            continue
+        carried = member_subject_id(target, eid)
+        if carried not in labels:
+            out[carried] = label
+            if sid in incidents:
+                incidents.setdefault(carried, incidents[sid])
+    return out, incidents
+
+
+def current_view(conn: sqlite3.Connection, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``event`` as the database holds it now, or None when it is no longer an Active event of 2+ records.
+
+    The events of a run are read once, before any split; a split that re-attaches a record to an existing event
+    and merges that event into the group's new one changes events later in the list (WSU, 2026-11-01: the SSO
+    event was merged away and its own labelled split then found no records). Members, suspects and candidates
+    are re-read and kept only while still members.
+    """
+    row = conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event["id"],)).fetchone()
+    if row is None or row[0] != "Active":
+        return None
+    members = load_event_members(conn, event["id"])
+    if len(members) < 2:
+        return None
+    ids = {m["id"] for m in members}
+    view = {**event, "members": members}
+    for key in ("suspect_ids", "unidentified_ids"):
+        if key in event:
+            view[key] = [m for m in event[key] if m in ids]
+    if "candidates" in event:
+        view["candidates"] = {m: r for m, r in event["candidates"].items() if m in ids}
+    return view
+
+
 def _label_rows(path: Path) -> Dict[str, Dict[str, str]]:
     try:
         with Path(path).open(encoding="utf-8") as fh:
@@ -634,6 +695,7 @@ def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, e
                 raise
             logger.warning("REPORT ONLY (no --apply): %s", exc)
     cutoff = cal["cutoff"] if cal else None
+    labels, incidents = follow_merged_labels(conn, labels, incidents)
     labelled_events = {sid.split("|", 1)[0] for sid in labels}
     resolver = EntityResolver(conn)
     events = find_suspect_events(conn, resolver, only=only, include=labelled_events)
@@ -646,6 +708,10 @@ def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, e
 
     findings, splits = [], []
     for event in events:
+        if splits:      # an earlier split this run may have changed or merged away this event
+            event = current_view(conn, event)
+            if event is None:
+                continue
         decision = decide_strays(event, scores, labels, cutoff, resolver, incidents)
         if not decision["strays"] and not decision["held"]:
             continue

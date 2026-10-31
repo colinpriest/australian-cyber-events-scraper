@@ -475,6 +475,7 @@ def check_same_organisation(conn: sqlite3.Connection, apply: bool = False, judge
     elif apply:
         logger.warning("No same-organisation labels (%s): nothing protects a member labelled 'same' - "
                        "which is only a risk once labels exist", Path(labels_path).name)
+    labels, incidents = coherence.follow_merged_labels(conn, labels, incidents)
     cal = active_calibration(calibration_path)
     cutoff = cal["cutoff"] if cal else None
     resolver = EntityResolver(conn)
@@ -487,6 +488,10 @@ def check_same_organisation(conn: sqlite3.Connection, apply: bool = False, judge
 
     findings, splits = [], []
     for event in events:
+        if splits:      # an earlier split this run may have changed or merged away this event
+            event = coherence.current_view(conn, event)
+            if event is None:
+                continue
         decision = decide_splits(event, scores, labels, cutoff)
         if not decision["leave"] and not decision["held"]:
             continue
