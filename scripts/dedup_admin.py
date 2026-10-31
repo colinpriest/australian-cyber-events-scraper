@@ -4053,6 +4053,13 @@ def cmd_find_supplier_victims(args) -> int:
         print(f"  {'split' if apply else 'would split'}  {sp['event'][:8]}: {sp['records']} record(s) of "
               f"{sp['customer']} leave" + (f" as {sp['new_event'][:8]}" if sp.get("new_event") else "")
               + f" ({sp['stays']} stays)")
+    repairs = result.get("registry_repairs") or {}
+    for r in repairs.get("stale_links_removed", []):
+        print(f"  removed stale link  {r['supplier']} -> {r['customer']} ({r['event'][:8]} no longer records the supplier)")
+    for r in repairs.get("incidents_merged", []):
+        print(f"  merged incident  {r['supplier']}: {r['merged']} into {r['kept']} (both linked {r['shared_event'][:8]})")
+    for r in repairs.get("shared_not_merged", []):
+        print(f"  shared, not merged  {r['event'][:8]} in {', '.join(r['incidents'])}: {r['why']}")
     for link in result["links"]:
         event = link["customer_event_id"]
         print(f"  link    {link['supplier_incident_id']}  {link['customer_name']}: "
@@ -4067,8 +4074,12 @@ def cmd_find_supplier_victims(args) -> int:
                   f"{', '.join(e['victims_now']) or '-'}")
     else:
         print(f"Report only (pass --apply to act); findings in {out}")
+    places = result.get("customer_jurisdictions") or {}
+    if places:
+        print(f"Looked up the jurisdiction of {places['looked_up']} named customer(s); {places['failed']} failed, "
+              f"{places['unplaced']} still unplaced (left out of the supplier report until researched).")
     problems = (len(result["failed"]["victim"]) + len(result["failed"]["same_incident"])
-                + len(result["search_failures"]))
+                + len(result["search_failures"]) + places.get("failed", 0))
     undecided = len(result["undecided"]["victim"]) + len(result["undecided"]["same_incident"])
     if undecided:
         print(f"WARNING: {undecided} item(s) in the escalation band have no escalated answer and are "
@@ -4503,6 +4514,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                        help="The owner's reported wrong results, kept as tests: add KIND EVENT VALUE --note; list; check")
     p.add_argument("action", choices=["add", "list", "check", "root-cause", "revise"])
     p.add_argument("kind", nargs="?", help="victim | not_victim | same_incident_as | different_incident_from | incident_month "
+                                            "| same_supplier_incident_as | not_supplier_customer "
                                             "(root-cause / revise: the exception id)")
     p.add_argument("event", nargs="?", help="the event id the owner reported (root-cause: the cause found; "
                                              "revise: the new kind)")

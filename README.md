@@ -786,7 +786,9 @@ acronym's own name with a qualifier ("TEG Pty Ltd") stays global (`contextual_al
 
 **Manual validation exceptions.** Every wrong result the owner reports is stored in `ValidationExceptions`
 (`dedup/validation_exceptions.py`) with the owner's words, anchored on the event's record ids (event ids change
-with merges and splits): `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`.
+with merges and splits): `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`,
+`same_supplier_incident_as` (two events linked to one supplier incident and no other) and `not_supplier_customer`
+(the supplier report does not list an organisation under the event's supplier incident).
 `dedup_admin.py validation-exception add KIND EVENT VALUE --note ...`, `list`, `check` (exit 1 when any fails) and
 `root-cause ID TEXT`. The quality report counts the failures (`acceptance.exceptions.failures`, a warning). They are
 tests, never inputs: run `check` before and after changing any dedup, victim or supplier algorithm.
@@ -1235,9 +1237,29 @@ OracleCMS notices were counted as OracleCMS's. Now:
   `repair_departed_links` for earlier splits, run by `classify-entities`).
 
 `dashboard/supplier_incidents.html` (`scripts/build_supplier_incidents_report.py`, published with the other outputs)
-lists every attack on a known vendor that affected more than one of its customers, ordered by vendor name, date of
-attack and customer name, with a brief description of each attack. It reads `SupplierIncidents` /
-`SupplierIncidentLinks`; the vendor itself, descriptions and lists are not counted as customers.
+lists every attack on a known vendor that affected more than one of its **Australian** customers, ordered by vendor
+name, date of attack and customer name, with a brief description of each attack. It reads `SupplierIncidents` /
+`SupplierIncidentLinks` (`dedup/multi_customer_incidents.py`); the vendor itself, descriptions and lists are not
+counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
+
+* **One attack, one card.** Links were only ever added, so a run that filed a customer event under the nearest
+  incident by date could leave it in two incidents of one supplier (Allens, ASIC and NSW Health under two Accellion
+  attacks; Canva and McGraw Hill under two Salesforce ones). `find-supplier-victims` now first runs
+  `supplier_links.repair_registry`: a `vendor-recorded` link whose event no longer records the supplier is removed;
+  incidents of one supplier that share a customer event are merged (into the one with the supplier's own event,
+  else the earliest; never two that each have the supplier's own event); a date-window (`vendor-recorded`) link that
+  a pair label rules a different incident from the other incident's events leaves (NSW Education's July 2021
+  attack, which had anchored the second Accellion incident). A placed event then stays in its incident, and the
+  different-incident check sees stored members, not only those placed in the run.
+* **Australian customers only.** A customer with its own Active event passed the calibrated scope check. A customer
+  only named in the reporting (Accellion's global list: Kroger, Stanford University, the Reserve Bank of New
+  Zealand) is listed only when its researched entity profile (`jurisdiction`, one Perplexity lookup per
+  organisation, made by `find-supplier-victims --research --apply` for every named customer without one) places it
+  in Australia. The others are named in a footnote ("outside Australia", or "jurisdiction not yet researched") and
+  are not counted.
+* **One date per attack**: the supplier's own event's date, else the earliest of its customers' events, at its
+  verified precision ("December 2020"; an unverified one says so). Customers' own event dates are report dates and
+  are no longer shown as attack dates.
 
 ### Supplier incidents: every affected organisation, one incident (superseded)
 

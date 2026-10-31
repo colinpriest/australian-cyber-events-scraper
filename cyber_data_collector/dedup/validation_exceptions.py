@@ -17,7 +17,12 @@ Kinds:
 * ``same_incident_as``: the event and the event ``value`` (anchored on its records too) are one Active event;
 * ``different_incident_from``: they are two Active events;
 * ``incident_month``: the event's incident date (its verified interval when it has one) falls in ``value``
-  (``YYYY-MM``).
+  (``YYYY-MM``);
+* ``same_supplier_incident_as``: the event and the event ``value`` are linked to one and the same supplier incident
+  (``SupplierIncidents``), and to no other incident of it - so the supplier report shows the attack once, with one
+  date;
+* ``not_supplier_customer``: no supplier incident linking the event lists ``value`` as a customer in the supplier
+  report (:mod:`multi_customer_incidents`).
 """
 
 from __future__ import annotations
@@ -30,7 +35,9 @@ from typing import Dict, List, Optional, Sequence
 
 from cyber_data_collector.utils.timestamps import utc_now_iso
 
-KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month")
+KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month",
+         "same_supplier_incident_as", "not_supplier_customer")
+PAIR_KINDS = ("same_incident_as", "different_incident_from", "same_supplier_incident_as")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ValidationExceptions (
@@ -86,7 +93,7 @@ def add(conn: sqlite3.Connection, kind: str, event_id: str, value: str, note: st
     if not records:
         raise ValueError(f"event {event_id} has no Active records to anchor the exception on")
     other = None
-    if kind in ("same_incident_as", "different_incident_from"):
+    if kind in PAIR_KINDS:
         other = _records(conn, value)
         if not other:
             raise ValueError(f"event {value} has no Active records to anchor the exception on")
@@ -125,6 +132,20 @@ def _victims(conn: sqlite3.Connection, event_id: str) -> List[str]:
            WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""", (event_id,))]
 
 
+def _supplier_incidents(conn: sqlite3.Connection, event_id: str) -> set:
+    """The supplier incidents linking ``event_id`` (as a customer's or the supplier's own event; merges followed)."""
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"SupplierIncidents", "SupplierIncidentLinks"} <= tables:
+        return set()
+    from cyber_data_collector.dedup.supplier_links import resolve_event
+
+    rows = conn.execute("""SELECT supplier_incident_id, customer_event_id FROM SupplierIncidentLinks
+                           WHERE customer_event_id IS NOT NULL
+                           UNION SELECT supplier_incident_id, supplier_event_id FROM SupplierIncidents
+                           WHERE supplier_event_id IS NOT NULL""").fetchall()
+    return {sid for sid, e in rows if (resolve_event(conn, e) or e) == event_id}
+
+
 def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
     """Whether the data now satisfies one exception."""
     from cyber_data_collector.dedup.victim_fill import names_match
@@ -148,9 +169,24 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         ok = hit if kind == "victim" else not hit
         return Result(eid, kind, "pass" if ok else "fail",
                       f"event {now[:8]} victims: {', '.join(victims) or 'none'}")
+    if kind == "not_supplier_customer":
+        from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+        mine = _supplier_incidents(conn, now)
+        if not mine:
+            return Result(eid, kind, "unchecked", f"event {now[:8]} is in no supplier incident")
+        listed = [(i.vendor, c.name) for i in mci.find(conn) if i.supplier_incident_id in mine for c in i.customers]
+        hits = [f"{c} under {v}" for v, c in listed if names_match(conn, row["value"], c)]
+        return Result(eid, kind, "fail" if hits else "pass",
+                      f"listed: {'; '.join(hits)}" if hits else f"not listed in {len(mine)} supplier incident(s)")
     other = current_event(conn, json.loads(row["value_record_ids_json"] or "[]"))
     if other is None:
         return Result(eid, kind, "unchecked", "no single Active event holds the other event's records")
+    if kind == "same_supplier_incident_as":
+        a, b = _supplier_incidents(conn, now), _supplier_incidents(conn, other)
+        ok = len(a) == 1 and a == b
+        return Result(eid, kind, "pass" if ok else "fail",
+                      f"{now[:8]} in {sorted(a) or 'none'}; {other[:8]} in {sorted(b) or 'none'}")
     same = other == now
     ok = same if kind == "same_incident_as" else not same
     return Result(eid, kind, "pass" if ok else "fail",
@@ -184,7 +220,7 @@ def revise(conn: sqlite3.Connection, exception_id: str, kind: str, value: str, n
     if row is None:
         raise ValueError(f"no validation exception {exception_id}")
     other = None
-    if kind in ("same_incident_as", "different_incident_from"):
+    if kind in PAIR_KINDS:
         other = _records(conn, value)
         if not other:
             raise ValueError(f"event {value} has no Active records to anchor the exception on")
