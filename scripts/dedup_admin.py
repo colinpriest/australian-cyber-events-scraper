@@ -68,6 +68,7 @@ from cyber_data_collector.dedup.entity_classification import (
     EntityRole,
     EntityRoleClassifier,
     classifier_detail,
+    entity_mentions,
     resolve_victim,
 )
 from cyber_data_collector.dedup import alias_learning, name_judgement
@@ -2586,7 +2587,8 @@ def cmd_classify_entities(args) -> int:
             )[: args.max_entities]
 
             try:
-                result = classifier.classify(r["title"] or "", classifier_detail(conn, r["id"], r["summary"]), names)
+                result = classifier.classify(r["title"] or "", classifier_detail(conn, r["id"], r["summary"]), names,
+                                             mentions=entity_mentions(conn, r["id"], names))
             except ClassificationFailed as exc:
                 failed += 1
                 print(f"  FAILED {r['id'][:8]} {(r['title'] or '')[:50]}: {exc}")
@@ -3232,7 +3234,9 @@ def cmd_roles_status(args) -> int:
         print(f"  roles outdated     : {report['outdated']}  (membership changed since)")
         print(f"  never classified   : {report['never_classified']}")
         print(f"  older role prompt  : {report['prompt_outdated']}  (classified before the current role prompt "
-              "and still without a victim)")
+              "and still without a victim, or recording a vendor)")
+        print(f"  victim split out   : {report['victim_departed']}  (the recorded victim is a customer split out "
+              "as its own event)")
         print(f"  NO VICTIM          : {report['no_victim']}  (active events with no usable victim role; "
               "python scripts/dedup_admin.py fill-victims)")
 
@@ -3247,7 +3251,8 @@ def cmd_roles_status(args) -> int:
                     (dedup_id,)).fetchone()
                 if row:
                     print(f"   [{row['n']:>3} members] {str(row['title'])[:58]!r}")
-        if report["outdated"] or report["never_classified"] or report["prompt_outdated"]:
+        if (report["outdated"] or report["never_classified"] or report["prompt_outdated"]
+                or report["victim_departed"]):
             print("\nrun: python scripts/dedup_admin.py classify-entities --stale-only")
     finally:
         conn.close()

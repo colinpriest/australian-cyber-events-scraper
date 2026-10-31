@@ -117,14 +117,39 @@ def _role_rows(conn: sqlite3.Connection) -> List[Dict[str, object]]:
             "SELECT DISTINCT deduplicated_event_id FROM DeduplicatedEventEntities WHERE relationship_type = 'vendor'")}
     except sqlite3.OperationalError:
         vendors = set()
+    # The scalar vendor too: CrowdStrike's lawsuit event kept a vendor field with no vendor role, so it was never
+    # classified again under v3.
+    vendors |= {r[0] for r in conn.execute(
+        "SELECT deduplicated_event_id FROM DeduplicatedEvents WHERE COALESCE(vendor_organization_name, '') <> ''")}
+    departed = _victim_departed(conn)
     return [{"id": r[0], "stored": r[1], "version": r[2], "has_version_column": _has_version_column(conn),
              "members": (r[3] or "").split(",") if r[3] else [], "has_victim": r[0] in victims,
-             "has_vendor": r[0] in vendors} for r in rows]
+             "has_vendor": r[0] in vendors, "victim_departed": r[0] in departed} for r in rows]
+
+
+def _victim_departed(conn: sqlite3.Connection) -> set:
+    """Events whose recorded victim is a customer split out of them as its own event.
+
+    The old promotion of a demoted vendor's customers made Stake the victim of DriveWealth's event after Stake's
+    records left it; such an event is classified again (the promotion now skips departed customers)."""
+    from cyber_data_collector.dedup.supplier_links import departed_customers
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'SupplierLinkActions'").fetchone():
+        return set()
+    out = set()
+    for (origin,) in conn.execute("SELECT DISTINCT deduplicated_event_id FROM SupplierLinkActions WHERE action = 'split'"):
+        row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ? "
+                           "AND COALESCE(status, 'Active') = 'Active'", (origin,)).fetchone()
+        if row and row[0] and any(names_match(conn, row[0], d) for d in departed_customers(conn, origin)):
+            out.add(origin)
+    return out
 
 
 def _state(row: Dict[str, object]) -> str:
     """``never`` / ``outdated`` (membership) / ``prompt`` / ``current`` for one event's roles.
 
+    ``departed``: the recorded victim is a customer split out of the event as its own event.
     ``prompt``: classified under an older role prompt and left without a victim (v2's fix: an incident event
     whose every entity was a bystander), or recording a vendor (v3's fix: a security firm, agency or photo
     credit recorded as the supplier). Other events keep the roles they have; ``roles-status --invalidate-all``
@@ -138,6 +163,8 @@ def _state(row: Dict[str, object]) -> str:
     if row["has_version_column"] and row["version"] != _prompt_version() and (
             not row["has_victim"] or row.get("has_vendor")):
         return "prompt"
+    if row.get("victim_departed"):
+        return "departed"
     return "current"
 
 
@@ -158,7 +185,7 @@ def stale_event_ids(
         if state == "never":
             if include_unclassified:
                 stale.append(row["id"])
-        elif state in ("outdated", "prompt"):
+        elif state in ("outdated", "prompt", "departed"):
             stale.append(row["id"])
     return stale
 
@@ -173,11 +200,12 @@ def staleness_report(conn: sqlite3.Connection) -> Dict[str, int]:
     """
     rows = _role_rows(conn)
     report = {"active": len(rows), "current": 0, "outdated": 0, "never_classified": 0, "prompt_outdated": 0,
+              "victim_departed": 0,
               "no_victim": sum(1 for r in rows if not r["has_victim"])}
     for row in rows:
         state = _state(row)
         key = {"never": "never_classified", "outdated": "outdated", "prompt": "prompt_outdated",
-               "current": "current"}[state]
+               "departed": "victim_departed", "current": "current"}[state]
         report[key] += 1
     return report
 
