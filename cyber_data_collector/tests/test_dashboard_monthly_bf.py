@@ -125,3 +125,16 @@ def test_first_known_is_the_first_publication_not_a_late_backfill():
     known = {incident_known for _incident, incident_known in events}
     assert sorted(events) == [(date(2025, 3, 1), date(2025, 3, 4)), (date(2025, 3, 1), date(2026, 10, 28))]
     assert date(2025, 3, 4) in known
+
+
+def test_an_estimate_is_shown_only_for_a_month_whose_count_is_shown():
+    """Owner rule 2026-11-01: the partial month has no observed point, so it gets no estimate either."""
+    from scripts.build_static_dashboard import bf_months_shown
+
+    bf = {'method': 'bornhuetter_ferguson', 'months': [
+        {'month': '2026-09', 'estimate': 32.0}, {'month': '2026-10', 'estimate': 37.0},
+        {'month': '2026-11', 'estimate': 26.0}]}
+    shown = bf_months_shown(bf, ['2026-08', '2026-09', '2026-10'])
+    assert [m['month'] for m in shown['months']] == ['2026-09', '2026-10']
+    assert shown['method'] == 'bornhuetter_ferguson' and len(bf['months']) == 3   # input left as it was
+    assert bf_months_shown(None, ['2026-10']) is None

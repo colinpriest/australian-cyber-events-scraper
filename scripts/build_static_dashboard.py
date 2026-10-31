@@ -1572,6 +1572,20 @@ def _load_bf_inputs(conn: sqlite3.Connection) -> Optional[Tuple[date, Optional[d
     return extraction, collection_start, events, monthly_counts
 
 
+def bf_months_shown(monthly_bf: Optional[Dict[str, Any]],
+                    observed_months: List[str]) -> Optional[Dict[str, Any]]:
+    """The monthly estimates the trend chart may draw: only months whose observed count it shows.
+
+    The month in progress at extraction is left off the observed line (an incomplete count reads as a drop), so
+    its estimate is left off too: an estimate with no observed point beside it extended the axis by a month that
+    has no actual line (owner rule, 2026-11-01).
+    """
+    if not monthly_bf:
+        return monthly_bf
+    shown = set(observed_months)
+    return dict(monthly_bf, months=[m for m in monthly_bf.get('months') or [] if m['month'] in shown])
+
+
 def get_monthly_bf_estimates(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
     """Per-month BF estimates for the monthly unique-event chart (None on fallback)."""
     inputs = _load_bf_inputs(conn)
@@ -3241,8 +3255,8 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
     renderRiskMatrix('asdRiskMatrixCurrent', asdRiskCurrent, 'asdCurrentTotal');
 
     // 1) Monthly Trends (line) with trend line, plus Bornhuetter-Ferguson
-    // estimates of the full count for months still under-reported at
-    // extraction (including the partial month, shown only as an estimate).
+    // estimates of the full count for shown months still under-reported at
+    // extraction.
     (function() {
       const counts = monthlyCounts.counts;
       const n = counts.length;
@@ -3265,12 +3279,10 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
         trendLine.push(slope * i + intercept);
       }
 
-      // x axis: observed months, extended by any estimate-only month (the
-      // partial month at extraction is excluded from the observed series).
+      // x axis: observed months only. Estimates are given only for months the
+      // observed line shows (bf_months_shown); the partial month has neither.
       const bfMonths = (monthlyBF && Array.isArray(monthlyBF.months)) ? monthlyBF.months : [];
       const labels = monthlyCounts.months.slice();
-      bfMonths.forEach(m => { if (!labels.includes(m.month)) labels.push(m.month); });
-      labels.sort();
       const observedByMonth = {};
       monthlyCounts.months.forEach((m, i) => { observedByMonth[m] = counts[i]; });
       const observedData = labels.map(m => (m in observedByMonth) ? observedByMonth[m] : null);
@@ -3364,7 +3376,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       // Subtitle: what the observed line excludes, and what the dashed line is.
       const subtitleParts = [];
       if (incompleteMonthNote) {
-        subtitleParts.push(bfMonths.length > 0 ? 'Observed ' + incompleteMonthNote.charAt(0).toLowerCase() + incompleteMonthNote.slice(1) : incompleteMonthNote);
+        subtitleParts.push(incompleteMonthNote);
       }
       if (bfMonths.length > 0) {
         subtitleParts.push('dashed = estimated full count, 80% interval');
@@ -5194,7 +5206,7 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
             monthly_counts_series = monthly_counts
             event_type_mix_series = event_type_mix
 
-        monthly_bf = get_monthly_bf_estimates(conn)
+        monthly_bf = bf_months_shown(get_monthly_bf_estimates(conn), monthly_counts_series.get('months') or [])
 
         data = {
             'incomplete_month': incomplete_month,
