@@ -304,3 +304,44 @@ def test_a_malformed_labels_file_raises(conn, tmp_path):
     with pytest.raises(co.CoherenceConfigError):
         so.check_same_organisation(conn, judge=JevJudge(conn, client=FakeTypeSafe()), labels_path=bad,
                                    calibration_path=tmp_path / "none.json")
+
+
+# --- events changed by the run itself, and labels on merged events (WSU, 2026-11-01) -------------
+
+def test_an_event_merged_away_by_an_earlier_split_is_skipped_not_split_bare(conn, tmp_path):
+    class MergingLedger(FakeLedger):
+        def split_members(self, dedup_id, ids, reason, actor="human"):
+            if conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                            (dedup_id,)).fetchone()[0] != "Active":
+                raise ValueError("splitting every member would leave an event with no records")
+            # the split re-attached a record to the next event and merged that event into the group's home
+            conn.execute("UPDATE DeduplicatedEvents SET status = 'Merged' WHERE deduplicated_event_id = 'youx'")
+            conn.execute("UPDATE EventDeduplicationMap SET deduplicated_event_id = 'home' "
+                         "WHERE deduplicated_event_id = 'youx'")
+            return super().split_members(dedup_id, ids, reason, actor)
+
+    ledger = MergingLedger()
+    labels = _labels(tmp_path, [("quiet", "o2", "different", ""), ("youx", "a3", "different", "")])
+    result = so.check_same_organisation(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(default=0.99)),
+                                        calibration_path=tmp_path / "none.json", labels_path=labels, ledger=ledger)
+    assert [s[0] for s in ledger.splits] == ["quiet"]
+    assert [f["event"] for f in result["findings"]] == ["quiet"]
+
+
+def test_a_label_on_a_merged_event_follows_its_record(conn, tmp_path):
+    conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN master_enriched_event_id TEXT")
+    conn.execute("UPDATE DeduplicatedEvents SET master_enriched_event_id = 'a1' WHERE deduplicated_event_id = 'youx'")
+    conn.execute("INSERT INTO DeduplicatedEvents (deduplicated_event_id, title, event_date, victim_organization_name, "
+                 "status, master_enriched_event_id) VALUES ('old', 'youX', ?, 'youX', 'Merged', 'a3')", (EVENT_DATE,))
+    ledger = FakeLedger()
+    so.check_same_organisation(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(default=0.99)),
+                               calibration_path=tmp_path / "none.json",
+                               labels_path=_labels(tmp_path, [("old", "a3", "different", "")]), ledger=ledger)
+    assert ledger.splits and ledger.splits[0][:2] == ("youx", ["a3"])
+    # a label made on the current event outranks the carried one
+    ledger = FakeLedger()
+    so.check_same_organisation(conn, apply=True, judge=JevJudge(conn, client=FakeTypeSafe(default=0.99)),
+                               calibration_path=tmp_path / "none.json",
+                               labels_path=_labels(tmp_path, [("old", "a3", "different", ""),
+                                                              ("youx", "a3", "same", "")]), ledger=ledger)
+    assert ledger.splits == []

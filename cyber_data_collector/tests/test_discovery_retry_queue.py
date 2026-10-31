@@ -120,6 +120,12 @@ class FakeJudge:
         return {qid: SimpleNamespace(value=0.9) for qid in questions}
 
 
+class _MidMonth(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 10, 27, 9, 0)
+
+
 class Clock:
     def __init__(self):
         self.now = datetime(2026, 10, 27, 9, 0)
@@ -134,6 +140,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
     monkeypatch.setattr(discovery, "CyberDataCollector", FakeCollector)
     monkeypatch.setattr(discovery, "PlaywrightScraper", FakeScraper)
+    # A one-day lookback on the 1st of a month spans two months and the fake source answers both with the same
+    # record, so discovery's "now" is pinned mid-month (these tests failed every 1st, 2026-11-01).
+    monkeypatch.setattr(discovery, "datetime", _MidMonth)
     FakeCollector.sources, FakeCollector.classify, FakeCollector.received = {}, "ok", []
     db_path = tmp_path / "instance" / "t.db"
     initialize_database(str(db_path))

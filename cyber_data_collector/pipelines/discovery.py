@@ -309,7 +309,6 @@ class EventDiscoveryEnrichmentPipeline:
         await self.drain_retry_queue()
 
         # Get current year and month for dynamic date range
-        from datetime import datetime
         now = datetime.now()
         current_year = now.year
         current_month = now.month
