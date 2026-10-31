@@ -2196,6 +2196,10 @@ def cmd_retitle(args) -> int:
                 WHERE m.deduplicated_event_id = ?
             """, (r["id"],))]
             label = ledger.incident_label_for(r["id"])
+            # --orphaned-only: only a title no current member gives and that is not the incident label - one
+            # inherited from a record that has since left (ASIC's Accellion event kept NSW Health's headline).
+            if args.orphaned_only and (r["title"] in member_titles or (label and r["title"] == label)):
+                continue
             new_title = derive_title(member_titles, victim=r["victim"],
                                      incident_label=label,
                                      current_title=r["title"])
@@ -4350,6 +4354,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--generate", action="store_true",
                    help="Write a headline with the strong OpenAI model when every candidate "
                         "title is a placeholder, prose or page furniture.")
+    p.add_argument("--orphaned-only", action="store_true",
+                   help="Only events whose title no current member gives (inherited from a record that left).")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_retitle)
 
