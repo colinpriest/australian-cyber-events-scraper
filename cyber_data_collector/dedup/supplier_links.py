@@ -508,6 +508,14 @@ def touched_events(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
     return {d: names for d, names in touched.items() if d in active}
 
 
+def reversed_customers(conn: sqlite3.Connection, dedup_id: str) -> Set[str]:
+    """Customers the supplier step once attached to this event as separate victims, since reversed."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'SupplierVictimReversals'").fetchone():
+        return set()
+    return {r[0] for r in conn.execute("SELECT entity_name FROM SupplierVictimReversals "
+                                       "WHERE deduplicated_event_id = ? AND action = 'reversed'", (dedup_id,))}
+
+
 def _record_orgs(conn: sqlite3.Connection, dedup_id: str) -> List[Dict[str, Any]]:
     """Each member record and the organisation its Perplexity research names (None when it names none)."""
     from cyber_data_collector.dedup.coherence import _formal_name
@@ -567,16 +575,26 @@ def plan_splits(conn: sqlite3.Connection, resolver, vendors_of: Dict[str, List[s
                 groups[hits[0]].append(m["id"])
             elif len(hits) > 1:
                 unclear.append(f"{m['id'][:8]} names {m['org']!r}, which fits {', '.join(hits)}")
+        scalar = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
+                              "WHERE deduplicated_event_id = ?", (did,)).fetchone()
+        own = next((c for c in sorted(customers) if scalar and scalar[0] and same_org(resolver, c, scalar[0])), None)
         if len(groups) + (1 if supplier_records else 0) < 2:
+            # The event's own victim is a customer even when none of its records names it in a matching
+            # form ("Medical information leaked in NSW Health hack": its NSW Health records name "New South
+            # Wales Ministry of Health" or nothing, beside three Transport for NSW records). Then only the
+            # customers this module attached here as separate victims, and reversed, leave: the attachment
+            # was the calibrated judgement that they are other organisations, where a name test is not
+            # (Tasmania's DECYP under two spellings, SA Health and its department).
+            separate = reversed_customers(conn, did)
+            leaving = {c: r for c, r in groups.items() if c != own and c in separate}
+            if own and own not in groups and leaving:
+                plans.append(SplitPlan(did, own, {c: sorted(r) for c, r in leaving.items()}))
             continue
         if unclear:
             ambiguous.append({"deduplicated_event_id": did, "why": "a record fits two customers: " + "; ".join(unclear)})
             continue
         # Records about the supplier's own breach keep the event (it becomes the supplier's event);
         # otherwise the event's own recorded victim keeps it, else the largest customer group.
-        scalar = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
-                              "WHERE deduplicated_event_id = ?", (did,)).fetchone()
-        own = next((c for c in groups if scalar and scalar[0] and same_org(resolver, c, scalar[0])), None)
         stays = (vendors[0] if supplier_records else own
                  or sorted(groups, key=lambda c: (-len(groups[c]), c))[0])
         plans.append(SplitPlan(did, stays, {c: sorted(r) for c, r in groups.items() if c != stays}))

@@ -970,3 +970,26 @@ def test_the_events_own_victim_is_never_reversed_and_a_past_reversal_is_restored
     assert _victims(conn, "e1") == ["Curtin University"]
     assert sv.restore_own_victims(conn) == []
     assert sv.reverse_attachments(conn) == []
+
+
+def test_an_attached_customers_records_leave_the_event_of_its_own_victim(conn):
+    """"Medical information leaked in NSW Health hack": NSW Health is the event's own victim but no record
+    names it in a matching form; the three Transport for NSW records, once attached as a separate victim and
+    reversed, leave. A customer never attached that way stays (a name test alone is no proof)."""
+    from cyber_data_collector.dedup import supplier_links as sl
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    _event(conn, "e9", "Medical information leaked in Monash hack", "2021-02-01", victim="Monash University",
+           vendor="ProctorU",
+           records=[("r91", "Monash hack", "https://news.example/m1", None, []),
+                    ("r92", "Curtin data stolen", "https://news.example/m2", "Curtin University", []),
+                    ("r93", "Acme data stolen", "https://news.example/m3", "Acme Bakery", [])])
+    conn.execute("INSERT INTO DeduplicatedEventEntities VALUES ('e9', 9, 'victim', NULL, 1)")
+    assert sv.attach_victim(conn, "e9", 4, "merge", subject_id="e9|4", probability=None, cutoff=None,
+                            question_version=sv.VICTIM_VERSION)
+    plans, _ = sl.plan_splits(conn, EntityResolver(conn), {"e9": ["ProctorU"]})
+    assert not [p for p in plans if p.event_id == "e9"]          # still attached: not yet a separate customer
+    sv.reverse_attachments(conn)
+    plans, _ = sl.plan_splits(conn, EntityResolver(conn), {"e9": ["ProctorU"]})
+    (plan,) = [p for p in plans if p.event_id == "e9"]
+    assert plan.stays == "Monash University" and plan.leaving == {"Curtin University": ["r92"]}
