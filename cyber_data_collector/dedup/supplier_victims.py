@@ -938,6 +938,11 @@ def _entity_for(conn: sqlite3.Connection, cand: VictimCandidate, index: _EntityI
     hit = index.find(name)
     if hit:
         return hit[0]
+    # The index holds only the names it was fitted on and matches by key: a row with exactly this name (one the
+    # index leaves out, or one this run created) is that entity, and a second insert would break the unique name.
+    row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?", (name,)).fetchone()
+    if row:
+        return int(row[0])
     cur = conn.execute("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES (?, 'organisation')",
                        (name,))
     return int(cur.lastrowid)
