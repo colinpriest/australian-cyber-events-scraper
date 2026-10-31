@@ -693,6 +693,41 @@ def test_the_role_classifier_is_shown_the_sentences_that_name_each_entity():
     assert "Cyber Security Agency of Singapore\n    (named in no sentence" in seen["prompt"]
 
 
+def test_a_vendor_label_must_quote_a_listed_sentence():
+    """v6: the Singapore agency (named nowhere) and an unquoted Accenture are bystanders; a quoted vendor stays."""
+    from cyber_data_collector.dedup.entity_classification import (EntityAssignment, EntityKind, EntityRole,
+                                                                  EventEntityRoles, grounded_vendors)
+
+    def vendor(name, evidence=None):
+        return EntityAssignment(name=name, kind=EntityKind.ORGANISATION, role=EntityRole.VENDOR,
+                                confidence=0.9, evidence=evidence)
+
+    result = EventEntityRoles(assignments=[
+        vendor("Cyber Security Agency of Singapore", "The agency investigated the breach."),
+        vendor("Accenture"),
+        vendor("Mandiant", "Its cybersecurity adviser Mandiant discovered the breach"),
+        vendor("Accellion", "“Hackers exploited a flaw in Accellion's file transfer appliance.”"),
+    ])
+    mentions = {
+        "Cyber Security Agency of Singapore": [],
+        "Accenture": ["(Supplied: Accenture)"],
+        "Mandiant": ["The breach was found by Mandiant.", "Mandiant reported it."],
+        "Accellion": ["Hackers exploited a flaw in Accellion's file transfer appliance."],
+    }
+    assert grounded_vendors(result, mentions) == ["Cyber Security Agency of Singapore", "Accenture", "Mandiant"]
+    roles = {a.name: a.role for a in result.assignments}
+    assert roles["Accellion"] == EntityRole.VENDOR
+    assert roles["Mandiant"] == EntityRole.BYSTANDER
+
+
+def test_the_answer_schema_does_not_call_a_failed_product_a_vendor():
+    from cyber_data_collector.dedup.entity_classification import EntityAssignment
+
+    described = EntityAssignment.model_json_schema()["properties"]["role"]["description"]
+    assert "whose breach or software caused" not in described
+    assert "without an attack" in described
+
+
 # --- localising a victim: researched jurisdiction outranks the extraction flag; no description (2026-11-01) ---
 
 def _localise_db():
@@ -728,3 +763,11 @@ def test_a_foreign_victim_is_localised_to_a_named_organisation_never_a_descripti
     assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("National Australia Bank", "Cisco Systems")
     c.execute("DELETE FROM EnrichedEventEntities WHERE entity_id = 4")
     assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("Cisco Systems", None)
+
+
+def test_an_australian_co_victim_is_the_victim_and_the_foreign_one_is_not_its_vendor():
+    """CrowdStrike outage: Delta Air Lines and Woolworths were both harmed; Delta supplied nothing to Woolworths."""
+    from cyber_data_collector.dedup import entity_classification as ec
+    c = _localise_db()
+    c.execute("UPDATE EnrichedEventEntities SET relationship_type = 'victim' WHERE entity_id = 4")
+    assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("National Australia Bank", None)

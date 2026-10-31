@@ -119,8 +119,11 @@ class EntityAssignment(BaseModel):
     role: EntityRole = Field(
         description=(
             "Its part in THIS event. victim = the organisation whose systems "
-            "or data were compromised. vendor = a third party whose breach or "
-            "software caused the victim's exposure. affected_customer = an "
+            "or data were compromised. vendor = a third-party supplier whose "
+            "own system, product or service was attacked or compromised, which "
+            "caused the victim's exposure (not one whose product failed without "
+            "an attack, nor a firm or agency that reported, investigated or "
+            "was credited). affected_customer = an "
             "organisation harmed via the vendor. regulator = investigating or "
             "responding authority. product = the software involved. "
             "threat_actor = the attacker. bystander = commentator, journalist "
@@ -128,6 +131,14 @@ class EntityAssignment(BaseModel):
         )
     )
     confidence: float = Field(ge=0.0, le=1.0)
+    evidence: Optional[str] = Field(
+        default=None,
+        description=(
+            "Only for role vendor: copy, word for word, the sentence listed for this entity that shows its own "
+            "system, product or service was attacked or compromised. If no listed sentence shows that, the "
+            "entity is not a vendor. Leave empty for every other role."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -199,7 +210,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v5"
+ROLES_PROMPT_VERSION = "entity-roles-v6"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -210,6 +221,11 @@ ROLES_PROMPT_VERSION = "entity-roles-v5"
 # v5 (2026-11-01): the victim is localised only when its researched jurisdiction (or, with none, the extraction
 # flag) is foreign, and never to a description: youX's own breach had been filed under "lenders" with youX as the
 # vendor, OracleCMS's under one of its customers. No prompt text changed; the version re-resolves those events.
+# v6 (2026-11-01): v4/v5 still kept Accenture, the Singapore agency and Delta Air Lines (suing CrowdStrike over its
+# faulty update) as vendors. The answer schema still defined a vendor as one "whose breach or software caused the
+# victim's exposure", contradicting the system prompt; it now says the same as the prompt. And a vendor label must
+# quote the sentence of the reporting, among those listed for it, that shows its own system, product or service was
+# attacked or compromised: a label with no such quote is a bystander (:func:`grounded_vendors`).
 #: Sentences shown per entity, and characters per sentence.
 MENTIONS_PER_ENTITY = 2
 MENTION_CHARS = 240
@@ -436,6 +452,8 @@ class EntityRoleClassifier:
         result.assignments = [
             a for a in result.assignments if a.name.strip().lower() in known
         ]
+        if mentions is not None:
+            grounded_vendors(result, mentions)
         missing = known - {a.name.strip().lower() for a in result.assignments}
         if missing:
             # Entities the model did not label stay unlabelled (no rule answer
@@ -443,6 +461,34 @@ class EntityRoleClassifier:
             logger.warning("Model left %d of %d entit(ies) unlabelled for %r: %s",
                            len(missing), len(known), title[:60], ", ".join(sorted(missing))[:200])
         return result
+
+
+def _quote_key(text: str) -> str:
+    return " ".join(text.lower().strip().strip("\"'“”").split()).rstrip(".")
+
+
+def grounded_vendors(result: EventEntityRoles, mentions: Dict[str, List[str]]) -> List[str]:
+    """Make a vendor label a bystander unless its quote is one of the sentences listed for it.
+
+    The quote must be (part of) a sentence the model was shown for that entity, at least 20 characters long; an
+    entity named in no sentence therefore cannot be a vendor. Whether the quoted sentence really describes a
+    compromise is the model's judgement - the check only stops a vendor label that cites no reporting. Returns the
+    names demoted.
+    """
+    by_name = {name.strip().lower(): said for name, said in mentions.items()}
+    demoted: List[str] = []
+    for a in result.assignments:
+        if a.role != EntityRole.VENDOR:
+            continue
+        quote = _quote_key(a.evidence or "")
+        said = [_quote_key(s) for s in by_name.get(a.name.strip().lower(), [])]
+        if len(quote) >= 20 and any(quote in s or s in quote for s in said if len(s) >= 20):
+            continue
+        logger.info("Vendor label on %r cites no listed sentence (%r): labelled bystander",
+                    a.name, (a.evidence or "")[:120])
+        a.role = EntityRole.BYSTANDER
+        demoted.append(a.name)
+    return demoted
 
 
 # ----------------------------------------------------------------------
@@ -715,6 +761,12 @@ def localise_victim(conn, victim, vendor, deduplicated_event_id):
         from cyber_data_collector.dedup.entity_resolution import EntityResolver
         if EntityResolver().same_organisation(victim, name):
             continue
+        # Only a customer harmed through the foreign party makes that party its supplier. An Australian co-victim
+        # (Woolworths beside Delta Air Lines in the CrowdStrike outage) is the victim here and the foreign party
+        # stays one of its co-victims, not its vendor.
+        if candidate["role"] == "victim":
+            logger.info("Localised victim: %r -> %r (Australian co-victim)", victim, name)
+            return name, vendor
         logger.info("Localised victim: %r -> %r (foreign party recorded as vendor)",
                     victim, name)
         return name, (vendor or victim)
