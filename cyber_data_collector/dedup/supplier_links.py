@@ -517,10 +517,19 @@ def reversed_customers(conn: sqlite3.Connection, dedup_id: str) -> Set[str]:
 
 
 def _record_orgs(conn: sqlite3.Connection, dedup_id: str) -> List[Dict[str, Any]]:
-    """Each member record and the organisation its Perplexity research names (None when it names none)."""
+    """Each member record, the organisation its Perplexity research names (None when it names none), and the
+    organisations the record's own entity links give as harmed (``victim`` / ``affected_customer``)."""
     from cyber_data_collector.dedup.coherence import _formal_name
 
-    return [{"id": rid, "org": _formal_name(pe)} for rid, pe in conn.execute(
+    harmed: Dict[str, List[str]] = defaultdict(list)
+    for rid, name in conn.execute(
+            """SELECT ee.enriched_event_id, v.entity_name FROM EventDeduplicationMap m
+               JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+               JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
+               WHERE m.deduplicated_event_id = ? AND ee.relationship_type IN ('victim', 'affected_customer')""",
+            (dedup_id,)):
+        harmed[rid].append(name)
+    return [{"id": rid, "org": _formal_name(pe), "harmed": harmed.get(rid, [])} for rid, pe in conn.execute(
         """SELECT m.enriched_event_id, e.perplexity_enrichment_data FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            WHERE m.deduplicated_event_id = ? ORDER BY m.enriched_event_id""", (dedup_id,))]
@@ -544,15 +553,28 @@ def plan_splits(conn: sqlite3.Connection, resolver, vendors_of: Dict[str, List[s
     """
     from cyber_data_collector.dedup.supplier_victims import same_org
 
+    # A split that was undone because both parts recorded the same victim is not made again
+    # (split_rulings.same_victim_supplier_rulings): Block and Afterpay would otherwise part every run.
+    try:
+        undone = {frozenset(r) for r in conn.execute(
+            "SELECT left_enriched_event_id, right_enriched_event_id FROM DedupOverrides WHERE active = 0 "
+            "AND reason LIKE '%[void: both records'' events now record the same victim%'")}
+    except sqlite3.OperationalError:       # no rulings table, or one without active / reason
+        undone = set()
     candidates: Dict[str, Set[str]] = {d: set(n) for d, n in touched_events(conn).items()}
     for did, vendors in vendors_of.items():
         if vendors:
             candidates.setdefault(did, set())
     plans, ambiguous = [], []
     for did, attached in sorted(candidates.items()):
-        customers = set(attached) | {r[0] for r in conn.execute(
-            """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id)
-               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""", (did,))}
+        # Customers are the organisations the calibrated supplier-victim judgement attached here as separate
+        # victims, and the event's own recorded victim - not every victim role. Role classification marks parents,
+        # subsidiaries, regional arms, lists and descriptions as victims (Block for Afterpay, Medlab for Australian
+        # Clinical Labs, "Ingram Micro Holding Corporation" for Ingram Micro, Nissan for Nissan Oceania, "five
+        # Australian firms"), and each became a "customer" split off its own incident.
+        scalar = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                              (did,)).fetchone()
+        customers = set(attached) | ({scalar[0]} if scalar and scalar[0] else set())
         vendors = vendors_of.get(did, [])
         # One customer under two names ("NSW Health" / "NSW Ministry of Health") is one customer.
         distinct: List[str] = []
@@ -565,7 +587,17 @@ def plan_splits(conn: sqlite3.Connection, resolver, vendors_of: Dict[str, List[s
         supplier_records: List[str] = []
         unclear = []
         for m in _record_orgs(conn, did):
-            if not m["org"]:
+            # Whose record it is: the customer its own entity links give as harmed, when exactly one is. In a
+            # supplier breach Perplexity's ``formal_entity_name`` is the breached supplier even for a customer's
+            # own notice (Latrobe City Council's and Boroondara's OracleCMS notices, 7 of SA's Frontier payroll
+            # records), so it decides only for a record whose links name no customer. A record naming several
+            # customers is general coverage and stays.
+            linked = sorted({c for c in customers for h in m["harmed"]
+                             if not any(same_org(resolver, h, v) for v in vendors) and same_org(resolver, h, c)})
+            if len(linked) == 1:
+                groups[linked[0]].append(m["id"])
+                continue
+            if linked or not m["org"]:
                 continue
             if any(same_org(resolver, m["org"], v) for v in vendors):
                 supplier_records.append(m["id"])
@@ -593,11 +625,22 @@ def plan_splits(conn: sqlite3.Connection, resolver, vendors_of: Dict[str, List[s
         if unclear:
             ambiguous.append({"deduplicated_event_id": did, "why": "a record fits two customers: " + "; ".join(unclear)})
             continue
-        # Records about the supplier's own breach keep the event (it becomes the supplier's event);
-        # otherwise the event's own recorded victim keeps it, else the largest customer group.
-        stays = (vendors[0] if supplier_records else own
-                 or sorted(groups, key=lambda c: (-len(groups[c]), c))[0])
-        plans.append(SplitPlan(did, stays, {c: sorted(r) for c, r in groups.items() if c != stays}))
+        # The party with the most records keeps the event: a tie goes to the supplier (its own records then
+        # keep it as the supplier's event), then to the event's own recorded victim, then to the customer of
+        # the event's master record. One Frontier-named page no longer takes SA's 20 records' event from it.
+        master = conn.execute("SELECT master_enriched_event_id FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                              (did,)).fetchone()
+        master = master[0] if master else None
+        parties = {c: len(r) for c, r in groups.items()}
+        if supplier_records:
+            parties[vendors[0]] = len(supplier_records)
+        stays = sorted(parties, key=lambda p: (-parties[p], p != (vendors[0] if supplier_records else None),
+                                                p != own, master not in groups.get(p, ()), p))[0]
+        staying = {m["id"] for m in _record_orgs(conn, did)} - {r for c, rs in groups.items() if c != stays for r in rs}
+        leaving = {c: sorted(r) for c, r in groups.items() if c != stays
+                   and not any(frozenset((x, y)) in undone for x in r for y in staying)}
+        if leaving:
+            plans.append(SplitPlan(did, stays, leaving))
     return plans, ambiguous
 
 
@@ -747,8 +790,61 @@ def _link_split(conn: sqlite3.Connection, g, registry: Registry, plan: SplitPlan
         registry.link(Link(inc.supplier_incident_id, entity, customer, new, BASIS_SPLIT, None, "rule"))
 
 
-def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool) -> Dict[str, Any]:
-    """Reverse the old attachments into links and split cross-customer events (``apply``); else plan only."""
+def demote_split_customers(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
+    """A customer split out of an event as its own event is no longer a victim of the event it left.
+
+    The split moved the customer's records; its victim role stayed on the origin wherever another record there
+    still mentions it, so the by-entity view listed each customer twice: Australian Conservation Foundation under
+    Pareto Phone's own event, Macquarrie Corporation under Auto-IT's, City of Ballarat under the OracleCMS event,
+    TasTAFE under Instructure's Global Canvas event (TasTAFE is a victim of the Tasmanian education event split
+    from it), Stake under DriveWealth's. Each such role on the origin becomes ``affected_customer`` - the supplier
+    link records the relationship - when the customer is a victim of an Active event split from that origin.
+    Idempotent; ``apply`` False rolls back.
+    """
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'SupplierLinkActions'").fetchone():
+        return []
+    victims: Dict[str, List[Tuple[int, str]]] = defaultdict(list)
+    for did, eid, name in conn.execute(
+            """SELECT dee.deduplicated_event_id, dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = dee.deduplicated_event_id
+               WHERE dee.relationship_type = 'victim' AND d.status = 'Active'"""):
+        victims[did].append((eid, name))
+    scalar = dict(conn.execute("SELECT deduplicated_event_id, victim_organization_name FROM DeduplicatedEvents"))
+    split_from: Dict[str, Set[str]] = defaultdict(set)
+    for origin, new in conn.execute("SELECT deduplicated_event_id, new_event_id FROM SupplierLinkActions "
+                                    "WHERE action = 'split' AND new_event_id IS NOT NULL"):
+        split_from[origin].add(resolve_event(conn, new) or new)
+    done = []
+    for origin, parts in sorted(split_from.items()):
+        if origin not in victims:
+            continue
+        theirs = [name for p in parts if p != origin for _, name in victims.get(p, [])]
+        for eid, name in victims[origin]:
+            # The origin's own recorded victim is not a departed customer, whatever its parts record.
+            if scalar.get(origin) and names_match(conn, name, scalar[origin]):
+                continue
+            if any(names_match(conn, name, t) for t in theirs):
+                conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
+                             "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
+                             (origin, eid))
+                done.append({"deduplicated_event_id": origin, "customer": name})
+    if apply:
+        conn.commit()
+    else:
+        conn.rollback()
+    return done
+
+
+def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split: bool = False) -> Dict[str, Any]:
+    """Reverse the old attachments into links (``apply``) and correct the roles of customers already split out.
+
+    Splitting events joined across customers was the one-off conversion of 2026-10-31. Its role list treated
+    parents, subsidiaries, regional arms and lists as customers, so further splits are proposals (``splits`` with
+    ``new_event`` None) unless ``split`` is set too.
+    """
     from cyber_data_collector.dedup import supplier_victims as sv
     from cyber_data_collector.dedup.ledger import DedupLedger
 
@@ -768,7 +864,7 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool) -> Dic
                       if p.leaving]
     splits: List[Dict[str, Any]] = []
     new_event_of: Dict[Tuple[str, str], str] = {}
-    if apply:
+    if apply and split:
         ledger = DedupLedger(conn)
         previous = conn.row_factory
         conn.row_factory = sqlite3.Row
@@ -826,8 +922,9 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool) -> Dic
         registry.link(Link(inc.supplier_incident_id, entity_id, item["victim"], event, BASIS_CONVERTED,
                            row[1] if row else None, (row[2] if row else None) or "attachment"))
         converted += 1
+    demoted = demote_split_customers(conn, apply=apply)
     return {"attachments_reversed": reversed_, "attachments_converted": converted, "splits": splits,
-            "ambiguous": ambiguous}
+            "ambiguous": ambiguous, "split_customers_demoted": demoted}
 
 
 # ----------------------------------------------------------------------

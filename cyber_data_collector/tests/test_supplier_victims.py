@@ -931,15 +931,28 @@ def _event_of(c, record):
                      (record,)).fetchone()[0]
 
 
+def _attach(c, did, name, decided_by="jev"):
+    sv.ensure_schema(c)
+    entity_id = c.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?", (name,)).fetchone()[0]
+    c.execute("INSERT INTO SupplierVictimAttachments (attachment_id, deduplicated_event_id, entity_id, entity_name, "
+              "decided_by, created_at) VALUES (?, ?, ?, ?, ?, '2026-10-30')", (f"att-{name}", did, entity_id, name,
+                                                                              decided_by))
+
+
 def test_an_event_holding_the_supplier_and_its_customers_is_split_per_customer(full):
-    """ZircoDATA's own records keep the event; Monash Health's and Home Affairs' leave as their own events."""
+    """ZircoDATA's own records keep the event; Monash Health's (its recorded victim) and Home Affairs' (attached by
+    the calibrated judgement) leave as their own events - only when asked to split."""
+    _attach(full, "ded-z1", "Department of Home Affairs")
     g = sv.gather(full)
     registry = sl.Registry(full, g.resolver)
     plan = sl.convert(full, g, registry, apply=False)
     assert sorted((s["customer"], s["records"]) for s in plan["splits"]) == [
         ("Department of Home Affairs", 1), ("Monash Health", 2)]
     assert _event_of(full, "enr-m1") == "ded-z1"                       # planning changes nothing
-    done = sl.convert(full, g, registry, apply=True)
+    proposed = sl.convert(full, g, registry, apply=True)                # applying alone only proposes splits
+    assert proposed["splits"] and all(s["new_event"] is None for s in proposed["splits"])
+    assert _event_of(full, "enr-m1") == "ded-z1"
+    done = sl.convert(full, g, registry, apply=True, split=True)
     assert {s["stays"] for s in done["splits"]} == {"ZircoDATA"}
     assert _event_of(full, "enr-z1") == _event_of(full, "enr-z2") == "ded-z1"
     monash, home = _event_of(full, "enr-m1"), _event_of(full, "enr-h1")
@@ -947,7 +960,7 @@ def test_an_event_holding_the_supplier_and_its_customers_is_split_per_customer(f
     assert full.execute("SELECT COUNT(*) FROM SupplierLinkActions WHERE action = 'split'").fetchone()[0] == 2
     # Idempotent: the parts hold one customer each now.
     g2 = sv.gather(full)
-    assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True)["splits"] == []
+    assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True, split=True)["splits"] == []
 
 
 def test_the_events_own_victim_is_never_reversed_and_a_past_reversal_is_restored(conn):

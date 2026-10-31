@@ -1835,7 +1835,9 @@ def cmd_alias(args) -> int:
 
     A person's alias is applied by ``canonicalise-entities`` as a reviewed fold (never re-asked of a model,
     never reversed by one), and its 'same' decision is stored as the person's (``EntityAliasDecisions`` model
-    ``human``). Refused when the pair is listed as an anti-alias. ``list`` shows the people's aliases.
+    ``human``). Refused when a person listed the pair as an anti-alias; a model's anti-alias for the pair (a
+    Perplexity ``parent_subsidiary`` verdict on Medlab Pathology and Australian Clinical Labs) gives way to the
+    person, as every model decision does. ``list`` shows the people's aliases.
     """
     from cyber_data_collector.dedup import anti_aliases
     from cyber_data_collector.dedup.entity_resolution import EntityResolver
@@ -1854,9 +1856,11 @@ def cmd_alias(args) -> int:
             print("ERROR: alias add needs VARIANT CANONICAL --reason", file=sys.stderr)
             return 2
         if anti_aliases.is_anti_alias(anti_aliases.pair_set(conn), args.variant, args.canonical):
-            print(f"ERROR: {args.variant!r} / {args.canonical!r} is listed as an anti-alias; remove that first",
-                  file=sys.stderr)
-            return 2
+            if not anti_aliases.remove(conn, args.variant, args.canonical, source=anti_aliases.SOURCE_LLM):
+                print(f"ERROR: {args.variant!r} / {args.canonical!r} is listed as an anti-alias by a person; "
+                      "remove that first", file=sys.stderr)
+                return 2
+            print(f"removed the model's anti-alias {args.variant!r} / {args.canonical!r}: a person's alias outranks it")
         EntityResolver(conn).learn_alias(conn, args.variant, args.canonical, source="human")
         a, b = sorted((args.variant, args.canonical))
         conn.execute("INSERT OR REPLACE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
@@ -1865,6 +1869,68 @@ def cmd_alias(args) -> int:
         conn.commit()
         print(f"alias (human): {args.variant!r} -> {args.canonical!r}; run canonicalise-entities to fold")
         return 0
+    finally:
+        conn.close()
+
+
+def cmd_validation_exception(args) -> int:
+    """The owner's manual validation exceptions (``dedup/validation_exceptions.py``): stored, listed, re-checked.
+
+    ``check`` exits 1 when any exception fails, so a change to an algorithm can be run against every case the
+    owner has reported.
+    """
+    from cyber_data_collector.dedup import validation_exceptions as ve
+
+    conn = _connect(args.db)
+    try:
+        ve.ensure_schema(conn)
+        if args.action == "add":
+            if not (args.kind and args.event and args.value and (args.note or "").strip()):
+                print("ERROR: add needs KIND EVENT VALUE --note", file=sys.stderr)
+                return 2
+            try:
+                eid = ve.add(conn, args.kind, args.event, args.value, args.note, observed=args.observed)
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            print(f"validation exception {eid}: {args.kind} {args.event[:8]} {args.value}")
+            return 0
+        if args.action == "revise":
+            # revise EXCEPTION_ID NEW_KIND NEW_VALUE --note "the owner's later decision"
+            if not (args.kind and args.event and args.value and (args.note or "").strip()):
+                print("ERROR: revise needs EXCEPTION_ID KIND VALUE --note", file=sys.stderr)
+                return 2
+            match = [r[0] for r in conn.execute("SELECT exception_id FROM ValidationExceptions "
+                                                "WHERE exception_id LIKE ?", (args.kind + "%",))]
+            if len(match) != 1:
+                print(f"ERROR: {args.kind!r} matches {len(match)} exception(s)", file=sys.stderr)
+                return 2
+            try:
+                ve.revise(conn, match[0], args.event, args.value, args.note)
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                return 2
+            print(f"validation exception {match[0]} revised: {args.event} {args.value}")
+            return 0
+        if args.action == "root-cause":
+            if not (args.kind and args.event):
+                print("ERROR: root-cause needs EXCEPTION_ID TEXT", file=sys.stderr)
+                return 2
+            ve.set_root_cause(conn, args.kind, args.event)
+            return 0
+        results = {r.exception_id: r for r in ve.check(conn, record=args.action == "check")}
+        failed = 0
+        for eid, kind, event, value, note, cause in conn.execute(
+                "SELECT exception_id, kind, deduplicated_event_id, value, note, root_cause FROM ValidationExceptions "
+                "ORDER BY reported_at"):
+            r = results[eid]
+            failed += r.result == "fail"
+            print(f"  [{r.result.upper():9}] {eid[:8]} {kind} {event[:8]} {value[:60]} - {r.detail}")
+            print(f"              owner: {note[:150]}")
+            if cause:
+                print(f"              root cause: {cause[:150]}")
+        print(f"{len(results)} exception(s), {failed} failing")
+        return 1 if failed and args.action == "check" else 0
     finally:
         conn.close()
 
@@ -2437,6 +2503,12 @@ def cmd_classify_entities(args) -> int:
         unlinked = link_unlinked_events(conn, apply=not getattr(args, "dry_run", False))
         if unlinked:
             print(f"{len(unlinked)} event(s) with no entity link took their members' links")
+        from cyber_data_collector.dedup.ledger import repair_departed_links
+
+        departed = repair_departed_links(conn, apply=not getattr(args, "dry_run", False))
+        if departed:
+            print(f"{sum(n for _, n in departed)} link(s) only split-out records carried removed from "
+                  f"{len(departed)} event(s)")
         classifier = EntityRoleClassifier()
 
         rows = conn.execute("""
@@ -2558,6 +2630,13 @@ def cmd_classify_entities(args) -> int:
         print(f"classifier stats: {classifier.stats}")
         if failed:
             print(f"{failed} event(s) not classified (model call failed); they stay stale and are retried")
+        # Classification marks every organisation the text calls harmed a victim, including customers whose
+        # own events were split out of this one; those are affected customers here (the supplier link says so).
+        from cyber_data_collector.dedup.supplier_links import demote_split_customers
+
+        demoted = demote_split_customers(conn, apply=not args.dry_run)
+        if demoted:
+            print(f"{len(demoted)} split-out customer(s) no longer a victim of the event they left")
     finally:
         conn.close()
     return 1 if failed else 0
@@ -3952,7 +4031,8 @@ def cmd_find_supplier_victims(args) -> int:
     refresher = _make_refresher(args) if apply else None
     try:
         result = sv.find_supplier_victims(conn, apply=apply, research=args.research,
-                                          role_refresher=refresher, limit=args.limit)
+                                          role_refresher=refresher, limit=args.limit,
+                                          split=getattr(args, "split_customers", False))
     except sv.CalibrationError as exc:
         print(f"Refusing to apply: {exc}")
         return 2
@@ -4419,6 +4499,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--reason", help="why they are one organisation (required)")
     p.set_defaults(func=cmd_alias)
 
+    p = sub.add_parser("validation-exception",
+                       help="The owner's reported wrong results, kept as tests: add KIND EVENT VALUE --note; list; check")
+    p.add_argument("action", choices=["add", "list", "check", "root-cause", "revise"])
+    p.add_argument("kind", nargs="?", help="victim | not_victim | same_incident_as | different_incident_from | incident_month "
+                                            "(root-cause / revise: the exception id)")
+    p.add_argument("event", nargs="?", help="the event id the owner reported (root-cause: the cause found; "
+                                             "revise: the new kind)")
+    p.add_argument("value", nargs="?", help="an organisation name, the other event's id, or YYYY-MM")
+    p.add_argument("--note", help="the owner's words (required for add)")
+    p.add_argument("--observed", help="what was wrong when reported")
+    p.set_defaults(func=cmd_validation_exception)
+
     p = sub.add_parser("descriptive-name",
                        help="Names that are descriptions, not names ('Australian university'): list, add (human, "
                             "--reason), remove, sync (labels + calibrated verdicts), demote (victims that are "
@@ -4776,6 +4868,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="One stored Perplexity search per supplier incident for the "
                         "organisations it affected (reused on later runs)")
     p.add_argument("--limit", type=int, default=None, help="Only the first N supplier incidents")
+    p.add_argument("--split-customers", action="store_true",
+                   help="With --apply, also make the per-customer splits it proposes (otherwise they are listed: "
+                        "the one-off conversion of 2026-10-31 split parents, subsidiaries and lists off their own "
+                        "incidents, so further splits need a person's go-ahead)")
     p.set_defaults(func=cmd_find_supplier_victims)
 
     p = sub.add_parser("supplier-incidents",

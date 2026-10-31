@@ -427,8 +427,8 @@ def test_only_one_publication_runs_at_a_time(harness):
 
 
 def test_default_builders_cover_every_published_output():
-    assert set(pub.DEFAULT_BUILDERS) == {"dashboard", "entities", "timelines", "dedup", "close_pairs", "recurrence",
-                                       "risk_matrix"}
+    assert set(pub.DEFAULT_BUILDERS) == {"dashboard", "entities", "timelines", "dedup", "close_pairs",
+                                       "supplier_incidents", "recurrence", "risk_matrix"}
 
 
 # --- quality runs name their snapshot ---------------------------------------------------------------------

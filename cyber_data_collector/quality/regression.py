@@ -311,7 +311,27 @@ def measure_acceptance(conn: sqlite3.Connection, thresholds=None, today=None,
             detail=f"{len(failed[kind])} of {checked[kind]} checkable {kind} case(s) not satisfied")
     out["acceptance.checked"] = Measurement(value=sum(checked.values()), detail=f"{len(rows)} cases in {ACCEPTANCE_FILE}")
     out["acceptance.unchecked"] = Measurement(value=n_unchecked, detail=f"cases not checked: {breakdown}")
+    out.update(measure_validation_exceptions(conn))
     return out
+
+
+def measure_validation_exceptions(conn: sqlite3.Connection) -> Dict[str, Measurement]:
+    """The owner's manual validation exceptions (``ValidationExceptions``) the data still fails.
+
+    Read-only: results are not written back (the measured database may be a snapshot). A database with no
+    exceptions table has none to fail.
+    """
+    from cyber_data_collector.dedup import validation_exceptions as ve
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'ValidationExceptions'").fetchone():
+        return {"acceptance.exceptions.failures": Measurement(value=0, detail="no ValidationExceptions table")}
+    results = ve.check(conn, record=False)
+    failed = [f"{r.exception_id[:8]} {r.kind}: {r.detail}" for r in results if r.result == "fail"]
+    unchecked = sum(r.result == "unchecked" for r in results)
+    return {"acceptance.exceptions.failures": Measurement(
+        value=len(failed), examples=failed[:EXAMPLES],
+        detail=f"{len(failed)} of {len(results)} owner-reported validation exception(s) still fail; "
+               f"{unchecked} unchecked (their records are in no single Active event)")}
 
 
 LABEL_CHECKS: Dict[str, Callable] = {

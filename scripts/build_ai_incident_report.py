@@ -83,6 +83,9 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
         logger.warning("AI incident report: %d of %d incident(s) have no AI-involvement judgement",
                        unjudged, total)
 
+    from cyber_data_collector.dedup.multi_customer_incidents import event_suppliers
+
+    suppliers = event_suppliers(conn)
     rows: List[str] = []
     for item in incidents:
         when = html_escape((item["event_date"] or "undated")[:10])
@@ -107,9 +110,10 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
             description = f'<span class="missing">{html_escape(NO_DESCRIPTION)}</span>'
         rows.append(
             f'<tr data-category="{badge}"><td class="nowrap">{when}</td><td>{victims}</td>'
+            f'<td>{html_escape(suppliers.get(item["deduplicated_event_id"], ""))}</td>'
             f'<td><span class="badge {badge}">{category}</span>{prob_text}</td>'
             f'<td><div class="title">{html_escape(item["title"] or "")}</div>{description}</td></tr>')
-    body = "\n".join(rows) or '<tr><td colspan="4" class="muted">No incidents with AI involvement.</td></tr>'
+    body = "\n".join(rows) or '<tr><td colspan="5" class="muted">No incidents with AI involvement.</td></tr>'
 
     notes = [f"{settled} of {total} incidents dated {period.start_iso} to {period.end_iso} involved AI: "
              f"{counts[ai.AI_ATTACKER]} with AI as the attacker, "
@@ -213,7 +217,7 @@ def build_report_html(conn: sqlite3.Connection, period: Optional[ReportingPeriod
   </div>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Date</th><th>Victim</th><th>AI category</th><th>Description</th></tr></thead>
+    <thead><tr><th>Date</th><th>Victim</th><th>Supplier</th><th>AI category</th><th>Description</th></tr></thead>
     <tbody>
 {body}
     </tbody>

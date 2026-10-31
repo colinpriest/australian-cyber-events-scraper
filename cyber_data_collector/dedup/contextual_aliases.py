@@ -150,6 +150,23 @@ def migrate_contextual_aliases(conn: sqlite3.Connection) -> List[Tuple[str, str]
         add_contextual_alias(conn, raw, canonical, source)
         conn.execute("DELETE FROM EntityAliases WHERE raw_name = ?", (raw,))
         moved.append((raw, canonical))
+    # A full name folded into an acronym is one organisation ("National Australia Bank" -> "NAB") - until a second
+    # name folds into the same acronym. "Top Education Group" -> "TEG" and Ticketek's parent "TEG Pty Ltd" -> "TEG"
+    # filed both organisations under one entity. Then the expansions become the acronym's contextual candidates;
+    # the acronym's own name with a qualifier ("TEG Pty Ltd") stays global.
+    into: Dict[str, List[Tuple[str, str]]] = {}
+    for raw, canonical, source in conn.execute(
+            "SELECT raw_name, canonical_name, source FROM EntityAliases WHERE source != 'human'").fetchall():
+        into.setdefault(canonical, []).append((raw, source))
+    for acronym, raws in sorted(into.items()):
+        if len(raws) < 2:
+            continue
+        for raw, source in raws:
+            if EXPLICIT_ALIASES.get(raw) == acronym or not is_contextual_variant(acronym, raw):
+                continue
+            add_contextual_alias(conn, acronym, raw, source)
+            conn.execute("DELETE FROM EntityAliases WHERE raw_name = ?", (raw,))
+            moved.append((raw, acronym))
     return moved
 
 

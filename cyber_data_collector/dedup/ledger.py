@@ -45,6 +45,65 @@ def pair_key(left_id: str, right_id: str) -> str:
     return "|".join(sorted((str(left_id), str(right_id))))
 
 
+def drop_departed_links(conn: sqlite3.Connection, dedup_id: str, departed: Sequence[str]) -> int:
+    """Remove from an event the entity links only records that left it carried.
+
+    An event's links are its members' links; a split moved the record but left its organisation on the event it
+    left. City of Ballarat's OracleCMS notice left the OracleCMS event as Ballarat's own event, and the OracleCMS
+    event (Latrobe City Council's and Boroondara's notices) was still listed under City of Ballarat. An entity a
+    remaining member also links stays. Returns the links removed.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not departed or not {"EnrichedEventEntities", "DeduplicatedEventEntities"} <= tables:
+        return 0
+    marks = ",".join("?" * len(departed))
+    gone = [r[0] for r in conn.execute(
+        f"""SELECT DISTINCT ee.entity_id FROM EnrichedEventEntities ee
+            WHERE ee.enriched_event_id IN ({marks})
+              AND ee.entity_id NOT IN (
+                  SELECT ee2.entity_id FROM EventDeduplicationMap m
+                  JOIN EnrichedEventEntities ee2 ON ee2.enriched_event_id = m.enriched_event_id
+                  WHERE m.deduplicated_event_id = ?)""", (*departed, dedup_id))]
+    if not gone:
+        return 0
+    cur = conn.execute(f"DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? "
+                       f"AND entity_id IN ({','.join('?' * len(gone))})", (dedup_id, *gone))
+    return cur.rowcount
+
+
+def repair_departed_links(conn: sqlite3.Connection, apply: bool = True) -> List[Tuple[str, int]]:
+    """:func:`drop_departed_links` for splits made before it existed: per Active event, the records a pre-split
+    snapshot (``revert-*``) shows it held and it no longer holds. Idempotent. Returns (event, links removed);
+    ``apply`` False rolls back."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'DedupSnapshots'").fetchone():
+        return []
+    held: Dict[str, set] = {}
+    for did, payload in conn.execute("SELECT deduplicated_event_id, payload_json FROM DedupSnapshots "
+                                     "WHERE batch_id LIKE 'revert-%'"):
+        try:
+            members = {m["enriched_event_id"] for m in json.loads(payload).get("members", [])}
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
+        held.setdefault(did, set()).update(members)
+    active = {r[0] for r in conn.execute("SELECT deduplicated_event_id FROM DeduplicatedEvents WHERE status = 'Active'")}
+    now: Dict[str, set] = {}
+    for record, did in conn.execute("SELECT enriched_event_id, deduplicated_event_id FROM EventDeduplicationMap"):
+        now.setdefault(did, set()).add(record)
+    out = []
+    for did in sorted(held):
+        if did not in active:
+            continue
+        gone = sorted(held[did] - now.get(did, set()))
+        n = drop_departed_links(conn, did, gone)
+        if n:
+            out.append((did, n))
+    if apply:
+        conn.commit()
+    else:
+        conn.rollback()
+    return out
+
+
 class DedupLedger:
     """Reads and writes the deduplication decision history."""
 
@@ -451,6 +510,7 @@ class DedupLedger:
         self._refresh_counts(deduplicated_event_id)
         self._refresh_counts(new_dedup_id)
         self._link_entities(new_dedup_id)
+        drop_departed_links(self.conn, deduplicated_event_id, [enriched_event_id])
         # Both sides changed: one lost a record, the other is brand new.
         self._roles_changed(deduplicated_event_id, new_dedup_id)
         logger.info(

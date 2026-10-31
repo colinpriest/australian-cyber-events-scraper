@@ -68,6 +68,7 @@ def _side(s: close_pairs.Side) -> str:
     return (f'<div class="side"><div class="t">{html.escape(s.title or "")}</div>'
             f'<div class="m">{html.escape(str(s.event_date or "undated"))} &middot; possible period {period} '
             f'({html.escape(s.basis)}) &middot; {s.records} record(s)</div>'
+            + (f'<div class="m">Supplier: {html.escape(s.supplier)}</div>' if s.supplier else "") +
             f'<div class="m"><code>{html.escape(s.event_id)}</code></div></div>')
 
 
