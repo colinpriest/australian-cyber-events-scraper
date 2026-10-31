@@ -1,3 +1,3 @@
 scenario,replicates,median_recorded_repeats,p05_recorded_repeats,p95_recorded_repeats,median_rate_per_100_entity_years,p05_rate,p95_rate
-uniform 75% follow-up observation,100,106.0,95.9,114.05,4.630645155503037,4.189423305780577,4.982312075331333
-lower observation for small organisations,100,138.0,135.95,140.0,6.0285757684850845,5.939020838590923,6.115946431796463
+uniform 75% follow-up observation,100,92.0,83.0,100.0,4.043935360576113,3.648332988345841,4.395581913669688
+lower observation for small organisations,100,120.0,118.0,122.0,5.274698296403626,5.186786658130232,5.362609934677019
