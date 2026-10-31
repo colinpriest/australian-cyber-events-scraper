@@ -601,6 +601,99 @@ def plan_splits(conn: sqlite3.Connection, resolver, vendors_of: Dict[str, List[s
     return plans, ambiguous
 
 
+def record_majority(conn: sqlite3.Connection, resolver, dedup_id: str) -> Optional[str]:
+    """The organisation at least two thirds (and at least two) of the event's naming records name, if any."""
+    from cyber_data_collector.dedup.supplier_victims import same_org
+
+    orgs = [m["org"] for m in _record_orgs(conn, dedup_id) if m["org"]]
+    groups: List[List[str]] = []
+    for org in orgs:
+        group = next((g for g in groups if same_org(resolver, g[0], org)), None)
+        if group is None:
+            groups.append([org])
+        else:
+            group.append(org)
+    best = max(groups, key=len) if groups else []
+    return best[0] if len(best) >= 2 and 3 * len(best) >= 2 * len(orgs) else None
+
+
+def merged_customer_plans(conn: sqlite3.Connection, resolver) -> List[SplitPlan]:
+    """Undo the earlier version's cross-customer merges where the event's own records say whose it is.
+
+    The supplier step merged "the same supplier incident recorded under another customer" into one event
+    (``DedupDecisions`` reasoning naming :data:`supplier_victims.PAIR_VERSION`). ASIC's Accellion event took in
+    NSW Health's events that way, and its victim was later rewritten to NSW Health. Each merge batch snapshots
+    the source event, so the records each source brought in are known. A source's records still in the event
+    leave together as its customer's event when all of these hold - each a recorded fact, not a name test:
+
+    * the event's own organisation is what two thirds of its naming records name (:func:`record_majority`;
+      the scalar victim is not used, it was rewritten), and the source's customer is another organisation;
+    * the merge carried that customer across as a separate victim (``SupplierVictimAttachments``
+      ``decided_by`` ``merge``) and the conversion reversed it (``SupplierVictimReversals``, reversed or
+      restored) - the calibrated judgement that it was another customer;
+    * the customer is not a list of organisations, and none of the source's records names the event's own
+      organisation.
+
+    A source with no recorded victim, or only a description, stays.
+    """
+    from cyber_data_collector.dedup import descriptive_names
+    from cyber_data_collector.dedup.entity_merge import is_organisation_list
+    from cyber_data_collector.dedup.supplier_victims import PAIR_VERSION, same_org
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"DedupDecisions", "DedupSnapshots", "SupplierVictimAttachments", "SupplierVictimReversals"} <= tables:
+        return []
+    batches: Dict[str, Set[str]] = defaultdict(set)
+    for batch, target in conn.execute(
+            "SELECT DISTINCT batch_id, deduplicated_event_id FROM DedupDecisions WHERE action = 'merge' "
+            "AND reasoning LIKE ?", (f"%{PAIR_VERSION}%",)):
+        batches[batch].add(target)
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    members: Dict[str, Set[str]] = defaultdict(set)
+    for record, did in conn.execute("SELECT enriched_event_id, deduplicated_event_id FROM EventDeduplicationMap"):
+        members[did].add(record)
+    carried: Dict[str, Set[str]] = defaultdict(set)
+    for did, name in conn.execute(
+            """SELECT a.deduplicated_event_id, a.entity_name FROM SupplierVictimAttachments a
+               JOIN SupplierVictimReversals r ON r.attachment_id = a.attachment_id
+               WHERE a.decided_by = 'merge' AND r.action IN ('reversed', 'restored')"""):
+        carried[did].add(name)
+    descriptions = descriptive_names.described(conn)
+    owns: Dict[str, Optional[str]] = {}
+    leaving: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+    for batch, targets in sorted(batches.items()):
+        for did, payload in conn.execute("SELECT deduplicated_event_id, payload_json FROM DedupSnapshots "
+                                         "WHERE batch_id = ?", (batch,)):
+            if did in targets or status.get(did) != "Merged":
+                continue
+            try:
+                snap = json.loads(payload)
+            except (ValueError, TypeError):
+                continue
+            customer = (snap.get("event") or {}).get("victim_organization_name")
+            if (not customer or descriptive_names.is_listed(descriptions, customer)
+                    or is_organisation_list(customer)):
+                continue
+            brought = {m.get("enriched_event_id") for m in snap.get("members", []) if isinstance(m, dict)}
+            for target in targets:
+                still = brought & members.get(target, set())
+                if status.get(target) != "Active" or not still:
+                    continue
+                if not any(same_org(resolver, customer, c) for c in carried.get(target, ())):
+                    continue
+                if target not in owns:
+                    owns[target] = record_majority(conn, resolver, target)
+                own = owns[target]
+                if not own or is_organisation_list(own) or same_org(resolver, customer, own):
+                    continue
+                if any(m["org"] and same_org(resolver, m["org"], own)
+                       for m in _record_orgs(conn, target) if m["id"] in still):
+                    continue
+                key = next((c for c in leaving[target] if same_org(resolver, c, customer)), customer)
+                leaving[target][key] |= still
+    return [SplitPlan(t, owns[t], {c: sorted(r) for c, r in groups.items()}) for t, groups in sorted(leaving.items())]
+
+
 def _entity_named(conn: sqlite3.Connection, g, name: str, event_id: Optional[str] = None) -> Optional[int]:
     """The entity of ``name``: the one the event already records for it (victim or attached), else by name."""
     from cyber_data_collector.dedup.supplier_victims import same_org
@@ -666,6 +759,13 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool) -> Dic
     sv.restore_own_victims(conn, apply=apply)       # a reversal never takes the event's own victim
     reversed_ = sv.reverse_attachments(conn, apply=apply)
     plans, ambiguous = plan_splits(conn, g.resolver, vendors_of)
+    # Cross-customer merges of the earlier version are undone first; a record leaves once.
+    merged = merged_customer_plans(conn, g.resolver)
+    taken = {r for p in merged for rs in p.leaving.values() for r in rs}
+    plans = merged + [p for p in (SplitPlan(p.event_id, p.stays, {c: [r for r in rs if r not in taken]
+                                                                  for c, rs in p.leaving.items()
+                                                                  if set(rs) - taken}) for p in plans)
+                      if p.leaving]
     splits: List[Dict[str, Any]] = []
     new_event_of: Dict[Tuple[str, str], str] = {}
     if apply:

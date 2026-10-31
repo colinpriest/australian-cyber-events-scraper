@@ -177,8 +177,9 @@ def is_organisation_list(name: str) -> bool:
     if _CAPTION.search(name or ""):
         return True
     parts = [part for part in re.split(r",|;", name or "") if part.strip()]
-    # Each part a name of its own (two or more words): "Smith, Jones & Co" is one firm.
-    return len(parts) >= 2 and all(len(_tokens(part)) >= 2 for part in parts)
+    # Each part a name of its own (two or more words): "Smith, Jones & Co" is one firm. Three or more parts
+    # are a list whatever their length ("ANZ, NAB, Westpac, Commonwealth Bank").
+    return len(parts) >= 3 or (len(parts) >= 2 and all(len(_tokens(part)) >= 2 for part in parts))
 
 
 def canonical_groups(conn: sqlite3.Connection, explicit_only: bool = False,

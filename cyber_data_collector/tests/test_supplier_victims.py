@@ -993,3 +993,32 @@ def test_an_attached_customers_records_leave_the_event_of_its_own_victim(conn):
     plans, _ = sl.plan_splits(conn, EntityResolver(conn), {"e9": ["ProctorU"]})
     (plan,) = [p for p in plans if p.event_id == "e9"]
     assert plan.stays == "Monash University" and plan.leaving == {"Curtin University": ["r92"]}
+
+
+def test_an_earlier_cross_customer_merge_is_undone_where_the_records_say_whose_event_it_is(conn):
+    """ASIC's Accellion event took in NSW Health's by an earlier supplier merge, and its victim was rewritten
+    to NSW Health. Two thirds of its naming records name ASIC; the merge carried NSW Health across as a
+    separate victim and the conversion reversed it: the records NSW Health's event brought in leave."""
+    from cyber_data_collector.dedup import supplier_links as sl
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name, entity_kind) VALUES (20, 'NSW Health', 'organisation')")
+    _event(conn, "t1", "Medical information leaked in NSW Health hack", "2021-02-01", victim="NSW Health",
+           vendor="ProctorU", records=[(f"a{i}", "ASIC hit", f"https://news.example/a{i}", "Monash University", [])
+                                       for i in range(3)] + [("n1", "NSW Health hack", "https://news.example/n1",
+                                                              None, [])])
+    _event(conn, "s1", "NSW Health hack", "2021-02-01", victim="NSW Health", status="Merged")
+    conn.execute("CREATE TABLE DedupDecisions (batch_id TEXT, deduplicated_event_id TEXT, action TEXT, reasoning TEXT)")
+    conn.execute("INSERT INTO DedupDecisions VALUES ('m1', 't1', 'merge', ?)", (f"Jev {sv.PAIR_VERSION}: same",))
+    conn.execute("INSERT INTO DedupSnapshots VALUES ('x', 'm1', 's1', ?)", (json.dumps(
+        {"event": {"victim_organization_name": "NSW Health"}, "members": [{"enriched_event_id": "n1"}]}),))
+    assert sl.merged_customer_plans(conn, EntityResolver(conn)) == []          # never carried as a victim
+    assert sv.attach_victim(conn, "t1", 20, "merge", subject_id="t1|20", probability=None, cutoff=None,
+                            question_version=sv.VICTIM_VERSION)
+    assert sl.merged_customer_plans(conn, EntityResolver(conn)) == []          # attached, never reversed
+    # As on the live database: reversed by the conversion, then restored as the (rewritten) scalar victim.
+    (aid,) = conn.execute("SELECT attachment_id FROM SupplierVictimAttachments").fetchone()
+    conn.execute("INSERT INTO SupplierVictimReversals VALUES (?, 't1', 20, 'NSW Health', 'restored', NULL, '[]', "
+                 "'test', 'b', '2026-10-31')", (aid,))
+    (plan,) = sl.merged_customer_plans(conn, EntityResolver(conn))
+    assert plan.event_id == "t1" and plan.stays == "Monash University" and plan.leaving == {"NSW Health": ["n1"]}
