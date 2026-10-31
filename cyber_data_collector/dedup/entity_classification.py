@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from enum import Enum
 from typing import Dict, Iterable, List, Optional, Sequence, Set
 
@@ -732,6 +733,19 @@ def _sync_roles(conn, deduplicated_event_id: str,
         retype(victim, "victim")
 
 
+
+def _rederive_title(conn: sqlite3.Connection, deduplicated_event_id: str) -> None:
+    """A changed victim re-derives the event's title from its members: ASIC's Accellion event kept "Medical
+    information leaked in NSW Health hack" after NSW Health's records left and its victim became ASIC."""
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    previous = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        DedupLedger(conn)._recompute_identity(deduplicated_event_id)
+    finally:
+        conn.row_factory = previous
+
 def resolve_victim(
     conn,
     deduplicated_event_id: str,
@@ -840,6 +854,8 @@ def resolve_victim(
                 (victim, industry_for(conn, victim), vendor,
                  industry_for(conn, vendor) if vendor else None,
                  deduplicated_event_id))
+            if stored and stored[0] and stored[0].strip().lower() != victim.strip().lower():
+                _rederive_title(conn, deduplicated_event_id)
         else:
             conn.execute(
                 "UPDATE DeduplicatedEvents SET vendor_organization_name = ?, "

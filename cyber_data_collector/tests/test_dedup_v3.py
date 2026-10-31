@@ -772,3 +772,21 @@ def test_an_event_with_no_entity_link_takes_its_members_links_and_no_other_event
         "SELECT deduplicated_event_id, entity_id, relationship_type FROM DeduplicatedEventEntities")}
     assert roles == {(d1, 7, "victim"), (d2, 8, "affected")}
     assert link_unlinked_events(conn) == []
+
+
+def test_a_changed_victim_re_derives_the_title_from_the_members(conn):
+    from cyber_data_collector.dedup.entity_classification import _rederive_title
+
+    _, e1, d1 = _add_event(conn, "t1", "Australian Securities and Investments Commission (ASIC) Security Breach", "https://x/1",
+                           victim="Australian Securities and Investments Commission")
+    conn.execute("INSERT INTO EventDeduplicationMap (map_id, enriched_event_id, deduplicated_event_id, "
+                 "contribution_type) VALUES ('m1', ?, ?, 'master')", (e1, d1))
+    conn.execute("UPDATE DeduplicatedEvents SET title = 'Medical information leaked in NSW Health hack' "
+                 "WHERE deduplicated_event_id = ?", (d1,))
+    previous = conn.row_factory
+    conn.row_factory = None
+    _rederive_title(conn, d1)
+    assert conn.row_factory is None
+    conn.row_factory = previous
+    assert conn.execute("SELECT title FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                        (d1,)).fetchone()[0] == "Australian Securities and Investments Commission (ASIC) Security Breach"
