@@ -22,7 +22,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def prune_stale_sources(conn: sqlite3.Connection) -> int:
     return deleted
 
 
-def backfill_event_entities(conn: sqlite3.Connection) -> int:
+def backfill_event_entities(conn: sqlite3.Connection, event_ids: Optional[Sequence[str]] = None) -> int:
     """Rebuild ``DeduplicatedEventEntities`` from the members' entity links.
 
     The table is written during discovery but **deleted and never repopulated**
@@ -167,7 +167,7 @@ def backfill_event_entities(conn: sqlite3.Connection) -> int:
 
     Roles come from ``EnrichedEventEntities.relationship_type``, which entity
     classification now populates, so the rebuilt rows carry victim/vendor/
-    regulator rather than a uniform 'affected'.
+    regulator rather than a uniform 'affected'. ``event_ids`` limits it to those events (a split's new event).
     """
     tables = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -190,8 +190,11 @@ def backfill_event_entities(conn: sqlite3.Connection) -> int:
             WHERE d.deduplicated_event_id = m.deduplicated_event_id
               AND d.entity_id = ee.entity_id
         )
+        {scope}
         GROUP BY m.deduplicated_event_id, ee.entity_id, ee.relationship_type
-        """
+        """.format(scope="" if event_ids is None else
+                   f"AND m.deduplicated_event_id IN ({','.join('?' * len(event_ids))})"),
+        () if event_ids is None else tuple(event_ids),
     ).fetchall()
 
     added = 0

@@ -716,6 +716,23 @@ def test_group_split_keeps_the_group_together_and_rules_only_against_the_rest(co
         ledger.merge_events(d3, new_id, reason="automated", actor="pipeline")
 
 
+
+def test_a_split_out_event_carries_its_members_entity_links(conn):
+    """NSW Health's records left ASIC's Accellion event as an event with no entity links, hence no victim role,
+    and the duplicate check never paired it with NSW Health's own event."""
+    _, e1, d1 = _add_event(conn, "s1", "ASIC Accellion breach", "https://x/1")
+    _, e2, d2 = _add_event(conn, "s2", "NSW Health Accellion breach", "https://x/2")
+    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name) VALUES (7, 'NSW Health')")
+    conn.execute("INSERT INTO EnrichedEventEntities VALUES (?, 7, 'victim', 0.9)", (e2,))
+    run_backfill(conn)
+    ledger = DedupLedger(conn)
+    ledger.merge_events(d1, d2, reason="wrong")
+    conn.execute("DELETE FROM DeduplicatedEventEntities")          # as on the live database
+    new_id = ledger.split_members(d1, [e2], reason="NSW Health's own records")
+    assert [tuple(r) for r in conn.execute(
+        "SELECT entity_id, relationship_type FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ?",
+        (new_id,))] == [(7, "victim")]
+
 def test_group_split_refuses_to_empty_the_event(conn):
     _, e1, d1 = _add_event(conn, "a", "Acme breach", "https://x/1")
     run_backfill(conn)
