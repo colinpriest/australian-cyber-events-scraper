@@ -394,3 +394,19 @@ def test_an_exception_is_revised_by_a_later_owner_decision_keeping_the_first_wor
     kind, value, note = conn.execute("SELECT kind, value, note FROM ValidationExceptions").fetchone()
     assert (kind, value) == ("not_victim", "Stake") and note.startswith("owner: clearly") and "do not merge" in note
     assert [r.result for r in ve.check(conn)] == ["fail"]                 # big still records Stake as its victim
+
+
+def test_a_named_customer_the_index_misses_reuses_its_existing_entity_row():
+    """2026-10-31: the supplier step stopped on UNIQUE(entity_name) when the index did not hold a stored name."""
+    conn, _ = _accellion()
+    existing = conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('Reserve Bank of New Zealand')").lastrowid
+
+    class Missing:
+        def find(self, name):
+            return None
+
+    cand = sv.VictimCandidate("ded-t", "Reserve Bank of New Zealand", None, None)
+    assert sv._entity_for(conn, cand, Missing()) == existing
+    other = sv.VictimCandidate("ded-t", "Kroger", None, None)
+    first = sv._entity_for(conn, other, Missing())
+    assert sv._entity_for(conn, other, Missing()) == first        # created once, then found
