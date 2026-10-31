@@ -145,10 +145,24 @@ def _initials(name: str) -> str:
     return "".join(out)
 
 
+def _word_then_abbreviation(name: str) -> List[Tuple[str, str]]:
+    """Tokens of ``name`` written as a word followed by an abbreviation ("OracleCMS"), as ``(word, letters)``
+    in lower case."""
+    import re
+
+    return [(m.group(1).lower(), m.group(2).lower())
+            for m in (re.fullmatch(r"([A-Z][a-z]{2,})([A-Z]{2,})", tok) for tok in re.findall(r"[A-Za-z]+", name or ""))
+            if m]
+
+
 def abbreviation_fits(short: str, long: str) -> bool:
     """One of ``short``'s abbreviations is the initials of ``long`` taken in order from its first word
     ("ANZ" / "Australia and New Zealand Banking Group", "RMIT University" / "Royal Melbourne Institute of
-    Technology"). A proposal test only: the verification decides."""
+    Technology"), or a word followed by an abbreviation is that word of ``long`` followed by the initials of the
+    words after it ("OracleCMS" / "Oracle Customer Management Solutions"). A proposal test only: the verification
+    decides."""
+    import re
+
     initials = _initials(long)
     for abbr in _abbreviations(short):
         if len(abbr) < 2 or not initials or abbr[0] != initials[0]:
@@ -156,6 +170,11 @@ def abbreviation_fits(short: str, long: str) -> bool:
         it = iter(initials)
         if all(ch in it for ch in abbr):
             return True
+    words = re.findall(r"[A-Za-z]+", long or "")
+    for word, abbr in _word_then_abbreviation(short):
+        for i, w in enumerate(words):
+            if w.lower() == word and _initials(" ".join(words[i + 1:])).startswith(abbr):
+                return True
     return False
 
 

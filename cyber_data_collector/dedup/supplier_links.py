@@ -987,6 +987,27 @@ def _link_split(conn: sqlite3.Connection, g, registry: Registry, plan: SplitPlan
         registry.link(Link(inc.supplier_incident_id, entity, customer, new, BASIS_SPLIT, None, "rule"))
 
 
+def departed_customers(conn: sqlite3.Connection, origin: str) -> List[str]:
+    """The victims of Active events split from ``origin`` as their own customer events (``SupplierLinkActions``).
+
+    Such a customer's incident is recorded on its own event, linked to the supplier: on ``origin`` it is an
+    affected customer, never a victim (owner decision 2026-10-31)."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'SupplierLinkActions'").fetchone():
+        return []
+    parts = {resolve_event(conn, new) or new for (new,) in conn.execute(
+        "SELECT new_event_id FROM SupplierLinkActions WHERE action = 'split' AND new_event_id IS NOT NULL "
+        "AND deduplicated_event_id = ?", (origin,))} - {origin}
+    names: List[str] = []
+    for part in sorted(parts):
+        names.extend(name for (name,) in conn.execute(
+            """SELECT v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = dee.deduplicated_event_id
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim' AND d.status = 'Active'""",
+            (part,)))
+    return names
+
+
 def demote_split_customers(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
     """A customer split out of an event as its own event is no longer a victim of the event it left.
 

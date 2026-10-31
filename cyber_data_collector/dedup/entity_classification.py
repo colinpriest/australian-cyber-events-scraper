@@ -199,11 +199,17 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v3"
+ROLES_PROMPT_VERSION = "entity-roles-v4"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
 # prompt that record a vendor are classified again (role_maintenance).
+# v4 (2026-10-31): each entity is listed with the sentences of the reporting that name it (entity_mentions). Under
+# v3 the model still saw only the names and the descriptions, so Accenture (named only in "(Supplied: Accenture)")
+# and the Cyber Security Agency of Singapore (named nowhere in the TPG event's text) stayed vendors.
+#: Sentences shown per entity, and characters per sentence.
+MENTIONS_PER_ENTITY = 2
+MENTION_CHARS = 240
 #: Characters of detail the classifier is shown (v1: 700).
 DETAIL_CHARS = 1200
 
@@ -235,6 +241,52 @@ def classifier_detail(conn, deduplicated_event_id: str, summary: Optional[str] =
             break
     return text[:DETAIL_CHARS]
 
+def entity_mentions(conn, deduplicated_event_id: str, names: Sequence[str]) -> Dict[str, List[str]]:
+    """The sentences of the event's reporting that name each of ``names`` (at most :data:`MENTIONS_PER_ENTITY`).
+
+    Searched: the event's title, its active members' titles and descriptions, and each member's stored page when
+    the page is the record's own article (:func:`active_evidence.evidence_page`). A name is found by its whole name
+    or its first distinctive word (:func:`active_evidence.names_organisation`); a name with no sentence maps to an
+    empty list, which the prompt states.
+    """
+    import re
+
+    from cyber_data_collector.processing.active_evidence import (evidence_page, member_condition,
+                                                                  names_organisation, research_names)
+
+    texts: List[str] = []
+    row = conn.execute("SELECT title, victim_organization_name FROM DeduplicatedEvents "
+                       "WHERE deduplicated_event_id = ?", (deduplicated_event_id,)).fetchone()
+    if row and row[0]:
+        texts.append(row[0])
+    victim = row[1] if row else None
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(EnrichedEvents)")}
+    research_column = "e.perplexity_enrichment_data" if "perplexity_enrichment_data" in columns else "NULL"
+    for title, desc, research, page in conn.execute(
+            f"""SELECT e.title, e.description, {research_column}, r.raw_content
+                FROM EventDeduplicationMap m JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                LEFT JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+                WHERE m.deduplicated_event_id = ? {member_condition(conn)} ORDER BY e.enriched_event_id""",
+            (deduplicated_event_id,)):
+        texts.extend(t for t in (title, desc) if t)
+        own, _ = evidence_page(title, [*research_names(research), victim], page)
+        if own:
+            texts.append(own)
+    sentences: List[str] = []
+    seen = set()
+    for text in texts:
+        for piece in re.split(r"(?<=[.!?])\s+|\n+", text):
+            piece = " ".join(piece.split())
+            if piece and piece not in seen:
+                seen.add(piece)
+                sentences.append(piece)
+    out: Dict[str, List[str]] = {}
+    for name in names:
+        found = [s[:MENTION_CHARS] for s in sentences if names_organisation(name, s)]
+        out[name] = found[:MENTIONS_PER_ENTITY]
+    return out
+
+
 SYSTEM_PROMPT = (
     "You label the organisations, products and people named in a cyber "
     "security incident report.\n\n"
@@ -264,6 +316,10 @@ SYSTEM_PROMPT = (
     "whose own autonomous tool or agent carried out the intrusion (the "
     "developer of an AI agent that broke in is the actor, not the victim).\n"
     "- bystander: journalists, commentators, news outlets, unrelated mentions.\n\n"
+    "Each entity is listed with the sentences of the reporting that name it. "
+    "An entity named only in a photo or image credit, a byline, a caption or a "
+    "link, or in no sentence of the reporting, is a bystander unless the detail "
+    "itself describes its part in the incident.\n\n"
     "Label every entity given, using its name exactly as supplied. The report "
     "describes an incident, so when any listed organisation is the one whose "
     "systems or data were affected, label it victim - do not leave an incident "
@@ -326,8 +382,11 @@ class EntityRoleClassifier:
         title: str,
         summary: Optional[str],
         entities: Sequence[str],
+        mentions: Optional[Dict[str, List[str]]] = None,
     ) -> EventEntityRoles:
         """Classify every entity of one event.
+
+        ``mentions`` (from :func:`entity_mentions`) lists the sentences that name each entity.
 
         Raises :class:`ClassificationUnavailable` without the model and
         :class:`ClassificationFailed` when the call fails; nothing is
@@ -340,7 +399,15 @@ class EntityRoleClassifier:
 
         client = self._get_client()
 
-        listing = "\n".join(f"- {name}" for name in entities)
+        def entry(name: str) -> str:
+            if mentions is None:
+                return f"- {name}"
+            said = mentions.get(name) or []
+            if not said:
+                return f"- {name}\n    (named in no sentence of the stored reporting)"
+            return f"- {name}\n" + "\n".join(f"    named in: \"{s}\"" for s in said)
+
+        listing = "\n".join(entry(name) for name in entities)
         prompt = (
             f"Incident title: {title}\n"
             f"Detail: {(summary or '')[:DETAIL_CHARS]}\n\n"
@@ -674,7 +741,8 @@ def classify_event(
 
     names = rank_entity_names(links, event["title"], max_entities)
     result = classifier.classify(event["title"] or "",
-                                 classifier_detail(conn, deduplicated_event_id, event["summary"]), names)
+                                 classifier_detail(conn, deduplicated_event_id, event["summary"]), names,
+                                 mentions=entity_mentions(conn, deduplicated_event_id, names))
     if not result.assignments:
         return {"victim": None, "vendor": None, "labelled": 0, "assignments": [], "unresolved_victim": True}
 
@@ -807,7 +875,15 @@ def resolve_victim(
             """, (deduplicated_event_id,)).fetchall()
         # A collective ("TAFEs", "Australian hospitals") names a group, not the
         # organisation whose systems were attacked, so it is never promoted.
-        real = [c for c in customers if not is_non_organisation(c[1])]
+        # A customer split out as its own event, linked to the supplier, has its incident there: on this event it
+        # stays an affected customer (owner decision 2026-10-31). Promoting it made Stake the victim of DriveWealth's
+        # event again after the split.
+        from cyber_data_collector.dedup.supplier_links import departed_customers
+        from cyber_data_collector.dedup.victim_fill import names_match
+
+        departed = departed_customers(conn, deduplicated_event_id)
+        real = [c for c in customers if not is_non_organisation(c[1])
+                and not any(names_match(conn, c[1], d) for d in departed)]
         for entity_id, name in real:
             conn.execute(
                 "UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "

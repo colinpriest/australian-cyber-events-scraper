@@ -607,3 +607,84 @@ def test_a_named_customer_gets_a_record_from_its_own_reporting_once():
                                     "WHERE source_url LIKE '%sbs.com.au%'").fetchone()
     assert url == "https://www.sbs.com.au/news/sbs-accellion-statement" and title == "SBS cyber incident" and int(done) == 0
     assert mci.customers_to_search(conn) == [] and mci.search_customer_reports(conn, search=search)["searched"] == 0
+
+
+def test_a_word_followed_by_an_abbreviation_fits_the_spelled_out_name():
+    """The vendor listed as its own customer: "Oracle Customer Management Solutions" under OracleCMS."""
+    from cyber_data_collector.dedup import alias_learning as al
+
+    assert al.abbreviation_fits("OracleCMS", "Oracle Customer Management Solutions")
+    assert not al.abbreviation_fits("OracleCMS", "Oracle Corporation")
+    assert not al.abbreviation_fits("ActionAid", "Action Aid International")
+
+
+def _classified(conn, did, version="entity-roles-v4"):
+    from cyber_data_collector.dedup import role_maintenance as rm
+
+    members = [r[0] for r in conn.execute("SELECT enriched_event_id FROM EventDeduplicationMap "
+                                          "WHERE deduplicated_event_id = ?", (did,))]
+    conn.execute("UPDATE DeduplicatedEvents SET roles_member_signature = ?, roles_prompt_version = ? "
+                 "WHERE deduplicated_event_id = ?", (rm.signature_for_members(members), version, did))
+
+
+def test_a_customer_split_out_as_its_own_event_is_not_promoted_back_to_victim_of_the_event_it_left():
+    """Stake was promoted to victim of DriveWealth's event (customer of a demoted vendor) after its records left."""
+    from cyber_data_collector.dedup import role_maintenance as rm
+    from cyber_data_collector.dedup.entity_classification import (EntityAssignment, EntityKind, EntityRole,
+                                                                  EventEntityRoles, resolve_victim)
+
+    conn, ledger, big = _world([("d1", "DriveWealth", "vendor"), ("d2", "Stake", "affected_customer"),
+                                ("d3", "Stake", "victim")], victim="Stake")
+    part = ledger.split_members(big, ["enr-d3"], reason="test", actor="rule")
+    conn.execute("INSERT INTO SupplierLinkActions VALUES ('a1', 'split', ?, ?, NULL, '{}', 'test', '2026-10-31')",
+                 (big, part))
+    conn.execute("UPDATE EntitiesV2 SET is_australian = 1, entity_kind = 'organisation'")
+    _classified(conn, big)
+    assert sl.departed_customers(conn, big) == ["Stake"]
+    assert rm.stale_event_ids(conn, include_unclassified=False) == [big]       # its victim is a departed customer
+    result = EventEntityRoles(assignments=[
+        EntityAssignment(name="DriveWealth", kind=EntityKind.ORGANISATION, role=EntityRole.VENDOR, confidence=0.9),
+        EntityAssignment(name="Stake", kind=EntityKind.ORGANISATION, role=EntityRole.AFFECTED_CUSTOMER,
+                         confidence=0.9)])
+    victim, vendor = resolve_victim(conn, big, result)
+    assert victim is None and vendor == "DriveWealth"
+    assert "Stake" not in _victims(conn, big)
+    assert conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                        (big,)).fetchone()[0] is None
+
+
+def test_a_vendor_field_with_no_vendor_role_under_an_older_prompt_is_classified_again():
+    """CrowdStrike's lawsuit event kept the vendor field and was never classified under v3."""
+    from cyber_data_collector.dedup import role_maintenance as rm
+
+    conn, _ = _accellion()
+    _classified(conn, "ded-a", version="entity-roles-v2")
+    conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = 'CrowdStrike' "
+                 "WHERE deduplicated_event_id = 'ded-a'")
+    assert "ded-a" in rm.stale_event_ids(conn)
+
+
+def test_the_role_classifier_is_shown_the_sentences_that_name_each_entity():
+    """Accenture is named only in a photo credit, the Singapore agency nowhere."""
+    from cyber_data_collector.dedup.entity_classification import (EntityRoleClassifier, EventEntityRoles,
+                                                                  entity_mentions)
+
+    conn, _, big = _world([("t1", "Tasmanian Government", "victim")], victim="Tasmanian Government")
+    conn.execute("UPDATE RawEvents SET raw_content = 'Tasmanian ambulance pager data leaked. "
+                 "The information came from pagers used by paramedics. (Supplied: Accenture)'")
+    mentions = entity_mentions(conn, big, ["Accenture", "Cyber Security Agency of Singapore"])
+    assert mentions["Accenture"] == ["(Supplied: Accenture)"]
+    assert mentions["Cyber Security Agency of Singapore"] == []
+    seen = {}
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    seen["prompt"] = kw["messages"][1]["content"]
+                    return EventEntityRoles()
+
+    EntityRoleClassifier(openai_client=Client).classify("t", "d", list(mentions), mentions=mentions)
+    assert 'named in: "(Supplied: Accenture)"' in seen["prompt"]
+    assert "Cyber Security Agency of Singapore\n    (named in no sentence" in seen["prompt"]

@@ -1271,8 +1271,19 @@ Second owner review (2026-10-31):
 * **A vendor is a supplier that was compromised** (role prompt `entity-roles-v3`). ESET (a researcher), the Cyber
   Security Agency of Singapore and Accenture (a photo credit on the ABC's Tasmanian ambulance pager-leak story,
   which filed that leak under Accenture's LockBit attack) were recorded as vendors; so was CrowdStrike, whose 2024
-  outage was not an attack. An event classified under an older prompt that records a vendor is classified again
-  (`role_maintenance`), and the registry repair then drops the links that no longer hold.
+  outage was not an attack. An event classified under an older prompt that records a vendor (a vendor role, or
+  only the `vendor_organization_name` field, as CrowdStrike's lawsuit event did) is classified again
+  (`role_maintenance`), and the registry repair then drops the links that no longer hold. v3 alone did not move
+  Accenture or the Singapore agency: the model was shown only names and descriptions. From `entity-roles-v4` each
+  entity is listed with up to two sentences of the reporting that name it (`entity_mentions`: titles,
+  descriptions and the record's own page) or "named in no sentence of the stored reporting"; one named only in a
+  credit, byline, caption or link, or nowhere, is a bystander unless the detail describes its part.
+* **A customer split out as its own event stays an affected customer of the event it left.** Promoting the
+  customers of a demoted vendor (the ProctorU rule) skips them (`supplier_links.departed_customers`); it had made
+  Stake the victim of DriveWealth's event again. An event whose recorded victim is such a customer is classified
+  again (`roles-status`: "victim split out").
+* "OracleCMS" fits "Oracle Customer Management Solutions" (a word followed by the initials of the rest), so the
+  vendor under its spelled-out name is put to the verification and, ruled `same`, is not its own customer.
 * **One customer is listed once.** Names listed under one supplier incident, and the supplier's own name, are put
   to the alias verification with the incident's context when they share a distinctive word, one abbreviates the
   other, or their profiles place them together (`alias_learning.supplier_pair_proposals` /
