@@ -970,6 +970,12 @@ def test_the_events_own_victim_is_never_reversed_and_a_past_reversal_is_restored
     assert _victims(conn, "e1") == ["Curtin University"]
     assert sv.restore_own_victims(conn) == []
     assert sv.reverse_attachments(conn) == []
+    # Once the event's victim is another organisation, the restoration is withdrawn.
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'University of Sydney' "
+                 "WHERE deduplicated_event_id = 'e1'")
+    (withdrawn,) = sv.restore_own_victims(conn)
+    assert withdrawn["withdrawn"] and "Curtin University" not in _victims(conn, "e1")
+    assert sv.restore_own_victims(conn) == []
 
 
 def test_an_attached_customers_records_leave_the_event_of_its_own_victim(conn):

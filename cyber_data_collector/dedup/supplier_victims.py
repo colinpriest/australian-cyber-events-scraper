@@ -1200,6 +1200,35 @@ def restore_own_victims(conn: sqlite3.Connection, apply: bool = True) -> List[Di
         conn.execute("UPDATE SupplierVictimReversals SET action = 'restored' WHERE deduplicated_event_id = ? "
                      "AND entity_id = ? AND action = 'reversed'", (did, entity_id))
         logger.info("Restored %r as the victim of %s: the event's own victim, not an attached customer", name, did)
+    # A restoration holds only while its basis does: once the event's victim is another organisation (ASIC's
+    # Accellion event, whose victim had been rewritten to NSW Health, got its own back when NSW Health's records
+    # left), the restored role is reversed again.
+    for attachment_id, did, entity_id, name, previous in conn.execute(
+            """SELECT r.attachment_id, r.deduplicated_event_id, r.entity_id, r.entity_name, r.restored_role
+               FROM SupplierVictimReversals r
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = r.deduplicated_event_id
+               WHERE r.action = 'restored' AND d.status = 'Active'
+                 AND LOWER(TRIM(COALESCE(d.victim_organization_name, ''))) != LOWER(TRIM(r.entity_name))
+               ORDER BY r.created_at, r.attachment_id""").fetchall():
+        if (did, entity_id) in done:
+            continue
+        done.add((did, entity_id))
+        out.append({"attachment_id": attachment_id, "deduplicated_event_id": did, "victim": name,
+                    "withdrawn": True})
+        if not apply:
+            continue
+        DedupLedger(conn).snapshot_event(f"supplier-victims-unrestore-{datetime.now().strftime('%Y%m%d%H%M%S')}-"
+                                         f"{did[:8]}", did)
+        if previous is None:
+            conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? AND entity_id = ? "
+                         "AND relationship_type = 'victim'", (did, entity_id))
+        else:
+            conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = ? WHERE deduplicated_event_id = ? "
+                         "AND entity_id = ? AND relationship_type = 'victim'", (previous, did, entity_id))
+        conn.execute("UPDATE SupplierVictimReversals SET action = 'reversed' WHERE deduplicated_event_id = ? "
+                     "AND entity_id = ? AND action = 'restored'", (did, entity_id))
+        logger.info("Withdrew the restored victim %r of %s: the event's victim is now another organisation",
+                    name, did)
     if apply and out:
         conn.commit()
     return out
