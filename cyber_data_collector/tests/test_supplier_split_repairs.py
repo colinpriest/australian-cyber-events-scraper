@@ -410,3 +410,17 @@ def test_a_named_customer_the_index_misses_reuses_its_existing_entity_row():
     other = sv.VictimCandidate("ded-t", "Kroger", None, None)
     first = sv._entity_for(conn, other, Missing())
     assert sv._entity_for(conn, other, Missing()) == first        # created once, then found
+
+
+def test_customer_events_on_one_date_with_and_without_a_precision_sort():
+    """2026-10-31: the report and the exception check stopped on (date, None) < (date, 'month')."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    if "event_date_precision" not in {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}:
+        conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN event_date_precision TEXT")
+    conn.execute("UPDATE DeduplicatedEvents SET event_date = '2020-12-01'")
+    conn.execute("UPDATE DeduplicatedEvents SET event_date_precision = 'month' WHERE deduplicated_event_id = 'ded-a'")
+    [inc] = [i for i in mci.find(conn) if i.vendor == "Accellion"]
+    assert inc.attack_date == "2020-12-01"

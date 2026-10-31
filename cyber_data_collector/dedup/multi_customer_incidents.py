@@ -162,8 +162,9 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
         if len(customers) < 2:
             continue
         own = _event(conn, own_event)
-        dated = sorted((row[2], row[5]) for c in customers if c.event_id
-                       for row in [_event(conn, c.event_id)] if row and row[2])
+        dated = sorted(((row[2], row[5]) for c in customers if c.event_id
+                        for row in [_event(conn, c.event_id)] if row and row[2]),
+                       key=lambda d: (str(d[0]), d[1] or ""))       # a precision may be NULL
         if own and own[2]:
             attack_date, precision = own[2], own[5]
         elif dated:
