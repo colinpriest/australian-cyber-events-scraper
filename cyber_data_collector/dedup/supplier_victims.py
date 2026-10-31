@@ -1483,7 +1483,8 @@ def gather(conn: sqlite3.Connection, limit: Optional[int] = None) -> Gathered:
 def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, research: bool = False,
                           judge_client=None, escalation_client=None, search=None,
                           labels_path: Path = LABELS_PATH, calibration_path: Path = CALIBRATION_PATH,
-                          role_refresher=None, limit: Optional[int] = None, split: bool = False) -> Dict[str, Any]:
+                          role_refresher=None, limit: Optional[int] = None, split: bool = False,
+                          profile_search=None) -> Dict[str, Any]:
     """Detect supplier incidents, judge their customers and other events, and report or write the links.
 
     One event per customer (owner decision 2026-10-31): nothing here attaches a co-victim or merges
@@ -1526,6 +1527,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
 
     # The old state is converted first (its splits create the customers' events), then everything is judged.
     before = gather(conn, limit)
+    repairs = sl.repair_registry(conn, before.resolver, labels)
     registry = sl.Registry(conn, before.resolver)
     conversion = sl.convert(conn, before, registry, apply, split=split)
     g = gather(conn, limit) if apply else before
@@ -1559,7 +1561,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         "ambiguous": conversion["ambiguous"] + planned["ambiguous"],
         "links": [vars(link) for link in registry.links.values()],
         "supplier_incident_rows": len(registry.incidents), "written": {},
-        "multi_customer_events": [],
+        "multi_customer_events": [], "registry_repairs": repairs, "customer_jurisdictions": {},
     }
     for inc in g.incidents:
         result["incidents"].append({
@@ -1579,4 +1581,16 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
     result["applied"] = True
     result["multi_customer_events"] = multi_customer_events(conn)
     conn.commit()
+    if research:
+        # A customer only named in the reporting is reported as Australian only by its researched jurisdiction
+        # (multi_customer_incidents): look up those with none. A failed lookup stays unplaced and is retried.
+        from cyber_data_collector.dedup import entity_profiles, multi_customer_incidents
+
+        looked = failed = 0
+        for entity_id, name in multi_customer_incidents.unplaced_customers(conn):
+            looked += 1
+            if entity_profiles.research_profile(conn, entity_id, name, search=profile_search) is None:
+                failed += 1
+        result["customer_jurisdictions"] = {"looked_up": looked, "failed": failed,
+                                            "unplaced": len(multi_customer_incidents.unplaced_customers(conn))}
     return result

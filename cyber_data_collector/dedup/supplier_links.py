@@ -209,10 +209,18 @@ class Registry:
                                               stored=True)
         self.links: Dict[Tuple[str, int], Link] = {}
         self.stored_links: Dict[Tuple[str, int], Tuple] = {}
+        # Where each customer event is linked already (supplier key, resolved event) -> incident: a placed
+        # event stays in its incident, so a later run cannot file it under a second incident of the supplier.
+        self.placed: Dict[Tuple[str, str], str] = {}
         for row in conn.execute(
                 """SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id, basis,
                           probability, decided_by FROM SupplierIncidentLinks"""):
             self.stored_links[(row[0], row[1])] = row
+            inc = self.incidents.get(row[0])
+            if row[3] and inc is not None:
+                event = resolve_event(conn, row[3]) or row[3]
+                self.placed.setdefault((inc.supplier_key, event), row[0])
+                inc.events.add(event)       # so a pair label against a stored member keeps an event out
 
     def key(self, supplier: str) -> str:
         return self.resolver.key_for(supplier)
@@ -244,6 +252,13 @@ class Registry:
             if event_date:
                 inc.dates.add(event_date)
             return inc
+        placed = self.incidents.get(self.placed.get((key, anchor), ""))
+        if placed is not None and not (apart is not None and any(
+                apart(anchor, e) for e in placed.events | {placed.supplier_event_id} if e)):
+            placed.events.add(anchor)
+            if event_date:
+                placed.dates.add(event_date)
+            return placed
         best: Optional[Tuple[int, str]] = None
         for inc in mine:
             if apart is not None and any(apart(anchor, e) for e in inc.events | {inc.supplier_event_id} if e):
@@ -340,6 +355,184 @@ def _rank_row(row: Tuple) -> Tuple[int, int, float]:
     return (row[3] is not None, _BASIS_RANK.get(row[4], 0), row[5] or 0.0)
 
 
+def _event_vendors(conn: sqlite3.Connection, event_id: str) -> List[str]:
+    """The suppliers an event records: its vendor column and its vendor roles."""
+    row = conn.execute("SELECT vendor_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event_id,)).fetchone()
+    names = [row[0]] if row and row[0] else []
+    return names + [r[0] for r in conn.execute(
+        """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (event_id,))]
+
+
+def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] = None) -> Dict[str, Any]:
+    """Undo drift in the stored supplier incidents before a run places anything (no commit; the caller's).
+
+    Links are only ever added, so two kinds of drift outlived their cause:
+
+    * a ``vendor-recorded`` link whose event no longer records the supplier (NSW Education's July 2021
+      attack, once filed as an Accellion customer event, still anchored an Accellion incident of its own
+      after its vendor was cleared). Its basis is gone, so the link is removed;
+    * one customer event linked under two incidents of the same supplier (Allens, ASIC and NSW Health in two
+      Accellion incidents; Canva and McGraw Hill in two Salesforce incidents): a later run placed it by
+      nearest date into another incident. Incidents that share a customer event are one incident and are
+      merged: into the one with the supplier's own event, else the earliest, keeping the stronger link per
+      customer. Two incidents that each have the supplier's own event (Ivanti's separate campaigns), or
+      whose events a pair label rules different, are not merged; the shared event is reported.
+
+    An incident left with no link and no supplier event is removed.
+    """
+    from cyber_data_collector.dedup import supplier_victims as sv
+
+    ensure_schema(conn)
+    report: Dict[str, Any] = {"stale_links_removed": [], "incidents_merged": [], "incidents_removed": [],
+                              "shared_not_merged": []}
+    incidents = {r[0]: {"key": r[1], "name": r[2], "event": r[3], "first": r[4]} for r in conn.execute(
+        "SELECT supplier_incident_id, supplier_key, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
+    for sid, entity_id, name, event_id in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
+            "WHERE basis = ? AND customer_event_id IS NOT NULL", (BASIS_VENDOR,)).fetchall():
+        inc = incidents.get(sid)
+        now = resolve_event(conn, event_id)
+        if inc is None or now is None:
+            continue
+        if any(sv.same_org(resolver, inc["name"], v) for v in _event_vendors(conn, now)):
+            continue
+        if any(sv.same_org(resolver, inc["name"], v[1]) for v in sv.event_victims(conn, now)):
+            continue
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                     (sid, entity_id))
+        report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                              "customer": name, "event": now})
+
+    different: Set[str] = set()
+    for (kind, pair), label in (labels or {}).items():
+        if kind == sv.KIND_PAIR and label in sv.NEGATIVE[sv.KIND_PAIR]:
+            a, _, b = pair.partition("|")
+            ra, rb = resolve_event(conn, a) or a, resolve_event(conn, b) or b
+            different.add("|".join(sorted((ra, rb))))
+
+    def events_of(sid: str) -> Set[str]:
+        out = {resolve_event(conn, r[0]) or r[0] for r in conn.execute(
+            "SELECT customer_event_id FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+            "AND customer_event_id IS NOT NULL", (sid,))}
+        own = incidents[sid]["event"]
+        return out | ({resolve_event(conn, own) or own} if own else set())
+
+    changed = True
+    while changed:
+        changed = False
+        by_event: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+        for sid, event_id in conn.execute(
+                "SELECT supplier_incident_id, customer_event_id FROM SupplierIncidentLinks "
+                "WHERE customer_event_id IS NOT NULL ORDER BY supplier_incident_id").fetchall():
+            if sid in incidents:
+                by_event[(incidents[sid]["key"], resolve_event(conn, event_id) or event_id)].append(sid)
+        for (key, event_id), sids in sorted(by_event.items()):
+            sids = sorted(set(sids))
+            if len(sids) < 2:
+                continue
+            a, b = sorted(sids[:2], key=lambda s: (incidents[s]["event"] is None, incidents[s]["first"] or "9999", s))
+            ea, eb = events_of(a), events_of(b)
+            conflicts = [(x, y) for x in ea for y in eb if x != y and "|".join(sorted((x, y))) in different]
+            if conflicts and not (incidents[a]["event"] and incidents[b]["event"]):
+                # A label outranks the date window: an event placed by vendor-recorded rule that a pair label rules
+                # a different incident from the other side's events leaves (NSW Education's July 2021 attack).
+                dropped = _drop_rule_links(conn, {a, b}, conflicts)
+                if dropped:
+                    report["stale_links_removed"].extend(
+                        {"supplier_incident_id": sid, "supplier": incidents[sid]["name"], "customer": name,
+                         "event": ev, "why": "a pair label rules it a different incident"} for sid, name, ev in dropped)
+                    changed = True
+                    break
+            blocked = ("both have the supplier's own event" if incidents[a]["event"] and incidents[b]["event"] else
+                       "a pair label rules their events different" if conflicts else None)
+            if blocked:
+                note = {"event": event_id, "incidents": [a, b], "why": blocked}
+                if note not in report["shared_not_merged"]:
+                    report["shared_not_merged"].append(note)
+                continue
+            _merge_incident(conn, keep=a, drop=b)
+            report["incidents_merged"].append({"supplier": incidents[a]["name"], "kept": a, "merged": b,
+                                               "shared_event": event_id})
+            incidents.pop(b)
+            changed = True
+            break
+
+    for sid, inc in list(incidents.items()):
+        has_links = conn.execute("SELECT 1 FROM SupplierIncidentLinks WHERE supplier_incident_id = ? LIMIT 1",
+                                 (sid,)).fetchone()
+        if not has_links and not inc["event"]:
+            conn.execute("DELETE FROM SupplierIncidents WHERE supplier_incident_id = ?", (sid,))
+            report["incidents_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"]})
+            incidents.pop(sid)
+    # The span is what is linked now, not what a removed or merged link once contributed.
+    for sid in incidents:
+        linked = sorted(events_of(sid))
+        if not linked:
+            continue
+        dates = sorted(r[0] for r in conn.execute(
+            "SELECT event_date FROM DeduplicatedEvents WHERE status = 'Active' AND event_date IS NOT NULL "
+            f"AND deduplicated_event_id IN ({','.join('?' * len(linked))})", linked))
+        if dates:
+            conn.execute("UPDATE SupplierIncidents SET first_date = ?, last_date = ?, updated_at = ? "
+                         "WHERE supplier_incident_id = ? AND NOT (first_date IS ? AND last_date IS ?)",
+                         (dates[0], dates[-1], _now(), sid, dates[0], dates[-1]))
+    return report
+
+
+def _drop_rule_links(conn: sqlite3.Connection, sids: Set[str], conflicts: List[Tuple[str, str]]
+                     ) -> List[Tuple[str, str, str]]:
+    """Remove the ``vendor-recorded`` links, in ``sids``, of events on one side of a labelled-different pair whose
+    other side was linked on stronger evidence (a label or a judgement). Returns (incident, customer, event)."""
+    marks = ",".join("?" * len(sids))
+    links = [(sid, ent, name, resolve_event(conn, ev) or ev, basis) for sid, ent, name, ev, basis in conn.execute(
+        f"SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id, basis "
+        f"FROM SupplierIncidentLinks WHERE supplier_incident_id IN ({marks}) AND customer_event_id IS NOT NULL",
+        sorted(sids)).fetchall()]
+    basis_of: Dict[str, Set[str]] = defaultdict(set)
+    for _sid, _ent, _name, ev, basis in links:
+        basis_of[ev].add(basis)
+    weak = {ev for ev, bases in basis_of.items() if bases == {BASIS_VENDOR}}
+    losers = {x for pair in conflicts for x, y in (pair, pair[::-1]) if x in weak and y not in weak}
+    dropped = []
+    for sid, ent, name, ev, _basis in links:
+        if ev in losers:
+            conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                         (sid, ent))
+            dropped.append((sid, name, ev))
+    return dropped
+
+
+def _merge_incident(conn: sqlite3.Connection, keep: str, drop: str) -> None:
+    """Move ``drop``'s links into ``keep`` (the stronger link per customer; a known event is never lost)."""
+    cols = "supplier_incident_id, customer_entity_id, customer_name, customer_event_id, basis, probability, decided_by"
+    kept = {r[1]: r for r in conn.execute(f"SELECT {cols} FROM SupplierIncidentLinks WHERE supplier_incident_id = ?",
+                                          (keep,))}
+    for row in conn.execute(f"SELECT {cols} FROM SupplierIncidentLinks WHERE supplier_incident_id = ?",
+                            (drop,)).fetchall():
+        old = kept.get(row[1])
+        if old is None:
+            conn.execute("UPDATE SupplierIncidentLinks SET supplier_incident_id = ?, updated_at = ? "
+                         "WHERE supplier_incident_id = ? AND customer_entity_id = ?", (keep, _now(), drop, row[1]))
+            continue
+        if _rank_row(row) > _rank_row(old):
+            conn.execute("""UPDATE SupplierIncidentLinks SET customer_name = ?, customer_event_id = ?, basis = ?,
+                                   probability = ?, decided_by = ?, updated_at = ?
+                            WHERE supplier_incident_id = ? AND customer_entity_id = ?""",
+                         (row[2], row[3] or old[3], row[4], row[5], row[6], _now(), keep, row[1]))
+        elif old[3] is None and row[3] is not None:
+            conn.execute("UPDATE SupplierIncidentLinks SET customer_event_id = ?, updated_at = ? "
+                         "WHERE supplier_incident_id = ? AND customer_entity_id = ?", (row[3], _now(), keep, row[1]))
+    conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ?", (drop,))
+    dates = sorted(d for r in conn.execute("SELECT first_date, last_date FROM SupplierIncidents "
+                                           "WHERE supplier_incident_id IN (?, ?)", (keep, drop)) for d in r if d)
+    if dates:
+        conn.execute("UPDATE SupplierIncidents SET first_date = ?, last_date = ?, updated_at = ? "
+                     "WHERE supplier_incident_id = ?", (dates[0], dates[-1], _now(), keep))
+    conn.execute("DELETE FROM SupplierIncidents WHERE supplier_incident_id = ?", (drop,))
+
+
 # ----------------------------------------------------------------------
 # Planning links from detection, labels and calibrated judgements
 # ----------------------------------------------------------------------
@@ -386,8 +579,12 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
         victims = sv.event_victims(conn, did)
         return ((victims[0][0], victims[0][1]) if len(victims) == 1 else None), [v[1] for v in victims]
 
-    different = {sid for (kind, sid), label in labels.items()
-                 if kind == sv.KIND_PAIR and label in sv.NEGATIVE[sv.KIND_PAIR]}
+    different = set()
+    for (kind, sid), label in labels.items():
+        if kind == sv.KIND_PAIR and label in sv.NEGATIVE[sv.KIND_PAIR]:
+            a, _, b = sid.partition("|")
+            different.add(sid)      # as labelled, and as the events are now (labels name events as they were)
+            different.add("|".join(sorted((resolve_event(conn, a) or a, resolve_event(conn, b) or b))))
 
     def apart(a: str, b: str) -> bool:
         return "|".join(sorted((a, b))) in different

@@ -240,6 +240,7 @@ def test_the_report_lists_vendor_attacks_with_several_customers_in_order():
     descriptive_names.ensure_schema(conn)
     conn.execute("INSERT INTO DescriptiveNames (name_key, name, source, reason, created_at) VALUES "
                  "('australian universities', 'Australian universities', 'human', 'a description', 'x')")
+    _jurisdictions(conn, {1: "Australia, New South Wales", 5: "Australia, Victoria", 6: "Australia"})
     found = mci.find(conn)
     assert [(i.vendor, [c.name for c in i.customers]) for i in found] == [
         ("Instructure", ["University of Canberra", "University of Sydney"]),
@@ -247,6 +248,141 @@ def test_the_report_lists_vendor_attacks_with_several_customers_in_order():
     assert found[0].customers[0].event_id == big
     page = build_html(found, "now")
     assert page.index("Instructure") < page.index("ZircoDATA") and "Acme Hosting" not in page
+
+
+def _jurisdictions(conn, places):
+    from cyber_data_collector.dedup import entity_profiles
+
+    entity_profiles.ensure_schema(conn)
+    conn.executemany("INSERT INTO EntityProfiles (entity_id, kind, value, source, created_at) "
+                     "VALUES (?, 'jurisdiction', ?, 'llm', 'x')", list(places.items()))
+
+
+def test_a_named_customer_is_listed_only_when_its_researched_jurisdiction_is_australian():
+    """Accellion's global victim list named Kroger and Stanford University: not Australian customers."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+    from scripts.build_supplier_incidents_report import build_html
+
+    conn, _, big = _world([("c1", "Transport for NSW", "victim")], victim="Transport for NSW")
+    if "event_date_precision" not in {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}:
+        conn.execute("ALTER TABLE DeduplicatedEvents ADD COLUMN event_date_precision TEXT")
+    conn.execute("UPDATE DeduplicatedEvents SET event_date = '2020-12-01', event_date_precision = 'month' "
+                 "WHERE deduplicated_event_id = ?", (big,))
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-1', 'accellion', NULL, 'Accellion', NULL, "
+                 "'2020-12-01', '2021-07-07', 'x', 'x')")
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-1', ?, ?, ?, 'customer-named', NULL, 'jev', 'x', 'x')",
+                     [(1, "Transport for NSW", big), (2, "SBS", None), (3, "Stanford University", None),
+                      (4, "Kroger", None)])
+    _jurisdictions(conn, {2: "Australia", 3: "United States"})
+    assert mci.unplaced_customers(conn) == [(4, "Kroger")]
+    [inc] = mci.find(conn)
+    assert [c.name for c in inc.customers] == ["SBS", "Transport for NSW"]
+    assert (inc.outside, inc.unplaced) == (["Stanford University"], ["Kroger"])
+    assert mci.attack_label(inc) == "December 2020"            # one date for the attack, at its precision
+    page = build_html([inc], "now")
+    assert "Event date" not in page and "outside Australia: Stanford University" in page
+
+
+def _separate(events):
+    """Separate Active events [(key, victim, date, vendor)]."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(BASE_DDL)
+    schema.migrate(conn)
+    sl.ensure_schema(conn)
+    sv.ensure_schema(conn)
+    for key, victim, date, vendor in events:
+        _add_event(conn, key, f"{victim} breach", f"https://x/{key}", victim=victim, date=date)
+        conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = ? WHERE deduplicated_event_id = ?",
+                     (vendor, f"ded-{key}"))
+    run_backfill(conn)
+    conn.commit()
+    return conn
+
+
+def _accellion():
+    conn = _separate([("t", "Transport for NSW", "2020-12-01", "Accellion"), ("a", "ASIC", "2020-12-28", "Accellion"),
+                      ("e", "NSW Department of Education", "2021-07-07", "Accellion"),
+                      ("x", "Amazon", "2023-05-27", None)])
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, 'accellion', NULL, 'Accellion', NULL, ?, ?, 'x', 'x')",
+                     [("si-a", "2020-12-01", "2020-12-28"), ("si-b", "2020-12-28", "2021-07-07")])
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-p', 'pwc', NULL, 'PwC', NULL, '2023-05-27', '2023-05-27', "
+                 "'x', 'x')")
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, ?, ?, ?, ?, ?, ?, 'x', 'x')",
+                     [("si-a", 1, "Transport for NSW", "ded-t", "split-customer", None, "rule"),
+                      ("si-a", 2, "ASIC", "ded-a", "judged-same-incident", 0.97, "jev"),
+                      ("si-b", 2, "ASIC", "ded-a", "judged-same-incident", 0.96, "jev"),
+                      ("si-b", 3, "NSW Department of Education", "ded-e", "vendor-recorded", None, "rule"),
+                      ("si-b", 4, "SBS", None, "customer-named", 0.88, "jev"),
+                      ("si-p", 5, "Amazon", "ded-x", "vendor-recorded", None, "rule")])
+    conn.commit()
+    resolver = EntityResolver(conn)
+    resolver.fit(["Accellion", "PwC"])
+    return conn, resolver
+
+
+def test_two_incidents_of_one_supplier_sharing_an_event_become_one():
+    """Accellion: ASIC in two incidents, the second anchored by NSW Education's July 2021 attack, which a pair
+    label rules a different incident; PwC's link to Amazon's event, which no longer records PwC."""
+    conn, resolver = _accellion()
+    labels = {(sv.KIND_PAIR, "ded-a|ded-e"): "different"}
+    report = sl.repair_registry(conn, resolver, labels)
+    assert {(r["supplier"], r["customer"]) for r in report["stale_links_removed"]} == {
+        ("PwC", "Amazon"), ("Accellion", "NSW Department of Education")}
+    assert [(r["kept"], r["merged"]) for r in report["incidents_merged"]] == [("si-a", "si-b")]
+    rows = conn.execute("SELECT supplier_incident_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
+                        "ORDER BY customer_name").fetchall()
+    assert [tuple(r) for r in rows] == [("si-a", "ASIC", "ded-a"), ("si-a", "SBS", None),
+                                        ("si-a", "Transport for NSW", "ded-t")]
+    assert [r[0] for r in conn.execute("SELECT supplier_incident_id FROM SupplierIncidents")] == ["si-a"]
+    assert tuple(conn.execute("SELECT first_date, last_date FROM SupplierIncidents").fetchone()) == (
+        "2020-12-01", "2020-12-28")
+    assert sl.repair_registry(conn, resolver, labels)["incidents_merged"] == []            # idempotent
+
+
+def test_without_a_label_the_rule_linked_event_stays_and_the_incidents_merge():
+    conn, resolver = _accellion()
+    report = sl.repair_registry(conn, resolver, {})
+    assert [(r["kept"], r["merged"]) for r in report["incidents_merged"]] == [("si-a", "si-b")]
+    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidentLinks WHERE supplier_incident_id = 'si-a'"
+                        ).fetchone()[0] == 4
+
+
+def test_a_placed_event_stays_in_its_incident():
+    """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
+    conn, resolver = _accellion()
+    registry = sl.Registry(conn, resolver)
+    assert registry.incident("Accellion", "2020-12-28", "ded-a").supplier_incident_id == "si-a"
+    conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = 'si-a' AND customer_event_id = 'ded-a'")
+    registry = sl.Registry(conn, resolver)
+    assert registry.incident("Accellion", "2020-12-28", "ded-a").supplier_incident_id == "si-b"
+    # A pair label against a stored member keeps a new event out of that incident.
+    registry = sl.Registry(conn, resolver)
+    placed = registry.incident("Accellion", "2020-12-20", "ded-new", apart=lambda x, y: y == "ded-t")
+    assert placed.supplier_incident_id == "si-b"
+
+
+def test_supplier_incident_exceptions():
+    """Owner 2026-10-31: the Accellion customers are one incident; the Reserve Bank of New Zealand is no customer."""
+    from cyber_data_collector.dedup import entity_profiles
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    entity_profiles.ensure_schema(conn)
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-a', 9, 'Reserve Bank of New Zealand', NULL, "
+                 "'customer-named', 0.94, 'escalation', 'x', 'x')")
+    one = ve.add(conn, "same_supplier_incident_as", "ded-t", "ded-a", note="owner: clearly one incident")
+    out = ve.add(conn, "not_supplier_customer", "ded-t", "Reserve Bank of New Zealand", note="owner: not in Australia")
+    results = {r.exception_id: r.result for r in ve.check(conn)}
+    assert results[one] == "pass" and results[out] == "pass"       # no researched jurisdiction: not listed
+    conn.execute("INSERT INTO EntityProfiles (entity_id, kind, value, source, created_at) "
+                 "VALUES (9, 'jurisdiction', 'Australia', 'human', 'x')")
+    assert {r.exception_id: r.result for r in ve.check(conn)}[out] == "fail"
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-z', 'accellion', NULL, 'Accellion', NULL, NULL, NULL, "
+                 "'x', 'x')")
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-z', 2, 'ASIC', 'ded-a', 'judged-same-incident', 0.9, "
+                 "'jev', 'x', 'x')")
+    assert {r.exception_id: r.result for r in ve.check(conn)}[one] == "fail"
 
 
 def test_an_exception_is_revised_by_a_later_owner_decision_keeping_the_first_words():
