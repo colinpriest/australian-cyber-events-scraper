@@ -365,6 +365,35 @@ def test_without_a_label_the_rule_linked_event_stays_and_the_incidents_merge():
                         ).fetchone()[0] == 4
 
 
+def test_a_supplier_is_not_its_own_customer_and_an_unanchored_incident_goes():
+    """2026-11-01: Nissan's event, split under a "Nissan Oceania" incident, no longer records Nissan Oceania as its
+    vendor; OracleCMS's attack also under "Oracle CMS"; a "Delta Air Lines" incident of named customers left behind
+    after Delta stopped being anyone's vendor; the supplier listed as its own customer."""
+    conn, resolver = _accellion()
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, ?, NULL, ?, NULL, '2024-04-01', '2024-04-01', 'x', 'x')",
+                     [("si-n", "nissan oceania", "Nissan Oceania"), ("si-o1", "oraclecms", "OracleCMS"),
+                      ("si-o2", "oracle cms", "Oracle CMS"), ("si-d", "delta air lines", "Delta Air Lines")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, ?, ?, ?, ?, NULL, 'rule', 'x', 'x')",
+                     [("si-n", 10, "Nissan", "ded-x", "split-customer"),
+                      ("si-n", 11, "Nissan Australia", None, "customer-named"),
+                      ("si-a", 15, "Accellion Inc", None, "customer-named"),
+                      ("si-o1", 12, "Latrobe City Council", "ded-t", "judged-same-incident"),
+                      ("si-o2", 12, "Latrobe City Council", "ded-t", "judged-same-incident"),
+                      ("si-o2", 13, "City of Sydney", None, "customer-named"),
+                      ("si-d", 14, "Woolworths", None, "customer-named")])
+    report = sl.repair_registry(conn, resolver, {})
+    assert [r["customer"] for r in report["own_organisation_links_removed"]] == ["Accellion Inc"]
+    assert [r["supplier"] for r in report["keys_joined"]] in (["Oracle CMS"], ["OracleCMS"])
+    assert {r["supplier"] for r in report["incidents_removed"]} >= {"Nissan Oceania", "Delta Air Lines"}
+    remaining = {r[0] for r in conn.execute("SELECT supplier_name FROM SupplierIncidents")}
+    assert "Nissan Oceania" not in remaining and "Delta Air Lines" not in remaining
+    assert len([n for n in remaining if "Oracle" in n]) == 1               # one attack, one card
+    registry = sl.Registry(conn, resolver)
+    assert registry.key("Oracle CMS") == registry.key("OracleCMS")
+    again = sl.repair_registry(conn, resolver, {})                         # idempotent
+    assert not (again["own_organisation_links_removed"] or again["keys_joined"] or again["incidents_removed"])
+
+
 def test_a_placed_event_stays_in_its_incident():
     """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
     conn, resolver = _accellion()
@@ -504,9 +533,27 @@ def test_a_named_customer_with_no_name_verdict_is_not_listed_until_judged(monkey
     _jurisdictions(conn, {40: "Australia"})
     conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-a', 40, 'Early Learning', NULL, 'customer-named', "
                  "0.9, 'jev', 'x', 'x')")
-    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: {"asic": 0.9})
+    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: {"asic": 0.9, "accellion": 0.95})
     [inc] = [i for i in mci.find(conn) if i.vendor == "Accellion"]
     assert "Early Learning" not in [c.name for c in inc.customers] and "Early Learning" in inc.unplaced
+
+
+def test_an_attack_is_listed_only_under_a_named_supplier(monkeypatch):
+    """2026-11-01: "IT service provider" and "Australian sole trader" each had a card as a vendor."""
+    from cyber_data_collector.dedup import descriptive_names, multi_customer_incidents as mci, name_judgement
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    monkeypatch.setattr(name_judgement, "stored_probabilities",
+                        lambda conn: {"accellion": 0.95, "asic": 0.9, "transport for nsw": 0.9})
+    assert [i.vendor for i in mci.find(conn)] == ["Accellion"]
+    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: {"asic": 0.9, "transport for nsw": 0.9})
+    assert mci.find(conn) == []                                   # the supplier's name is not judged yet
+    monkeypatch.setattr(name_judgement, "stored_probabilities",
+                        lambda conn: {"accellion": 0.95, "asic": 0.9, "transport for nsw": 0.9})
+    descriptive_names.ensure_schema(conn)
+    descriptive_names.add(conn, "Accellion", reason="test: as if a description")
+    assert mci.find(conn) == []
 
 
 def test_each_attack_gets_a_description_rewritten_only_when_its_evidence_changes():
@@ -796,6 +843,37 @@ def test_an_australian_co_victim_is_the_victim_and_the_foreign_one_is_not_its_ve
     c = _localise_db()
     c.execute("UPDATE EnrichedEventEntities SET relationship_type = 'victim' WHERE entity_id = 4")
     assert ec.localise_victim(c, "Cisco Systems", None, "ev") == ("National Australia Bank", None)
+
+
+def test_the_victims_own_arm_is_not_its_vendor():
+    """v7 stored Nissan Oceania as the vendor of Nissan's December 2023 breach of its own systems."""
+    from cyber_data_collector.dedup.entity_classification import (EntityAssignment, EntityKind, EntityRole,
+                                                                  EventEntityRoles, own_organisation_vendors)
+
+    def labelled(name, role):
+        return EntityAssignment(name=name, kind=EntityKind.ORGANISATION, role=role, confidence=0.9)
+
+    result = EventEntityRoles(assignments=[labelled("Nissan", EntityRole.VICTIM),
+                                           labelled("Nissan Oceania", EntityRole.VENDOR),
+                                           labelled("OracleCMS", EntityRole.VENDOR)])
+    assert own_organisation_vendors(result) == ["Nissan Oceania"]
+    assert result.vendor() == "OracleCMS" and set(result.by_role(EntityRole.VICTIM)) == {"Nissan", "Nissan Oceania"}
+
+
+def test_a_foreign_victims_own_australian_arm_does_not_make_it_a_vendor():
+    """Nissan (flagged foreign) with "Nissan Australia" on its records stays the victim; a researched Australian
+    victim is never moved; another Australian organisation still moves a foreign party to vendor."""
+    from cyber_data_collector.dedup import entity_classification as ec, entity_profiles
+    c = _localise_db()
+    c.executescript("""
+        INSERT INTO EntitiesV2 VALUES (5, 'Nissan', 0, 'organisation'), (6, 'Nissan Australia', 1, 'organisation');
+        INSERT INTO EventDeduplicationMap VALUES ('r2', 'nissan');
+        INSERT INTO EnrichedEventEntities VALUES ('r2', 6, 'victim');
+    """)
+    assert ec.foreign_vendor_not_victim(c, "Nissan", None, "nissan") == ("Nissan", None)
+    assert ec.foreign_vendor_not_victim(c, "Cisco Systems", None, "ev") == (None, "Cisco Systems")
+    entity_profiles.set_profile(c, "Cisco Systems", "jurisdiction", "Australia", reason="test")
+    assert ec.foreign_vendor_not_victim(c, "Cisco Systems", None, "ev") == ("Cisco Systems", None)
 
 
 def test_victim_size_exception():

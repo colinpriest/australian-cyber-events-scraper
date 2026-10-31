@@ -1256,6 +1256,18 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   a pair label rules a different incident from the other incident's events leaves (NSW Education's July 2021
   attack, which had anchored the second Accellion incident). A placed event then stays in its incident, and the
   different-incident check sees stored members, not only those placed in the run.
+* **An incident needs something to support it, and a named supplier** (2026-11-01). The report of that morning
+  still carried cards for Delta Air Lines, ESET, IDCare, Gridware, Xen Technologies and Microsoft, "Oracle CMS"
+  beside OracleCMS, "RMS" beside RMS Cloud, and "IT service provider" and "Australian sole trader" as vendors. The
+  registry repair now removes an incident, with its links, once nothing supports it: not the supplier's own event,
+  not a label or a same-incident judgement, and no linked event that still records the supplier as its vendor
+  (every other link came from such an event, so it lapses with it: 30 incidents on the live copy, 28 of them with
+  no event at all, e.g. Delta's 16 named customers left after Delta stopped being CrowdStrike's vendor). A link
+  naming the supplier's own organisation is removed (a supplier is not its own customer). Incidents of one
+  organisation under two spellings share one supplier key, in the repair and when a run files a new incident, so
+  they merge when they share an event. A Merged event whose records moved resolves through its master record (the
+  split-off Nissan event, merged back, resolved to nothing). A supplier name is put to the proper-name judgement
+  with the customers' names, and an attack is listed only under a supplier judged a name.
 * **Australian customers only.** A customer with its own Active event passed the calibrated scope check. A customer
   only named in the reporting (Accellion's global list: Kroger, Stanford University, the Reserve Bank of New
   Zealand) is listed only when its researched entity profile (`jurisdiction`, one Perplexity lookup per
@@ -1301,6 +1313,12 @@ Second owner review (2026-10-31):
   (`RECLASSIFY_VERSIONS`). A supplier compromised in another incident that the report mentions as background is not
   this incident's vendor: ASIC's 2023 roundup of its own errors ("Prior to 2022, ASIC was a named victim of the
   hack on ... Accellion") had been filed as a second Accellion attack.
+* **An organisation's own arm is not its vendor** (`entity-roles-v8`, no prompt change). A vendor label naming the
+  same organisation as a labelled victim (`EntityResolver.same_organisation`) becomes a victim
+  (`own_organisation_vendors`), and `foreign_vendor_not_victim` reads the researched jurisdiction first and moves a
+  foreign victim to vendor only for an Australian party that is another organisation. v7 stored Nissan's December
+  2023 breach with Nissan Oceania as its vendor and no victim ("Nissan Australia" on its records had counted as a
+  customer Nissan supplied). v7 events with a vendor or no victim are classified again.
 * **Stale event-level vendor links are cleared** (`clear_stale_vendors`, and `repair_stale_vendors` at the start of
   every `classify-entities`). Event-level roles were written only for the chosen victim and vendor, so a vendor link
   from an earlier classification outlived it: Visa stayed the "vendor" of American Express in a card-dump event

@@ -211,7 +211,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v7"
+ROLES_PROMPT_VERSION = "entity-roles-v8"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -233,6 +233,10 @@ ROLES_PROMPT_VERSION = "entity-roles-v7"
 # supplier compromised in this incident: ASIC's 2023 roundup of its own error-caused breaches named Accellion as
 # background ("Prior to 2022, ASIC was a named victim of the hack on ... Accellion") and was filed as an Accellion
 # attack.
+# v8 (2026-11-01): no prompt text changed. A vendor label naming a labelled victim's own organisation is a victim
+# (:func:`own_organisation_vendors`), and a foreign victim moves to vendor only for an Australian party that is
+# another organisation (:func:`foreign_vendor_not_victim`): Nissan's December 2023 breach was stored with Nissan
+# Oceania as its vendor and no victim. v7 events with a vendor or no victim are classified again.
 #: Prompt versions whose every classification is redone, not only those with a vendor or no victim.
 RECLASSIFY_VERSIONS = frozenset({"entity-roles-v6"})
 #: Sentences shown per entity, and characters per sentence.
@@ -465,6 +469,7 @@ class EntityRoleClassifier:
         ]
         if mentions is not None:
             grounded_vendors(result, mentions, shown=[title, (summary or '')[:DETAIL_CHARS]])
+        own_organisation_vendors(result)
         missing = known - {a.name.strip().lower() for a in result.assignments}
         if missing:
             # Entities the model did not label stay unlabelled (no rule answer
@@ -505,6 +510,26 @@ def grounded_vendors(result: EventEntityRoles, mentions: Dict[str, List[str]],
         a.role = EntityRole.BYSTANDER
         demoted.append(a.name)
     return demoted
+
+
+def own_organisation_vendors(result: EventEntityRoles) -> List[str]:
+    """Make a vendor label a victim when it names the same organisation as a labelled victim.
+
+    A supplier is a third party: an organisation's own regional arm or a spelling of its name cannot be its vendor.
+    v7 labelled Nissan Oceania the vendor of Nissan's December 2023 breach of Nissan Oceania's own systems
+    (``EntityResolver.same_organisation``: "Oceania" only qualifies the name). Returns the names relabelled.
+    """
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    resolver = EntityResolver()
+    victims = [a.name for a in result.assignments if a.role == EntityRole.VICTIM]
+    relabelled: List[str] = []
+    for a in result.assignments:
+        if a.role == EntityRole.VENDOR and any(resolver.same_organisation(a.name, v) for v in victims):
+            logger.info("Vendor label on %r names the victim's own organisation: labelled victim", a.name)
+            a.role = EntityRole.VICTIM
+            relabelled.append(a.name)
+    return relabelled
 
 
 # ----------------------------------------------------------------------
@@ -669,27 +694,37 @@ def foreign_vendor_not_victim(conn, victim, vendor, deduplicated_event_id):
     sites. Recording it as the vendor and leaving the victim unknown states
     what is actually known; naming Cisco as the breached party does not.
 
+    Foreign is read as in :func:`localise_victim` (researched jurisdiction first, then the extraction flag), and the
+    Australian party must be another organisation: "Nissan Australia" on the records of Nissan's own breach is
+    Nissan's arm, not a customer Nissan supplied, and moving Nissan to vendor left the event with no victim.
+
     Returns ``(victim, vendor)``.
     """
     if not victim:
         return victim, vendor
-    row = conn.execute(
-        "SELECT is_australian FROM EntitiesV2 WHERE entity_name = ? LIMIT 1",
-        (victim,)).fetchone()
-    if row is None or row["is_australian"] != 0:
+    researched = researched_australian(conn, victim)
+    if researched is None:
+        row = conn.execute(
+            "SELECT is_australian FROM EntitiesV2 WHERE entity_name = ? LIMIT 1",
+            (victim,)).fetchone()
+        if row is None or row["is_australian"] != 0:
+            return victim, vendor
+    elif researched:
         return victim, vendor
 
-    affected = conn.execute(
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    resolver = EntityResolver()
+    affected = [r[0] for r in conn.execute(
         """
-        SELECT 1 FROM EventDeduplicationMap m
+        SELECT DISTINCT v.entity_name FROM EventDeduplicationMap m
         JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
         JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
         WHERE m.deduplicated_event_id = ? AND v.is_australian = 1
           AND ee.relationship_type IN ('victim', 'affected_customer')
-        LIMIT 1
         """,
-        (deduplicated_event_id,)).fetchone()
-    if affected is None:
+        (deduplicated_event_id,)) if not resolver.same_organisation(r[0], victim)]
+    if not affected:
         return victim, vendor
     logger.info("Foreign party %r moved to vendor; Australian victim unnamed",
                 victim)
