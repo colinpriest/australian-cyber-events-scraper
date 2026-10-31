@@ -226,7 +226,15 @@ class DedupLedger:
             for eid in group:
                 self.add_override(other, eid, OverrideVerdict.DIFFERENT,
                                   reason=f"split: {reason}", created_by=actor)
+        self._link_entities(home)
         return home
+
+    def _link_entities(self, dedup_id: str) -> None:
+        """Give an event the entity links its members carry. A split-out event used to get none, so it had
+        no victim role and every same-organisation step (duplicates, recurrence) passed it by."""
+        from cyber_data_collector.dedup.backfill import backfill_event_entities
+
+        backfill_event_entities(self.conn, [dedup_id])
 
     def _split_member(
         self,
@@ -442,6 +450,7 @@ class DedupLedger:
         ))
         self._refresh_counts(deduplicated_event_id)
         self._refresh_counts(new_dedup_id)
+        self._link_entities(new_dedup_id)
         # Both sides changed: one lost a record, the other is brand new.
         self._roles_changed(deduplicated_event_id, new_dedup_id)
         logger.info(
