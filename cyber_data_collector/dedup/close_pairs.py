@@ -41,6 +41,7 @@ class Side:
     period: Optional[Tuple[date, date]]
     basis: str
     records: int
+    supplier: str = ""                  # the supplier whose breach reached it, when it is a supplier incident
 
 
 @dataclass
@@ -79,7 +80,10 @@ def find(conn: sqlite3.Connection, universe=None) -> List[ClosePair]:
     from cyber_data_collector.dedup import label_contradictions as lc
     from cyber_data_collector.dedup.ledger import DedupLedger
 
+    from cyber_data_collector.dedup.multi_customer_incidents import event_suppliers
+
     universe = universe or dj.PairUniverse(conn)
+    suppliers = event_suppliers(conn)
     records = dict(conn.execute(
         "SELECT deduplicated_event_id, COUNT(*) FROM EventDeduplicationMap GROUP BY deduplicated_event_id"))
     found: List[Tuple[Dict[str, Any], ClosePair]] = []
@@ -92,8 +96,10 @@ def find(conn: sqlite3.Connection, universe=None) -> List[ClosePair]:
             continue
         found.append((pair, ClosePair(
             pair["pair_id"], ea.entity_name, "same stored date" if same_day else "overlapping periods",
-            Side(ea.dedup_id, ea.title, ea.event_date, pa, ba, records.get(ea.dedup_id, 0)),
-            Side(eb.dedup_id, eb.title, eb.event_date, pb, bb, records.get(eb.dedup_id, 0)))))
+            Side(ea.dedup_id, ea.title, ea.event_date, pa, ba, records.get(ea.dedup_id, 0),
+                 suppliers.get(ea.dedup_id, "")),
+            Side(eb.dedup_id, eb.title, eb.event_date, pb, bb, records.get(eb.dedup_id, 0),
+                 suppliers.get(eb.dedup_id, "")))))
     if not found:
         return []
     scores = dj.stored_final_probabilities(conn, [p for p, _ in found])

@@ -352,6 +352,24 @@ def build_close_pairs(ctx: BuildContext) -> List[Path]:
     return [path]
 
 
+def build_supplier_incidents(ctx: BuildContext) -> List[Path]:
+    """``supplier_incidents.html``: attacks on a known vendor that affected more than one of its customers."""
+    from datetime import datetime, timezone
+
+    from cyber_data_collector.dedup import multi_customer_incidents
+    from scripts import build_supplier_incidents_report as module
+
+    conn = sqlite3.connect(ctx.db)
+    try:
+        incidents = multi_customer_incidents.find(conn)
+    finally:
+        conn.close()
+    path = ctx.dashboard_dir / "supplier_incidents.html"
+    path.write_text(module.build_html(incidents, f"from snapshot {ctx.snapshot.snapshot_id}, "
+                                                 f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"), encoding="utf-8")
+    return [path]
+
+
 def build_recurrence(ctx: BuildContext) -> List[Path]:
     """``recurrence.html`` from the analysis folders, naming the snapshot each was computed on."""
     from scripts import build_recurrence_dashboard as module
@@ -380,6 +398,7 @@ DEFAULT_BUILDERS: Dict[str, Callable[[BuildContext], List[Path]]] = {
     "timelines": build_timelines,
     "dedup": build_dedup,
     "close_pairs": build_close_pairs,
+    "supplier_incidents": build_supplier_incidents,
     "recurrence": build_recurrence,
     "risk_matrix": build_risk_matrices,
 }

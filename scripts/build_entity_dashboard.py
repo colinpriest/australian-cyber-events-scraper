@@ -162,6 +162,9 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     resolved.sort(key=lambda pair: ((pair[0]["entity"] or "").lower(), pair[1]["event_date"] or "",
                                     pair[1]["title"] or ""))
 
+    from cyber_data_collector.dedup.multi_customer_incidents import event_suppliers
+
+    suppliers = event_suppliers(conn)
     out: List[Dict[str, Any]] = []
     for rep, r in resolved:
         description = (r["description"] or "").strip()
@@ -185,7 +188,7 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
             "title": r["title"] or "(untitled)",
             "date": str(r["event_date"])[:10] if r["event_date"] else "",
             "records": r["records_affected"],
-            "vendor": r["vendor"],
+            "vendor": r["vendor"] or suppliers.get(r["event_id"]) or "",
             "members": r["members"],
             "evidence": r["evidence_status"],
             "evidence_reason": r["evidence_status_reason"],
@@ -361,7 +364,7 @@ function render() {{
   }}
 
   let html = '<table><thead><tr><th>Entity</th><th>Size</th><th>Date</th>' +
-             '<th>Event</th><th>Description</th></tr></thead><tbody>';
+             '<th>Event</th><th>Supplier</th><th>Description</th></tr></thead><tbody>';
   let prev = null;
   for (const r of rows) {{
     const isNew = r.entity !== prev;
@@ -388,11 +391,12 @@ function render() {{
             '</div><div class="meta">' +
             r.members + ' source record(s)' +
             (r.records ? ' · ' + Number(r.records).toLocaleString() + ' records' : '') +
-            (r.vendor ? ' · via ' + esc(r.vendor) : '') +
             (r.evidence && r.evidence !== 'supported'
               ? ' <span class="evidence evidence-' + esc(r.evidence.replace(' ', '-')) + '" title="' +
                 esc(r.evidence_reason) + '">evidence ' + esc(r.evidence) + '</span>' : '') +
             '</div></td>';
+    // The supplier whose breach reached this organisation, when the event is a supplier incident.
+    html += '<td class="supplier">' + esc(r.vendor || '') + '</td>';
     html += '<td class="desc">' + esc(r.description) + '</td>';
     html += '</tr>';
     prev = r.entity;

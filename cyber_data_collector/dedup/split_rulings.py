@@ -176,11 +176,56 @@ def outgrown_coherence_rulings(conn: sqlite3.Connection) -> List[Orphan]:
     return found
 
 
+def same_victim_supplier_rulings(conn: sqlite3.Connection) -> List[Orphan]:
+    """Supplier-split rulings between two records whose Active events now record the same victim.
+
+    The per-customer split (``supplier_links.convert``) rules the records it moves different from every record
+    that stays: "these are another customer's records". When the two events end up recording one victim, the
+    split separated nothing - Australian Clinical Labs and its subsidiary Medlab, Ingram Micro and "Ingram Micro
+    Holding Corporation", Nissan Oceania and Nissan, one of SA Government's Frontier records out of SA's own
+    event - and the ruling must not veto the merge the calibrated duplicate check makes (0.93-0.98 on those).
+    Events of two different customers (each university's Canvas event) keep their rulings.
+    """
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    if not _has_rulings(conn):
+        return []
+    rows = conn.execute(
+        """SELECT override_id, left_enriched_event_id, right_enriched_event_id, COALESCE(reason, '')
+           FROM DedupOverrides WHERE active = 1 AND verdict = 'different' AND created_by = 'rule'
+             AND reason LIKE 'split: [supplier-split]%'""").fetchall()
+    if not rows:
+        return []
+    event_of: Dict[str, str] = {}
+    victim: Dict[str, str] = {}
+    for record, event_id, name in conn.execute(
+            """SELECT m.enriched_event_id, m.deduplicated_event_id, d.victim_organization_name
+               FROM EventDeduplicationMap m JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+               WHERE d.status = 'Active'"""):
+        event_of[record] = event_id
+        if name:
+            victim[event_id] = name
+    found = []
+    for override_id, left, right, reason in rows:
+        el, er = event_of.get(left), event_of.get(right)
+        if el and er and el != er and el in victim and er in victim and names_match(conn, victim[el], victim[er]):
+            found.append(Orphan(override_id, left, right, "", reason))
+    return found
+
+
 def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
-    """Deactivate the rulings :func:`orphaned` and :func:`withdrawn_label_rulings` find; ``apply`` False only
-    lists them."""
+    """Deactivate the rulings :func:`orphaned`, :func:`withdrawn_label_rulings`,
+    :func:`outgrown_coherence_rulings` and :func:`same_victim_supplier_rulings` find; ``apply`` False only lists
+    them."""
     withdrawn = withdrawn_label_rulings(conn)
     outgrown = outgrown_coherence_rulings(conn)
+    same_victim = same_victim_supplier_rulings(conn)
+    if apply and same_victim:
+        conn.executemany(
+            "UPDATE DedupOverrides SET active = 0, reason = reason || ' [void: both records'' events now record the "
+            "same victim; the split separated no customers]' WHERE override_id = ?",
+            [(o.override_id,) for o in same_victim])
+        conn.commit()
     if apply and outgrown:
         conn.executemany(
             "UPDATE DedupOverrides SET active = 0, reason = reason || ' [void: the organisation it was about is now "
@@ -199,4 +244,4 @@ def void_orphaned(conn: sqlite3.Connection, apply: bool = True) -> List[Orphan]:
         conn.commit()
         logger.info("Voided %d split ruling(s) between records that both left the event they were split from",
                     len(found))
-    return withdrawn + outgrown + found
+    return withdrawn + outgrown + same_victim + found

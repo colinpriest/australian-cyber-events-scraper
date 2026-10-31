@@ -774,7 +774,22 @@ the text extraction did not list it.
 
 `dedup_admin.py alias add VARIANT CANONICAL --reason ...` records a person's alias (`EntityAliases` source `human`
 and a `human` decision): folded by `canonicalise-entities` as a reviewed alias, never re-asked or reversed by a
-model ("NSW Ministry of Health" is NSW Health, owner 2026-10-31).
+model ("NSW Ministry of Health" is NSW Health, owner 2026-10-31) A model's anti-alias for the pair gives way to it (Medlab Pathology is
+Australian Clinical Labs, owner 2026-10-31, over a model's `parent_subsidiary`); a person's anti-alias does not.
+
+**An acronym two organisations fold into is contextual.** "National Australia Bank" -> "NAB" stays global: a full
+name means one organisation. "Top Education Group" -> "TEG" and Ticketek's parent "TEG Pty Ltd" -> "TEG" filed both
+organisations under one entity, so an expansion folded into an acronym that another name also folds into becomes the
+acronym's contextual candidate (`TEG` -> `Top Education Group`), applied record by record from the text; the
+acronym's own name with a qualifier ("TEG Pty Ltd") stays global (`contextual_aliases.migrate_contextual_aliases`,
+`EntityResolver.learn_alias`).
+
+**Manual validation exceptions.** Every wrong result the owner reports is stored in `ValidationExceptions`
+(`dedup/validation_exceptions.py`) with the owner's words, anchored on the event's record ids (event ids change
+with merges and splits): `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`.
+`dedup_admin.py validation-exception add KIND EVENT VALUE --note ...`, `list`, `check` (exit 1 when any fails) and
+`root-cause ID TEXT`. The quality report counts the failures (`acceptance.exceptions.failures`, a warning). They are
+tests, never inputs: run `check` before and after changing any dedup, victim or supplier algorithm.
 
 **Folds reached by chaining are verified.** A model fold whose two names have no verdict of their own (A = B and
 B = C confirmed, C folded into A unasked) is put to Perplexity by `canonicalise-entities` and undone unless `same`.
@@ -1198,6 +1213,31 @@ supplier (`dedup_admin.py supplier-incidents`). The calibrated same-incident and
 *links*, not merges or co-victims; `find-supplier-victims --apply` reverses earlier co-victim attachments into links
 and splits events that held several customers' records per customer. The section below describes the earlier
 co-victim convention, kept for the calibrations it measured.
+
+**Repairs of the per-customer split (2026-10-31, from the owner's reports).** The split treated every victim role on an
+event as a separate customer and gave each record to the organisation Perplexity named as breached. Role
+classification marks parents, subsidiaries, regional arms and lists as victims, and in a supplier breach Perplexity
+names the supplier even on a customer's own notice. So Medlab Pathology was split off Australian Clinical Labs,
+Nissan off Nissan Oceania, one SA Government record off SA's own Frontier event, and Latrobe's and Boroondara's
+OracleCMS notices were counted as OracleCMS's. Now:
+
+* a record belongs to the customer its own entity links give as harmed (`victim` / `affected_customer`), when exactly
+  one; Perplexity's name decides only for a record whose links name no customer;
+* customers are the organisations the calibrated supplier-victim judgement attached, plus the event's own victim -
+  not every victim role; the party with the most records keeps the event (ties: supplier, own victim, master record);
+* further splits are **proposals** in the findings unless `find-supplier-victims --apply --split-customers`;
+* a supplier-split ruling between two records whose Active events now record the **same victim** is void
+  (`split_rulings.same_victim_supplier_rulings`), so the calibrated duplicate check can rejoin them, and a split
+  undone that way is not proposed again;
+* a customer split out of an event is an `affected_customer`, not a victim, of the event it left
+  (`supplier_links.demote_split_customers`, run by `classify-entities` and the conversion);
+* a split takes off the event it leaves the entity links only its records carried (`ledger.drop_departed_links`;
+  `repair_departed_links` for earlier splits, run by `classify-entities`).
+
+`dashboard/supplier_incidents.html` (`scripts/build_supplier_incidents_report.py`, published with the other outputs)
+lists every attack on a known vendor that affected more than one of its customers, ordered by vendor name, date of
+attack and customer name, with a brief description of each attack. It reads `SupplierIncidents` /
+`SupplierIncidentLinks`; the vendor itself, descriptions and lists are not counted as customers.
 
 ### Supplier incidents: every affected organisation, one incident (superseded)
 
@@ -2682,7 +2722,8 @@ The dashboards used to be built from the live database, the quality gate to read
 separately, and the risk matrices to be written before any gate. Now the step takes **one
 consistent snapshot** (SQLite backup API), keeps a compressed copy under
 `instance/snapshots/`, runs the gate on it, builds `dashboard/index.html`,
-`ai_incidents.html`, `entities.html`, `timelines.html`, `dedup.html`, `recurrence.html` and
+`ai_incidents.html`, `entities.html`, `timelines.html`, `dedup.html`, `close_pairs.html`, `supplier_incidents.html`,
+`recurrence.html` and
 the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
 id, writes `dashboard/publication.json` (hashes of every output and of the inputs outside
 the database) and moves them all into place together. A blocked gate, a failing builder or

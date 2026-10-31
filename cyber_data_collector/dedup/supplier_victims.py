@@ -1483,7 +1483,7 @@ def gather(conn: sqlite3.Connection, limit: Optional[int] = None) -> Gathered:
 def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, research: bool = False,
                           judge_client=None, escalation_client=None, search=None,
                           labels_path: Path = LABELS_PATH, calibration_path: Path = CALIBRATION_PATH,
-                          role_refresher=None, limit: Optional[int] = None) -> Dict[str, Any]:
+                          role_refresher=None, limit: Optional[int] = None, split: bool = False) -> Dict[str, Any]:
     """Detect supplier incidents, judge their customers and other events, and report or write the links.
 
     One event per customer (owner decision 2026-10-31): nothing here attaches a co-victim or merges
@@ -1527,7 +1527,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
     # The old state is converted first (its splits create the customers' events), then everything is judged.
     before = gather(conn, limit)
     registry = sl.Registry(conn, before.resolver)
-    conversion = sl.convert(conn, before, registry, apply)
+    conversion = sl.convert(conn, before, registry, apply, split=split)
     g = gather(conn, limit) if apply else before
     victim_items = g.victim_items(conn)
     pair_items = g.pair_items(conn)

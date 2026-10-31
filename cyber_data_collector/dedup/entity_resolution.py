@@ -428,6 +428,18 @@ class EntityResolver:
             logger.warning("Alias %r -> %r refused: one is a description, the other a name", raw_name,
                            canonical_name)
             return
+        from cyber_data_collector.dedup import contextual_aliases as ctx
+
+        if source != "human" and ctx.is_contextual_variant(canonical_name, raw_name) and conn.execute(
+                "SELECT 1 FROM EntityAliases WHERE canonical_name = ? AND raw_name != ?",
+                (canonical_name, raw_name)).fetchone():
+            # The canonical is an acronym another name already folds into ("Top Education Group" -> "TEG", where
+            # Ticketek's parent "TEG Pty Ltd" -> "TEG"): held globally it files two organisations under one
+            # entity. Kept as the acronym's contextual candidate, applied record by record from the text.
+            ctx.add_contextual_alias(conn, canonical_name, raw_name, source)
+            logger.info("Alias %r -> %r kept as contextual: %r is an acronym another name folds into", raw_name,
+                        canonical_name, canonical_name)
+            return
         key = canonical_key(canonical_name)
         conn.execute(
             """

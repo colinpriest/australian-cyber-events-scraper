@@ -31,7 +31,7 @@
     {"match": "labels.*.contradictions", "max": 0, "blocking": false,
      "why": "Per-label-set breakdown of labels.contradictions_total."},
     {"match": "acceptance.*.failures", "max": 0, "blocking": false,
-     "why": "The review's acceptance cases (evaluation/review_acceptance_cases.csv): fragments of one incident that must be one event, victims that must be named, and events that must be out of scope. A warning, not a gate: it measures how far the rules have come."},
+     "why": "The review's acceptance cases (evaluation/review_acceptance_cases.csv) and the owner's manual validation exceptions (ValidationExceptions): fragments of one incident that must be one event, victims that must be named, and events that must be out of scope. A warning, not a gate: it measures how far the rules have come."},
     {"match": "acceptance.checked", "blocking": false, "why": "Trend only."},
     {"match": "acceptance.unchecked", "blocking": false, "why": "Cases whose event no longer exists or cannot be traced."},
     {"match": "labels.*.unchecked", "blocking": false,
