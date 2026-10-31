@@ -1287,7 +1287,14 @@ Second owner review (2026-10-31):
 * **A foreign victim is moved to vendor only when it is foreign** (`localise_victim`, `entity-roles-v5`): its
   researched profile's `jurisdiction` decides, and only an organisation with none falls back to the extraction's
   `is_australian` flag, which had called youX FinTech, OracleCMS and Nissan Oceania foreign. The replacement is
-  never a description: youX's own breach was filed under "lenders" with youX as its vendor.
+  never a description: youX's own breach was filed under "lenders" with youX as its vendor. Only a customer
+  harmed through the foreign party makes that party its vendor; an Australian co-victim becomes the victim and the
+  foreign one stays a co-victim (Woolworths beside Delta Air Lines in the CrowdStrike outage).
+* **A vendor label must quote its evidence** (`entity-roles-v6`, `grounded_vendors`). v4 still kept Accenture, the
+  Singapore agency and Delta Air Lines as vendors: the answer schema still defined a vendor as one "whose breach or
+  software caused" the exposure, against the prompt, and now matches it. Each vendor label quotes the sentence,
+  among those listed for the entity, that shows its own system, product or service was attacked or compromised; a
+  label whose quote is not one of them (or an entity named in no sentence) is a bystander.
 
 **Coherence splits (2026-11-01).** `check-coherence` and `check-same-organisation` re-read an event once a split
 in the same run has happened (a split that re-attaches a record can merge a later event away; the run failed on
