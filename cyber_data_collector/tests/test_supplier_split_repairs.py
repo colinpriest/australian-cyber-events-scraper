@@ -578,3 +578,32 @@ def test_a_usable_headline_beats_a_stored_llm_paragraph():
              "a system error that resulted in their details being published in the White Pages directory[4][2][3]")
     assert derive_title([prose, "Optus White Pages listing breach (2019)"], victim="Optus",
                         current_title=prose) == "Optus White Pages listing breach (2019)"
+
+
+def test_a_named_customer_gets_a_record_from_its_own_reporting_once():
+    """Owner 2026-10-31: an event for a customer only named in the reporting, from its own reporting - never the
+    supplier's article that named it."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    _jurisdictions(conn, {4: "Australia"})
+    have = {r[1] for r in conn.execute("PRAGMA table_info(RawEvents)")}
+    for column in ("source_event_id", "raw_content", "event_date", "source_metadata", "is_processed"):
+        if column not in have:
+            conn.execute(f"ALTER TABLE RawEvents ADD COLUMN {column} TEXT")
+    supplier_article = conn.execute("SELECT source_url FROM RawEvents WHERE raw_event_id = 'raw-t'").fetchone()[0]
+    asked = []
+
+    def search(query, model):
+        asked.append(query)
+        return {"answer": "FOUND: yes\nINCIDENT: SBS confirmed its files were taken.\nSOURCES: ...",
+                "citations": [supplier_article, "https://www.sbs.com.au/news/sbs-accellion-statement"]}
+
+    assert [c.name for _, c in mci.customers_to_search(conn)] == ["SBS"]
+    counts = mci.search_customer_reports(conn, search=search)
+    assert counts == {"searched": 1, "queued": 1, "pending": 0} and "SBS" in asked[0] and "Accellion" in asked[0]
+    url, title, done = conn.execute("SELECT source_url, raw_title, is_processed FROM RawEvents "
+                                    "WHERE source_url LIKE '%sbs.com.au%'").fetchone()
+    assert url == "https://www.sbs.com.au/news/sbs-accellion-statement" and title == "SBS cyber incident" and int(done) == 0
+    assert mci.customers_to_search(conn) == [] and mci.search_customer_reports(conn, search=search)["searched"] == 0

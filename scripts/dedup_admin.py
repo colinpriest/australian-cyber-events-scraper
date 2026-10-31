@@ -4045,7 +4045,8 @@ def cmd_find_supplier_victims(args) -> int:
     try:
         result = sv.find_supplier_victims(conn, apply=apply, research=args.research,
                                           role_refresher=refresher, limit=args.limit,
-                                          split=getattr(args, "split_customers", False))
+                                          split=getattr(args, "split_customers", False),
+                                          search_customers=getattr(args, "search_customers", False))
     except sv.CalibrationError as exc:
         print(f"Refusing to apply: {exc}")
         return 2
@@ -4095,9 +4096,11 @@ def cmd_find_supplier_victims(args) -> int:
     if result.get("customer_pairs") is not None:
         print(f"Judged {result.get('customer_names_judged', 0)} customer name(s); customer pairs in one incident: "
               f"{pairs['asked']} asked, {pairs['reused']} reused, {pairs['failed']} failed; descriptions "
-              f"{result.get('descriptions')}")
+              f"{result.get('descriptions')}; named customers searched for their own reporting "
+              f"{result.get('customer_reports')}")
     problems = (len(result["failed"]["victim"]) + len(result["failed"]["same_incident"])
-                + len(result["search_failures"]) + places.get("failed", 0) + pairs.get("failed", 0))
+                + len(result["search_failures"]) + places.get("failed", 0) + pairs.get("failed", 0)
+                + (result.get("customer_reports") or {}).get("pending", 0))
     undecided = len(result["undecided"]["victim"]) + len(result["undecided"]["same_incident"])
     if undecided:
         print(f"WARNING: {undecided} item(s) in the escalation band have no escalated answer and are "
@@ -4901,6 +4904,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="One stored Perplexity search per supplier incident for the "
                         "organisations it affected (reused on later runs)")
     p.add_argument("--limit", type=int, default=None, help="Only the first N supplier incidents")
+    p.add_argument("--search-customers", action="store_true",
+                   help="With --research --apply: search once per customer the supplier report names only from the "
+                        "reporting, for its own reporting, and queue the best citation as a new record")
     p.add_argument("--split-customers", action="store_true",
                    help="With --apply, also make the per-customer splits it proposes (otherwise they are listed: "
                         "the one-off conversion of 2026-10-31 split parents, subsidiaries and lists off their own "

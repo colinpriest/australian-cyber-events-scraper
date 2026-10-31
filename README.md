@@ -1289,6 +1289,13 @@ Second owner review (2026-10-31):
   recorded" for every attack.
 * **The main dashboard** has a chart of these attacks per half-year of the attack (undated ones counted in its
   subtitle), reconciled against the report's list.
+* **A named customer gets an event from its own reporting** (owner decision 2026-10-31). `find-supplier-victims
+  --research --apply --search-customers` searches once per customer the report lists only as named in the
+  reporting (stored in `SourceReplacements`, purpose `supplier_customer`; a failed search is retried) for its own
+  notice, a regulator notice or news about its exposure, and queues the best citation that is not already a stored
+  record - never the supplier's article that named it - as a new record with its own URL. The next refresh
+  scrapes, judges, enriches and deduplicates it; the duplicate and supplier checks place it and link it to the
+  attack. No event is created without a source of its own.
 
 ### Supplier incidents: every affected organisation, one incident (superseded)
 

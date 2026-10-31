@@ -231,6 +231,93 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
     return out
 
 
+# ---------------------------------------------------------------- customers' own reporting
+
+CUSTOMER_PURPOSE = "supplier_customer"
+CUSTOMER_PROMPT = """Find credible public reporting - the organisation's own notice or statement, a regulator \
+notice, or a news article about it - of how this organisation was itself affected by a cyber incident at a \
+supplier it uses:
+
+Organisation: {customer}
+Supplier whose incident affected it: {supplier}
+Approximate date: {date}
+
+Report only sources about this organisation's own exposure (what of its data or services was affected), not
+general coverage of the supplier's incident.
+
+Answer in exactly this format:
+FOUND: yes / no
+INCIDENT: two or three sentences - what of this organisation was affected, when (to the day if reported).
+SOURCES: the URLs of the reporting you found, best first, one per line."""
+
+
+def customer_search_key(supplier_incident_id: str, customer: str) -> str:
+    return f"customer:{supplier_incident_id}:{' '.join(customer.split()).lower()}"
+
+
+def customers_to_search(conn: sqlite3.Connection) -> List[Tuple[Incident, Customer]]:
+    """Every customer the supplier report lists only as named in the reporting (no event of its own), not yet
+    searched for its own reporting (a failed search, ``pending``, is tried again)."""
+    from cyber_data_collector.dedup import source_gate
+
+    source_gate.ensure_replacement_schema(conn)
+    done = {k for (k,) in conn.execute("SELECT enriched_event_id FROM SourceReplacements WHERE purpose = ? "
+                                       "AND COALESCE(status, ?) != ?",
+                                       (CUSTOMER_PURPOSE, source_gate.STATUS_SEARCHED, source_gate.STATUS_PENDING))}
+    return [(inc, c) for inc in find(conn) for c in inc.customers
+            if c.event_id is None and customer_search_key(inc.supplier_incident_id, c.name) not in done]
+
+
+def search_customer_reports(conn: sqlite3.Connection, search: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+                            limit: Optional[int] = None) -> Dict[str, int]:
+    """One stored search per named customer for reporting of its own exposure; the best citation that is not
+    already a stored record becomes a new record with its own URL (:func:`source_gate.search_and_queue`).
+
+    Owner decision 2026-10-31: a customer named in the reporting gets an event of its own only from its own
+    reporting, never from the supplier's article. The record is scraped, judged, enriched and deduplicated like any
+    other by the next refresh; the duplicate and supplier checks decide which event it belongs to and link it to
+    the supplier incident. A citation already stored (the supplier article that named the customer) is skipped.
+    """
+    from datetime import date as _date
+
+    from cyber_data_collector.dedup import source_gate
+    from cyber_data_collector.dedup.corroboration import _perplexity_search
+    from cyber_data_collector.utils.url_clean import clean_url
+
+    stored = {clean_url(u) for (u,) in conn.execute("SELECT source_url FROM RawEvents WHERE source_url IS NOT NULL")}
+    base = search or _perplexity_search
+
+    def own_reporting(query: str, model: str) -> Dict[str, Any]:
+        result = base(query, model)
+        return {**result, "citations": [c for c in (result.get("citations") or []) if c and clean_url(c) not in stored]}
+
+    counts = {"searched": 0, "queued": 0, "pending": 0}
+    todo = customers_to_search(conn)
+    for inc, customer in (todo[:limit] if limit else todo):
+        when = None
+        if inc.attack_date:
+            try:
+                when = _date.fromisoformat(str(inc.attack_date)[:10])
+            except ValueError:
+                when = None
+        key = customer_search_key(inc.supplier_incident_id, customer.name)
+        query = CUSTOMER_PROMPT.format(customer=customer.name, supplier=inc.vendor, date=attack_label(inc))
+        raw_id = source_gate.search_and_queue(
+            conn, key, query, customer.name, when, own_reporting,
+            metadata={"origin": "supplier customer search", "supplier_incident_id": inc.supplier_incident_id,
+                      "supplier": inc.vendor, "customer": customer.name},
+            purpose=CUSTOMER_PURPOSE)
+        status = conn.execute("SELECT status FROM SourceReplacements WHERE enriched_event_id = ?", (key,)).fetchone()
+        counts["searched"] += 1
+        counts["queued"] += 1 if raw_id else 0
+        counts["pending"] += 1 if status and status[0] == source_gate.STATUS_PENDING else 0
+        if raw_id:
+            stored.add(clean_url(conn.execute("SELECT source_url FROM RawEvents WHERE raw_event_id = ?",
+                                              (raw_id,)).fetchone()[0]))
+    conn.commit()
+    return counts
+
+
 # ---------------------------------------------------------------- descriptions
 
 def description_state(conn: sqlite3.Connection, supplier_incident_id: str) -> Dict[str, Any]:

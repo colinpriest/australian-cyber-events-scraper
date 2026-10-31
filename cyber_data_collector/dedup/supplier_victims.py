@@ -1489,7 +1489,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
                           judge_client=None, escalation_client=None, search=None,
                           labels_path: Path = LABELS_PATH, calibration_path: Path = CALIBRATION_PATH,
                           role_refresher=None, limit: Optional[int] = None, split: bool = False,
-                          profile_search=None, describer=None) -> Dict[str, Any]:
+                          profile_search=None, describer=None, search_customers: bool = False) -> Dict[str, Any]:
     """Detect supplier incidents, judge their customers and other events, and report or write the links.
 
     One event per customer (owner decision 2026-10-31): nothing here attaches a co-victim or merges
@@ -1612,4 +1612,8 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         pairs = alias_learning.verify_supplier_pairs(conn)
         result["customer_pairs"] = {"asked": pairs.asked, "reused": pairs.reused, "failed": len(pairs.failed)}
         result["descriptions"] = multi_customer_incidents.describe_incidents(conn, describer=describer)
+        # A customer named only in the reporting gets its own record from its own reporting (owner 2026-10-31);
+        # the next refresh ingests it and the duplicate and supplier checks place it.
+        if search_customers:
+            result["customer_reports"] = multi_customer_incidents.search_customer_reports(conn, search=search)
     return result
