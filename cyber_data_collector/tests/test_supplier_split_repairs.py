@@ -567,3 +567,14 @@ def test_the_dashboard_counts_vendor_attacks_per_half_year_of_the_attack():
     assert dict(zip(chart["periods"], chart["counts"]))["2020 H2"] == 1
     assert sum(chart["counts"]) == 1 and chart["undated"] == 0 and chart["outside"] == 0
     assert get_vendor_attacks_by_half_year(conn, "2022-01-01", "2022-12-31")["outside"] == 1
+
+
+def test_a_usable_headline_beats_a_stored_llm_paragraph():
+    """Owner 2026-10-31: the Optus White Pages event's title was a 528-character Perplexity answer."""
+    from cyber_data_collector.dedup.title_selection import derive_title
+
+    prose = ("The incident reported at the original URL concerns a **data breach at Optus** that occurred prior to "
+             "April 2020, involving the exposure of personal information of approximately **50,000 customers** due to "
+             "a system error that resulted in their details being published in the White Pages directory[4][2][3]")
+    assert derive_title([prose, "Optus White Pages listing breach (2019)"], victim="Optus",
+                        current_title=prose) == "Optus White Pages listing breach (2019)"
