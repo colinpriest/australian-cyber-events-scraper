@@ -216,6 +216,29 @@ def backfill_event_entities(conn: sqlite3.Connection, event_ids: Optional[Sequen
     return added
 
 
+
+def link_unlinked_events(conn: sqlite3.Connection, apply: bool = True) -> List[str]:
+    """Active events with no entity link at all whose members carry links: give them their members' links.
+
+    A split used to create its event with none (42 on 2026-10-31, among them NSW Health's records split out of
+    ASIC's Accellion event), so it had no victim role and every same-organisation step passed it by. Only such
+    events are touched: an event that has links keeps exactly the ones it has (a reversed or demoted role is
+    not brought back from its members). Returns their ids.
+    """
+    ids = [r[0] for r in conn.execute(
+        """SELECT d.deduplicated_event_id FROM DeduplicatedEvents d
+           WHERE d.status = 'Active'
+             AND NOT EXISTS (SELECT 1 FROM DeduplicatedEventEntities x
+                             WHERE x.deduplicated_event_id = d.deduplicated_event_id)
+             AND EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                         JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                         WHERE m.deduplicated_event_id = d.deduplicated_event_id)
+           ORDER BY d.deduplicated_event_id""")]
+    if apply and ids:
+        backfill_event_entities(conn, ids)
+        conn.commit()
+    return ids
+
 def refresh_source_counts(conn: sqlite3.Connection) -> int:
     """Recompute ``total_data_sources`` from actual membership.
 
