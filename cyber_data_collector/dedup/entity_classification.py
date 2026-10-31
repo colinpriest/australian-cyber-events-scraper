@@ -121,9 +121,10 @@ class EntityAssignment(BaseModel):
             "Its part in THIS event. victim = the organisation whose systems "
             "or data were compromised. vendor = a third-party supplier whose "
             "own system, product or service was attacked or compromised, which "
-            "caused the victim's exposure (not one whose product failed without "
-            "an attack, nor a firm or agency that reported, investigated or "
-            "was credited). affected_customer = an "
+            "caused the victim's exposure in this incident (not one compromised "
+            "in another incident mentioned as background, not one whose product "
+            "failed without an attack, nor a firm or agency that reported, "
+            "investigated or was credited). affected_customer = an "
             "organisation harmed via the vendor. regulator = investigating or "
             "responding authority. product = the software involved. "
             "threat_actor = the attacker. bystander = commentator, journalist "
@@ -134,9 +135,9 @@ class EntityAssignment(BaseModel):
     evidence: Optional[str] = Field(
         default=None,
         description=(
-            "Only for role vendor: copy, word for word, the sentence listed for this entity that shows its own "
-            "system, product or service was attacked or compromised. If no listed sentence shows that, the "
-            "entity is not a vendor. Leave empty for every other role."
+            "Only for role vendor: copy, word for word, the sentence of the reporting shown that says this "
+            "entity's own system, product or service was attacked or compromised in this incident. If none "
+            "says that, the entity is not a vendor. Leave empty for every other role."
         ),
     )
 
@@ -210,7 +211,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v6"
+ROLES_PROMPT_VERSION = "entity-roles-v7"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -226,6 +227,14 @@ ROLES_PROMPT_VERSION = "entity-roles-v6"
 # victim's exposure", contradicting the system prompt; it now says the same as the prompt. And a vendor label must
 # quote the sentence of the reporting, among those listed for it, that shows its own system, product or service was
 # attacked or compromised: a label with no such quote is a bystander (:func:`grounded_vendors`).
+# v7 (2026-11-01): v6 accepted only a quote from the entity's own two listed sentences, so Pareto Phone, RMS Cloud
+# and ZircoDATA, quoted from the incident description, were demoted. The quote may now come from anything the model
+# was shown. Every event classified under v6 is classified again (:data:`RECLASSIFY_VERSIONS`). The vendor is the
+# supplier compromised in this incident: ASIC's 2023 roundup of its own error-caused breaches named Accellion as
+# background ("Prior to 2022, ASIC was a named victim of the hack on ... Accellion") and was filed as an Accellion
+# attack.
+#: Prompt versions whose every classification is redone, not only those with a vendor or no victim.
+RECLASSIFY_VERSIONS = frozenset({"entity-roles-v6"})
 #: Sentences shown per entity, and characters per sentence.
 MENTIONS_PER_ENTITY = 2
 MENTION_CHARS = 240
@@ -319,7 +328,9 @@ SYSTEM_PROMPT = (
     "victim.\n"
     "- vendor: a third-party supplier, contractor or software provider whose "
     "own system, product or service was compromised or attacked, and whose "
-    "compromise caused the victim's exposure. NOT a vendor: a security firm, "
+    "compromise caused the victim's exposure in THIS incident. NOT a vendor: "
+    "a supplier compromised in a different, earlier or later incident that the "
+    "report mentions only as background (bystander); a security firm, "
     "researcher or agency that reported, researched, investigated, advised or "
     "responded (bystander, or regulator for an authority); an organisation "
     "credited for a photo, quote or data (bystander); a provider whose product "
@@ -453,7 +464,7 @@ class EntityRoleClassifier:
             a for a in result.assignments if a.name.strip().lower() in known
         ]
         if mentions is not None:
-            grounded_vendors(result, mentions)
+            grounded_vendors(result, mentions, shown=[title, (summary or '')[:DETAIL_CHARS]])
         missing = known - {a.name.strip().lower() for a in result.assignments}
         if missing:
             # Entities the model did not label stay unlabelled (no rule answer
@@ -464,27 +475,32 @@ class EntityRoleClassifier:
 
 
 def _quote_key(text: str) -> str:
+    text = text.replace("’", "'").replace("‘", "'")
     return " ".join(text.lower().strip().strip("\"'“”").split()).rstrip(".")
 
 
-def grounded_vendors(result: EventEntityRoles, mentions: Dict[str, List[str]]) -> List[str]:
-    """Make a vendor label a bystander unless its quote is one of the sentences listed for it.
+def grounded_vendors(result: EventEntityRoles, mentions: Dict[str, List[str]],
+                     shown: Sequence[str] = ()) -> List[str]:
+    """Make a vendor label a bystander unless it quotes the reporting it was shown.
 
-    The quote must be (part of) a sentence the model was shown for that entity, at least 20 characters long; an
-    entity named in no sentence therefore cannot be a vendor. Whether the quoted sentence really describes a
-    compromise is the model's judgement - the check only stops a vendor label that cites no reporting. Returns the
-    names demoted.
+    The quote (at least 20 characters) must occur word for word in the text the model was shown - the title, the
+    detail or any listed sentence (``shown`` plus every sentence in ``mentions``) - so a label citing nothing, or
+    citing text that is not there, is dropped. An entity named in no sentence of the reporting cannot be a vendor
+    (the Singapore agency on TPG's breach). Whether the quoted text really describes the vendor's compromise is the
+    model's judgement: Pareto Phone's quote is the description's "After the company fell victim to ransomware
+    gang LockBit ...", which does not repeat its name (v6 demanded one of the entity's own two sentences and
+    demoted Pareto Phone, RMS Cloud and ZircoDATA). Returns the names demoted.
     """
-    by_name = {name.strip().lower(): said for name, said in mentions.items()}
+    said_of = {name.strip().lower(): said for name, said in mentions.items()}
+    corpus = " | ".join(_quote_key(t) for t in [*shown, *(s for said in mentions.values() for s in said)] if t)
     demoted: List[str] = []
     for a in result.assignments:
         if a.role != EntityRole.VENDOR:
             continue
         quote = _quote_key(a.evidence or "")
-        said = [_quote_key(s) for s in by_name.get(a.name.strip().lower(), [])]
-        if len(quote) >= 20 and any(quote in s or s in quote for s in said if len(s) >= 20):
+        if said_of.get(a.name.strip().lower()) and len(quote) >= 20 and quote in corpus:
             continue
-        logger.info("Vendor label on %r cites no listed sentence (%r): labelled bystander",
+        logger.info("Vendor label on %r is not grounded in the reporting shown (%r): labelled bystander",
                     a.name, (a.evidence or "")[:120])
         a.role = EntityRole.BYSTANDER
         demoted.append(a.name)
@@ -883,10 +899,50 @@ def _sync_roles(conn, deduplicated_event_id: str,
             "EventDeduplicationMap WHERE deduplicated_event_id = ?)",
             (role, entity_id, deduplicated_event_id))
 
+    clear_stale_vendors(conn, deduplicated_event_id, vendor)
     if vendor:
         retype(vendor, "vendor")
     if victim:
         retype(victim, "victim")
+
+
+def clear_stale_vendors(conn, deduplicated_event_id: str, vendor: Optional[str]) -> int:
+    """Set back to ``affected`` an event-level vendor link the event's classification no longer supports.
+
+    Only the chosen vendor, and an entity some member record still labels vendor, keep the role. Other event-level
+    links are written only for the chosen victim and vendor, so a vendor link from an earlier classification
+    outlived it: Visa stayed the "vendor" of American Express's card-dump event after Visa was no longer anyone's
+    supplier, and the supplier report and the not-vendor checks read these links. Returns the links changed.
+    """
+    rows = conn.execute(
+        """SELECT dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
+           JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'
+             AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                             JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                             WHERE m.deduplicated_event_id = dee.deduplicated_event_id
+                               AND ee.entity_id = dee.entity_id AND ee.relationship_type = 'vendor')""",
+        (deduplicated_event_id,)).fetchall()
+    changed = 0
+    for entity_id, name in rows:
+        if vendor and (name or "").strip().lower() == vendor.strip().lower():
+            continue
+        conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected' "
+                     "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'vendor'",
+                     (deduplicated_event_id, entity_id))
+        logger.info("Cleared stale vendor link %r on %s", name, deduplicated_event_id)
+        changed += 1
+    return changed
+
+
+def repair_stale_vendors(conn) -> int:
+    """:func:`clear_stale_vendors` for every Active event (run by ``classify-entities``)."""
+    total = 0
+    for did, vendor in conn.execute(
+            "SELECT deduplicated_event_id, vendor_organization_name FROM DeduplicatedEvents "
+            "WHERE status = 'Active'").fetchall():
+        total += clear_stale_vendors(conn, did, vendor)
+    return total
 
 
 

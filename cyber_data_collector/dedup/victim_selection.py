@@ -136,8 +136,10 @@ PLACE_NAMES: Set[str] = {
     "australia", "australian", "new south wales", "victoria", "queensland",
     "western australia", "south australia", "tasmania", "sydney", "melbourne",
     "brisbane", "perth", "adelaide", "canberra", "hobart", "darwin",
-    "australian government", "australian universities", "commonwealth",
+    "australian universities",
 }
+# "Australian Government" and "Commonwealth" were listed here as places; they name the Commonwealth Government, an
+# organisation (sized HUGE; owner 2026-11-01), and were sized UNKNOWN by the collective-noun rule.
 
 # Fallback threat actors for records with no attacking_entity_name recorded.
 THREAT_ACTOR_MARKERS: Set[str] = {

@@ -39,7 +39,8 @@ from typing import Dict, List, Optional, Sequence
 from cyber_data_collector.utils.timestamps import utc_now_iso
 
 KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month",
-         "same_supplier_incident_as", "not_supplier_customer", "supplier_customers_once", "not_vendor")
+         "same_supplier_incident_as", "not_supplier_customer", "supplier_customers_once", "not_vendor",
+         "victim_size")
 PAIR_KINDS = ("same_incident_as", "different_incident_from", "same_supplier_incident_as")
 
 SCHEMA = """
@@ -181,6 +182,17 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         hit = [v for v in vendors if names_match(conn, v, value_text)]
         return Result(eid, kind, "fail" if hit else "pass",
                       f"event {now[:8]} vendors: {', '.join(vendors) or 'none'}")
+    if kind == "victim_size":
+        # value "NAME=BAND": the event's victim of that name has that size band (SMALL ... HUGE).
+        name, _, band = value_text.rpartition("=")
+        sizes = {r[0]: r[1] for r in conn.execute(
+            """SELECT v.entity_name, v.size_estimate FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'""", (now,))}
+        found = {n: z for n, z in sizes.items() if names_match(conn, n, name)}
+        ok = bool(found) and all((z or "").upper() == band.strip().upper() for z in found.values())
+        return Result(eid, kind, "pass" if ok else "fail",
+                      f"event {now[:8]} sizes: {', '.join(f'{n}={z}' for n, z in found.items()) or 'victim not found'}")
     if kind == "supplier_customers_once":
         from cyber_data_collector.dedup import multi_customer_incidents as mci
 

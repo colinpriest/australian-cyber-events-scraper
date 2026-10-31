@@ -451,7 +451,9 @@ def pending_entities(
     where = ["v.entity_name IS NOT NULL", "TRIM(v.entity_name) != ''"]
     params: List[Any] = []
     if not refresh:
-        where.append("(v.size_estimate IS NULL OR v.size_method = 'unavailable')")
+        # A rule answer is kept only while the rule still gives it (filtered below): rules change, and a rule-settled
+        # UNKNOWN was never revisited - the Australian Government, once read as a place name, stayed UNKNOWN.
+        where.append("(v.size_estimate IS NULL OR v.size_method IN ('unavailable', 'rule'))")
     # A human ruling is never overwritten by an automated pass.
     where.append("COALESCE(v.size_method, '') != 'human'")
     if entity_filter:
@@ -478,9 +480,11 @@ def pending_entities(
         WHERE {' AND '.join(where)}
         ORDER BY v.entity_name COLLATE NOCASE
     """
-    if limit:
-        query += f" LIMIT {int(limit)}"
-    return conn.execute(query, params).fetchall()
+    rows = conn.execute(query, params).fetchall()
+    if not refresh:
+        settled = {r[0] for r in conn.execute("SELECT entity_id FROM EntitiesV2 WHERE size_method = 'rule'")}
+        rows = [r for r in rows if r[0] not in settled or rule_size(r[1], r[4]) is None]
+    return rows[:int(limit)] if limit else rows
 
 
 def store_estimate(conn, entity_id: int, result: Dict[str, Any]) -> None:
