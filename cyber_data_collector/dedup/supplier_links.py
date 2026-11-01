@@ -252,7 +252,7 @@ class Registry:
         the window, else a new one. ``apart(a, b)`` True means two events were ruled different incidents
         (a pair label); an incident holding such an event is not joined.
         """
-        from cyber_data_collector.dedup.supplier_victims import _gap
+        from cyber_data_collector.dedup.supplier_victims import OWN_EVENT_WINDOW_DAYS, _gap
 
         key = self.key(supplier)
         mine = [inc for inc in self.incidents.values() if inc.supplier_key == key]
@@ -399,15 +399,25 @@ def anchors_incident(conn: sqlite3.Connection, resolver, verdicts: Dict[frozense
                      event_id: str) -> bool:
     """Whether an event can be the supplier's own event (the anchor of its incident).
 
-    It must record the supplier as its vendor, or as its only victim: an event that records another organisation as
-    a victim is that organisation's report with the supplier merely beside it, unless the supplier is its vendor. Nissan's April 2024 notice records Nissan as its victim and OracleCMS only as a co-victim, and
-    anchored a second OracleCMS incident that then could not merge with the first (each had an own event). Jetstar's
-    cancellations after the CrowdStrike outage record CrowdStrike in neither role and anchored CrowdStrike's card.
-    A supplier's own breach report that names no victim, or names its customers, with the supplier as vendor
-    (Teletrac Navman's, Instructure's) is an anchor.
+    It must record the supplier as its vendor or be the supplier's report (:func:`_supplier_report`): its recorded
+    victim, or its only victim. Nissan's April 2024 notice records Nissan as its victim and OracleCMS only as a
+    co-victim, and anchored a second OracleCMS incident that then could not merge with the first. Jetstar's
+    cancellations after the CrowdStrike outage record CrowdStrike in no role and anchored CrowdStrike's card. A
+    supplier's breach report naming its customers as victims (Cisco's, Instructure's) is an anchor.
     """
     if any(is_supplier(resolver, verdicts, supplier, v) for v in _event_vendors(conn, event_id)):
         return True
+    return _supplier_report(conn, resolver, verdicts, supplier, event_id)
+
+
+def _supplier_report(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str], supplier: str,
+                     event_id: str) -> bool:
+    """Whether the event is the supplier's own report: its recorded victim (the victim field) is the supplier, or,
+    with no victim field, the supplier is its only victim role."""
+    row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event_id,)).fetchone()
+    if row and row[0]:
+        return is_supplier(resolver, verdicts, supplier, row[0])
     return _only_victim(conn, resolver, verdicts, supplier, event_id)
 
 
@@ -444,15 +454,18 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
       nearest date into another incident. Incidents that share a customer event are one incident and are
       merged: into the one with the supplier's own event, else the earliest, keeping the stronger link per
       customer. Two incidents that each have the supplier's own event (Ivanti's separate campaigns), or
-      whose events a pair label rules different, are not merged; the shared event is reported.
+      whose events a pair label rules different, are not merged; the shared event is reported. An incident's
+      anchor counts as one of its events, and only an anchor on the supplier's own report (the supplier its only
+      victim) keeps an incident apart.
 
     * a link whose customer is the supplier's own organisation (``same_org``): a supplier is not its own customer.
       v7 recorded Nissan Oceania as the vendor of Nissan's own breach, and the per-customer split filed Nissan under
       a "Nissan Oceania" supplier incident;
     * incidents of one organisation under two spellings ("Oracle CMS", "OracleCMS"; ``key_for`` differs) are given
       one supplier key, so they are grouped (and merged when they share an event) like any other pair;
-    * a supplier event that can no longer anchor the incident (:func:`anchors_incident`) is replaced by a linked
-      event whose only victim is the supplier, else cleared. Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
+    * a supplier event that can no longer anchor the incident (:func:`anchors_incident`), or that lies farther
+      from the customers' events than a linked report of the supplier's own, is replaced by that report, else
+      cleared. Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
       Jetstar's cancellations after the CrowdStrike outage, which now record neither CrowdStrike nor Jetstar,
       anchored CrowdStrike's;
     * a link from a same-incident judgement whose customer event no longer records the customer in any role: the
@@ -531,24 +544,46 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         report["keys_joined"].append({"supplier_incident_id": sid, "supplier": inc["name"], "key": joined})
         inc["key"] = joined
 
+    from cyber_data_collector.dedup.supplier_victims import OWN_EVENT_WINDOW_DAYS, _gap
+
+    def date_of(event_id: str) -> Optional[str]:
+        row = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                           (event_id,)).fetchone()
+        return row[0] if row else None
+
     for sid, inc in sorted(incidents.items()):
-        now = resolve_event(conn, inc["event"]) if inc["event"] else None
-        if inc["event"] is None or (now is not None and anchors_incident(conn, resolver, verdicts, inc["name"], now)):
+        if inc["event"] is None:
             continue
+        now = resolve_event(conn, inc["event"])
+        valid = now is not None and anchors_incident(conn, resolver, verdicts, inc["name"], now)
         taken = {resolve_event(conn, i["event"]) or i["event"] for k, i in incidents.items() if k != sid and i["event"]}
         linked = [(ent, resolve_event(conn, ev) or ev) for ent, ev in conn.execute(
             "SELECT customer_entity_id, customer_event_id FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
             "AND customer_event_id IS NOT NULL ORDER BY customer_event_id", (sid,)).fetchall()]
-        # Only the supplier's own report (the supplier its only victim) takes over: a customer's event that names the
-        # supplier as vendor stays that customer's.
-        adopted = next((ev for ev in sorted({ev for _ent, ev in linked if ev not in taken})
-                        if _only_victim(conn, resolver, verdicts, inc["name"], ev)), None)
+        events = sorted({ev for _ent, ev in linked})
+
+        def distance(ev: str) -> int:
+            """Days from the event to the nearest other linked event (an undated one is the farthest)."""
+            gaps = [g for g in (_gap(date_of(ev), date_of(o)) for o in events if o != ev) if g is not None]
+            return min(gaps) if gaps else OWN_EVENT_WINDOW_DAYS + 1
+
+        # A linked report of the supplier's own takes over from an anchor that no longer is one, or from one farther
+        # from the customers' events: Cisco's October 2024 incident had been re-anchored on a Cisco advisory of
+        # September 2025. A customer's event that names the supplier as vendor is never adopted.
+        reports = sorted((ev for ev in events if ev not in taken
+                          and _supplier_report(conn, resolver, verdicts, inc["name"], ev)),
+                         key=lambda ev: (not _only_victim(conn, resolver, verdicts, inc["name"], ev), distance(ev), ev))
+        best = reports[0] if reports else None
+        if valid and (best is None or best == now or distance(best) >= distance(now)):
+            continue
+        adopted = best
         conn.execute("UPDATE SupplierIncidents SET supplier_event_id = ?, updated_at = ? WHERE supplier_incident_id = ?",
                      (adopted, _now(), sid))
-        for ent, ev in linked:
-            if adopted is not None and ev == adopted:      # the supplier's own event is not a customer's
-                conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
-                             "AND customer_entity_id = ?", (sid, ent))
+        if adopted is not None and _only_victim(conn, resolver, verdicts, inc["name"], adopted):
+            for ent, ev in linked:          # the supplier's own event is not a customer's
+                if ev == adopted:
+                    conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+                                 "AND customer_entity_id = ?", (sid, ent))
         report["own_events_replaced"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                               "was": inc["event"], "now": adopted})
         inc["event"] = adopted
@@ -567,6 +602,13 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         own = incidents[sid]["event"]
         return out | ({resolve_event(conn, own) or own} if own else set())
 
+    def own_report(sid: str) -> bool:
+        """The incident is anchored on the supplier's own report (the supplier its only victim), not on a
+        customer's event that names it as vendor."""
+        own = incidents[sid]["event"]
+        now = resolve_event(conn, own) if own else None
+        return now is not None and _only_victim(conn, resolver, verdicts, incidents[sid]["name"], now)
+
     changed = True
     while changed:
         changed = False
@@ -576,11 +618,17 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                 "WHERE customer_event_id IS NOT NULL ORDER BY supplier_incident_id").fetchall():
             if sid in incidents:
                 by_event[(incidents[sid]["key"], resolve_event(conn, event_id) or event_id)].append(sid)
+        # An incident's anchor is one of its events too: OracleCMS's own report, linked as a customer event of the
+        # incident anchored on the councils' report, was given an incident of its own by a later run.
+        for sid, inc in sorted(incidents.items()):
+            if inc["event"]:
+                by_event[(inc["key"], resolve_event(conn, inc["event"]) or inc["event"])].append(sid)
         for (key, event_id), sids in sorted(by_event.items()):
             sids = sorted(set(sids))
             if len(sids) < 2:
                 continue
-            a, b = sorted(sids[:2], key=lambda s: (incidents[s]["event"] is None, incidents[s]["first"] or "9999", s))
+            a, b = sorted(sids[:2], key=lambda s: (not own_report(s), incidents[s]["event"] is None,
+                                                   incidents[s]["first"] or "9999", s))
             ea, eb = events_of(a), events_of(b)
             conflicts = [(x, y) for x in ea for y in eb if x != y and "|".join(sorted((x, y))) in different]
             if conflicts and not (incidents[a]["event"] and incidents[b]["event"]):
@@ -593,7 +641,9 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                          "event": ev, "why": "a pair label rules it a different incident"} for sid, name, ev in dropped)
                     changed = True
                     break
-            blocked = ("both have the supplier's own event" if incidents[a]["event"] and incidents[b]["event"] else
+            # Two of the supplier's own reports are two incidents (Ivanti's separate campaigns); an anchor on a
+            # customer's event that names the supplier as vendor does not keep an incident apart.
+            blocked = ("both have the supplier's own event" if own_report(a) and own_report(b) else
                        "a pair label rules their events different" if conflicts else None)
             if blocked:
                 note = {"event": event_id, "incidents": [a, b], "why": blocked}
