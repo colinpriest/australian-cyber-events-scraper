@@ -1,4 +1,4 @@
 phase_order,delayed_peak_phase,phase,events,exposure_days,rate_per_100_entity_years
-0,immediate_0_90,Immediate 0-90 days,12,84277,5.200707191760504
-1,peak_91_180,Delayed peak 91-180 days,16,75878,7.701837159651019
-2,post_180,Post-180 days,92,670793,5.0094440460768075
+0,immediate_0_90,Immediate 0-90 days,17,86703,7.161516902529324
+1,peak_91_180,Delayed peak 91-180 days,18,77656,8.466184196971259
+2,post_180,Post-180 days,103,681042,5.523998519915072
