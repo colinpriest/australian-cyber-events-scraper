@@ -229,7 +229,7 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
                              (now,)).fetchone()[0]
         if label is None:
             return Result(eid, kind, "unchecked", f"event {now[:8]} has no AI-involvement label")
-        reason = ai_involvement.stale_judgements(conn).get(now)
+        reason = ai_involvement.stale_judgements(conn, events=[now]).get(now)
         return Result(eid, kind, "fail" if reason else "pass",
                       f"event {now[:8]} {label}: {reason}" if reason else f"event {now[:8]} {label}: current")
     if kind == "not_supplier_customer":

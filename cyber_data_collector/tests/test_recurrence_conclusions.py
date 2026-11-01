@@ -59,15 +59,18 @@ def test_non_significant_p_0132_ci_spanning_one():
     assert "Small count (6 in 91-180 days, 3 in 0-90 days" in text
 
 
-def test_opposite_direction_is_named():
+def test_a_direction_is_named_only_when_the_interval_excludes_one():
+    """Owner, 2026-11-02: a non-significant estimate stated with a direction reads as a finding."""
     one_sided = describe_contrast(Contrast("91-180 vs post-180", 0.8, 0.4, 1.6, 0.74, test="greater",
                                            events={"a": 20, "b": 50}))
-    assert "opposite direction to the hypothesis (lower, not higher)" in one_sided
+    assert "opposite direction" not in one_sided and "lower" not in one_sided
+    assert "no direction can be read from it" in one_sided
     two_sided = describe_contrast(Contrast("later vs early", 0.78, 0.35, 1.77, 0.557,
                                            hypothesis="greater", events={"a": 16, "b": 9}))
-    assert "opposite direction to the hypothesis (lower, not higher)" in two_sided
+    assert "opposite direction" not in two_sided and "about 22% lower" not in two_sided
     assert "do not reject equal rates" in two_sided
-    falling = describe_contrast(Contrast("response vs immediate", 1.2, 0.6, 2.4, 0.7, test="less"))
+    falling = describe_contrast(Contrast("response vs immediate", 1.6, 1.1, 2.4, 0.02, hypothesis="less"))
+    assert "about 60% higher" in falling
     assert "opposite direction to the hypothesis (higher, not lower)" in falling
     as_expected = describe_contrast(Contrast("x", 1.5, 0.8, 2.8, 0.1, test="greater"))
     assert "opposite direction" not in as_expected

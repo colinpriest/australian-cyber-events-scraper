@@ -160,9 +160,13 @@ def describe_contrast(contrast: Contrast, min_events: int = MIN_EVENTS) -> str:
         f"two-sided p {_p(c.p_value)}" if c.test == "two-sided"
         else f"one-sided p {_p(c.p_value)} (alternative: {_word(c.test)})"
     )
+    # The direction of an estimate the data cannot tell from no difference is not a finding (owner, 2026-11-02:
+    # non-significant results stated with a direction invite reading them as one), so it is named only when
+    # significant.
+    change = _change(c.rate_ratio) if c.is_significant else "no direction can be read from it"
     sentences = [
         f"{c.comparison}: rate ratio {c.rate_ratio:.2f} (95% CI {c.ci_low:.2f}-{c.ci_high:.2f}),"
-        f" {_change(c.rate_ratio)}; {test_label}."
+        f" {change}; {test_label}."
     ]
     if c.is_significant:
         verdict = f"Statistically significant at the 5% level: the data reject {_null(c.test)}."
@@ -177,7 +181,7 @@ def describe_contrast(contrast: Contrast, min_events: int = MIN_EVENTS) -> str:
             f"{', which includes 1' if c.ci_includes_one else ''}."
         )
     sentences.append(verdict)
-    if c.is_opposite:
+    if c.is_opposite and not c.ci_includes_one:
         sentences.append(
             f"The estimate is in the opposite direction to the hypothesis"
             f" ({_word('less' if c.expected == 'greater' else 'greater')}, not {_word(c.expected)})."
