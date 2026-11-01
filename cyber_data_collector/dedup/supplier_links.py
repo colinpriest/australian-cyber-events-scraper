@@ -441,7 +441,8 @@ def _event_names(conn: sqlite3.Connection, event_id: str) -> List[Tuple[Optional
            JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.deduplicated_event_id = ?""", (event_id,))]
 
 
-def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] = None) -> Dict[str, Any]:
+def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] = None,
+                    pair_labels: Optional[Sequence[Tuple[str, str]]] = None) -> Dict[str, Any]:
     """Undo drift in the stored supplier incidents before a run places anything (no commit; the caller's).
 
     Links are only ever added, so two kinds of drift outlived their cause:
@@ -468,6 +469,11 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
       cleared. Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
       Jetstar's cancellations after the CrowdStrike outage, which now record neither CrowdStrike nor Jetstar,
       anchored CrowdStrike's;
+    * a link to an event that a pair label (``evaluation/duplicate_labels.csv``, ``pair_labels`` in tests) rules a
+      different incident from another of the incident's events, when it records the supplier in no role and the
+      other does: Nissan's December 2023 attack on its own systems, linked to the OracleCMS incident by an old
+      co-victim attachment, is a different incident from Nissan's report of the April 2024 OracleCMS breach (owner,
+      2026-11-01);
     * a link from a same-incident judgement whose customer event no longer records the customer in any role: the
       event is no longer that customer's report (Jetstar under CrowdStrike). A judged link names the event's own
       victim entity; split and converted links name the customer as the reporting spelled it, so a spelling the
@@ -594,6 +600,18 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
             a, _, b = pair.partition("|")
             ra, rb = resolve_event(conn, a) or a, resolve_event(conn, b) or b
             different.add("|".join(sorted((ra, rb))))
+    from cyber_data_collector.dedup import label_contradictions
+
+    if pair_labels is None:
+        pair_labels = label_contradictions.labelled_different_pairs()
+    known = {r[0] for r in conn.execute("SELECT deduplicated_event_id FROM DeduplicatedEvents")}
+    pair_labels = [(a, b) for a, b in pair_labels if a in known and b in known]   # labels of this database
+    if pair_labels:
+        sides = label_contradictions.SideResolver(conn)
+        for a, b in pair_labels:
+            ra, rb = sides.resolve(a)[0], sides.resolve(b)[0]
+            if ra and rb and ra != rb:
+                different.add("|".join(sorted((ra, rb))))
 
     def events_of(sid: str) -> Set[str]:
         out = {resolve_event(conn, r[0]) or r[0] for r in conn.execute(
@@ -656,6 +674,31 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
             incidents.pop(b)
             changed = True
             break
+
+    def records_supplier(event_id: str, supplier: str) -> bool:
+        return any(is_supplier(resolver, verdicts, supplier, n) for _e, n in _event_names(conn, event_id)) or any(
+            is_supplier(resolver, verdicts, supplier, v) for v in _event_vendors(conn, event_id))
+
+    for sid, inc in sorted(incidents.items()):
+        evs = sorted(events_of(sid))
+        losers: Set[str] = set()
+        for i, x in enumerate(evs):
+            for y in evs[i + 1:]:
+                if "|".join(sorted((x, y))) not in different:
+                    continue
+                rx, ry = records_supplier(x, inc["name"]), records_supplier(y, inc["name"])
+                if rx != ry:
+                    losers.add(y if rx else x)
+        for ent, name, ev, basis in conn.execute(
+                "SELECT customer_entity_id, customer_name, customer_event_id, basis FROM SupplierIncidentLinks "
+                "WHERE supplier_incident_id = ? AND customer_event_id IS NOT NULL", (sid,)).fetchall():
+            now = resolve_event(conn, ev) or ev
+            if now in losers and basis != BASIS_LABEL:
+                conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+                             "AND customer_entity_id = ?", (sid, ent))
+                report["stale_links_removed"].append({
+                    "supplier_incident_id": sid, "supplier": inc["name"], "customer": name, "event": now,
+                    "why": "a pair label rules it a different incident from an event that records the supplier"})
 
     for sid, inc in list(incidents.items()):
         if _supported(conn, resolver, sid, inc["name"], inc["event"]):

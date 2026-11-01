@@ -514,6 +514,33 @@ def test_a_far_anchor_gives_way_to_the_suppliers_report_beside_its_customers():
     assert not sl.repair_registry(conn, resolver, {})["own_events_replaced"]                 # idempotent
 
 
+def test_a_link_a_pair_label_contradicts_leaves_the_incident_that_does_not_record_its_supplier():
+    """Owner 2026-11-01: Nissan's December 2023 attack and its report of the April 2024 OracleCMS breach are two
+    incidents; the December event, linked by an old co-victim attachment, is no OracleCMS customer event."""
+    conn = _separate([("dec", "Nissan", "2023-12-05", None), ("apr", "Nissan", "2024-04-12", "OracleCMS"),
+                      ("bal", "City of Ballarat", "2024-04-12", "OracleCMS")])
+    ids = {}
+    ids.update(_roles(conn, "ded-dec", [("Nissan", "victim"), ("Nissan Oceania", "victim")]))
+    ids.update(_roles(conn, "ded-apr", [("Nissan Australia", "victim"), ("OracleCMS", "vendor")]))
+    ids.update(_roles(conn, "ded-bal", [("City of Ballarat", "victim"), ("OracleCMS", "vendor")]))
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-o', 'oraclecms', NULL, 'OracleCMS', NULL, '2023-12-05', "
+                 "'2024-04-12', 'x', 'x')")
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-o', ?, ?, ?, ?, 0.9, 'jev', 'x', 'x')",
+                     [(ids["Nissan"], "Nissan", "ded-dec", "converted-attachment"),
+                      (ids["Nissan Australia"], "Nissan Australia", "ded-apr", "vendor-recorded"),
+                      (ids["City of Ballarat"], "City of Ballarat", "ded-bal", "judged-same-incident")])
+    exc = ve.add(conn, "not_supplier_incident", "ded-dec", "OracleCMS", note="owner: two incidents")
+    assert {r.exception_id: r.result for r in ve.check(conn)}[exc] == "fail"
+    resolver = EntityResolver(conn)
+    resolver.fit(["OracleCMS", "Nissan"])
+    report = sl.repair_registry(conn, resolver, {}, pair_labels=[("ded-dec", "ded-apr")])
+    assert [(r["customer"], r["event"]) for r in report["stale_links_removed"]] == [("Nissan", "ded-dec")]
+    assert {r.exception_id: r.result for r in ve.check(conn)}[exc] == "pass"
+    assert sorted(r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")) == [
+        "City of Ballarat", "Nissan Australia"]
+    assert not sl.repair_registry(conn, resolver, {}, pair_labels=[("ded-dec", "ded-apr")])["stale_links_removed"]
+
+
 def test_a_placed_event_stays_in_its_incident():
     """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
     conn, resolver = _accellion()

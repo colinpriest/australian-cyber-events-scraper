@@ -40,7 +40,7 @@ from cyber_data_collector.utils.timestamps import utc_now_iso
 
 KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month",
          "same_supplier_incident_as", "not_supplier_customer", "supplier_customers_once", "not_vendor",
-         "victim_size")
+         "victim_size", "not_supplier_incident")
 PAIR_KINDS = ("same_incident_as", "different_incident_from", "same_supplier_incident_as")
 
 SCHEMA = """
@@ -211,6 +211,13 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
                 twice.append(inc.vendor)
         return Result(eid, kind, "fail" if twice else "pass",
                       f"listed as two customers under {', '.join(twice)}" if twice else "listed once (or not listed)")
+    if kind == "not_supplier_incident":
+        # value: a supplier name; the event is linked to no incident of that supplier (as customer or own event).
+        mine = _supplier_incidents(conn, now)
+        names = dict(conn.execute("SELECT supplier_incident_id, supplier_name FROM SupplierIncidents")) if mine else {}
+        hits = sorted(f"{names.get(s)} ({s})" for s in mine if names.get(s) and names_match(conn, names[s], value_text))
+        return Result(eid, kind, "fail" if hits else "pass",
+                      f"event {now[:8]} in {', '.join(hits)}" if hits else f"event {now[:8]} in no such incident")
     if kind == "not_supplier_customer":
         from cyber_data_collector.dedup import multi_customer_incidents as mci
 
