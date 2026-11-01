@@ -457,8 +457,9 @@ def test_an_event_that_records_a_customer_is_not_the_suppliers_own():
     assert {r["supplier_incident_id"] for r in report["incidents_removed"]} == {"si-o2", "si-c"}
     assert [tuple(r) for r in conn.execute("SELECT supplier_incident_id, supplier_event_id FROM SupplierIncidents")
             ] == [("si-o1", "ded-ocms")]
+    # The supplier's own event is no customer; City of Sydney, named in the old anchor's reporting, goes with it.
     assert sorted(r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")) == [
-        "City of Ballarat", "City of Sydney"]                 # the supplier's own event is no customer
+        "City of Ballarat"]
     again = sl.repair_registry(conn, resolver, {})            # idempotent
     assert not (again["own_events_replaced"] or again["stale_links_removed"] or again["incidents_removed"])
     verdicts = {frozenset(("oraclecms", "oracle customer management solutions")): "same"}
@@ -504,13 +505,17 @@ def test_a_far_anchor_gives_way_to_the_suppliers_report_beside_its_customers():
                  "'2025-09-25', 'x', 'x')")
     conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-c', ?, ?, ?, 'vendor-recorded', NULL, 'rule', "
                      "'x', 'x')", [(ids["NAB"], "NAB", "ded-nab"), (ids["Vodafone"], "Vodafone", "ded-rep")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-c', ?, ?, NULL, 'customer-named', 0.9, ?, "
+                     "'x', 'x')", [(901, "Telstra", "jev"), (902, "Optus", "label")])
     resolver = EntityResolver(conn)
     resolver.fit(["Cisco"])
     verdicts = {}
     assert sl.anchors_incident(conn, resolver, verdicts, "Cisco", "ded-rep")      # its recorded victim is Cisco
     report = sl.repair_registry(conn, resolver, {})
     assert [(r["was"], r["now"]) for r in report["own_events_replaced"]] == [("ded-adv", "ded-rep")]
-    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidentLinks").fetchone()[0] == 2    # Vodafone kept
+    # Vodafone's link is kept; Telstra, named in the old anchor's reporting, goes with it; a label stays.
+    assert sorted(r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")) == [
+        "NAB", "Optus", "Vodafone"]
     assert not sl.repair_registry(conn, resolver, {})["own_events_replaced"]                 # idempotent
 
 
@@ -539,6 +544,22 @@ def test_a_link_a_pair_label_contradicts_leaves_the_incident_that_does_not_recor
     assert sorted(r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")) == [
         "City of Ballarat", "Nissan Australia"]
     assert not sl.repair_registry(conn, resolver, {}, pair_labels=[("ded-dec", "ded-apr")])["stale_links_removed"]
+
+
+def test_the_supplier_is_put_to_the_verification_against_the_names_its_anchor_records():
+    """2026-11-01: "Oracle" matched OracleCMS's own report ("Oracle Customer Management Solutions") on name shape and
+    anchored the Oracle Cloud incident on it; nothing ever asked whether they are one organisation."""
+    from cyber_data_collector.dedup import alias_learning as al
+
+    conn = _separate([("ocms", "Oracle Customer Management Solutions", "2024-04-04", "OracleCMS"),
+                      ("opt", "Optus", "2025-03-25", "Oracle")])
+    _roles(conn, "ded-ocms", [("Oracle Customer Management Solutions", "victim")])
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'Oracle Customer Management Solutions' "
+                 "WHERE deduplicated_event_id = 'ded-ocms'")
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-or', 'oracle', NULL, 'Oracle', 'ded-ocms', '2024-04-04', "
+                 "'2025-03-25', 'x', 'x')")
+    pairs = al.supplier_pair_proposals(conn)
+    assert ("Oracle", "Oracle Customer Management Solutions") in pairs
 
 
 def test_a_placed_event_stays_in_its_incident():
