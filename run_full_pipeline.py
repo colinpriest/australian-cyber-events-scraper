@@ -1076,6 +1076,15 @@ class UnifiedPipeline:
             # dashboards, the AI incident report, the recurrence page, the risk matrices) are
             # built from it into staging and moved into place together, only if the gate passes.
             # A blocked or failed publication leaves the previous outputs untouched.
+            # The stored judgements the outputs show (AI involvement, breach source) are brought up
+            # to date first; a failure publishes nothing (cyber_data_collector/publication/judgements.py).
+            if getattr(args, 'no_refresh_judgements', False):
+                logger.warning("Stored judgements NOT refreshed (--no-refresh-judgements): stale ones are "
+                               "published marked")
+            else:
+                from cyber_data_collector.publication.judgements import refresh_judgements
+                refresh_judgements(Path(self.db_path), run=run_step)
+
             from cyber_data_collector.publication.outputs import publish
             if getattr(args, 'skip_quality_gate', False):
                 logger.warning("Quality gate SKIPPED (--skip-quality-gate): publishing unchecked")
@@ -1180,33 +1189,9 @@ class UnifiedPipeline:
         elif args.discover_only:
             logger.info("Skipping classification phase (--discover-only specified)")
 
-        # Phase 2b: breach source and personal-information types (Jev, stored;
-        # only new or changed events are asked). Feeds the dashboard's OAIC
-        # breach-source comparison, which showed 0 while this never ran.
-        if (not args.dashboard_only and not args.discover_only and not args.classify_only
-                and not args.skip_classification):
-            from scripts import enrich_pii_and_source_category
-            try:
-                code = run_step(enrich_pii_and_source_category.main, ["--db", self.db_path])
-            except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
-                code = f"error: {exc}"
-            if code != 0:
-                message = f"Breach-source classification did not complete ({code})"
-                logger.error(message)
-                self.results['classification'].setdefault('errors', []).append(message)
-
-            # AI involvement (Jev: AI-attacker / AI-vulnerability / AI-misuse / No-AI,
-            # with all four probabilities), and a description of each AI incident for the
-            # AI incident report. Stored, so only new or changed events are asked.
-            from scripts import classify_ai_involvement
-            try:
-                code = run_step(classify_ai_involvement.main, ["--db", self.db_path])
-            except Exception as exc:  # noqa: BLE001 - recorded, run ends degraded
-                code = f"error: {exc}"
-            if code != 0:
-                message = f"AI-involvement classification did not complete ({code})"
-                logger.error(message)
-                self.results['classification'].setdefault('errors', []).append(message)
+        # Phase 2b, breach source and personal-information types and AI involvement (Jev, stored;
+        # only new or changed events are asked), runs at the start of the dashboard phase, so the
+        # outputs never show judgements made before the last merge or split.
 
         # Phase 2c: OAIC statistics (data.gov.au), validated; a failing extract
         # keeps the last valid dataset and the run ends degraded.
@@ -1376,6 +1361,9 @@ Examples:
                              'Refused work is left for the next run.')
     parser.add_argument('--skip-quality-gate', action='store_true',
                         help='Publish the dashboard even if blocking data-quality checks fail (logged)')
+    parser.add_argument('--no-refresh-judgements', action='store_true',
+                        help='Publish without first bringing the stored AI-involvement and breach-source '
+                             'judgements up to date (stale ones are shown marked)')
     parser.add_argument('--page-gate-report-only', action='store_true',
                         help='Discovery page gate logs what it would drop but drops nothing')
     parser.add_argument('--enrich-limit', type=int, default=500,

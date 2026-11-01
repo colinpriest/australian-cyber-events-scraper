@@ -1256,6 +1256,11 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   a pair label rules a different incident from the other incident's events leaves (NSW Education's July 2021
   attack, which had anchored the second Accellion incident). A placed event then stays in its incident, and the
   different-incident check sees stored members, not only those placed in the run.
+  A `split-customer` link lapses once neither its event nor the event it was split from (`SupplierLinkActions`)
+  records the supplier in any role or field: the split was made because that event recorded the supplier as
+  vendor. Ticketek's May 2024 breach had been split out of an event that recorded Outabox (another breach of that
+  month, mentioned as background) as its vendor, and stayed listed under Outabox after the vendor was corrected
+  (owner, 2026-11-02). Stake keeps DriveWealth: the event it was split from is DriveWealth's own.
 * **An incident needs something to support it, and a named supplier** (2026-11-01). The report of that morning
   still carried cards for Delta Air Lines, ESET, IDCare, Gridware, Xen Technologies and Microsoft, "Oracle CMS"
   beside OracleCMS, "RMS" beside RMS Cloud, and "IT service provider" and "Australian sole trader" as vendors. The
@@ -2822,8 +2827,10 @@ any of them changed and it does not apply until `calibrate` is rerun. Without a 
 `ai_involvement_basis`, the report and the dashboard say so. Each AI incident also gets
 a 2-4 sentence description from the fast OpenAI model, stored in
 `EventDescriptions` and rewritten only when its evidence changes. The step runs
-in every refresh after the breach-source step; it requires `TYPESAFE_API_KEY`
-(exit 2 without it) and exits 1 if any event could not be judged or described.
+after the breach-source step at the start of every publication (below), so the
+report never shows labels made before the last merge or split; it requires
+`TYPESAFE_API_KEY` (exit 2 without it) and exits 1 if any event could not be
+judged or described.
 
 **Stale labels and descriptions are marked, never shown as current.** Each
 label stores a hash of what it was decided on (evidence, question, models,
@@ -2870,6 +2877,20 @@ id, writes `dashboard/publication.json` (hashes of every output and of the input
 the database) and moves them all into place together. A blocked gate, a failing builder or
 a failed move leaves every previous output untouched, and a crash half-way is rolled back
 by the next run. The quality run records the snapshot id (`QualityRuns.snapshot_id`).
+
+**Stored judgements are brought up to date first** (`publication/judgements.py`, 2026-11-02).
+The AI incident report and the OAIC comparisons show stored per-event judgements (AI
+involvement and its descriptions; breach source and personal-information types), keyed
+on each event's evidence. A publication made after the supplier steps had merged and
+split events showed "1 listed incident has a stale label ... 41 not listed have a stale
+label". So every new publication (`publish_outputs.py`, and the dashboard phase of
+`run_full_pipeline.py`, including `--dashboard-only` and `--skip-classification`) runs
+`enrich_pii_and_source_category.py` and `classify_ai_involvement.py` before taking the
+snapshot; each asks only about events whose evidence changed, so on unchanged data it
+makes no model call. If either fails nothing is published (exit 2); `--no-refresh-judgements`
+publishes them as stored, stale ones marked. Reproducing a retained snapshot
+(`--snapshot-id`) refreshes nothing. The quality report counts stale AI labels
+(`staleness.ai_involvement_stale`, a warning).
 
 Retention: the last 5 published snapshots, the last 2 blocked / failed / analysis ones,
 and any snapshot an analysis result names; about 100 MB each, 0.8 to 1.2 GB in all.

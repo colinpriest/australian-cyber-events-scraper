@@ -4550,6 +4550,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("action", choices=["add", "list", "check", "root-cause", "revise"])
     p.add_argument("kind", nargs="?", help="victim | not_victim | same_incident_as | different_incident_from | incident_month "
                                             "| same_supplier_incident_as | not_supplier_customer | supplier_customers_once (A|B) | not_vendor "
+                                            "| victim_size (NAME=BAND) | not_supplier_incident | ai_label_current (value: current) "
                                             "(root-cause / revise: the exception id)")
     p.add_argument("event", nargs="?", help="the event id the owner reported (root-cause: the cause found; "
                                              "revise: the new kind)")
