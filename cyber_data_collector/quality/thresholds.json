@@ -58,6 +58,8 @@
     {"match": "staleness.roles_never_classified", "blocking": false, "why": "Trend only."},
     {"match": "staleness.roles_no_victim", "blocking": false,
      "why": "Incidents with no usable victim role (186 of 1,090 on 2026-10-29). Not a finished classification: `dedup_admin.py fill-victims` gives them one at its calibrated threshold. Trend; the remainder are events whose evidence names no victim."},
+    {"match": "staleness.ai_involvement_stale", "max": 0, "blocking": false,
+     "why": "AI-involvement labels decided on evidence that has since changed; the AI incident report marks them stale. The publication step re-judges them before its snapshot (2026-11-02, after the owner found the report stale), so any here means that refresh was skipped (--no-refresh-judgements) or failed."},
     {"match": "staleness.facts_stale", "max": 0, "blocking": false,
      "why": "Facts (records affected, type) computed for a different membership; refreshed by the next deduplication."},
     {"match": "calibration.policy", "require": "pass", "blocking": true,

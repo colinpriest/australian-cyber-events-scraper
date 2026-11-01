@@ -441,3 +441,22 @@ def test_cutoff_is_the_smallest_meeting_precision():
     chosen, _ = choose_cutoff(rows, precision=0.95, min_flags=3)
     # Flagging down to 0.8 is all right; reaching 0.7 lets a non-AI event in (5/6 < 0.95).
     assert chosen["cutoff"] == 0.8 and chosen["flagged_labelled"] == 5 and chosen["weighted_precision"] == 1.0
+
+
+def test_the_owners_stale_label_exception_fails_until_the_event_is_judged_again(conn):
+    """2026-11-02: the published AI incident report said a listed incident had a stale label."""
+    from cyber_data_collector.dedup import validation_exceptions as ve
+
+    _run(conn)
+    ve.ensure_schema(conn)
+    ve.add(conn, "ai_label_current", "d0", "current", note="owner: ai_incidents.html says it is stale")
+
+    def result():
+        [one] = ve.check(conn, record=False)
+        return one.result
+
+    assert result() == "pass"
+    conn.execute("UPDATE RawEvents SET raw_content = 'Services Australia: new text' WHERE raw_event_id = 'r0'")
+    assert result() == "fail"
+    _run(conn)
+    assert result() == "pass"

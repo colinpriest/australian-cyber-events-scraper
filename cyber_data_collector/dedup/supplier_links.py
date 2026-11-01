@@ -483,6 +483,26 @@ def _event_names(conn: sqlite3.Connection, event_id: str) -> List[Tuple[Optional
            JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.deduplicated_event_id = ?""", (event_id,))]
 
 
+def _records_supplier(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str], supplier: str,
+                      event_id: str) -> bool:
+    """Whether an event records the supplier in any role, its victim field or its vendor field."""
+    return any(is_supplier(resolver, verdicts, supplier, n) for _e, n in _event_names(conn, event_id)) or any(
+        is_supplier(resolver, verdicts, supplier, v) for v in _event_vendors(conn, event_id))
+
+
+def _split_origins(conn: sqlite3.Connection, event_id: str) -> Set[str]:
+    """The Active events a per-customer split of ``event_id`` came from (``SupplierLinkActions``): the event it was
+    split out of, or itself when it is the part that stayed."""
+    out: Set[str] = set()
+    for origin, new in conn.execute("SELECT deduplicated_event_id, new_event_id FROM SupplierLinkActions "
+                                    "WHERE action = 'split' AND (new_event_id = ? OR deduplicated_event_id = ?)",
+                                    (event_id, event_id)):
+        now = resolve_event(conn, origin)
+        if now:
+            out.add(now)
+    return out
+
+
 def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] = None,
                     pair_labels: Optional[Sequence[Tuple[str, str]]] = None) -> Dict[str, Any]:
     """Undo drift in the stored supplier incidents before a run places anything (no commit; the caller's).
@@ -520,7 +540,13 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
     * a link from a same-incident judgement whose customer event no longer records the customer in any role: the
       event is no longer that customer's report (Jetstar under CrowdStrike). A judged link names the event's own
       victim entity; split and converted links name the customer as the reporting spelled it, so a spelling the
-      event's roles do not share ("Department for Education, Children and Young People") is not evidence.
+      event's roles do not share ("Department for Education, Children and Young People") is not evidence;
+    * a ``split-customer`` link when neither its event nor the event it was split from (``SupplierLinkActions``)
+      records the supplier any longer, in any role or field. The split was made because that event recorded the
+      supplier as vendor; once role classification no longer does, the basis is gone. Ticketek's May 2024 breach
+      was split from an event that had recorded Outabox (another breach of that month, mentioned as background) as
+      its vendor, and stayed listed under Outabox after the vendor was corrected (owner, 2026-11-02). Stake keeps its
+      DriveWealth link: the event it was split from is DriveWealth's own.
 
     An incident is removed with its links once nothing supports it: not the supplier's own event, not a link from a
     label or a same-incident judgement, and no linked event that still records the supplier as its vendor. The
@@ -570,6 +596,23 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": incidents[sid]["name"],
                                               "customer": name, "event": now,
                                               "why": "the event no longer records the customer"})
+
+    for sid, entity_id, name, event_id in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
+            "WHERE basis = ? AND customer_event_id IS NOT NULL", (BASIS_SPLIT,)).fetchall():
+        inc = incidents.get(sid)
+        now = resolve_event(conn, event_id)
+        if inc is None or now is None:
+            continue
+        if any(_records_supplier(conn, resolver, verdicts, inc["name"], ev)
+               for ev in {now} | _split_origins(conn, event_id)):
+            continue
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                     (sid, entity_id))
+        report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                              "customer": name, "event": now,
+                                              "why": "neither the event nor the event it was split from records the "
+                                                     "supplier"})
 
     for sid, entity_id, name in conn.execute(
             "SELECT supplier_incident_id, customer_entity_id, customer_name FROM SupplierIncidentLinks").fetchall():
@@ -725,8 +768,7 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
             break
 
     def records_supplier(event_id: str, supplier: str) -> bool:
-        return any(is_supplier(resolver, verdicts, supplier, n) for _e, n in _event_names(conn, event_id)) or any(
-            is_supplier(resolver, verdicts, supplier, v) for v in _event_vendors(conn, event_id))
+        return _records_supplier(conn, resolver, verdicts, supplier, event_id)
 
     for sid, inc in sorted(incidents.items()):
         evs = sorted(events_of(sid))

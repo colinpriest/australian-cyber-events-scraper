@@ -1114,3 +1114,31 @@ def test_victim_size_exception():
     assert {r.exception_id: r.result for r in ve.check(conn)}[size] == "fail"
     conn.execute("UPDATE EntitiesV2 SET size_estimate = 'HUGE' WHERE entity_id = ?", (entity,))
     assert {r.exception_id: r.result for r in ve.check(conn)}[size] == "pass"
+
+
+def test_a_split_link_lapses_when_neither_its_event_nor_its_origin_records_the_supplier():
+    """2026-11-02: Ticketek's May 2024 breach was split per customer out of an event that recorded Outabox (another
+    breach of that month, mentioned as background) as vendor; the vendor was corrected and Ticketek stayed listed
+    under Outabox. Stake, split out of DriveWealth's own event, keeps its link though its event names no vendor."""
+    conn = _separate([("o", "Outabox", "2024-05-01", None), ("c", "ClubsNSW", "2024-05-02", "Outabox"),
+                      ("t", "Ticketek", "2024-05-01", None), ("tg", "TEG", "2024-05-01", None),
+                      ("d", "DriveWealth", "2024-03-01", None), ("s", "Stake", "2024-03-05", None)])
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, ?, NULL, ?, ?, ?, ?, 'x', 'x')",
+                     [("si-o", "outabox", "Outabox", "ded-o", "2024-05-01", "2024-05-02"),
+                      ("si-d", "drivewealth", "DriveWealth", "ded-d", "2024-03-01", "2024-03-05")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, ?, ?, ?, ?, NULL, 'rule', 'x', 'x')",
+                     [("si-o", 1, "ClubsNSW", "ded-c", "vendor-recorded"), ("si-o", 2, "Ticketek", "ded-t", "split-customer"),
+                      ("si-o", 3, "TEG", "ded-tg", "split-customer"), ("si-d", 4, "Stake", "ded-s", "split-customer")])
+    conn.executemany("INSERT INTO SupplierLinkActions VALUES (?, 'split', ?, ?, NULL, '{}', 'test', '2026-10-31')",
+                     [("a1", "ded-t", "ded-tg"), ("a2", "ded-d", "ded-s")])
+    conn.commit()
+    resolver = EntityResolver(conn)
+    resolver.fit(["Outabox", "DriveWealth"])
+    report = sl.repair_registry(conn, resolver, {}, pair_labels=[])
+    assert sorted((r["customer"], r["why"]) for r in report["stale_links_removed"]) == [
+        ("TEG", "neither the event nor the event it was split from records the supplier"),
+        ("Ticketek", "neither the event nor the event it was split from records the supplier")]
+    assert sorted(tuple(r) for r in conn.execute(
+        "SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks")) == [
+        ("si-d", "Stake"), ("si-o", "ClubsNSW")]
+    assert not sl.repair_registry(conn, resolver, {}, pair_labels=[])["stale_links_removed"]     # idempotent

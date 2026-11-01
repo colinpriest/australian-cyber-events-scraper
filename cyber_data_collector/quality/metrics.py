@@ -565,6 +565,19 @@ def measure_staleness(conn: sqlite3.Connection, thresholds: Thresholds, today: d
         out["staleness.facts_stale"] = Measurement(
             value=len(stale), detail="active events whose facts were computed for a different membership",
             examples=stale[:EXAMPLES])
+
+    from cyber_data_collector.processing import ai_involvement
+
+    if not ai_involvement.has_schema(conn):
+        out["staleness.ai_involvement_stale"] = Measurement.unavailable(
+            "DeduplicatedEvents has no AI-involvement columns (scripts/classify_ai_involvement.py adds them)")
+    else:
+        stale_ai = ai_involvement.stale_judgements(conn)
+        out["staleness.ai_involvement_stale"] = Measurement(
+            value=len(stale_ai),
+            detail=f"{len(stale_ai)} active event(s) whose AI-involvement label was decided on evidence that has "
+                   "since changed, or whose re-judgement failed (the publication step re-judges them first)",
+            examples=[f"{e}: {r}" for e, r in sorted(stale_ai.items())[:EXAMPLES]])
     return out
 
 

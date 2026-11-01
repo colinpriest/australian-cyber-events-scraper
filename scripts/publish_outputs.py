@@ -15,6 +15,13 @@ workbooks are built from it and moved into place together, only if the gate
 passes. ``dashboard/publication.json`` records the snapshot, the quality run
 and a hash of every output.
 
+Before a new snapshot is taken, the stored per-event judgements the outputs show
+(AI involvement and the AI incident descriptions; breach source and personal-
+information types) are brought up to date
+(``cyber_data_collector/publication/judgements.py``): only events whose evidence
+changed are asked again. If that fails nothing is published (exit 2);
+``--no-refresh-judgements`` publishes the judgements as stored, stale ones marked.
+
 Exit codes: 0 published; 1 blocked by the quality gate; 2 failed (nothing replaced).
 """
 
@@ -30,6 +37,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cyber_data_collector.publication import snapshot as snapshots  # noqa: E402
+from cyber_data_collector.publication.judgements import JudgementRefreshFailed, refresh_judgements  # noqa: E402
 from cyber_data_collector.publication.outputs import PublicationBlocked, PublicationError, publish  # noqa: E402
 from cyber_data_collector.utils.config_manager import resolve_db_path  # noqa: E402
 
@@ -58,6 +66,9 @@ def main(argv=None) -> int:
     parser.add_argument("--snapshot-id", default=None,
                         help="build from this retained snapshot (an id, or 'latest-published') instead of a new one")
     parser.add_argument("--skip-quality-gate", action="store_true", help="publish without the gate (logged)")
+    parser.add_argument("--no-refresh-judgements", action="store_true",
+                        help="do not bring the stored AI-involvement and breach-source judgements up to date first "
+                             "(stale ones are published marked stale)")
     parser.add_argument("--list", action="store_true", help="list the retained snapshots and exit")
     parser.add_argument("--prune", action="store_true", help="apply the retention policy and exit")
     args = parser.parse_args(argv)
@@ -72,6 +83,15 @@ def main(argv=None) -> int:
         print(f"Expired {len(expired)} snapshot cop{'y' if len(expired) == 1 else 'ies'}; "
               f"{store.disk_bytes() / 1e6:.0f} MB retained")
         return 0
+    if not args.snapshot_id:
+        if args.no_refresh_judgements:
+            logging.warning("Stored judgements NOT refreshed (--no-refresh-judgements): stale ones are published marked")
+        else:
+            try:
+                refresh_judgements(db_path)
+            except JudgementRefreshFailed as exc:
+                print(f"FAILED, nothing replaced: {exc}", file=sys.stderr)
+                return 2
     try:
         result = publish(db_path, Path(args.out_dir), Path(args.risk_matrix_dir),
                          analysis_dir=Path(args.analysis_dir), skip_gate=args.skip_quality_gate,

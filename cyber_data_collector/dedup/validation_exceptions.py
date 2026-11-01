@@ -25,7 +25,9 @@ Kinds:
   report (:mod:`multi_customer_incidents`);
 * ``supplier_customers_once``: ``value`` is ``A|B``, two names of one customer: no supplier incident linking the
   event lists them as two customers;
-* ``not_vendor``: the event records no vendor (column or role) that is ``value``.
+* ``not_vendor``: the event records no vendor (column or role) that is ``value``;
+* ``ai_label_current``: the event's AI-involvement label was decided on its current evidence, question, models and
+  cut-off (``ai_involvement.stale_judgements``); ``value`` is unused (``current``). An unjudged event is unchecked.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ from cyber_data_collector.utils.timestamps import utc_now_iso
 
 KINDS = ("victim", "not_victim", "same_incident_as", "different_incident_from", "incident_month",
          "same_supplier_incident_as", "not_supplier_customer", "supplier_customers_once", "not_vendor",
-         "victim_size", "not_supplier_incident")
+         "victim_size", "not_supplier_incident", "ai_label_current")
 PAIR_KINDS = ("same_incident_as", "different_incident_from", "same_supplier_incident_as")
 
 SCHEMA = """
@@ -218,6 +220,18 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         hits = sorted(f"{names.get(s)} ({s})" for s in mine if names.get(s) and names_match(conn, names[s], value_text))
         return Result(eid, kind, "fail" if hits else "pass",
                       f"event {now[:8]} in {', '.join(hits)}" if hits else f"event {now[:8]} in no such incident")
+    if kind == "ai_label_current":
+        from cyber_data_collector.processing import ai_involvement
+
+        if not ai_involvement.has_schema(conn):
+            return Result(eid, kind, "unchecked", "no AI-involvement columns")
+        label = conn.execute("SELECT ai_involvement FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                             (now,)).fetchone()[0]
+        if label is None:
+            return Result(eid, kind, "unchecked", f"event {now[:8]} has no AI-involvement label")
+        reason = ai_involvement.stale_judgements(conn).get(now)
+        return Result(eid, kind, "fail" if reason else "pass",
+                      f"event {now[:8]} {label}: {reason}" if reason else f"event {now[:8]} {label}: current")
     if kind == "not_supplier_customer":
         from cyber_data_collector.dedup import multi_customer_incidents as mci
 

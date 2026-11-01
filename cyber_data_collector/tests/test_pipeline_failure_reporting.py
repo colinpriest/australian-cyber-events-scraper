@@ -14,7 +14,8 @@ import run_full_pipeline as rfp
 
 def _args(**over):
     base = dict(dashboard_only=False, re_enrich=False, classify_only=False, discover_only=False,
-                skip_classification=True, continue_on_error=False, out_dir="dashboard")
+                skip_classification=True, continue_on_error=False, out_dir="dashboard",
+                no_refresh_judgements=True)          # judgement refresh: test_publication_judgements.py
     base.update(over)
     return SimpleNamespace(**base)
 

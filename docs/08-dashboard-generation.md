@@ -175,6 +175,12 @@ If any required table is missing, the phase fails with a `RuntimeError`.
 The dashboard phase (`run_full_pipeline.py`, `run_full_pipeline.py --dashboard-only`,
 `python scripts/publish_outputs.py`) is `cyber_data_collector/publication/outputs.py:publish`:
 
+0. **Judgements.** Before a new snapshot, the stored per-event judgements the outputs show
+   (breach source and personal-information types; AI involvement and the AI incident
+   descriptions) are brought up to date (`publication/judgements.py`): each step asks only
+   about events whose evidence changed since it was judged. A failure publishes nothing
+   (`--no-refresh-judgements` publishes them as stored, stale ones marked; a rebuild from a
+   retained snapshot refreshes nothing).
 1. **Snapshot.** The database is copied with the SQLite backup API (one consistent
    view, committed WAL data included), checked (`PRAGMA quick_check`), hashed and named
    `snap-<time>-<12 hex of sha-256>`. A compressed copy and a manifest are retained in
