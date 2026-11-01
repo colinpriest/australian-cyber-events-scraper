@@ -786,7 +786,7 @@ def test_apply_links_customers_and_never_attaches_or_merges(conn, tmp_path, merg
     # Idempotent: nothing is created or changed the second time.
     again = _apply(conn, tmp_path, rows=[("victim", "e1|3", "affected"), ("same_incident", "e1|e2", "same")])
     assert again["written"] == {"incidents_created": 0, "incidents_updated": 0, "links_created": 0,
-                                "links_updated": 0}
+                                "links_updated": 0, "named_links_removed": 0}
 
 
 def test_a_pair_labelled_different_is_not_one_supplier_incident(conn, tmp_path, merge_events):

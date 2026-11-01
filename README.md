@@ -1284,6 +1284,12 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   live copy: the second OracleCMS card, CrowdStrike's and Sonic HealthPlus's go. Incidents of different suppliers
   that hold one customer event are one attack and one card naming both (`multi_customer_incidents.attack_groups`:
   VIQ Solutions and e24 Technologies, Progress Software and Ipswitch); the registry keeps both incidents.
+  "Oracle" matched OracleCMS's report ("Oracle Customer Management Solutions") on name shape and anchored the
+  Oracle Cloud incident on it, and the councils' report (vendor "Oracle CMS") was filed under Oracle because the
+  first stored incident by id won. The supplier is now put to the alias verification against the names its anchor
+  records (Oracle / OracleCMS: `different`), a spelling joins the closest supplier name ("Oracle CMS" is
+  "OracleCMS"), a cleared anchor takes the named-only customers judged with it, and a named-only link whose
+  customer a full run plans under another incident, and which the incident's own evidence no longer names, leaves.
 * **Australian customers only.** A customer with its own Active event passed the calibrated scope check. A customer
   only named in the reporting (Accellion's global list: Kroger, Stanford University, the Reserve Bank of New
   Zealand) is listed only when its researched entity profile (`jurisdiction`, one Perplexity lookup per

@@ -218,6 +218,9 @@ class Registry:
                                               stored=True)
         self.links: Dict[Tuple[str, int], Link] = {}
         self.stored_links: Dict[Tuple[str, int], Tuple] = {}
+        # Incident -> the customers (entity ids and lower-case names) its events' evidence names this run, accepted
+        # or not (:func:`plan_links`): what a named-only link of that incident can rest on.
+        self.named_in: Dict[str, Set] = defaultdict(set)
         # Where each customer event is linked already (supplier key, resolved event) -> incident: a placed
         # event stays in its incident, so a later run cannot file it under a second incident of the supplier.
         self.placed: Dict[Tuple[str, str], str] = {}
@@ -238,10 +241,10 @@ class Registry:
         key = self.resolver.key_for(supplier)
         if any(inc.supplier_key == key for inc in self.incidents.values()):
             return key
-        for inc in sorted(self.incidents.values(), key=lambda i: i.supplier_incident_id):
-            if same_org(self.resolver, inc.supplier_name, supplier):
-                return inc.supplier_key
-        return key
+        matches = [(inc.supplier_name, inc.supplier_key) for inc in self.incidents.values()
+                   if same_org(self.resolver, inc.supplier_name, supplier)]
+        best = closest_name(supplier, [name for name, _key in matches])
+        return next(k for name, k in sorted(matches) if name == best) if best is not None else key
 
     def incident(self, supplier: str, event_date: Optional[str], anchor: str,
                  supplier_event: Optional[str] = None, apart=None) -> Incident:
@@ -310,10 +313,35 @@ class Registry:
         elif old.customer_event_id is None and link.customer_event_id is not None:
             old.customer_event_id = link.customer_event_id
 
-    def write(self) -> Dict[str, int]:
-        """Upsert incidents and links; a row changes only when what it records changes."""
+    def write(self, prune_named: bool = False) -> Dict[str, int]:
+        """Upsert incidents and links; a row changes only when what it records changes.
+
+        ``prune_named``: this run planned every customer only named in the reporting (no limit, no failed
+        judgement). A stored named-only link (not a label's) has moved, and is removed, when this run planned that
+        customer under another incident and nothing the incident's own events say names it any more. The councils
+        of OracleCMS's report, filed under Oracle by an earlier run, stayed there after the report was filed under
+        OracleCMS: links were only ever added. A customer named under two suppliers (Stanford University under
+        Accellion and Instructure) stays under both; a named link no run re-plans is left alone.
+        """
         now = _now()
         counts = {"incidents_created": 0, "incidents_updated": 0, "links_created": 0, "links_updated": 0}
+        if prune_named:
+            counts["named_links_removed"] = 0
+            planned_in = defaultdict(set)
+            for sid, ent in self.links:
+                planned_in[ent].add(sid)
+            for key, row in list(self.stored_links.items()):
+                if key in self.links or row[3] is not None or row[4] != BASIS_NAMED or row[6] == "label":
+                    continue
+                if not planned_in.get(key[1], set()) - {key[0]}:
+                    continue
+                if key[1] in self.named_in.get(key[0], ()) or (row[2] or "").strip().lower() in self.named_in.get(
+                        key[0], ()):
+                    continue
+                self.conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+                                  "AND customer_entity_id = ?", key)
+                del self.stored_links[key]
+                counts["named_links_removed"] += 1
         for inc in self.incidents.values():
             dates = sorted(d for d in {*inc.dates, inc.first_date, inc.last_date} if d)
             first, last = (dates[0], dates[-1]) if dates else (None, None)
@@ -381,6 +409,20 @@ def _event_vendors(conn: sqlite3.Connection, event_id: str) -> List[str]:
     return names + [r[0] for r in conn.execute(
         """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
            WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (event_id,))]
+
+
+def _compact(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def closest_name(name: str, candidates: Sequence[str]) -> Optional[str]:
+    """The candidate nearest ``name``: the same letters ignoring spaces and punctuation first ("Oracle CMS" is
+    "OracleCMS"), then the nearest in length, then the first in order. ``same_org`` joined "Oracle CMS" with both
+    "Oracle" and "OracleCMS", and the first stored incident by id (Oracle's) took the councils' report."""
+    if not candidates:
+        return None
+    target = _compact(name)
+    return min(sorted(candidates), key=lambda c: (_compact(c) != target, abs(len(_compact(c)) - len(target))))
 
 
 def is_supplier(resolver, verdicts: Dict[frozenset, str], supplier: str, name: str) -> bool:
@@ -541,8 +583,9 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
 
     first_name: Dict[str, str] = {}
     for sid, inc in sorted(incidents.items(), key=lambda kv: (kv[1]["key"], kv[0])):
-        joined = next((k for k, n in first_name.items()
-                       if k != inc["key"] and sv.same_org(resolver, n, inc["name"])), None)
+        matches = {n: k for k, n in first_name.items() if k != inc["key"] and sv.same_org(resolver, n, inc["name"])}
+        closest = closest_name(inc["name"], list(matches))
+        joined = matches[closest] if closest is not None else None
         if joined is None:
             first_name.setdefault(inc["key"], inc["name"])
             continue
@@ -924,6 +967,12 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
 
     victim_ok = sv.accepted(vscores.final, labels, sv.KIND_VICTIM, vcut)
     flat = {c.subject_id: c for cs in g.candidates.values() for c in cs}
+    for cand in flat.values():
+        if cand.dedup_id in incident_of:
+            named = registry.named_in[incident_of[cand.dedup_id].supplier_incident_id]
+            named.add(cand.name.strip().lower())
+            if cand.entity_id is not None:
+                named.add(cand.entity_id)
     for sid, how in sorted(victim_ok.items()):
         cand = flat.get(sid)
         if cand is None or cand.dedup_id not in incident_of:

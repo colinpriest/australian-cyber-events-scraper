@@ -1582,7 +1582,8 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
     if not apply:
         conn.rollback()     # planning may have created entity rows for named customers; keep nothing
         return result
-    result["written"] = registry.write()
+    # Every named customer is planned afresh unless the run was limited or a victim judgement failed.
+    result["written"] = registry.write(prune_named=not limit and not vscores.failed)
     result["applied"] = True
     result["multi_customer_events"] = multi_customer_events(conn)
     conn.commit()
