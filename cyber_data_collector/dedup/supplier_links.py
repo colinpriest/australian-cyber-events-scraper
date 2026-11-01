@@ -466,7 +466,8 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
       one supplier key, so they are grouped (and merged when they share an event) like any other pair;
     * a supplier event that can no longer anchor the incident (:func:`anchors_incident`), or that lies farther
       from the customers' events than a linked report of the supplier's own, is replaced by that report, else
-      cleared. Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
+      cleared; the customers only named in its reporting go with it (a run re-adds those still supported).
+      Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
       Jetstar's cancellations after the CrowdStrike outage, which now record neither CrowdStrike nor Jetstar,
       anchored CrowdStrike's;
     * a link to an event that a pair label (``evaluation/duplicate_labels.csv``, ``pair_labels`` in tests) rules a
@@ -590,6 +591,11 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                 if ev == adopted:
                     conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
                                  "AND customer_entity_id = ?", (sid, ent))
+        # Customers only named in the reporting were gathered and judged with the old anchor's evidence: six
+        # OracleCMS councils were filed under the Oracle Cloud incident anchored on OracleCMS's report. They go
+        # with it; a run re-adds those its incident's current evidence supports.
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_event_id IS NULL "
+                     "AND basis = ? AND decided_by != 'label'", (sid, BASIS_NAMED))
         report["own_events_replaced"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                               "was": inc["event"], "now": adopted})
         inc["event"] = adopted

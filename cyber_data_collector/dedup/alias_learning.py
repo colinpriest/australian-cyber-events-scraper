@@ -188,7 +188,8 @@ def supplier_pair_proposals(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
     breached, and the supplier as its own customer ("PricewaterhouseCoopers (PwC)" under PwC). Nothing compared
     them: no structure rule paired them across the whole table. Within one incident they are proposed when they
     share a distinctive word, one abbreviates the other, or they share a word and their profiles agree
-    (:func:`entity_profiles.agreement`). Only a proposal: the verification decides.
+    (:func:`entity_profiles.agreement`). The supplier is also paired with the names its own event records, which
+    decide whether that event anchors its incident. Only a proposal: the verification decides.
     """
     from cyber_data_collector.dedup.entity_merge import _PLACE_TOKENS, _tokens, distinctive_core
     from cyber_data_collector.dedup.entity_profiles import domain_of, profile_for
@@ -206,8 +207,18 @@ def supplier_pair_proposals(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
     if not {"SupplierIncidents", "SupplierIncidentLinks"} <= tables:
         return []
     names_of: Dict[str, Set[str]] = defaultdict(set)
-    for sid, vendor in conn.execute("SELECT supplier_incident_id, supplier_name FROM SupplierIncidents"):
+    anchor_names: Dict[str, Set[str]] = defaultdict(set)
+    for sid, vendor, own in conn.execute(
+            "SELECT supplier_incident_id, supplier_name, supplier_event_id FROM SupplierIncidents"):
         names_of[sid].add(vendor)
+        if own:
+            # The supplier against the names its own event records: "Oracle" matched OracleCMS's report ("Oracle
+            # Customer Management Solutions") on name shape alone and anchored the Oracle Cloud incident on it.
+            anchor_names[vendor] |= {n for row in conn.execute(
+                """SELECT victim_organization_name, vendor_organization_name FROM DeduplicatedEvents
+                   WHERE deduplicated_event_id = ?""", (own,)) for n in row if n} | {r[0] for r in conn.execute(
+                """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id)
+                   WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('victim', 'vendor')""", (own,))}
     for sid, name in conn.execute("SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks"):
         if name:
             names_of[sid].add(name)
@@ -220,6 +231,12 @@ def supplier_pair_proposals(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
                     or ((set(_tokens(a)) & set(_tokens(b))) - set(_PLACE_TOKENS)
                         and profiles_place_together(a, b))):
                 pairs.add((a, b))
+    for vendor, names in anchor_names.items():
+        for name in names:
+            if name.lower() != vendor.lower() and (distinctive_core(vendor) & distinctive_core(name)
+                                                   or abbreviation_fits(vendor, name)
+                                                   or abbreviation_fits(name, vendor)):
+                pairs.add(tuple(sorted((vendor, name))))
     return sorted(pairs)
 
 
