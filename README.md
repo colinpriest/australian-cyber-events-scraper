@@ -1272,9 +1272,14 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   April 2024 notice, which records OracleCMS beside Nissan as a co-victim, anchored a second OracleCMS card (an
   incident with the supplier's own event is never merged with another), and Jetstar's cancellations after the
   CrowdStrike outage, which record neither CrowdStrike nor Jetstar, anchored CrowdStrike's. An event anchors a
-  supplier's incident only when it records the supplier as its vendor or as its only victim
-  (`supplier_links.anchors_incident`); the repair replaces an anchor that no longer does by a linked event whose
-  only victim is the supplier, else clears it, and a co-victim supplier is no customer of the event it sits in. A
+  supplier's incident only when it records the supplier as its vendor, or is the supplier's own report (its
+  recorded victim is the supplier) (`supplier_links.anchors_incident`); the repair replaces an anchor that no
+  longer does, or that lies farther from the customers' events than a linked report of the supplier's own, by
+  that report, else clears it (Cisco's October 2024 incident had been re-anchored on a Cisco advisory of
+  September 2025), and a co-victim supplier is no customer of the event it sits in. An incident's anchor counts
+  as one of its events when incidents sharing an event are merged, and only two anchors on the supplier's own
+  reports keep incidents apart (OracleCMS's own report, a customer event of one incident, had become another's
+  anchor). A
   same-incident-judged link whose event no longer records the customer in any role is removed (Jetstar). On the
   live copy: the second OracleCMS card, CrowdStrike's and Sonic HealthPlus's go. Incidents of different suppliers
   that hold one customer event are one attack and one card naming both (`multi_customer_incidents.attack_groups`:

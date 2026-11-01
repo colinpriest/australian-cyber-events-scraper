@@ -466,6 +466,54 @@ def test_an_event_that_records_a_customer_is_not_the_suppliers_own():
     assert not sl.anchors_incident(conn, resolver, verdicts, "OracleCMS", "ded-nis")
 
 
+def test_an_incident_anchored_on_the_suppliers_own_report_absorbs_one_anchored_on_a_customers_event():
+    """2026-11-01: OracleCMS's own report (55f96bee), a customer event of the incident anchored on the councils'
+    report, was given an incident of its own by the next run, and the report showed two OracleCMS cards."""
+    conn = _separate([("lat", "Latrobe City Council", "2024-04-04", "OracleCMS"),
+                      ("ocms", "Oracle Customer Management Solutions", "2024-04-04", None)])
+    ids = {}
+    ids.update(_roles(conn, "ded-lat", [("Latrobe City Council", "victim"), ("City of Boroondara", "victim"),
+                                        ("OracleCMS", "vendor")]))
+    ids.update(_roles(conn, "ded-ocms", [("Oracle Customer Management Solutions", "victim")]))
+    _verdict(conn, "OracleCMS", "Oracle Customer Management Solutions", "same")
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, 'oraclecms', NULL, 'OracleCMS', ?, '2024-04-04', "
+                     "'2024-04-04', 'x', 'x')", [("si-1", "ded-lat"), ("si-2", "ded-ocms")])
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-1', ?, 'Oracle Customer Management Solutions', "
+                 "'ded-ocms', 'judged-same-incident', 0.98, 'jev', 'x', 'x')",
+                 (ids["Oracle Customer Management Solutions"],))
+    resolver = EntityResolver(conn)
+    resolver.fit(["OracleCMS"])
+    report = sl.repair_registry(conn, resolver, {})
+    assert [(r["kept"], r["merged"]) for r in report["incidents_merged"]] == [("si-2", "si-1")]
+    assert [tuple(r) for r in conn.execute("SELECT supplier_incident_id, supplier_event_id FROM SupplierIncidents")
+            ] == [("si-2", "ded-ocms")]
+
+
+def test_a_far_anchor_gives_way_to_the_suppliers_report_beside_its_customers():
+    """2026-11-01: Cisco's October 2024 incident (NAB and Vodafone) was re-anchored on a Cisco advisory of September
+    2025 once its own breach report, which lists Vodafone beside Cisco, stopped counting as an anchor."""
+    conn = _separate([("adv", "Cisco", "2025-09-25", None), ("rep", "Cisco", "2024-10-14", None),
+                      ("nab", "Vodafone", "2024-10-14", "Cisco")])
+    ids = {}
+    ids.update(_roles(conn, "ded-adv", [("Cisco", "victim")]))
+    ids.update(_roles(conn, "ded-rep", [("Cisco", "victim"), ("Vodafone", "victim")]))
+    ids.update(_roles(conn, "ded-nab", [("Vodafone", "victim"), ("NAB", "victim"), ("Cisco", "vendor")]))
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'Cisco' "
+                 "WHERE deduplicated_event_id IN ('ded-adv', 'ded-rep')")
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-c', 'cisco', NULL, 'Cisco', 'ded-adv', '2024-10-14', "
+                 "'2025-09-25', 'x', 'x')")
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-c', ?, ?, ?, 'vendor-recorded', NULL, 'rule', "
+                     "'x', 'x')", [(ids["NAB"], "NAB", "ded-nab"), (ids["Vodafone"], "Vodafone", "ded-rep")])
+    resolver = EntityResolver(conn)
+    resolver.fit(["Cisco"])
+    verdicts = {}
+    assert sl.anchors_incident(conn, resolver, verdicts, "Cisco", "ded-rep")      # its recorded victim is Cisco
+    report = sl.repair_registry(conn, resolver, {})
+    assert [(r["was"], r["now"]) for r in report["own_events_replaced"]] == [("ded-adv", "ded-rep")]
+    assert conn.execute("SELECT COUNT(*) FROM SupplierIncidentLinks").fetchone()[0] == 2    # Vodafone kept
+    assert not sl.repair_registry(conn, resolver, {})["own_events_replaced"]                 # idempotent
+
+
 def test_a_placed_event_stays_in_its_incident():
     """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
     conn, resolver = _accellion()
