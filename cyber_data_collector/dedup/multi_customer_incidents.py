@@ -81,6 +81,8 @@ class Incident:
     outside: List[str] = field(default_factory=list)      # named customers placed outside Australia
     unplaced: List[str] = field(default_factory=list)     # named customers not yet checked (name or jurisdiction)
     description_current: bool = True                      # False: written from older evidence
+    also_vendors: List[str] = field(default_factory=list)   # the attack filed under other suppliers too
+    supplier_incident_ids: List[str] = field(default_factory=list)   # every registry incident shown on this card
 
 
 def _event(conn: sqlite3.Connection, event_id: Optional[str]):
@@ -159,6 +161,49 @@ def _one(conn: sqlite3.Connection, verdicts: Dict[frozenset, str], a: str, b: st
     return names_match(conn, a, b) or verdicts.get(frozenset((a.strip().lower(), b.strip().lower()))) in kinds
 
 
+def attack_groups(conn: sqlite3.Connection) -> List[List[Tuple[str, str, Optional[str], Optional[str]]]]:
+    """The registry's incidents grouped into attacks: ``[(incident id, supplier, supplier event, first date)]`` per
+    attack, first the incident with the supplier's own event, then the one with the most links, then the earliest.
+
+    Incidents of different suppliers that hold one customer event are one attack: an event is one incident. VIQ
+    Solutions and its Australian arm e24 Technologies, Progress Software and its MOVEit unit Ipswitch, and the My
+    Rewards platform and its owner Pegasus Group each had a card for the same attack. The registry keeps both
+    suppliers' incidents (each supplier's own links and judgements); the report shows one card naming both.
+    """
+    from cyber_data_collector.dedup.supplier_links import resolve_event
+
+    rows = {r[0]: r for r in conn.execute(
+        "SELECT supplier_incident_id, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
+    parent = {sid: sid for sid in rows}
+
+    def root(sid: str) -> str:
+        while parent[sid] != sid:
+            parent[sid] = parent[parent[sid]]
+            sid = parent[sid]
+        return sid
+
+    links: Dict[str, int] = dict(conn.execute(
+        "SELECT supplier_incident_id, COUNT(*) FROM SupplierIncidentLinks GROUP BY supplier_incident_id"))
+    holder: Dict[str, str] = {}
+    for sid, event_id in conn.execute("SELECT supplier_incident_id, customer_event_id FROM SupplierIncidentLinks "
+                                      "WHERE customer_event_id IS NOT NULL ORDER BY supplier_incident_id"):
+        if sid not in rows:
+            continue
+        event_id = resolve_event(conn, event_id) or event_id
+        if event_id in holder:
+            a, b = root(holder[event_id]), root(sid)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+        else:
+            holder[event_id] = sid
+    groups: Dict[str, List] = {}
+    for sid in rows:
+        groups.setdefault(root(sid), []).append(rows[sid])
+    return [sorted(g, key=lambda r: (r[2] is None or _event(conn, r[2]) is None, -links.get(r[0], 0), r[3] or "9999",
+                                     r[0]))
+            for _root, g in sorted(groups.items())]
+
+
 def find(conn: sqlite3.Connection) -> List[Incident]:
     """Every supplier incident with two or more distinct Australian customers, ordered by vendor and date; each
     incident's customers in name order, with the named customers left out (outside Australia, or not checked)."""
@@ -172,26 +217,37 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
     judged_descriptive = name_judgement.descriptive_names(conn)
     judged = name_judgement.stored_probabilities(conn)
     verdicts = pair_verdicts(conn)
-    out: List[Incident] = []
-    for sid, vendor, own_event, first, _last in conn.execute(
-            "SELECT supplier_incident_id, supplier_name, supplier_event_id, first_date, last_date FROM SupplierIncidents"):
+
+    def named(vendor: Optional[str]) -> bool:
         # An attack is listed under a named supplier: "IT service provider" and "Australian sole trader" were
         # recorded as vendors and each got a card. A supplier name judged a description, or not yet judged, is not.
         vendor_key = " ".join((vendor or "").split()).lower()
-        if (not vendor or descriptive_names.is_listed(described, vendor) or vendor_key in judged_descriptive
-                or vendor_key not in judged):
+        return bool(vendor) and not (descriptive_names.is_listed(described, vendor)
+                                     or vendor_key in judged_descriptive or vendor_key not in judged)
+
+    out: List[Incident] = []
+    for group in attack_groups(conn):
+        sid, vendor, own_event, first = group[0]
+        vendors = []
+        for _sid, name, _own, _first in group:
+            if named(name) and not any(_one(conn, verdicts, name, v, ("same",)) for v in vendors):
+                vendors.append(name)
+        if not vendors:
             continue
+        vendor, also_vendors = vendors[0], vendors[1:]
+        sids = [g[0] for g in group]
         customers: List[Customer] = []
         outside: List[str] = []
         unplaced: List[str] = []
         rows = conn.execute(
             "SELECT customer_name, customer_entity_id, customer_event_id, basis FROM SupplierIncidentLinks "
-            "WHERE supplier_incident_id = ?", (sid,)).fetchall()
+            f"WHERE supplier_incident_id IN ({','.join('?' * len(sids))})", sids).fetchall()
         # A customer with its own event first, so the other names of one customer join it.
         rows.sort(key=lambda r: (_event(conn, r[2]) is None, (r[0] or "").casefold()))
         for name, entity_id, event_id, basis in rows:
             key = " ".join((name or "").split()).lower()
-            if (not name or _one(conn, verdicts, name, vendor, ("same",)) or descriptive_names.is_listed(described, name)
+            if (not name or any(_one(conn, verdicts, name, v, ("same",)) for v in [vendor, *also_vendors])
+                    or descriptive_names.is_listed(described, name)
                     or key in judged_descriptive or is_organisation_list(name)):
                 continue
             ev = _event(conn, event_id)
@@ -232,7 +288,8 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
         customers.sort(key=lambda c: c.name.casefold())
         text, current = stored_description(conn, sid, description_state(conn, sid))
         out.append(Incident(sid, vendor, attack_date, text or "", customers, precision,
-                            sorted(outside, key=str.casefold), sorted(unplaced, key=str.casefold), current))
+                            sorted(outside, key=str.casefold), sorted(unplaced, key=str.casefold), current,
+                            sorted(also_vendors, key=str.casefold), sids))
     out.sort(key=lambda i: (i.vendor.casefold(), i.attack_date or "9999", i.supplier_incident_id))
     return out
 

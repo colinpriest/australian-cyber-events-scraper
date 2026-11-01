@@ -381,6 +381,9 @@ def test_a_supplier_is_not_its_own_customer_and_an_unanchored_incident_goes():
                       ("si-o2", 12, "Latrobe City Council", "ded-t", "judged-same-incident"),
                       ("si-o2", 13, "City of Sydney", None, "customer-named"),
                       ("si-d", 14, "Woolworths", None, "customer-named")])
+    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name) VALUES (12, 'Latrobe City Council')")
+    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "VALUES ('ded-t', 12, 'affected_customer')")              # the judged event records Latrobe
     report = sl.repair_registry(conn, resolver, {})
     assert [r["customer"] for r in report["own_organisation_links_removed"]] == ["Accellion Inc"]
     assert [r["supplier"] for r in report["keys_joined"]] in (["Oracle CMS"], ["OracleCMS"])
@@ -392,6 +395,75 @@ def test_a_supplier_is_not_its_own_customer_and_an_unanchored_incident_goes():
     assert registry.key("Oracle CMS") == registry.key("OracleCMS")
     again = sl.repair_registry(conn, resolver, {})                         # idempotent
     assert not (again["own_organisation_links_removed"] or again["keys_joined"] or again["incidents_removed"])
+
+
+def _roles(conn, event, roles):
+    """Replace an event's roles with ``[(name, role)]`` (no victim field)."""
+    conn.execute("DELETE FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ?", (event,))
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = NULL WHERE deduplicated_event_id = ?",
+                 (event,))
+    ids = {}
+    for name, role in roles:
+        row = conn.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?", (name,)).fetchone()
+        ids[name] = row[0] if row else conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES (?)",
+                                                    (name,)).lastrowid
+        conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                     "VALUES (?, ?, ?)", (event, ids[name], role))
+    return ids
+
+
+def test_an_event_that_records_a_customer_is_not_the_suppliers_own():
+    """2026-11-01: Nissan's April 2024 notice records OracleCMS beside Nissan as a victim, and anchored a second
+    OracleCMS card; Jetstar's cancellations after the CrowdStrike outage, which record neither CrowdStrike nor
+    Jetstar, anchored CrowdStrike's card (the owner: the outage was not an attack). A supplier's own report that
+    names its customers as victims and the supplier as vendor still anchors."""
+    conn = _separate([("lat", "Latrobe City Council", "2024-04-04", "OracleCMS"),
+                      ("ocms", "Oracle Customer Management Solutions", "2024-04-04", None),
+                      ("nis", "Nissan", "2024-04-12", None), ("bal", "City of Ballarat", "2024-04-12", "OracleCMS"),
+                      ("jet", "Jetstar", "2024-07-19", None)])
+    ids = {}
+    for event, roles in (("lat", [("Latrobe City Council", "victim")]),
+                         ("ocms", [("Oracle Customer Management Solutions", "victim")]),
+                         ("nis", [("Nissan", "victim"), ("OracleCMS", "victim")]),
+                         ("bal", [("City of Ballarat", "victim")]), ("jet", [("Australian Government", "affected_customer")])):
+        ids.update(_roles(conn, f"ded-{event}", roles))
+    ids["Jetstar"] = conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('Jetstar')").lastrowid
+    ids["City of Sydney"] = conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('City of Sydney')").lastrowid
+    ids["Bunnings"] = conn.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('Bunnings')").lastrowid
+    _verdict(conn, "OracleCMS", "Oracle Customer Management Solutions", "same")
+    conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = NULL "
+                 "WHERE deduplicated_event_id = 'ded-lat'")         # Latrobe's notice names no supplier
+    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'Nissan' "
+                 "WHERE deduplicated_event_id = 'ded-nis'")
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, ?, NULL, ?, ?, ?, ?, 'x', 'x')",
+                     [("si-o1", "oraclecms", "OracleCMS", "ded-lat", "2024-04-04", "2024-04-12"),
+                      ("si-o2", "oraclecms", "OracleCMS", "ded-nis", "2024-04-12", "2024-04-12"),
+                      ("si-c", "crowdstrike", "CrowdStrike", "ded-jet", "2024-07-19", "2024-07-19")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, ?, ?, ?, ?, 0.9, ?, 'x', 'x')",
+                     [("si-o1", ids[n], n, e, b, d) for n, e, b, d in (
+                         ("City of Ballarat", "ded-bal", "judged-same-incident", "jev"),
+                         ("Oracle Customer Management Solutions", "ded-ocms", "judged-same-incident", "jev"),
+                         ("City of Sydney", None, "customer-named", "jev"))]
+                     + [("si-o2", ids["City of Sydney"], "City of Sydney", None, "customer-named", "jev"),
+                        ("si-c", ids["Jetstar"], "Jetstar", "ded-jet", "judged-same-incident", "jev"),
+                        ("si-c", ids["Bunnings"], "Bunnings", None, "customer-named", "label")])
+    resolver = EntityResolver(conn)
+    resolver.fit(["OracleCMS", "CrowdStrike"])
+    report = sl.repair_registry(conn, resolver, {})
+    assert {(r["supplier_incident_id"], r["now"]) for r in report["own_events_replaced"]} == {
+        ("si-o1", "ded-ocms"), ("si-o2", None), ("si-c", None)}
+    assert [(r["customer"], r["why"]) for r in report["stale_links_removed"]] == [
+        ("Jetstar", "the event no longer records the customer")]
+    assert {r["supplier_incident_id"] for r in report["incidents_removed"]} == {"si-o2", "si-c"}
+    assert [tuple(r) for r in conn.execute("SELECT supplier_incident_id, supplier_event_id FROM SupplierIncidents")
+            ] == [("si-o1", "ded-ocms")]
+    assert sorted(r[0] for r in conn.execute("SELECT customer_name FROM SupplierIncidentLinks")) == [
+        "City of Ballarat", "City of Sydney"]                 # the supplier's own event is no customer
+    again = sl.repair_registry(conn, resolver, {})            # idempotent
+    assert not (again["own_events_replaced"] or again["stale_links_removed"] or again["incidents_removed"])
+    verdicts = {frozenset(("oraclecms", "oracle customer management solutions")): "same"}
+    assert sl.anchors_incident(conn, resolver, verdicts, "OracleCMS", "ded-bal")    # its vendor, beside a customer
+    assert not sl.anchors_incident(conn, resolver, verdicts, "OracleCMS", "ded-nis")
 
 
 def test_a_placed_event_stays_in_its_incident():
@@ -554,6 +626,25 @@ def test_an_attack_is_listed_only_under_a_named_supplier(monkeypatch):
     descriptive_names.ensure_schema(conn)
     descriptive_names.add(conn, "Accellion", reason="test: as if a description")
     assert mci.find(conn) == []
+
+
+def test_one_attack_filed_under_two_suppliers_is_one_card(monkeypatch):
+    """2026-11-01: VIQ Solutions and its arm e24 Technologies each had a card for the court transcription breach;
+    Progress Software and Ipswitch, My Rewards and Pegasus Group the same. One customer event is one incident."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci, name_judgement
+
+    conn, resolver = _accellion()
+    sl.repair_registry(conn, resolver, {})
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-k', 'kiteworks', NULL, 'Kiteworks', NULL, '2021-01-01', "
+                 "'2021-01-01', 'x', 'x')")
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-k', 2, 'ASIC', 'ded-a', 'vendor-recorded', NULL, "
+                 "'rule', 'x', 'x')")
+    monkeypatch.setattr(name_judgement, "stored_probabilities", lambda conn: {
+        "accellion": 0.95, "kiteworks": 0.95, "asic": 0.9, "transport for nsw": 0.9})
+    [inc] = mci.find(conn)
+    assert (inc.vendor, inc.also_vendors) == ("Accellion", ["Kiteworks"])
+    assert sorted(inc.supplier_incident_ids) == ["si-a", "si-k"]
+    assert [c.name for c in inc.customers].count("ASIC") == 1                     # ASIC once
 
 
 def test_each_attack_gets_a_description_rewritten_only_when_its_evidence_changes():

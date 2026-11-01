@@ -80,7 +80,9 @@ def build_html(incidents: List[mci.Incident], generated: str) -> str:
         note = (f'<div class="meta" style="margin-top:6px">Not listed: {"; ".join(left_out)}.</div>'
                 if left_out else "")
         cards.append(
-            f'<div class="card"><div class="vendor">{html.escape(inc.vendor)}</div>'
+            f'<div class="card"><div class="vendor">{html.escape(inc.vendor)}'
+            + (f' <span class="meta">(also filed under {html.escape(", ".join(inc.also_vendors))})</span>'
+               if inc.also_vendors else "") + "</div>"
             f'<div class="meta">attack dated {html.escape(mci.attack_label(inc))} &middot; '
             f"{len(inc.customers)} Australian customers affected</div>"
             f'<div class="desc">{html.escape(description)}</div>'
