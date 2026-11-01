@@ -792,8 +792,8 @@ acronym's own name with a qualifier ("TEG Pty Ltd") stays global (`contextual_al
 with merges and splits): `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`,
 `same_supplier_incident_as` (two events linked to one supplier incident and no other) and `not_supplier_customer`
 (the supplier report does not list an organisation under the event's supplier incident), `supplier_customers_once`
-(`A|B`: two names of one customer are not listed as two customers) and `not_vendor` (the event records no vendor
-that is the organisation).
+(`A|B`: two names of one customer are not listed as two customers), `not_vendor` (the event records no vendor
+that is the organisation) and `not_supplier_incident` (the event is in no supplier incident of that supplier).
 `dedup_admin.py validation-exception add KIND EVENT VALUE --note ...`, `list`, `check` (exit 1 when any fails) and
 `root-cause ID TEXT`. The quality report counts the failures (`acceptance.exceptions.failures`, a warning). They are
 tests, never inputs: run `check` before and after changing any dedup, victim or supplier algorithm.
