@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.build_recurrence_dashboard import DEFAULT_OUT as DEFAULT_DASHBOARD_OUT
 from scripts.build_recurrence_dashboard import build_html as build_recurrence_dashboard
+from scripts import recurrence_summary
 from scripts.recurrence_conclusions import (
     DELAYED_PEAK_PERIODS,
     U_SHAPE_PERIODS,
@@ -2731,7 +2732,17 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
             **history_unknown_info, "rows unknown by table (InputHistoryUnknown)":
                 {table: sum(reasons.values()) for table, reasons in reconstruction.unknown.items()}}
 
+    # The page's five questions, answered from parsimonious models (scripts/recurrence_summary.py): the full
+    # adjusted model above has more parameters than its repeats support.
+    fine_cuts = recurrence_summary.CANDIDATE_CUTS
+    executive = recurrence_summary.executive_summary(
+        spells, fits, adjusted_coef, data_quality["verified incident-date precision"], tie_sensitivity,
+        replicates=args.bootstrap, seed=args.seed,
+        fine=recurrence_summary.table_from_split(
+            adjusted_poisson_split(spells, (0.0, *fine_cuts, math.inf), censor_date), fine_cuts))
+
     summary = {
+        "executive_summary": executive,
         "snapshot_id": analysis_input.snapshot.snapshot_id,
         "snapshot_sha256": analysis_input.snapshot.sha256,
         "as_known_at": reconstruction.as_known_at if reconstruction else None,
@@ -2788,6 +2799,10 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         size_comparison,
     )
     summary["conclusions"] = conclusions
+    report_path = out_dir / "recurrent_timing_report.md"
+    report_lines = report_path.read_text(encoding="utf-8").split("\n")
+    report_path.write_text("\n".join([report_lines[0], "", *recurrence_summary.markdown_section(executive),
+                                       *report_lines[1:]]), encoding="utf-8")
     (out_dir / "analysis_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     analysis_input.record(out_dir, analysis="repeat-event timing", censor_date=censor_date.isoformat(),

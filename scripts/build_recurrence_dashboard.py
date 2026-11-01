@@ -4,8 +4,10 @@
 a Markdown report, CSVs and diagnostic plots - and the bandings are only
 interesting side by side: whether a delayed early peak is real depends on how
 the first six months are cut. This page puts every run in one self-contained
-HTML file: an overview of the headline tests across runs, then each run's full
-report with its plots embedded inline.
+HTML file. It opens with an executive summary - five questions and their answers,
+generated from the main run's ``executive_summary`` (``scripts/recurrence_summary.py``)
+- and keeps the headline tests across runs and each run's full report, with its
+plots embedded inline, folded away under "Detailed results".
 
 It reads the analysis outputs only; it never touches the database, so it is
 cheap to rebuild after rerunning the analysis.
@@ -79,6 +81,8 @@ def render_report(run_dir: Path) -> str:
         figures[key] = _image_tag(png, match.group("label"))
         return f"\n{key}\n"
 
+    # The executive summary is shown once, at the top of the page.
+    text = re.sub(r"^## Executive Summary\n.*?(?=^## )", "", text, flags=re.MULTILINE | re.DOTALL)
     text = PLOT_LINE.sub(_swap, text)
     # Python-Markdown passes raw HTML through, and reports quote organisation
     # names and event titles: escape markup before converting.
@@ -171,6 +175,23 @@ def overview_rows(analysis_dir: Path) -> List[Dict[str, str]]:
     return rows
 
 
+def executive_summary_html(summary: Dict[str, Any]) -> str:
+    """The five questions and their generated answers, or a note that the main run predates them."""
+    executive = summary.get("executive_summary") or {}
+    questions = executive.get("questions") or []
+    if not questions:
+        return ('<p class="warn">The main run has no executive summary: rerun '
+                "<code>scripts/analyze_recurrent_timing.py</code>.</p>")
+    cards = []
+    for q in questions:
+        flag = ""
+        if q.get("key") == "adequacy":
+            flag = ' ok' if q.get("adequate") else ' bad'
+        cards.append(f'<div class="q{flag}"><h3>{html.escape(q["question"])}</h3>'
+                     f'<p>{html.escape(q["answer"])}</p></div>')
+    return '<div class="exec">' + "".join(cards) + "</div>"
+
+
 def build_html(analysis_dir: Path, published_snapshot_id: Optional[str] = None) -> str:
     runs = [(f, label) for f, label in RUNS if (analysis_dir / f / "recurrent_timing_report.md").exists()]
     if not runs:
@@ -233,28 +254,44 @@ figure img {{ max-width:100%; height:auto; background:#fff; border:1px solid var
 figcaption {{ color:var(--muted); font-size:13px; }}
 code {{ font-size:0.9em; }}
 .warn {{ color:#b42318; }}
+.exec {{ display:grid; gap:12px; margin:16px 0 8px; }}
+.q {{ background:var(--card); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:6px; padding:10px 16px; }}
+.q.ok {{ border-left-color:#2e7d32; }}
+.q.bad {{ border-left-color:#b42318; }}
+.q h3 {{ font-size:1rem; margin:0 0 4px; }}
+.q p {{ margin:0; }}
+details.more {{ margin-top:28px; }}
+details.more > summary {{ cursor:pointer; font-size:1.1rem; font-weight:600; padding:6px 0; border-bottom:1px solid var(--line); }}
 </style>
 </head>
 <body>
 <main>
 <h1>Repeat cyber-event timing</h1>
-<p class="muted">Is the risk of a further attack on the same organisation constant over time since the last one?
-Generated {generated} from <code>{html.escape(str(analysis_dir))}</code>.</p>
+<p class="muted">How does the risk of a further attack on the same organisation change with time since the last one,
+and with the organisation's size? Generated {generated} from <code>{html.escape(str(analysis_dir))}</code>.</p>
 
+<h2>Executive summary</h2>
+<p class="muted">Answered from parsimonious models (few parameters per repeat); a result that is not
+statistically significant is reported as no evidence, without a direction.</p>
+{executive_summary_html(main_summary)}
+{notes_block}
+
+<details class="more"><summary>Detailed results</summary>
 <h2>Headline tests across bandings</h2>
 <p class="muted">p-values test constant elapsed-time risk; the adjusted model controls for calendar period, prior event
-number, organisation size, sector, entity kind and records affected.</p>
+number, organisation size, sector, entity kind and records affected - more parameters than the repeats support (see the
+executive summary), so read its p-values as a sensitivity check.</p>
 <div class="scroll"><table>
 <thead><tr><th>Run</th><th>Censor date</th><th>Repeats</th><th>Unadjusted p</th><th>Adjusted p</th><th>Weibull vs exponential p</th><th>Best AIC</th><th>Data snapshot</th></tr></thead>
 <tbody>{overview}</tbody>
 </table></div>
-{notes_block}
 <p class="muted">{extended_line}</p>
 <p class="muted">Delayed 91-180 day peak, adjusted model with 0-90 / 91-180 / post-180 day phases (main run):</p>
 <ul class="muted">{peak}</ul>
 
 <div class="tabs">{tabs}</div>
 {panels}
+</details>
 </main>
 <script>
 document.querySelectorAll('.tab').forEach(function (btn) {{

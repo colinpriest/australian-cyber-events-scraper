@@ -60,7 +60,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from cyber_data_collector.processing.breach_source import event_state
 
@@ -425,8 +425,10 @@ def _stale_reason(stored_hash: Optional[str], error: Optional[str], state: Mappi
     return None
 
 
-def stale_judgements(conn: sqlite3.Connection, period: Any = None) -> Dict[str, str]:
-    """``{event: reason}`` for labelled active incidents (in ``period``) whose label is out of date.
+def stale_judgements(conn: sqlite3.Connection, period: Any = None,
+                     events: Optional[Sequence[str]] = None) -> Dict[str, str]:
+    """``{event: reason}`` for labelled active incidents (in ``period``; only ``events`` when given) whose label is
+    out of date.
 
     Out of date: the last re-judgement failed, or the current evidence,
     question, models, cut-off or label differ from what the label was decided
@@ -445,9 +447,13 @@ def stale_judgements(conn: sqlite3.Connection, period: Any = None) -> Dict[str, 
     cutoff = calibration["cutoff"] if calibration else None
     labels = labelled_events()
     out: Dict[str, str] = {}
+    only = ""
+    if events is not None:
+        only = f" AND de.deduplicated_event_id IN ({','.join('?' * len(events))})" if events else " AND 0"
+        params = [*params, *events]
     for event_id, stored_hash, error in conn.execute(
             f"SELECT de.deduplicated_event_id, {optional} FROM DeduplicatedEvents de "
-            f"WHERE {where} AND de.ai_involvement IS NOT NULL", params).fetchall():
+            f"WHERE {where} AND de.ai_involvement IS NOT NULL{only}", params).fetchall():
         reason = _stale_reason(stored_hash, error, event_state(conn, event_id), cutoff, labels.get(event_id))
         if reason:
             out[event_id] = reason

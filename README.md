@@ -3303,6 +3303,27 @@ runs used different snapshots or not the published one. The analysis scripts no
 longer write the page themselves (`--dashboard-out PATH` still does, for a one-off
 look; `python scripts/build_recurrence_dashboard.py` builds it alone).
 
+**Executive summary, from parsimonious models** (`scripts/recurrence_summary.py`, owner review 2026-11-02). The
+page opens with five questions and one generated answer each, from the main run's `executive_summary` in
+`analysis_summary.json`; the headline tests and the per-banding reports are folded under "Detailed results". The
+full adjusted model carries 26 parameters for about 140 repeats (5.4 per parameter) and 11 of its terms are not
+identified (standard error above 5 on the log scale: an UNKNOWN-size indicator with no repeats; sector and entity
+kind both separating government), so its non-significant contrasts, which still came with a direction, are not
+used for the answers. The answers come from Poisson models with prior event number and calendar period (5
+parameters) plus:
+
+| Question | Model and test |
+|---|---|
+| Is the data adequate? | repeats (at least 100), repeats per parameter of the models used (at least 10), the full model's parameters and unidentified terms, the share of unverified incident dates, a tie policy that flips the verdict |
+| Best splits for time bands | every banding of up to 4 cuts from 30, 60, 90, 120, 150, 180, 270, 365, 545, 730, 1095, 1460, 2190 days with at least 10 repeats per band, scored by BIC (penalty log repeats) with size, prior event number and calendar period as offsets; a **search-adjusted p-value** from rerunning the whole search on repeats simulated under a constant rate (searching 400 bandings beats a constant rate by chance) |
+| Delayed peak 91-120 days | the adjusted rate in that window against all other elapsed time, exact conditional (binomial) test, one-sided; not tested below 10 repeats in the window |
+| Best fit | AIC of the constant rate, the selected banding and the Weibull, log-normal, log-logistic and generalised-gamma fits, every spell |
+| Does size predict recurrence? | size as three steps SMALL < MEDIUM < LARGE < HUGE **constrained to one sign** (monotone; both directions fitted, the better kept), with the selected bands; p-value against no size effect by **parametric bootstrap** under the null (the constrained likelihood ratio is not chi-squared); UNKNOWN-size spells left out and counted |
+
+A result that is not significant is reported as "no evidence", never with a direction, here and in every
+conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
+is in the opposite direction" only when its 95% interval excludes 1).
+
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
 
