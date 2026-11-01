@@ -562,6 +562,43 @@ def test_the_supplier_is_put_to_the_verification_against_the_names_its_anchor_re
     assert ("Oracle", "Oracle Customer Management Solutions") in pairs
 
 
+def test_a_spelling_joins_the_closest_supplier_and_unplanned_named_links_are_pruned():
+    """2026-11-01: the councils' report records its vendor as "Oracle CMS", which matches both "Oracle" and
+    "OracleCMS" by name shape; the first stored incident (Oracle's) took it, and its named councils stayed there."""
+    assert sl.closest_name("Oracle CMS", ["Oracle", "OracleCMS"]) == "OracleCMS"
+    assert sl.closest_name("Oracle CMS", []) is None
+    conn = _separate([("x", "Optus", "2025-03-25", "Oracle")])
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, ?, NULL, ?, NULL, NULL, NULL, 'x', 'x')",
+                     [("si-a", "oracle", "Oracle"), ("si-b", "oraclecms", "OracleCMS")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES ('si-a', ?, ?, NULL, 'customer-named', 0.9, ?, "
+                     "'x', 'x')", [(1, "City of Monash", "jev"), (2, "Knox City Council", "label")])
+
+    class Resolver:
+        def key_for(self, name):
+            return name.lower()
+
+    import cyber_data_collector.dedup.supplier_victims as svm
+    registry = sl.Registry(conn, Resolver())
+    original = svm.same_org
+    svm.same_org = lambda r, a, b: "oracle" in a.lower() and "oracle" in b.lower()
+    try:
+        assert registry.key("Oracle CMS") == "oraclecms"
+    finally:
+        svm.same_org = original
+    conn.execute("INSERT INTO SupplierIncidentLinks VALUES ('si-a', 3, 'Optus', NULL, 'customer-named', 0.9, 'jev', "
+                 "'x', 'x')")
+    registry = sl.Registry(conn, Resolver())
+    registry.link(sl.Link("si-b", 1, "City of Monash", None, "customer-named", 0.9, "jev"))   # Monash moved
+    registry.link(sl.Link("si-b", 2, "Knox City Council", None, "customer-named", 0.9, "jev"))
+    registry.link(sl.Link("si-b", 3, "Optus", None, "customer-named", 0.9, "jev"))
+    registry.named_in["si-a"].add("optus")          # Oracle's own evidence still names Optus: it stays there too
+    counts = registry.write(prune_named=True)
+    assert counts["named_links_removed"] == 1    # Monash leaves Oracle; Knox's label and unplanned Optus stay
+    assert sorted(r[:2] for r in conn.execute("SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks")
+                  ) == [("si-a", "Knox City Council"), ("si-a", "Optus"), ("si-b", "City of Monash"),
+                        ("si-b", "Knox City Council"), ("si-b", "Optus")]
+
+
 def test_a_placed_event_stays_in_its_incident():
     """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
     conn, resolver = _accellion()
