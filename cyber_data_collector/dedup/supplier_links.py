@@ -383,6 +383,54 @@ def _event_vendors(conn: sqlite3.Connection, event_id: str) -> List[str]:
            WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (event_id,))]
 
 
+def is_supplier(resolver, verdicts: Dict[frozenset, str], supplier: str, name: str) -> bool:
+    """Whether ``name`` is the supplier itself: one organisation by name (``same_org``), or ruled ``same`` in a
+    supplier incident's context (``alias_learning.verify_supplier_pairs``: "Oracle Customer Management Solutions"
+    for OracleCMS). ``verdicts`` is :func:`multi_customer_incidents.pair_verdicts`."""
+    from cyber_data_collector.dedup import supplier_victims as sv
+
+    if not name:
+        return False
+    return (sv.same_org(resolver, supplier, name)
+            or verdicts.get(frozenset((supplier.strip().lower(), name.strip().lower()))) == "same")
+
+
+def anchors_incident(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str], supplier: str,
+                     event_id: str) -> bool:
+    """Whether an event can be the supplier's own event (the anchor of its incident).
+
+    It must record the supplier as its vendor, or as its only victim: an event that records another organisation as
+    a victim is that organisation's report with the supplier merely beside it, unless the supplier is its vendor. Nissan's April 2024 notice records Nissan as its victim and OracleCMS only as a co-victim, and
+    anchored a second OracleCMS incident that then could not merge with the first (each had an own event). Jetstar's
+    cancellations after the CrowdStrike outage record CrowdStrike in neither role and anchored CrowdStrike's card.
+    A supplier's own breach report that names no victim, or names its customers, with the supplier as vendor
+    (Teletrac Navman's, Instructure's) is an anchor.
+    """
+    if any(is_supplier(resolver, verdicts, supplier, v) for v in _event_vendors(conn, event_id)):
+        return True
+    return _only_victim(conn, resolver, verdicts, supplier, event_id)
+
+
+def _only_victim(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str], supplier: str,
+                 event_id: str) -> bool:
+    """Whether the supplier is the event's only recorded victim (its victim field and its victim roles)."""
+    from cyber_data_collector.dedup import supplier_victims as sv
+
+    row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event_id,)).fetchone()
+    victims = ([row[0]] if row and row[0] else []) + [v[1] for v in sv.event_victims(conn, event_id)]
+    return bool(victims) and all(is_supplier(resolver, verdicts, supplier, v) for v in victims)
+
+
+def _event_names(conn: sqlite3.Connection, event_id: str) -> List[Tuple[Optional[int], str]]:
+    """``(entity_id, name)`` of every organisation an event records, in any role, and its victim field."""
+    row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event_id,)).fetchone()
+    return ([(None, row[0])] if row and row[0] else []) + [tuple(r) for r in conn.execute(
+        """SELECT dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
+           JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.deduplicated_event_id = ?""", (event_id,))]
+
+
 def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] = None) -> Dict[str, Any]:
     """Undo drift in the stored supplier incidents before a run places anything (no commit; the caller's).
 
@@ -402,7 +450,15 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
       v7 recorded Nissan Oceania as the vendor of Nissan's own breach, and the per-customer split filed Nissan under
       a "Nissan Oceania" supplier incident;
     * incidents of one organisation under two spellings ("Oracle CMS", "OracleCMS"; ``key_for`` differs) are given
-      one supplier key, so they are grouped (and merged when they share an event) like any other pair.
+      one supplier key, so they are grouped (and merged when they share an event) like any other pair;
+    * a supplier event that can no longer anchor the incident (:func:`anchors_incident`) is replaced by a linked
+      event whose only victim is the supplier, else cleared. Nissan's notice, which records OracleCMS beside Nissan, anchored a second OracleCMS incident;
+      Jetstar's cancellations after the CrowdStrike outage, which now record neither CrowdStrike nor Jetstar,
+      anchored CrowdStrike's;
+    * a link from a same-incident judgement whose customer event no longer records the customer in any role: the
+      event is no longer that customer's report (Jetstar under CrowdStrike). A judged link names the event's own
+      victim entity; split and converted links name the customer as the reporting spelled it, so a spelling the
+      event's roles do not share ("Department for Education, Children and Young People") is not evidence.
 
     An incident is removed with its links once nothing supports it: not the supplier's own event, not a link from a
     label or a same-incident judgement, and no linked event that still records the supplier as its vendor. The
@@ -412,10 +468,13 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
     vendors, and the "Nissan Oceania" incident the correction of Nissan's arm from Nissan's vendor.
     """
     from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
 
     ensure_schema(conn)
+    verdicts = pair_verdicts(conn)
     report: Dict[str, Any] = {"stale_links_removed": [], "incidents_merged": [], "incidents_removed": [],
-                              "shared_not_merged": [], "own_organisation_links_removed": [], "keys_joined": []}
+                              "shared_not_merged": [], "own_organisation_links_removed": [], "keys_joined": [],
+                              "own_events_replaced": []}
     incidents = {r[0]: {"key": r[1], "name": r[2], "event": r[3], "first": r[4]} for r in conn.execute(
         "SELECT supplier_incident_id, supplier_key, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
     for sid, entity_id, name, event_id in conn.execute(
@@ -433,6 +492,22 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                      (sid, entity_id))
         report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                               "customer": name, "event": now})
+
+    for sid, entity_id, name, event_id in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
+            "WHERE basis = ? AND customer_event_id IS NOT NULL", (BASIS_JUDGED,)).fetchall():
+        now = resolve_event(conn, event_id)
+        if sid not in incidents or now is None:
+            continue
+        recorded = _event_names(conn, now)
+        if any(e is not None and e == entity_id for e, _n in recorded) or any(
+                sv.same_org(resolver, name, n) for _e, n in recorded):
+            continue
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                     (sid, entity_id))
+        report["stale_links_removed"].append({"supplier_incident_id": sid, "supplier": incidents[sid]["name"],
+                                              "customer": name, "event": now,
+                                              "why": "the event no longer records the customer"})
 
     for sid, entity_id, name in conn.execute(
             "SELECT supplier_incident_id, customer_entity_id, customer_name FROM SupplierIncidentLinks").fetchall():
@@ -455,6 +530,28 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
                      (joined, _now(), sid))
         report["keys_joined"].append({"supplier_incident_id": sid, "supplier": inc["name"], "key": joined})
         inc["key"] = joined
+
+    for sid, inc in sorted(incidents.items()):
+        now = resolve_event(conn, inc["event"]) if inc["event"] else None
+        if inc["event"] is None or (now is not None and anchors_incident(conn, resolver, verdicts, inc["name"], now)):
+            continue
+        taken = {resolve_event(conn, i["event"]) or i["event"] for k, i in incidents.items() if k != sid and i["event"]}
+        linked = [(ent, resolve_event(conn, ev) or ev) for ent, ev in conn.execute(
+            "SELECT customer_entity_id, customer_event_id FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+            "AND customer_event_id IS NOT NULL ORDER BY customer_event_id", (sid,)).fetchall()]
+        # Only the supplier's own report (the supplier its only victim) takes over: a customer's event that names the
+        # supplier as vendor stays that customer's.
+        adopted = next((ev for ev in sorted({ev for _ent, ev in linked if ev not in taken})
+                        if _only_victim(conn, resolver, verdicts, inc["name"], ev)), None)
+        conn.execute("UPDATE SupplierIncidents SET supplier_event_id = ?, updated_at = ? WHERE supplier_incident_id = ?",
+                     (adopted, _now(), sid))
+        for ent, ev in linked:
+            if adopted is not None and ev == adopted:      # the supplier's own event is not a customer's
+                conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? "
+                             "AND customer_entity_id = ?", (sid, ent))
+        report["own_events_replaced"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                              "was": inc["event"], "now": adopted})
+        inc["event"] = adopted
 
     different: Set[str] = set()
     for (kind, pair), label in (labels or {}).items():
@@ -615,8 +712,10 @@ def _entity_id(conn: sqlite3.Connection, index, name: str) -> Optional[int]:
 
 
 def _supplier_event(conn, registry: Registry, inc: Incident, own: Dict[int, List[Tuple[str, Optional[str]]]],
-                    names: Dict[int, str], exclude: Set[str] = frozenset()) -> Optional[str]:
-    """The supplier's own Active event nearest the incident, if any (not one anchoring another incident)."""
+                    names: Dict[int, str], exclude: Set[str] = frozenset(),
+                    verdicts: Optional[Dict[frozenset, str]] = None) -> Optional[str]:
+    """The supplier's own Active event (:func:`anchors_incident`) nearest the incident, if any (not one anchoring
+    another incident)."""
     from cyber_data_collector.dedup.supplier_victims import _gap, same_org
 
     best: Optional[Tuple[int, str]] = None
@@ -624,7 +723,7 @@ def _supplier_event(conn, registry: Registry, inc: Incident, own: Dict[int, List
         if not same_org(registry.resolver, inc.supplier_name, names.get(entity_id, "")):
             continue
         for did, edate in events:
-            if did in exclude:
+            if did in exclude or not anchors_incident(conn, registry.resolver, verdicts or {}, inc.supplier_name, did):
                 continue
             gaps = [g for g in (_gap(edate, d) for d in inc.dates) if g is not None]
             gap = min(gaps) if gaps else None
@@ -640,16 +739,24 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
                pcut: Optional[float], registry: Registry) -> Dict[str, Any]:
     """Add every link the evidence supports to ``registry``; return what was ambiguous."""
     from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
 
     ambiguous: List[Dict[str, Any]] = []
     own = sv.victim_events(conn)
+    verdicts = pair_verdicts(conn)
     names = dict(conn.execute("SELECT entity_id, entity_name FROM EntitiesV2"))
     by_id = g.by_id
     incident_of: Dict[str, Incident] = {}
 
-    def customer_of(did: str) -> Tuple[Optional[Tuple[int, str]], List[str]]:
-        victims = sv.event_victims(conn, did)
+    def customer_of(did: str, supplier: Optional[str] = None) -> Tuple[Optional[Tuple[int, str]], List[str]]:
+        """The event's one customer and all its victims; with ``supplier``, the supplier recorded beside its
+        customer as a co-victim is not one of them."""
+        victims = [v for v in sv.event_victims(conn, did)
+                   if supplier is None or not is_supplier(g.resolver, verdicts, supplier, v[1])]
         return ((victims[0][0], victims[0][1]) if len(victims) == 1 else None), [v[1] for v in victims]
+
+    def own_of(supplier: str, all_victims: List[str]) -> bool:
+        return bool(all_victims) and all(is_supplier(g.resolver, verdicts, supplier, v) for v in all_victims)
 
     different = set()
     for (kind, sid), label in labels.items():
@@ -667,14 +774,14 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
             ambiguous.append({"deduplicated_event_id": x.dedup_id, "title": x.title,
                               "why": "describes a third-party compromise but records no supplier"})
             continue
-        single, all_victims = customer_of(x.dedup_id)
-        if any(sv.same_org(g.resolver, x.vendors[0], v) for v in all_victims):
+        if own_of(x.vendors[0], customer_of(x.dedup_id)[1]):
             # The supplier's own event: it anchors an incident of its own.
             inc = incident_of[x.dedup_id] = registry.incident(x.vendors[0], x.event_date, x.dedup_id,
                                                                supplier_event=x.dedup_id)
             if inc.supplier_entity_id is None:
                 inc.supplier_entity_id = _entity_id(conn, g.index, x.vendors[0])
             continue
+        single, all_victims = customer_of(x.dedup_id, x.vendors[0])
         customer_events.append((x, single, all_victims))
     for x, single, all_victims in customer_events:
         vendor = x.vendors[0]
@@ -696,12 +803,12 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
         inc = incident_of.get(p.supplier_id)
         if not how or inc is None:
             continue
-        single, all_victims = customer_of(p.other_id)
-        if any(sv.same_org(g.resolver, inc.supplier_name, v) for v in all_victims):
+        if own_of(inc.supplier_name, customer_of(p.other_id)[1]):
             if inc.supplier_event_id is None and not any(
                     i.supplier_event_id == p.other_id for i in registry.incidents.values()):
                 inc.supplier_event_id = p.other_id
             continue
+        single, all_victims = customer_of(p.other_id, inc.supplier_name)
         if single is None:
             ambiguous.append({"deduplicated_event_id": p.other_id, "victims": all_victims,
                               "why": f"judged the same incident as {p.supplier_id[:8]} but records "
@@ -744,7 +851,7 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
     anchored = {i.supplier_event_id for i in registry.incidents.values() if i.supplier_event_id}
     for inc in registry.incidents.values():
         if inc.supplier_event_id is None:
-            found = _supplier_event(conn, registry, inc, own, names, exclude=anchored)
+            found = _supplier_event(conn, registry, inc, own, names, exclude=anchored, verdicts=verdicts)
             if found:
                 inc.supplier_event_id = found
                 anchored.add(found)

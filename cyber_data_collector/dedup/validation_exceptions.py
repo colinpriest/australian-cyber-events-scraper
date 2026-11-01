@@ -202,7 +202,7 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         first, _, second = value_text.partition("|")
         twice = []
         for inc in mci.find(conn):
-            if inc.supplier_incident_id not in mine:
+            if not set(inc.supplier_incident_ids) & set(mine):
                 continue
             holders = [{i for i, c in enumerate(inc.customers) if any(names_match(conn, n, name)
                                                                      for n in [c.name, *c.also])}
@@ -217,7 +217,8 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         mine = _supplier_incidents(conn, now)
         if not mine:
             return Result(eid, kind, "unchecked", f"event {now[:8]} is in no supplier incident")
-        listed = [(i.vendor, c.name) for i in mci.find(conn) if i.supplier_incident_id in mine for c in i.customers]
+        listed = [(i.vendor, c.name) for i in mci.find(conn) if set(i.supplier_incident_ids) & set(mine)
+                  for c in i.customers]
         hits = [f"{c} under {v}" for v, c in listed if names_match(conn, row["value"], c)]
         return Result(eid, kind, "fail" if hits else "pass",
                       f"listed: {'; '.join(hits)}" if hits else f"not listed in {len(mine)} supplier incident(s)")

@@ -1268,6 +1268,17 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   they merge when they share an event. A Merged event whose records moved resolves through its master record (the
   split-off Nissan event, merged back, resolved to nothing). A supplier name is put to the proper-name judgement
   with the customers' names, and an attack is listed only under a supplier judged a name.
+* **What anchors a supplier incident; one attack under two suppliers** (2026-11-01, after the v8 run). Nissan's
+  April 2024 notice, which records OracleCMS beside Nissan as a co-victim, anchored a second OracleCMS card (an
+  incident with the supplier's own event is never merged with another), and Jetstar's cancellations after the
+  CrowdStrike outage, which record neither CrowdStrike nor Jetstar, anchored CrowdStrike's. An event anchors a
+  supplier's incident only when it records the supplier as its vendor or as its only victim
+  (`supplier_links.anchors_incident`); the repair replaces an anchor that no longer does by a linked event whose
+  only victim is the supplier, else clears it, and a co-victim supplier is no customer of the event it sits in. A
+  same-incident-judged link whose event no longer records the customer in any role is removed (Jetstar). On the
+  live copy: the second OracleCMS card, CrowdStrike's and Sonic HealthPlus's go. Incidents of different suppliers
+  that hold one customer event are one attack and one card naming both (`multi_customer_incidents.attack_groups`:
+  VIQ Solutions and e24 Technologies, Progress Software and Ipswitch); the registry keeps both incidents.
 * **Australian customers only.** A customer with its own Active event passed the calibrated scope check. A customer
   only named in the reporting (Accellion's global list: Kroger, Stanford University, the Reserve Bank of New
   Zealand) is listed only when its researched entity profile (`jurisdiction`, one Perplexity lookup per
