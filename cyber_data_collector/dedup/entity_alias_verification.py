@@ -150,24 +150,60 @@ def incident_context(conn: sqlite3.Connection, name: str) -> str:
     return f'\n   (named in: "{row[0][:160]}")' if row else ""
 
 
+def person_decisions(conn: sqlite3.Connection, name: str) -> List[str]:
+    """What a person has recorded about the name: their aliases (``EntityAliases`` source ``human``) and alias
+    decisions (``model = 'human'``) that involve it, as sentences.
+
+    Shown to the alias question as evidence. "Ministry of Health" / "NSW Health" was answered ``same`` on
+    2026-10-31 and ``related`` when asked again on 2026-11-03 ("the NSW Ministry of Health is its system
+    manager"), against the owner's decision that NSW Health and the NSW Ministry of Health are one entity, which
+    the question had not shown.
+    """
+    lines: List[str] = []
+    try:
+        rows = conn.execute("SELECT raw_name, canonical_name FROM EntityAliases WHERE source = 'human' "
+                            "AND (raw_name = ? OR canonical_name = ?)", (name, name)).fetchall()
+        lines += [f'"{a}" is the same organisation as "{b}"' for a, b in rows]
+        rows = conn.execute("SELECT name, other_name, verdict FROM EntityAliasDecisions WHERE model = 'human' "
+                            "AND (name = ? OR other_name = ?)", (name, name)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    labels = {"same": "the same organisation as", "parent_subsidiary": "a parent or subsidiary of",
+              "related": "related to, but not the same organisation as", "different": "a different organisation from"}
+    for a, b, verdict in rows:
+        line = f'"{a}" is {labels.get(verdict, verdict)} "{b}"'
+        if verdict == "same" and any({a, b} == set(x.split('"')[1::2]) for x in lines):
+            continue
+        lines.append(line)
+    return sorted(set(lines))
+
+
 def _context(conn: sqlite3.Connection, name: str) -> str:
-    """What the question tells about one name: an incident it appeared in, and its stored profile if any."""
+    """What the question tells about one name: an incident it appeared in, its stored profile if any, and what a
+    person has recorded about it."""
     from cyber_data_collector.dedup.entity_profiles import profile_text
 
     profile = profile_text(conn, name)
-    return incident_context(conn, name) + (f"\n   (profile: {profile})" if profile else "")
+    recorded = person_decisions(conn, name)
+    return (incident_context(conn, name) + (f"\n   (profile: {profile})" if profile else "")
+            + "".join(f"\n   (recorded by a person: {line})" for line in recorded))
 
 
 def pair_evidence(conn: sqlite3.Connection, a: str, b: str) -> str:
-    """A hash of what a question about the pair shows: the incident each name appeared in, and any stored
-    profile of either organisation (:mod:`entity_profiles`). It changes when the evidence does.
+    """A hash of what a question about the pair shows: the incident each name appeared in, any stored
+    profile of either organisation (:mod:`entity_profiles`) and what a person recorded about either name
+    (:func:`person_decisions`). It changes when the evidence does.
     """
     import hashlib
 
     from cyber_data_collector.dedup.entity_profiles import profile_text
 
-    blob = json.dumps({"a": incident_context(conn, a), "b": incident_context(conn, b),
-                       "profile_a": profile_text(conn, a), "profile_b": profile_text(conn, b)}, sort_keys=True)
+    evidence = {"a": incident_context(conn, a), "b": incident_context(conn, b),
+                "profile_a": profile_text(conn, a), "profile_b": profile_text(conn, b)}
+    recorded = person_decisions(conn, a) + person_decisions(conn, b)
+    if recorded:      # only where a person recorded something, so other pairs keep their stored decisions
+        evidence["person"] = sorted(set(recorded))
+    blob = json.dumps(evidence, sort_keys=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
