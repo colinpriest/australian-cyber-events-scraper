@@ -7,6 +7,17 @@ and entity kind both separating government). Its non-significant contrasts still
 a reader cannot tell a direction the data support from one the parameterisation produced. The questions on
 the page are therefore answered here from models with few parameters, each fitted to the spells directly:
 
+**Calendar time.** Recorded incidents grow steeply (11 victim events in 2019, over 200 a year from 2024), and
+long gaps end, and first-year gaps start, in the dense recent years: elapsed time since an event and the long-term
+growth are confounded unless calendar time is modelled finely. Four coarse calendar periods did not (most of the
+growth is inside the last one). Every model below splits follow-up by calendar month (owner, 2026-11-02) and holds
+a linear calendar trend in the per-organisation rate (:data:`PRIMARY_CALENDAR`, one parameter); the elapsed-time
+result is re-tested under every :data:`CALENDAR_SPECS` adjustment - none, the linear trend, the log of monthly
+reporting intensity (all recorded victim events in the 12 months centred on the month) and a separate effect for
+every year from 2020 (earlier years pooled) - and the summary says whether it holds under all of them. Prior event
+number (2 parameters) is held too: organisations attacked more often recur sooner, and without it a falling
+population rate stands for differences between organisations.
+
 1. **Is the data adequate?** Repeats, repeats per parameter (at least :data:`MIN_EVENTS_PER_PARAMETER`) of the
    models used here and of the full adjusted model, its terms that are not identified (standard error above
    :data:`NOT_IDENTIFIED_SE` on the log scale), the share of unverified incident dates, and whether a tie policy
@@ -14,11 +25,17 @@ the page are therefore answered here from models with few parameters, each fitte
 2. **The best elapsed-time splits.** Every banding of up to :data:`MAX_CUTS` cut points from
    :data:`CANDIDATE_CUTS` with at least :data:`MIN_REPEATS_PER_BAND` repeats in each band is scored by BIC
    (penalty log of the number of repeats; the conservative criterion, because the search itself overfits), with
-   organisation size held as an offset. No cut beating the constant rate means no split is supported.
-3. **A delayed peak 91-120 days after an event.** The size-adjusted rate in that window against all other elapsed
-   time, by the exact conditional (binomial) test, one-sided for "higher".
-4. **The best fit for recurrence rates.** AIC of the constant rate (exponential), the selected banding and the
-   parametric models (Weibull, log-normal, log-logistic, generalised gamma), all on every spell, without size.
+   size, prior event number and reporting intensity held as an offset; a search-adjusted p-value comes from
+   rerunning the whole search on repeats simulated under a constant rate. No supported cut: no split.
+3. **A delayed peak after an event.** The adjusted rate 91-180 days after an event (the window of the earlier
+   delayed-peak tests; the owner accepted it on 2026-11-02 - 91-120 alone holds too few repeats, and is reported as
+   such) against all other elapsed time, by the exact
+   conditional (binomial) test, one-sided for "higher"; a window with fewer than :data:`MIN_REPEATS_PER_BAND`
+   repeats is not tested.
+4. **The best fit for recurrence rates.** AIC of the adjusted Poisson models with elapsed time as nothing
+   (constant rate), log elapsed time (Weibull-shaped), log elapsed time and its square (rise-and-fall, log-normal
+   shaped) or the selected bands, each with size, prior event number and the calendar trend. The unadjusted parametric fits of the main analysis cannot take the reporting
+   trend into account and are kept for reference only (``unadjusted_timing_models``).
 5. **Does organisation size predict recurrence?** A Poisson model with the selected bands and size as three
    ordered steps SMALL < MEDIUM < LARGE < HUGE, all of one sign (a **monotone** effect: larger organisations are
    never less, or never more, at risk than smaller ones). It is fitted both ways and the better kept; its
@@ -34,6 +51,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -48,6 +66,9 @@ MIN_REPEATS_PER_BAND = 10
 MIN_EVENTS_PER_PARAMETER = 10
 MIN_REPEATS = 100
 PEAK_WINDOW = (90, 120)
+PEAK_WINDOWS = ((90, 180), (90, 120))
+CALENDAR_SPECS = ("linear_trend", "none", "log_intensity", "yearly_from_2020")
+PRIMARY_CALENDAR = "linear_trend"
 ALPHA = 0.05
 NOT_IDENTIFIED_SE = 5.0
 UNVERIFIED_DATE_SHARE_LIMIT = 0.5
@@ -88,19 +109,65 @@ def interval_table(spells: pd.DataFrame, cuts: Sequence[float]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def table_from_split(split: pd.DataFrame, cuts: Sequence[float]) -> pd.DataFrame:
-    """The fine-interval table from ``analyze_recurrent_timing.adjusted_poisson_split`` run with elapsed bounds
-    ``0, *cuts, inf``: repeats and exposure per interval, calendar period, size and prior event number."""
+def _month(ordinal: int) -> int:
+    day = date.fromordinal(int(ordinal))
+    return day.year * 12 + day.month - 1
+
+
+def _next_month_start(ordinal: int) -> int:
+    day = date.fromordinal(int(ordinal))
+    year, month = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
+    return date(year, month, 1).toordinal()
+
+
+def reporting_intensity(spells: pd.DataFrame, window: int = 12) -> Dict[int, float]:
+    """Recorded victim events (spell starts) in the ``window`` months centred on each month, by month index."""
+    starts = pd.to_datetime(spells["prior_event_date"]).map(lambda d: d.year * 12 + d.month - 1)
+    ends = pd.to_datetime(spells["prior_event_date"]) + pd.to_timedelta(spells["duration_days"], unit="D")
+    first, last = int(starts.min()), int(ends.map(lambda d: d.year * 12 + d.month - 1).max())
+    counts = starts.value_counts().reindex(range(first, last + 1), fill_value=0).astype(float)
+    smoothed = counts.rolling(window, center=True, min_periods=1).sum()
+    return {int(m): max(float(v), 0.5) for m, v in smoothed.items()}
+
+
+def monthly_table(spells: pd.DataFrame, cuts: Sequence[float]) -> pd.DataFrame:
+    """Repeats, exposure (days) and summed elapsed days per elapsed interval ``(lo, hi]``, calendar month,
+    organisation size and prior event number, with ``log_intensity`` (:func:`reporting_intensity`) per month."""
     edges = [0.0, *[float(c) for c in cuts], math.inf]
-    out = (split.assign(size=split["org_size"].fillna("UNKNOWN").astype(str).str.upper(),
-                        event_number=split["event_number_cat"].astype(str),
-                        calendar=split["calendar_band"].astype(str))
-           .groupby(["elapsed_band_index", "calendar", "size", "event_number"], as_index=False)
-           .agg(events=("events", "sum"), exposure_days=("exposure_days", "sum"))
-           .rename(columns={"elapsed_band_index": "interval"}))
+    starts = pd.to_datetime(spells["prior_event_date"]).map(lambda d: d.toordinal()).to_numpy()
+    durations = spells["duration_days"].to_numpy(dtype=float)
+    observed = spells["event"].to_numpy(dtype=int)
+    sizes = spells["org_size"].fillna("UNKNOWN").astype(str).str.upper().to_numpy()
+    numbers = (spells["event_number_cat"].astype(str).to_numpy() if "event_number_cat" in spells.columns
+               else np.repeat("1", len(spells)))
+    cells: Dict[Tuple[int, int, str, str], List[float]] = {}
+    for start, duration, event, size, number in zip(starts, durations, observed, sizes, numbers):
+        for index, (lo, hi) in enumerate(zip(edges, edges[1:])):
+            end = min(duration, hi)
+            if end <= lo:
+                break
+            current, stop = start + int(lo), start + int(math.ceil(end))
+            while current < stop:
+                boundary = min(stop, _next_month_start(current))
+                cell = cells.setdefault((index, _month(current), size, number), [0.0, 0.0, 0.0])
+                length = boundary - current
+                cell[1] += length
+                cell[2] += length * ((current + boundary) / 2 - start)
+                current = boundary
+            if event and lo < duration <= hi:
+                cell = cells.setdefault((index, _month(start + int(math.ceil(duration)) - 1), size, number),
+                                        [0.0, 0.0, 0.0])
+                cell[0] += 1
+    out = pd.DataFrame([(i, m, s, n, *v) for (i, m, s, n), v in cells.items()],
+                       columns=["interval", "month", "size", "event_number", "events", "exposure_days",
+                                "elapsed_days_sum"])
+    out = out[out["exposure_days"] > 0].copy()
+    intensity = reporting_intensity(spells)
+    out["log_intensity"] = np.log(out["month"].map(intensity).fillna(0.5).clip(lower=0.5))
+    out["calendar_year"] = out["month"] / 12.0
     out["lo"] = out["interval"].map(lambda i: edges[int(i)])
     out["hi"] = out["interval"].map(lambda i: edges[int(i) + 1])
-    return out
+    return out.reset_index(drop=True)
 
 
 def fit_poisson(y: np.ndarray, exposure: np.ndarray, x: np.ndarray,
@@ -150,27 +217,33 @@ def _number_columns(table: pd.DataFrame) -> np.ndarray:
     return np.column_stack([(table["event_number"].astype(str) == level).astype(float) for level in levels])
 
 
-def _calendar_columns(table: pd.DataFrame) -> np.ndarray:
-    """Indicator columns for every calendar period but the one with the most repeats. Reporting is far denser in
-    recent years, and recent spells are short: without them the first year after an event looks riskier."""
-    if "calendar" not in table.columns:
+def _calendar_columns(table: pd.DataFrame, spec: str = PRIMARY_CALENDAR) -> np.ndarray:
+    """Calendar-time columns of the rate model (see :data:`CALENDAR_SPECS`); none when the table has no months."""
+    if spec == "none" or "month" not in table.columns:
         return np.zeros((len(table), 0))
-    totals = table.groupby("calendar")["events"].sum().sort_values(ascending=False)
-    levels = sorted(totals.index[1:])
-    if not levels:
-        return np.zeros((len(table), 0))
-    return np.column_stack([(table["calendar"] == level).astype(float) for level in levels])
+    if spec == "linear_trend":
+        years = table["calendar_year"].to_numpy(dtype=float)
+        return (years - years.mean())[:, None]
+    if spec == "log_intensity":
+        values = table["log_intensity"].to_numpy(dtype=float)
+        return (values - values.mean())[:, None]
+    if spec == "yearly_from_2020":
+        year = (table["month"] // 12).to_numpy()
+        levels = [y for y in range(2020, int(year.max())) if (year == y).any()]     # the latest year is the reference
+        return np.column_stack([(year < 2020).astype(float), *[(year == y).astype(float) for y in levels]])
+    raise ValueError(f"calendar spec must be one of {CALENDAR_SPECS}")
 
 
-def monotone_size_fit(table: pd.DataFrame, cuts: Sequence[float] = ()) -> Dict[str, Any]:
+def monotone_size_fit(table: pd.DataFrame, cuts: Sequence[float] = (),
+                      calendar: str = PRIMARY_CALENDAR) -> Dict[str, Any]:
     """Size as three same-signed steps, with prior event number and the bands of ``cuts``: both directions of the
     size effect fitted, the better one kept."""
     known = _known_size(table)
     y = known["events"].to_numpy(dtype=float)
     exposure = known["exposure_days"].to_numpy(dtype=float)
     numbers = _number_columns(known)
-    calendar = _calendar_columns(known)
-    base = np.column_stack([np.ones(len(known)), _band_columns(known, cuts), numbers, calendar])
+    calendar_columns = _calendar_columns(known, calendar)
+    base = np.column_stack([np.ones(len(known)), _band_columns(known, cuts), numbers, calendar_columns])
     steps = _size_steps(known["size"])
     free = [(None, None)] * base.shape[1]
     null = fit_poisson(y, exposure, base)
@@ -180,13 +253,13 @@ def monotone_size_fit(table: pd.DataFrame, cuts: Sequence[float] = ()) -> Dict[s
     best = up if up["log_likelihood"] >= down["log_likelihood"] else down
     n_bands = len(cuts)
     number_effects = best["beta"][1 + n_bands:1 + n_bands + numbers.shape[1]]
-    calendar_effects = best["beta"][1 + n_bands + numbers.shape[1]:base.shape[1]]
+    band_effects = best["beta"][1:1 + n_bands]
+    calendar_effect = best["beta"][1 + n_bands + numbers.shape[1]:base.shape[1]]
+    # Each row's rate multiplier from everything but the intercept and the bands: what the band search and the
+    # peak tests hold fixed.
+    held = np.column_stack([numbers, calendar_columns, steps])
+    row_multiplier = np.exp(held @ best["beta"][1 + n_bands:])
     levels = sorted(known["event_number"].astype(str).unique())
-    if "calendar" in known.columns:
-        totals = known.groupby("calendar")["events"].sum().sort_values(ascending=False)
-        calendar_levels = [totals.index[0], *sorted(totals.index[1:])]
-    else:
-        calendar_levels = []
     increments = best["beta"][base.shape[1]:]
     cumulative = np.concatenate([[0.0], np.cumsum(increments)])
     free_increments = unconstrained["beta"][base.shape[1]:]
@@ -206,8 +279,10 @@ def monotone_size_fit(table: pd.DataFrame, cuts: Sequence[float] = ()) -> Dict[s
         "n_params": int(base.shape[1] + steps.shape[1]),
         "event_number_rate_ratio": {level: float(math.exp(v)) for level, v in
                                     zip(levels, np.concatenate([[0.0], number_effects]))},
-        "calendar_rate_ratio": {level: float(math.exp(v)) for level, v in
-                                zip(calendar_levels, np.concatenate([[0.0], calendar_effects]))},
+        "band_rate_ratio": [1.0, *[float(math.exp(v)) for v in band_effects]],
+        "calendar": calendar,
+        "calendar_coefficients": [float(v) for v in calendar_effect],
+        "row_multiplier": row_multiplier,
         "null_mu": null["mu"],
         "_y_shape": (len(known),),
         "_design": (y, exposure, base, steps),
@@ -235,15 +310,10 @@ def bootstrap_size_p(fit: Dict[str, Any], replicates: int, seed: int) -> float:
 
 
 def size_offsets(table: pd.DataFrame, fit: Dict[str, Any]) -> pd.Series:
-    """Each known-size row's exposure multiplied by its size's, prior event number's and calendar period's rate
-    ratios (held fixed in the band search and the delayed-peak test)."""
+    """Each known-size row's exposure times its fitted rate multiplier for size, prior event number and calendar
+    time (held fixed in the band search and the delayed-peak tests). ``fit`` is a fit of the same ``table``."""
     known = _known_size(table)
-    out = (known["exposure_days"] * known["size"].map(fit["rate_ratio_vs_small"])
-           * known["event_number"].astype(str).map(fit["event_number_rate_ratio"]))
-    if "calendar" in known.columns and fit.get("calendar_rate_ratio"):
-        out = out * known["calendar"].map(fit["calendar_rate_ratio"])
-    return out
-
+    return known["exposure_days"] * fit["row_multiplier"]
 
 def _bands_from_intervals(events: np.ndarray, exposure: np.ndarray, edges: Sequence[float],
                           cuts: Sequence[float]) -> Tuple[np.ndarray, np.ndarray]:
@@ -363,14 +433,6 @@ def peak_window_test(table: pd.DataFrame, size_fit: Dict[str, Any],
             "p_one_sided_higher": p_higher, "enough_repeats": e_in >= MIN_REPEATS_PER_BAND}
 
 
-def timing_band_rates(spells: pd.DataFrame, cuts: Sequence[float]) -> str:
-    """Unadjusted repeats per 100 organisation-years in each band of ``cuts``, as text."""
-    table = interval_table(spells, cuts).groupby("interval").agg(events=("events", "sum"),
-                                                                 exposure=("exposure_days", "sum"))
-    rates = table["events"] / table["exposure"] * DAYS_PER_100_YEARS
-    return ", ".join(f"{r:.1f}" for r in rates)
-
-
 def timing_model_comparison(spells: pd.DataFrame, parametric: Sequence[Any], cuts: Sequence[float]) -> pd.DataFrame:
     """AIC of the constant rate, the selected banding and the parametric fits, on every spell, without size."""
     table = interval_table(spells, cuts).groupby("interval").agg(events=("events", "sum"),
@@ -393,6 +455,57 @@ def timing_model_comparison(spells: pd.DataFrame, parametric: Sequence[Any], cut
     out = out.sort_values(["aic", "n_params"]).reset_index(drop=True)
     out["delta_aic"] = out["aic"] - out["aic"].iloc[0]
     return out
+
+
+def adjusted_timing_models(table: pd.DataFrame, size_fit: Dict[str, Any], cuts: Sequence[float]) -> pd.DataFrame:
+    """AIC of elapsed-time shapes, each fitted with size (monotone, the fitted direction), prior event number and
+    the calendar trend: constant, log t (Weibull-shaped), log t + (log t)^2 (rise and fall), the selected bands."""
+    known = _known_size(table)
+    y = known["events"].to_numpy(dtype=float)
+    exposure = known["exposure_days"].to_numpy(dtype=float)
+    log_t = np.log(np.maximum(known["elapsed_days_sum"].to_numpy(dtype=float) / np.maximum(exposure, 1e-9), 1.0))
+    log_t = log_t - log_t.mean()
+    base = np.column_stack([np.ones(len(known)), _number_columns(known), _calendar_columns(known)])
+    steps = _size_steps(known["size"])
+    sign = (0, None) if size_fit["direction"] != "decreasing" else (None, 0)
+    shapes = [("constant rate", np.zeros((len(known), 0))),
+              ("log elapsed time (Weibull-shaped)", log_t[:, None]),
+              ("log elapsed time and its square (rise and fall)", np.column_stack([log_t, log_t ** 2]))]
+    if cuts:
+        bounds = [0.0, *cuts, math.inf]
+        shapes.append(("bands " + ", ".join(_band_label(a, b) for a, b in zip(bounds, bounds[1:])),
+                       _band_columns(known, cuts)))
+    rows = []
+    for name, columns in shapes:
+        x = np.column_stack([base, columns, steps])
+        bounds_list = [(None, None)] * (base.shape[1] + columns.shape[1]) + [sign] * steps.shape[1]
+        fit = fit_poisson(y, exposure, x, bounds_list)
+        rows.append({"model": name, "n_params": int(x.shape[1]), "log_likelihood": fit["log_likelihood"]})
+    out = pd.DataFrame(rows)
+    out["aic"] = -2 * out["log_likelihood"] + 2 * out["n_params"]
+    out = out.sort_values(["aic", "n_params"]).reset_index(drop=True)
+    out["delta_aic"] = out["aic"] - out["aic"].iloc[0]
+    return out
+
+
+def calendar_robustness(table: pd.DataFrame, cuts: Sequence[float]) -> pd.DataFrame:
+    """The selected bands against a constant rate, and the calendar terms against none, under every calendar
+    adjustment: whether the elapsed-time result is the long-term growth in reporting in disguise."""
+    rows = []
+    no_calendar = monotone_size_fit(table, (), "none")["log_likelihood"]
+    for spec in CALENDAR_SPECS:
+        constant = monotone_size_fit(table, (), spec)
+        banded = monotone_size_fit(table, cuts, spec) if cuts else constant
+        lr = 2 * (banded["log_likelihood"] - constant["log_likelihood"])
+        calendar_df = len(constant["calendar_coefficients"])
+        calendar_lr = 2 * (constant["log_likelihood"] - no_calendar)
+        rows.append({"calendar": spec, "calendar_params": calendar_df,
+                     "calendar_lr": calendar_lr if calendar_df else None,
+                     "calendar_p": float(stats.chi2.sf(calendar_lr, calendar_df)) if calendar_df else None,
+                     "bands_lr": lr, "bands_df": len(cuts),
+                     "bands_p": float(stats.chi2.sf(lr, len(cuts))) if cuts else None,
+                     "band_rate_ratio": banded["band_rate_ratio"]})
+    return pd.DataFrame(rows)
 
 
 def adjusted_model_parameters(coefficients: pd.DataFrame, repeats: int) -> Dict[str, Any]:
@@ -427,10 +540,9 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
                       fine: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """The five questions with their answers (one sentence each) and the numbers behind them.
 
-    ``fine`` is :func:`table_from_split` of the adjusted split at ``0, *CANDIDATE_CUTS, inf`` (with calendar
-    periods); without it the models are not adjusted for calendar period.
+    ``fine`` overrides :func:`monthly_table` of ``spells`` at :data:`CANDIDATE_CUTS` (tests).
     """
-    fine = interval_table(spells, CANDIDATE_CUTS) if fine is None else fine
+    fine = monthly_table(spells, CANDIDATE_CUTS) if fine is None else fine
     repeats = int(spells["event"].sum())
     known = _known_size(fine)
     unknown_spells = int((~spells["org_size"].fillna("UNKNOWN").astype(str).str.upper().isin(SIZE_ORDER)).sum())
@@ -442,8 +554,9 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
     cuts = [float(c) for c in chosen["cuts"]]
     size_fit = monotone_size_fit(fine, cuts)
     size_p = bootstrap_size_p(size_fit, replicates, seed) if replicates > 0 else math.nan
-    peak = peak_window_test(fine, size_fit)
-    timing = timing_model_comparison(spells, parametric, cuts)
+    peaks = [peak_window_test(fine, size_fit, window) for window in PEAK_WINDOWS]
+    timing = adjusted_timing_models(fine, size_fit, cuts)
+    unadjusted_timing = timing_model_comparison(spells, parametric, cuts)
     full = adjusted_model_parameters(adjusted_coefficients, repeats)
 
     # 1. Adequacy
@@ -478,7 +591,23 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
     delta = float(chosen["delta_bic_vs_constant"])
     search_p = (search_p_value(fine, size_only, delta, replicates, seed + 1)
                 if replicates > 0 and cuts else math.nan)
-    band_rates = timing_band_rates(spells, cuts)
+    band_rates = ", ".join(f"{v:.2f}" for v in size_fit["band_rate_ratio"])
+    robustness = calendar_robustness(fine, cuts)
+    trend = robustness.loc[robustness["calendar"] == "linear_trend"].iloc[0]
+    yearly = robustness.loc[robustness["calendar"] == "yearly_from_2020"].iloc[0]
+    trend_per_year = math.exp(size_fit["calendar_coefficients"][0]) - 1 if size_fit["calendar_coefficients"] else 0.0
+    calendar_note = (
+        f" The long-term growth in recorded incidents does not explain it: the per-organisation rate "
+        + (f"changes by {trend_per_year:+.0%} a year (yearly effects from 2020, p = {yearly['calendar_p']:.2f})"
+           if yearly["calendar_p"] is not None and yearly["calendar_p"] >= ALPHA else
+           f"does change with calendar year (yearly effects from 2020, p = {yearly['calendar_p']:.3f})")
+        + ", and the bands hold under no calendar adjustment, a linear trend, monthly reporting intensity and "
+          "yearly effects alike (p from "
+        + f"{robustness['bands_p'].min():.4f} to {robustness['bands_p'].max():.4f})."
+        if cuts and robustness["bands_p"].max() < ALPHA else
+        (" The bands do not hold under every calendar adjustment (p up to "
+         f"{robustness['bands_p'].max():.3f}), so they may be the long-term growth in reporting in disguise."
+         if cuts else ""))
     if len(cuts) == 0:
         splits = ("No split is supported: a single constant rate fits best (BIC), "
                   f"against every banding with at least {MIN_REPEATS_PER_BAND} repeats per band.")
@@ -487,37 +616,44 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
                   f"{len(search)} bandings ({chosen['bands']} days) beats a constant rate by {-delta:.1f} BIC, but "
                   f"searching constant-rate data does as well ({_p_text(search_p, replicates)}).")
     else:
-        splits = (f"Best bands: {chosen['bands']} days, with {band_rates} repeats per 100 organisation-years "
+        splits = (f"Best bands: {chosen['bands']} days, with rates {band_rates} times the first band's "
                   f"({bic_evidence(delta)} evidence: {-delta:.1f} BIC better than a constant rate, holding size, "
-                  f"prior event number and calendar period; search-adjusted {_p_text(search_p, replicates)}).")
+                  f"prior event number and a calendar trend; search-adjusted "
+                  f"{_p_text(search_p, replicates)}).{calendar_note}")
 
     # 3. Delayed peak
-    if peak["repeats_in_window"] < MIN_REPEATS_PER_BAND:
-        delayed = (f"Cannot be tested reliably: only {peak['repeats_in_window']} repeats fall {peak['window']} days "
-                   f"after an event (at least {MIN_REPEATS_PER_BAND} are needed).")
-    elif peak["p_one_sided_higher"] < ALPHA:
-        delayed = (f"Yes: the size-adjusted rate {peak['window']} days after an event is {peak['rate_ratio']:.2f} times "
-                   f"the rate at other times (95% CI {peak['ci_low']:.2f}-{peak['ci_high']:.2f}; one-sided "
-                   f"{_p_text(peak['p_one_sided_higher'])}; {peak['repeats_in_window']} repeats).")
+    main_peak, narrow = peaks[0], peaks[1]
+    if main_peak["repeats_in_window"] < MIN_REPEATS_PER_BAND:
+        delayed = (f"Cannot be tested reliably: only {main_peak['repeats_in_window']} repeats fall "
+                   f"{main_peak['window']} days after an event (at least {MIN_REPEATS_PER_BAND} are needed).")
+    elif main_peak["p_one_sided_higher"] < ALPHA:
+        delayed = (f"Yes: the adjusted rate {main_peak['window']} days after an event is {main_peak['rate_ratio']:.2f} "
+                   f"times the rate at other times (95% CI {main_peak['ci_low']:.2f}-{main_peak['ci_high']:.2f}; "
+                   f"one-sided {_p_text(main_peak['p_one_sided_higher'])}; {main_peak['repeats_in_window']} repeats).")
     else:
-        delayed = (f"No evidence of a delayed peak: the rate {peak['window']} days after an event is not higher than at "
-                   f"other times (one-sided {_p_text(peak['p_one_sided_higher'])}; {peak['repeats_in_window']} repeats).")
+        delayed = (f"No evidence of a delayed peak: the adjusted rate {main_peak['window']} days after an event is not "
+                   f"higher than at other times (one-sided {_p_text(main_peak['p_one_sided_higher'])}; "
+                   f"{main_peak['repeats_in_window']} repeats).")
+    if narrow["repeats_in_window"] < MIN_REPEATS_PER_BAND:
+        delayed += (f" The narrower {narrow['window']} day window holds only {narrow['repeats_in_window']} repeats, "
+                    "too few to test on its own.")
 
     # 4. Best fit
     best = timing.iloc[0]
     close = timing.loc[(timing.index > 0) & (timing["delta_aic"] < 2), "model"].tolist()
-    best_fit = (f"Best fit by AIC: {best['model']}"
+    best_fit = (f"Best fit by AIC, holding size, prior event number and a calendar trend: {best['model']}"
                 + (f" (within 2 AIC: {', '.join(close)}, so these fit about as well)" if close else "")
                 + ".")
     constant_gap = float(timing.loc[timing["model"].str.startswith("constant"), "delta_aic"].iloc[0])
     if best["model"].startswith("constant") or (close and any(m.startswith("constant") for m in close)):
         best_fit += " The risk of a repeat does not change measurably with time since the last event."
-    elif best["model"].startswith("piecewise") and not (search_p < ALPHA):
+    elif best["model"].startswith("bands") and not (search_p < ALPHA):
         best_fit += (" Its bands were chosen by the search, and the search-adjusted test does not support them, "
                      "so treat the rate as constant.")
     else:
-        best_fit += (f" Unadjusted, on every spell, the constant rate is {constant_gap:.1f} AIC behind; the bands "
-                     "were chosen by the search, so that margin is optimistic.")
+        best_fit += f" The constant rate is {constant_gap:.1f} AIC behind."
+        if best["model"].startswith("bands"):
+            best_fit += " The bands were chosen by the search, so that margin is optimistic."
 
     # 5. Size
     rr = size_fit["rate_ratio_vs_small"]
@@ -528,7 +664,7 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
         steps = ", ".join(f"{name} {rr[name]:.1f}" for name in SIZE_ORDER[1:])
         size = (f"Yes: the recurrence rate {'rises' if size_fit['direction'] == 'increasing' else 'falls'} with "
                 f"organisation size. Rate relative to SMALL organisations: {steps} (monotone model holding prior "
-                f"event number and calendar period, bootstrap {_p_text(size_p, replicates)}). Size stands for "
+                f"event number and a calendar trend, bootstrap {_p_text(size_p, replicates)}). Size stands for "
                 "visibility and exposure as much as size: this is prediction, not cause.")
 
     def clean(value: Any) -> Any:
@@ -541,7 +677,7 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
             {"key": "adequacy", "question": "Is the data adequate for a reliable recurrence model?",
              "answer": adequacy, "adequate": adequate, "caveats": caveats},
             {"key": "splits", "question": "What are the best splits for recurrence time bands?", "answer": splits},
-            {"key": "delayed_peak", "question": "Is there a delayed peak in recurrence 90-120 days after an event?",
+            {"key": "delayed_peak", "question": "Is there a delayed peak in recurrence 91-180 days after an event?",
              "answer": delayed},
             {"key": "best_fit", "question": "What fits recurrence rates best?", "answer": best_fit},
             {"key": "size", "question": "Does organisation size predict recurrence rates?", "answer": size},
@@ -557,8 +693,11 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
                         "delta_bic_vs_constant": delta, "search_adjusted_p": clean(search_p),
                         "rates_per_100_organisation_years": band_rates,
                         "top": [{k: clean(v) for k, v in r.items()} for r in search.head(5).to_dict("records")]},
-        "delayed_peak": {k: clean(v) for k, v in peak.items()},
+        "delayed_peak": [{k: clean(v) for k, v in peak.items()} for peak in peaks],
         "timing_models": [{k: clean(v) for k, v in r.items()} for r in timing.to_dict("records")],
+        "unadjusted_timing_models": [{k: clean(v) for k, v in r.items()} for r in unadjusted_timing.to_dict("records")],
+        "calendar": {"primary": PRIMARY_CALENDAR, "coefficients": size_fit["calendar_coefficients"],
+                     "robustness": [{k: clean(v) for k, v in r.items()} for r in robustness.to_dict("records")]},
         "size_model": {"direction": size_fit["direction"], "bootstrap_p": clean(size_p),
                        "bootstrap_replicates": replicates, "likelihood_ratio": size_fit["likelihood_ratio"],
                        "n_params": size_fit["n_params"], "events_per_parameter": epv,

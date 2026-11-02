@@ -3309,16 +3309,24 @@ page opens with five questions and one generated answer each, from the main run'
 full adjusted model carries 26 parameters for about 140 repeats (5.4 per parameter) and 11 of its terms are not
 identified (standard error above 5 on the log scale: an UNKNOWN-size indicator with no repeats; sector and entity
 kind both separating government), so its non-significant contrasts, which still came with a direction, are not
-used for the answers. The answers come from Poisson models with prior event number and calendar period (5
-parameters) plus:
+used for the answers. The answers come from Poisson models that split follow-up by **calendar month** and hold
+prior event number (2 parameters) and a linear calendar trend in the per-organisation rate (1 parameter), plus:
 
 | Question | Model and test |
 |---|---|
 | Is the data adequate? | repeats (at least 100), repeats per parameter of the models used (at least 10), the full model's parameters and unidentified terms, the share of unverified incident dates, a tie policy that flips the verdict |
-| Best splits for time bands | every banding of up to 4 cuts from 30, 60, 90, 120, 150, 180, 270, 365, 545, 730, 1095, 1460, 2190 days with at least 10 repeats per band, scored by BIC (penalty log repeats) with size, prior event number and calendar period as offsets; a **search-adjusted p-value** from rerunning the whole search on repeats simulated under a constant rate (searching 400 bandings beats a constant rate by chance) |
-| Delayed peak 91-120 days | the adjusted rate in that window against all other elapsed time, exact conditional (binomial) test, one-sided; not tested below 10 repeats in the window |
-| Best fit | AIC of the constant rate, the selected banding and the Weibull, log-normal, log-logistic and generalised-gamma fits, every spell |
+| Best splits for time bands | every banding of up to 4 cuts from 30, 60, 90, 120, 150, 180, 270, 365, 545, 730, 1095, 1460, 2190 days with at least 10 repeats per band, scored by BIC (penalty log repeats) with size, prior event number and the calendar trend as offsets; a **search-adjusted p-value** from rerunning the whole search on repeats simulated under a constant rate (searching 400 bandings beats a constant rate by chance) |
+| Delayed peak 91-180 days | the adjusted rate in that window (the earlier reports' window; owner 2026-11-02) against all other elapsed time, exact conditional (binomial) test, one-sided; 91-120 alone is reported, and not tested below 10 repeats |
+| Best fit | AIC of adjusted Poisson models with elapsed time as nothing (constant), log t (Weibull-shaped), log t and its square (rise and fall) or the selected bands; the unadjusted parametric fits cannot hold calendar time and are kept for reference only |
 | Does size predict recurrence? | size as three steps SMALL < MEDIUM < LARGE < HUGE **constrained to one sign** (monotone; both directions fitted, the better kept), with the selected bands; p-value against no size effect by **parametric bootstrap** under the null (the constrained likelihood ratio is not chi-squared); UNKNOWN-size spells left out and counted |
+
+**Elapsed time against the long-term growth in recorded incidents** (owner, 2026-11-02). Long gaps end, and
+first-year gaps start, in the dense recent years, so an elapsed-time pattern can be calendar growth in disguise;
+four coarse calendar periods did not separate them. The bands are re-tested under no calendar adjustment, the
+linear trend, the log of monthly reporting intensity (recorded victim events in the 12 months centred on the month)
+and a separate effect for every year from 2020 (`calendar_robustness`); the answer says whether they hold under all
+of them. A synthetic test in which only calendar time raises the rate checks that the trend-adjusted search does
+not report bands (`test_recurrence_summary.py`).
 
 A result that is not significant is reported as "no evidence", never with a direction, here and in every
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate

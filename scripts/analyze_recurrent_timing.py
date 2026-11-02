@@ -2733,13 +2733,11 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
                 {table: sum(reasons.values()) for table, reasons in reconstruction.unknown.items()}}
 
     # The page's five questions, answered from parsimonious models (scripts/recurrence_summary.py): the full
-    # adjusted model above has more parameters than its repeats support.
-    fine_cuts = recurrence_summary.CANDIDATE_CUTS
+    # adjusted model above has more parameters than its repeats support. They split follow-up by calendar month and
+    # hold monthly reporting intensity, which the coarse calendar periods above cannot separate from elapsed time.
     executive = recurrence_summary.executive_summary(
         spells, fits, adjusted_coef, data_quality["verified incident-date precision"], tie_sensitivity,
-        replicates=args.bootstrap, seed=args.seed,
-        fine=recurrence_summary.table_from_split(
-            adjusted_poisson_split(spells, (0.0, *fine_cuts, math.inf), censor_date), fine_cuts))
+        replicates=args.bootstrap, seed=args.seed)
 
     summary = {
         "executive_summary": executive,
