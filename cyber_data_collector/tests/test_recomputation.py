@@ -182,3 +182,14 @@ def test_new_model_reclassifies(classifier):
     classifier.save_classification("d1", CLASSIFICATION, event["_fingerprint"])
     classifier.model = "another-model"
     assert classifier.stale_count() == 1
+
+
+def test_a_zero_count_is_cleared_as_no_count(conn):
+    """2026-11-03: three events copied a master record's count of 0 ("no data was accessed") and blocked
+    publication. A count below 1 is unknown, as validate_records_affected has it for every other path."""
+    from cyber_data_collector.dedup.event_facts import refresh_facts
+    conn.execute("UPDATE EnrichedEvents SET records_affected = 0")
+    conn.execute("UPDATE DeduplicatedEvents SET records_affected = 0")
+    refresh_facts(conn)
+    assert _event(conn)["records_affected"] is None
+    assert refresh_facts(conn) == {}                                     # idempotent

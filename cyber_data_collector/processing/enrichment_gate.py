@@ -1045,7 +1045,9 @@ def plan_enrichment_update(
             columns["attack_method"] = new.attack_method
             applied.append("attack_method")
 
-    if new.victim_count is not None and (new.victim_count_confidence or 0.0) >= min_apply_confidence:
+    # A count below 1 is not a number of records affected ("no data was accessed"): stored as unknown, as
+    # validate_records_affected does for every other path (three zero counts blocked publication, 2026-11-03).
+    if new.victim_count is not None and new.victim_count >= 1             and (new.victim_count_confidence or 0.0) >= min_apply_confidence:
         if (current.get("records_affected") is None
                 or new.victim_count_confidence > _confidence_of(
                     stored_blob or {}, "victim_count_confidence")):

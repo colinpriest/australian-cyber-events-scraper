@@ -679,6 +679,22 @@ def stored_victim_is_invalid(
             """, (deduplicated_event_id, victim)).fetchone()
         if role and role[0] in NON_VICTIM_ROLES:
             return f"classified as the {role[0]} on this event, not the victim"
+        # The stored name may be another spelling of the entity the roles describe: a new event takes Perplexity's
+        # formal name ("Frontier Software Pty Ltd") while the roles name "Frontier Software" the vendor of the SA
+        # Government's notice, and the stale victim kept the record's "Government" industry (2026-11-03).
+        if not role:
+            from cyber_data_collector.dedup.entity_resolution import EntityResolver
+            resolver = EntityResolver()
+            roles = conn.execute(
+                """
+                SELECT v.entity_name, dee.relationship_type FROM DeduplicatedEventEntities dee
+                JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+                WHERE dee.deduplicated_event_id = ?
+                """, (deduplicated_event_id,)).fetchall()
+            matched = {r[1] for r in roles if resolver.same_organisation(r[0], victim)}
+            if matched and not matched & {"victim", "affected_customer"} and matched & set(NON_VICTIM_ROLES):
+                role_name = sorted(matched & set(NON_VICTIM_ROLES))[0]
+                return f"classified as the {role_name} on this event, not the victim"
 
     row = conn.execute(
         "SELECT entity_kind FROM EntitiesV2 WHERE entity_name = ? "
