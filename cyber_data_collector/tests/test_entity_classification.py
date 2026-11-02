@@ -251,3 +251,17 @@ def test_blank_victim_is_not_a_finding():
     conn = _entities_db()
     assert stored_victim_is_invalid(conn, None) is None
     assert stored_victim_is_invalid(conn, "   ") is None
+
+
+def test_a_stored_victim_the_roles_name_vendor_under_another_spelling_is_invalid():
+    """2026-11-03: a new SA Government event took Perplexity's "Frontier Software Pty Ltd" as its victim while its
+    roles named "Frontier Software" the vendor; the stale victim kept the record's "Government" industry."""
+    conn = _entities_db()
+    conn.execute("INSERT INTO EntitiesV2 VALUES (8, 'Frontier Software', 'organisation', 1)")
+    conn.execute("INSERT INTO EntitiesV2 VALUES (9, 'Government of South Australia', 'government_body', 1)")
+    conn.execute("CREATE TABLE DeduplicatedEventEntities (deduplicated_event_id TEXT, entity_id INTEGER, "
+                 "relationship_type TEXT)")
+    conn.executemany("INSERT INTO DeduplicatedEventEntities VALUES ('e1', ?, ?)",
+                     [(8, "vendor"), (9, "affected")])
+    assert "vendor" in stored_victim_is_invalid(conn, "Frontier Software Pty Ltd", "e1")
+    assert stored_victim_is_invalid(conn, "Government of South Australia", "e1") is None

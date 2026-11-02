@@ -103,6 +103,9 @@ def compute_facts(event: Dict[str, Any], members: List[Tuple], overrides: Dict[s
             counts.append(checked)
     if counts:
         facts[COUNT_FIELD] = max(counts)
+    elif event.get(COUNT_FIELD) is not None and _below_one(event.get(COUNT_FIELD)):
+        # A stored count below 1 (a new event copies its master record's value) is no count: unknown.
+        facts[COUNT_FIELD] = None
 
     master = event.get("master_enriched_event_id")
     for field in FILL_FIELDS:
@@ -121,6 +124,13 @@ def compute_facts(event: Dict[str, Any], members: List[Tuple], overrides: Dict[s
         if field in FACT_FIELDS:
             facts[field] = int(value) if field == COUNT_FIELD and value not in (None, "") else value
     return facts
+
+
+def _below_one(value: Any) -> bool:
+    try:
+        return int(value) < 1
+    except (TypeError, ValueError):
+        return False
 
 
 def recompute_facts(conn: sqlite3.Connection, dedup_id: str, dry_run: bool = False) -> Dict[str, Tuple[Any, Any]]:
@@ -176,7 +186,9 @@ def stale_events(conn: sqlite3.Connection) -> List[str]:
 def refresh_facts(conn: sqlite3.Connection, also: Iterable[str] = (), dry_run: bool = False
                   ) -> Dict[str, Dict[str, Tuple[Any, Any]]]:
     """Recompute every event whose membership changed, plus ``also`` (content changes)."""
-    targets = sorted(set(stale_events(conn)) | set(also))
+    zero_counts = [r[0] for r in conn.execute(
+        "SELECT deduplicated_event_id FROM DeduplicatedEvents WHERE status = 'Active' AND records_affected < 1")]
+    targets = sorted(set(stale_events(conn)) | set(also) | set(zero_counts))
     changed: Dict[str, Dict[str, Tuple[Any, Any]]] = {}
     for dedup_id in targets:
         delta = recompute_facts(conn, dedup_id, dry_run=dry_run)

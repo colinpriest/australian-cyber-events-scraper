@@ -980,3 +980,12 @@ class TestRequeueEmptyValidations:
         assert real["perplexity_validated"] and real["data_source_reliability"] == 0.85
         queued = PerplexityBackfillProcessor(db, _FakePerplexityEngine([])).get_events_needing_enrichment()
         assert [e["enriched_event_id"] for e in queued] == [empty_id]
+
+
+def test_a_zero_count_is_not_written_as_records_affected():
+    """2026-11-03: a supported count of 0 ("no data was accessed") reached three events and blocked publication.
+    A count below 1 is unknown, as validate_records_affected has it on every other path."""
+    text = ARTICLE + "No customer records were accessed. "
+    result = _evaluate(_good_answer(victim_count=0), record_text=text, reference_date=date(2025, 6, 1))
+    plan = plan_enrichment_update({}, result)
+    assert "records_affected" not in plan.columns and "victim_count" not in plan.applied
