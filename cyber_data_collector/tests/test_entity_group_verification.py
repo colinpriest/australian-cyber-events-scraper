@@ -152,3 +152,21 @@ def test_a_decision_with_no_recorded_evidence_is_asked_again_the_first_time_it_m
     groups = eav.verified_groups(conn, [(A, [B])], search=_answering("same", asked))
     assert len(asked) == 1 and groups == [(A, [B])]
     assert conn.execute("SELECT evidence_hash IS NOT NULL FROM EntityAliasDecisions").fetchone()[0] == 1
+
+
+def test_a_persons_decision_about_either_name_is_shown_to_the_question_and_is_part_of_its_evidence():
+    """2026-11-03: "Ministry of Health" / "NSW Health" was answered 'same', then 'related' when asked again
+    ("the NSW Ministry of Health is its system manager"), against the owner's decision that NSW Health and the
+    NSW Ministry of Health are one entity - which the question had not shown."""
+    conn = _db({})
+    before = eav.pair_evidence(conn, "Ministry of Health", "NSW Health")
+    conn.execute("CREATE TABLE EntityAliases (raw_name TEXT, canonical_name TEXT, source TEXT)")
+    conn.execute("INSERT INTO EntityAliases VALUES ('NSW Ministry of Health', 'NSW Health', 'human')")
+    conn.execute("INSERT INTO EntityAliasDecisions VALUES ('NSW Health', 'NSW Ministry of Health', 'same', NULL, "
+                 "'owner', '[]', 'human', 'human', 'x', NULL)")
+    asked = []
+    eav.verify_pair(conn, "Ministry of Health", "NSW Health", _answering("same", asked), {}, eav.VerificationReport())
+    assert 'recorded by a person: "NSW Ministry of Health" is the same organisation as "NSW Health"' in asked[0]
+    assert asked[0].count("recorded by a person") == 1                # the alias and the decision say one thing
+    assert eav.pair_evidence(conn, "Ministry of Health", "NSW Health") != before
+    assert eav.pair_evidence(conn, A, B) == eav.pair_evidence(_db({}), A, B)   # other pairs keep their evidence
