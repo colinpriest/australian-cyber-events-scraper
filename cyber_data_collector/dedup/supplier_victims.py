@@ -1562,6 +1562,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         "cutoffs": {"victim": vcut, "same_incident": pcut},
         "incidents": [], "merged": [], "attached": [], "held": [], "variants": [],
         "reversed": conversion["attachments_reversed"], "splits": conversion["splits"],
+        "supplier_reports": conversion["supplier_reports"],
         "attachments_converted": conversion["attachments_converted"],
         "ambiguous": conversion["ambiguous"] + planned["ambiguous"],
         "links": [vars(link) for link in registry.links.values()],

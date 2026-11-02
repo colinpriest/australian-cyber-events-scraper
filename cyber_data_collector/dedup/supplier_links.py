@@ -1425,6 +1425,70 @@ def demote_split_customers(conn: sqlite3.Connection, apply: bool = True) -> List
     return done
 
 
+SUPPLIER_REPORT_DECISION = ("owner 2026-11-02: a report of a supplier's breach naming several customers is the "
+                            "supplier's own event; its customers are affected customers, each counted through its own "
+                            "event (the OracleCMS hack report had counted Nissan twice; ZircoDATA's breach had Monash "
+                            "Health as a victim)")
+
+
+def supplier_breach_reports(conn: sqlite3.Connection, g, apply: bool) -> List[Dict[str, Any]]:
+    """Events that report a supplier's breach as a whole become the supplier's own event.
+
+    Shape: the event records a supplier (vendor), no headline victim other than the supplier, and two or more of the
+    supplier's customers as victims. That is the breach of the supplier told through the customers it reached - the
+    Cyber Daily report "Huge trove of Australian client data leaked following OracleCMS call centre hack" (victims
+    Nissan and two councils), ZircoDATA's Black Basta breach (victims Monash Health, The Migration Translators and two
+    descriptions of Victorian agencies). Under the owner's model (2026-10-31: one event per customer, linked) such an
+    event cannot stand: each customer was a victim twice, once here and once in its own event (Nissan's report a week
+    later), and a single article cannot be split per customer. So the supplier becomes the event's victim, the
+    customers its affected customers (they reach the supplier's card through their own events or as customers named
+    in its reporting), audited in ``SupplierLinkActions`` (``supplier-report``). Idempotent: an event already
+    converted records the supplier as its victim and fewer than two customer victims.
+    """
+    from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
+
+    verdicts = pair_verdicts(conn)
+    done: List[Dict[str, Any]] = []
+    for x in g.incidents:
+        if not x.vendors:
+            continue
+        supplier = x.vendors[0]
+        row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ? "
+                           "AND status = 'Active'", (x.dedup_id,)).fetchone()
+        if row is None or (row[0] and not is_supplier(g.resolver, verdicts, supplier, row[0])):
+            continue
+        customers = [(e, n) for e, n, _k in sv.event_victims(conn, x.dedup_id)
+                     if not is_supplier(g.resolver, verdicts, supplier, n)]
+        if len(customers) < 2:
+            continue
+        supplier_id = _entity_id(conn, g.index, supplier)
+        done.append({"deduplicated_event_id": x.dedup_id, "title": x.title, "supplier": supplier,
+                     "customers": sorted(n for _e, n in customers)})
+        if not apply:
+            continue
+        conn.executemany("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
+                         "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
+                         [(x.dedup_id, e) for e, _n in customers])
+        if supplier_id is not None:
+            if conn.execute("SELECT 1 FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? AND entity_id = ?",
+                            (x.dedup_id, supplier_id)).fetchone():
+                conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
+                             "WHERE deduplicated_event_id = ? AND entity_id = ?", (x.dedup_id, supplier_id))
+            else:
+                conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, "
+                             "relationship_type) VALUES (?, ?, 'victim')", (x.dedup_id, supplier_id))
+        conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ?",
+                     (supplier, x.dedup_id))
+        conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'supplier-report', ?, NULL, ?, ?, ?, ?)",
+                     (str(uuid.uuid4()), x.dedup_id, supplier_id,
+                      json.dumps({"supplier": supplier, "customers": [n for _e, n in customers]}),
+                      SUPPLIER_REPORT_DECISION, _now()))
+    if apply:
+        conn.commit()
+    return done
+
+
 def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split: bool = False) -> Dict[str, Any]:
     """Reverse the old attachments into links (``apply``) and correct the roles of customers already split out.
 
@@ -1510,8 +1574,9 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split:
                            row[1] if row else None, (row[2] if row else None) or "attachment"))
         converted += 1
     demoted = demote_split_customers(conn, apply=apply)
+    reports = supplier_breach_reports(conn, g, apply=apply)
     return {"attachments_reversed": reversed_, "attachments_converted": converted, "splits": splits,
-            "ambiguous": ambiguous, "split_customers_demoted": demoted}
+            "ambiguous": ambiguous, "split_customers_demoted": demoted, "supplier_reports": reports}
 
 
 # ----------------------------------------------------------------------

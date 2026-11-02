@@ -1261,6 +1261,15 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   vendor. Ticketek's May 2024 breach had been split out of an event that recorded Outabox (another breach of that
   month, mentioned as background) as its vendor, and stayed listed under Outabox after the vendor was corrected
   (owner, 2026-11-02). Stake keeps DriveWealth: the event it was split from is DriveWealth's own.
+* **A report of the supplier's breach is the supplier's event** (owner, 2026-11-02). An event that records a supplier,
+  no headline victim (or the supplier) and two or more of its customers as victims tells the supplier's breach
+  through the customers it reached: the Cyber Daily report "Huge trove of Australian client data leaked following
+  OracleCMS call centre hack" recorded Nissan and two councils as victims, so Nissan was counted twice (here and in
+  its own notice a week later); ZircoDATA's Black Basta breach recorded Monash Health, The Migration Translators and
+  two descriptions of Victorian agencies as victims. A single article cannot be split per customer, so
+  `find-supplier-victims --apply` makes the supplier its victim and the customers affected customers
+  (`supplier_links.supplier_breach_reports`, audited in `SupplierLinkActions` as `supplier-report`); each customer
+  is then counted through its own event and listed on the supplier's card. 8 active events had this shape.
 * **An incident needs something to support it, and a named supplier** (2026-11-01). The report of that morning
   still carried cards for Delta Air Lines, ESET, IDCare, Gridware, Xen Technologies and Microsoft, "Oracle CMS"
   beside OracleCMS, "RMS" beside RMS Cloud, and "IT service provider" and "Australian sole trader" as vendors. The
