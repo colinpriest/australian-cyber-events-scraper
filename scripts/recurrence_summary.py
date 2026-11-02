@@ -27,6 +27,9 @@ population rate stands for differences between organisations.
    (penalty log of the number of repeats; the conservative criterion, because the search itself overfits), with
    size, prior event number and reporting intensity held as an offset; a search-adjusted p-value comes from
    rerunning the whole search on repeats simulated under a constant rate. No supported cut: no split.
+3a. **Short-term vigilance** (owner, 2026-11-02): an attack makes an organisation more vigilant for a while, so
+   the adjusted rate 1-90 days after an event is lower than at other times. The same exact conditional test as the
+   delayed peak, one-sided for "lower".
 3. **A delayed peak after an event.** The adjusted rate 91-180 days after an event (the window of the earlier
    delayed-peak tests; the owner accepted it on 2026-11-02 - 91-120 alone holds too few repeats, and is reported as
    such) against all other elapsed time, by the exact
@@ -67,6 +70,7 @@ MIN_EVENTS_PER_PARAMETER = 10
 MIN_REPEATS = 100
 PEAK_WINDOW = (90, 120)
 PEAK_WINDOWS = ((90, 180), (90, 120))
+VIGILANCE_WINDOW = (0, 90)
 CALENDAR_SPECS = ("linear_trend", "none", "log_intensity", "yearly_from_2020")
 PRIMARY_CALENDAR = "linear_trend"
 ALPHA = 0.05
@@ -409,7 +413,8 @@ def bic_evidence(delta: float) -> str:
 
 def peak_window_test(table: pd.DataFrame, size_fit: Dict[str, Any],
                      window: Tuple[float, float] = PEAK_WINDOW) -> Dict[str, Any]:
-    """Size-adjusted rate in ``(lo, hi]`` days against all other elapsed time: exact conditional test."""
+    """Adjusted rate in ``(lo, hi]`` days against all other elapsed time: exact conditional (binomial) test, both
+    one-sided p-values (higher; lower) and the repeats expected in the window if its rate were no different."""
     lo, hi = window
     known = _known_size(table).assign(adjusted=size_offsets(table, size_fit))
     inside = (known["lo"] >= lo) & (known["hi"] <= hi)
@@ -418,6 +423,7 @@ def peak_window_test(table: pd.DataFrame, size_fit: Dict[str, Any],
     total = e_in + e_out
     share = x_in / (x_in + x_out)
     p_higher = float(stats.binomtest(e_in, total, share, alternative="greater").pvalue) if total else math.nan
+    p_lower = float(stats.binomtest(e_in, total, share, alternative="less").pvalue) if total else math.nan
     ci = stats.binomtest(e_in, total, share).proportion_ci(confidence_level=0.95) if total else None
 
     def to_ratio(p: float) -> float:
@@ -430,7 +436,8 @@ def peak_window_test(table: pd.DataFrame, size_fit: Dict[str, Any],
     return {"window": f"{int(lo) + 1}-{int(hi)}", "repeats_in_window": e_in, "repeats_elsewhere": e_out,
             "rate_ratio": (e_in / x_in) / (e_out / x_out) if e_out and x_in else math.nan,
             "ci_low": to_ratio(ci.low) if ci else math.nan, "ci_high": to_ratio(ci.high) if ci else math.nan,
-            "p_one_sided_higher": p_higher, "enough_repeats": e_in >= MIN_REPEATS_PER_BAND}
+            "p_one_sided_higher": p_higher, "p_one_sided_lower": p_lower,
+            "expected_if_no_difference": total * share, "enough_repeats": e_in >= MIN_REPEATS_PER_BAND}
 
 
 def timing_model_comparison(spells: pd.DataFrame, parametric: Sequence[Any], cuts: Sequence[float]) -> pd.DataFrame:
@@ -555,6 +562,7 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
     size_fit = monotone_size_fit(fine, cuts)
     size_p = bootstrap_size_p(size_fit, replicates, seed) if replicates > 0 else math.nan
     peaks = [peak_window_test(fine, size_fit, window) for window in PEAK_WINDOWS]
+    vigilance = peak_window_test(fine, size_fit, VIGILANCE_WINDOW)
     timing = adjusted_timing_models(fine, size_fit, cuts)
     unadjusted_timing = timing_model_comparison(spells, parametric, cuts)
     full = adjusted_model_parameters(adjusted_coefficients, repeats)
@@ -621,6 +629,23 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
                   f"prior event number and a calendar trend; search-adjusted "
                   f"{_p_text(search_p, replicates)}).{calendar_note}")
 
+    # 3a. Short-term vigilance
+    if vigilance["repeats_in_window"] + vigilance["expected_if_no_difference"] < MIN_REPEATS_PER_BAND:
+        vigilant = (f"Cannot be tested reliably: {vigilance['repeats_in_window']} repeats fall "
+                    f"{vigilance['window']} days after an event and about "
+                    f"{vigilance['expected_if_no_difference']:.0f} would be expected.")
+    elif vigilance["p_one_sided_lower"] < ALPHA:
+        vigilant = (f"Yes: the adjusted rate {vigilance['window']} days after an event is "
+                    f"{vigilance['rate_ratio']:.2f} times the rate at other times (95% CI {vigilance['ci_low']:.2f}-"
+                    f"{vigilance['ci_high']:.2f}; one-sided {_p_text(vigilance['p_one_sided_lower'])}; "
+                    f"{vigilance['repeats_in_window']} repeats against {vigilance['expected_if_no_difference']:.1f} "
+                    "expected), consistent with short-term vigilance.")
+    else:
+        vigilant = (f"No evidence of short-term vigilance: the adjusted rate {vigilance['window']} days after an event "
+                    f"is not lower than at other times (one-sided {_p_text(vigilance['p_one_sided_lower'])}; "
+                    f"{vigilance['repeats_in_window']} repeats against {vigilance['expected_if_no_difference']:.1f} "
+                    "expected if the rate were no different).")
+
     # 3. Delayed peak
     main_peak, narrow = peaks[0], peaks[1]
     if main_peak["repeats_in_window"] < MIN_REPEATS_PER_BAND:
@@ -677,6 +702,8 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
             {"key": "adequacy", "question": "Is the data adequate for a reliable recurrence model?",
              "answer": adequacy, "adequate": adequate, "caveats": caveats},
             {"key": "splits", "question": "What are the best splits for recurrence time bands?", "answer": splits},
+            {"key": "vigilance", "question": "Is the rate lower 1-90 days after an event (short-term vigilance)?",
+             "answer": vigilant},
             {"key": "delayed_peak", "question": "Is there a delayed peak in recurrence 91-180 days after an event?",
              "answer": delayed},
             {"key": "best_fit", "question": "What fits recurrence rates best?", "answer": best_fit},
@@ -694,6 +721,7 @@ def executive_summary(spells: pd.DataFrame, parametric: Sequence[Any], adjusted_
                         "rates_per_100_organisation_years": band_rates,
                         "top": [{k: clean(v) for k, v in r.items()} for r in search.head(5).to_dict("records")]},
         "delayed_peak": [{k: clean(v) for k, v in peak.items()} for peak in peaks],
+        "vigilance": {k: clean(v) for k, v in vigilance.items()},
         "timing_models": [{k: clean(v) for k, v in r.items()} for r in timing.to_dict("records")],
         "unadjusted_timing_models": [{k: clean(v) for k, v in r.items()} for r in unadjusted_timing.to_dict("records")],
         "calendar": {"primary": PRIMARY_CALENDAR, "coefficients": size_fit["calendar_coefficients"],

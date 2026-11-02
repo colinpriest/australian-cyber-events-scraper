@@ -150,3 +150,34 @@ def test_growth_in_calendar_time_is_not_read_as_an_elapsed_time_pattern():
     assert robustness.loc["none", "bands_p"] < 0.05             # the confounded reading
     assert robustness.loc["linear_trend", "bands_p"] > 0.05     # gone once calendar time is held
     assert robustness.loc["linear_trend", "calendar_p"] < 0.001
+
+
+def _early_rate_spells(early_rate, later_rate, seed, n=900):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for size in rs.SIZE_ORDER:
+        for _ in range(n):
+            t = rng.exponential(1 / early_rate)
+            if t > 90:
+                t = 90 + rng.exponential(1 / later_rate)
+            c = rng.uniform(200, 2500)
+            rows.append({"org_size": size, "event_number_cat": "1", "duration_days": max(1.0, min(t, c)),
+                         "event": int(t <= c), "prior_event_date": (CENSOR - timedelta(days=int(c))).isoformat()})
+    return pd.DataFrame(rows)
+
+
+def test_short_term_vigilance_is_found_when_the_first_90_days_are_quieter():
+    """Owner, 2026-11-02: is the rate lower 1-90 days after an event (attacks cause short-term vigilance)?"""
+    summary = _summary(_early_rate_spells(0.00005, 0.0006, seed=31), replicates=19)
+    assert summary["vigilance"]["window"] == "1-90"
+    assert summary["vigilance"]["p_one_sided_lower"] < 0.05
+    assert _answer(summary, "vigilance").startswith("Yes: the adjusted rate 1-90 days after an event is")
+    questions = [q["key"] for q in summary["questions"]]
+    assert questions.index("vigilance") == questions.index("delayed_peak") - 1
+
+
+def test_no_vigilance_is_reported_without_a_direction():
+    summary = _summary(_early_rate_spells(0.0005, 0.0005, seed=32), replicates=19)
+    text = _answer(summary, "vigilance")
+    assert text.startswith("No evidence of short-term vigilance")
+    assert "higher" not in text
