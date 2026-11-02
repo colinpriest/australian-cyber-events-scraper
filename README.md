@@ -3332,15 +3332,17 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-02 snapshot (`snap-20261102091647`, censor date 2026-11-01; 140 repeats, 1,008 post-event spells):
-adequate for a simple model (13 repeats per parameter; the full model 5.4, 11 terms not identified; 56% of incident
-dates unverified); best bands **0-365 / 366-1095 / >1095 days** (7.8, 3.5 and 7.9 repeats per 100
-organisation-years; 4.3 BIC better than a constant rate with size, prior event number and calendar period held,
-search-adjusted p = 0.018); the 91-120 day window holds only 5 repeats, too few to test; and the recurrence rate
-**rises with size** (LARGE 5.9 and HUGE 14.6 times SMALL, MEDIUM pooled with SMALL by the constraint; bootstrap
-p <= 0.002). The full adjusted model's "no elapsed-time pattern" (below) came from a model with more parameters
-than its repeats support; the first-year difference is only positive evidence (BIC) and may still reflect
-reporting density, so it is a finding to watch, not to act on.
+On the 2026-11-02 snapshot (`snap-20261102091647`, censor date 2026-11-01; 140 repeats, 1,008 post-event spells,
+follow-up split by calendar month): adequate for a simple model (16 repeats per parameter; the full model 5.4, 11
+terms not identified; 56% of incident dates unverified). Best bands **0-365 / 366-1095 / >1095 days**, the middle
+band at 0.47 times the first year's rate and the last at 1.01 (6.2 BIC better than a constant rate; search-adjusted
+p = 0.008). The long-term growth in recorded incidents does not explain it: the per-organisation rate changes by
++3% a year (yearly effects from 2020 jointly p = 0.67, i.e. the growth in incidents is matched by growth in
+organisations at risk), and the band contrast is the same under no calendar adjustment, the trend, monthly
+reporting intensity and yearly effects (p 0.0003-0.0006). **No delayed peak at 91-180 days** (one-sided p = 0.114,
+18 repeats; 91-120 alone holds 5). The recurrence rate **rises with size** (LARGE 6.0 and HUGE 14.0 times SMALL,
+MEDIUM pooled with SMALL by the constraint; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time
+pattern" (below) came from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
