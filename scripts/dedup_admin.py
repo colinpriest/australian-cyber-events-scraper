@@ -3711,7 +3711,7 @@ def cmd_reconcile_timelines(args) -> int:
         return 2
     conn = _connect(args.db)
     try:
-        result = reconcile_all(conn, queue_gaps=args.queue_gaps, apply=args.apply)
+        result = reconcile_all(conn, queue_gaps=args.queue_gaps, apply=args.apply, workers=args.workers)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -3755,11 +3755,11 @@ def cmd_research_timelines(args) -> int:
     conn = _connect(args.db)
     try:
         try:
-            done = research_all(conn)
+            done = research_all(conn, minimum=1 if args.all_victims else 2, workers=args.workers)
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
-        total = len(organisations_to_research(conn))
+        total = len(organisations_to_research(conn, 1 if args.all_victims else 2))
     finally:
         conn.close()
     print(f"{done} of {total} organisations have a current timeline.")
@@ -4839,11 +4839,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--apply", action="store_true",
                    help="Re-date date conflicts at the calibrated match cut-off (only with a matching "
                         "calibration and readable labels)")
+    p.add_argument("--workers", type=int, default=8,
+                   help="Concurrent Perplexity searches for timelines and coverage gaps (stored one at a time)")
     p.set_defaults(func=cmd_reconcile_timelines)
 
     p = sub.add_parser("research-timelines",
                        help="Research (or reuse) the incident timeline of every organisation "
                             "with several events (Perplexity; stored)")
+    p.add_argument("--all-victims", action="store_true",
+                   help="Every victim organisation, single-event ones too (their gaps are the missing repeats; "
+                        "researched once, they are kept current by every later run)")
+    p.add_argument("--workers", type=int, default=8, help="Concurrent Perplexity searches (stored one at a time)")
     p.set_defaults(func=cmd_research_timelines)
 
     p = sub.add_parser("check-victim-attribution",

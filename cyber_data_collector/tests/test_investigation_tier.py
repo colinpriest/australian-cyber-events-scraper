@@ -153,3 +153,38 @@ def test_a_timeline_is_refreshed_when_new_evidence_arrives(conn):
     assert refreshed["timeline"] != first["timeline"] and not ot.is_stale(conn, 1)
     ot.research_all(conn, search=newer)
     assert len(calls) == 2   # nothing new: no search
+
+
+def test_single_event_organisations_are_researched_with_all_victims_and_kept_after(conn):
+    """Owner, 2026-11-02: fill the repeats we know are missing - every victim organisation's history, not only those
+    with several events (that would add repeats only where repeats are already common)."""
+    conn.execute("INSERT INTO EntitiesV2 VALUES (2, 'Solo Pty Ltd')")
+    conn.execute("INSERT INTO DeduplicatedEvents VALUES ('s1', 'Solo breach', '2025-03-01', 'Solo Pty Ltd', 'Active', NULL)")
+    conn.execute("INSERT INTO DeduplicatedEventEntities VALUES ('s1', 2, 'victim')")
+    assert [o["entity_name"] for o in ot.organisations_to_research(conn)] == ["Western Sydney University"]
+    calls = []
+    assert ot.research_all(conn, search=_search(calls), minimum=1, workers=4) == 2
+    assert len(calls) == 2
+    # Researched once, it stays in the default set, so later runs keep it current and reconcile it.
+    assert [o["entity_name"] for o in ot.organisations_to_research(conn)] == ["Solo Pty Ltd",
+                                                                              "Western Sydney University"]
+    assert ot.research_all(conn, search=_search(calls), workers=4) == 2 and len(calls) == 2
+
+
+def test_a_prefetched_search_answers_in_order_and_raises_where_the_call_would():
+    from cyber_data_collector.utils.prefetch import PrefetchedSearch
+
+    seen = []
+
+    def search(query, model):
+        seen.append(query)
+        if query == "bad":
+            raise RuntimeError("Perplexity down")
+        return {"answer": query.upper()}
+
+    prefetched = PrefetchedSearch(search, ["a", "bad", "a", ""], "m", workers=3)
+    assert sorted(seen) == ["a", "bad"]                       # each question once, blanks skipped
+    assert prefetched("a", "m") == {"answer": "A"}
+    with pytest.raises(RuntimeError, match="Perplexity down"):
+        prefetched("bad", "m")
+    assert prefetched("c", "m") == {"answer": "C"} and seen[-1] == "c"   # not prefetched: the real search
