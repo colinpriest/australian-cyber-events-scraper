@@ -59,10 +59,11 @@ def conn(tmp_path):
 
 def test_webber_records_leave_the_15th_for_their_heading_month(conn):
     out = idt.repair_webber_dates(conn)
-    assert (out.raw, out.enriched, out.events, out.publication_cleared) == (1, 1, 1, 1)
+    assert (out.raw, out.enriched, out.events, out.publication_cleared) == (1, 1, 1, 0)
     raw = conn.execute("SELECT event_date, event_date_precision, event_date_basis, publication_date "
                        "FROM RawEvents WHERE raw_event_id = 'w1'").fetchone()
-    assert tuple(raw) == ("2025-06-01", "month", idt.BASIS_WEBBER_HEADING, None)
+    # The heading month is Webber's publication month (owner, 2026-11-02): it stays the publication date.
+    assert tuple(raw) == ("2025-06-01", "month", idt.BASIS_WEBBER_HEADING, "2025-06-15")
     assert conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'dw'"
                         ).fetchone()[0] == "2025-06-01"
     assert idt.repair_webber_dates(conn).raw == 0                                 # idempotent
@@ -102,7 +103,12 @@ def test_webber_detail_page_prefers_the_day_tied_to_the_breach_and_keeps_the_lin
 
     monkeypatch.setattr(Response, "content", b"<html><body><h1>Vertel</h1><article>No date here.</article></body></html>")
     event = source._scrape_detail_page(url, section_date=datetime(2025, 6, 1))
-    assert event.event_date.date().isoformat() == "2025-06-01" and event.event_date_precision == "month"
+    # The heading month is when Webber published the item, not the incident's (owner, 2026-11-02).
+    assert event.event_date is None and event.event_date_basis == idt.BASIS_WEBBER_PUBLICATION
+    plain = "https://www.webberinsurance.com.au/data-breaches-list#vertel"
+    event = source._scrape_detail_page(plain, section_date=datetime(2025, 6, 1))
+    assert event.event_date is None
+    assert event.data_sources[0].publication_date.date().isoformat() == "2025-06-15"
     assert source._parse_section_header_date("Vertel – June 2025") == datetime(2025, 6, 1)
 
 
@@ -179,3 +185,54 @@ def test_refresh_reports_incompatible_sources_as_conflicting_with_no_interval(co
                        "WHERE deduplicated_event_id = 'dc'").fetchone()
     assert tuple(row) == (None, None, None)
     assert "dc" in report.conflicting
+
+
+def test_the_webber_month_is_the_publication_month_not_the_incident_date(conn):
+    """Owner, 2026-11-02: "the webber date is published date, not incident date"."""
+    idt.repair_webber_dates(conn)
+    out = idt.webber_month_is_publication(conn)
+    assert (out.records, out.enriched) == (1, 1)
+    raw = conn.execute("SELECT event_date, event_date_precision, event_date_basis, publication_date "
+                       "FROM RawEvents WHERE raw_event_id = 'w1'").fetchone()
+    assert tuple(raw) == (None, None, idt.BASIS_WEBBER_PUBLICATION, "2025-06-15")
+    assert conn.execute("SELECT event_date FROM EnrichedEvents WHERE enriched_event_id = 'ew1'").fetchone()[0] is None
+    report = idt.refresh_event_precision(conn)
+    assert conn.execute("SELECT event_date_precision FROM DeduplicatedEvents WHERE deduplicated_event_id = 'dw'"
+                        ).fetchone()[0] is None                      # a publication month verifies nothing
+    assert report.verified == {"day": 1}
+    assert idt.webber_month_is_publication(conn).records == 0        # idempotent
+
+
+def test_research_dated_after_the_report_was_published_describes_another_incident(conn):
+    """Owner, 2026-11-02: Webber listed Cyber Daily's report of the May 2024 Qantas app fault in May 2024; research
+    answered with the July 2025 attack (its date and 6,000,000 records). An incident cannot follow its report."""
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, event_date, publication_date, "
+                 "publication_date_source, source_url, discovered_at) VALUES ('q1', 'WebberInsurance', NULL, "
+                 "'2024-05-15', 'source', 'https://cyberdaily/qantas-app', '2026-10-28')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, event_date, records_affected, "
+                 "status, is_australian_event, is_specific_event, perplexity_validated) VALUES ('eq1', 'q1', "
+                 "'Qantas breach exposes customer booking details', '2025-07-01', 6000000, 'Active', 1, 1, 1)")
+    # Within Webber's month (bound: its last day + 7): a research date in it stands.
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, publication_date, publication_date_source, "
+                 "source_url, discovered_at) VALUES ('k1', 'WebberInsurance', '2026-07-15', 'source', 'https://x/k', "
+                 "'2026-10-28')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, event_date, status, "
+                 "is_australian_event, is_specific_event) VALUES ('ek1', 'k1', 'CubePilot', '2026-07-24', 'Active', 1, 1)")
+    # OAIC's constant 2023-03-10 bounds nothing.
+    conn.execute("INSERT INTO RawEvents (raw_event_id, source_type, publication_date, publication_date_source, "
+                 "source_url, discovered_at) VALUES ('o1', 'OAIC', '2023-03-10', 'source', 'https://x/o', '2026-10-28')")
+    conn.execute("INSERT INTO EnrichedEvents (enriched_event_id, raw_event_id, title, event_date, status, "
+                 "is_australian_event, is_specific_event) VALUES ('eo1', 'o1', 'Statement on Qantas', '2025-06-30', "
+                 "'Active', 1, 1)")
+    conn.commit()
+    dry = idt.remove_dates_after_publication(conn, dry_run=True)
+    assert (dry.raw_dates, dry.research) == (0, 1)
+    out = idt.remove_dates_after_publication(conn)
+    assert out.research == 1
+    row = conn.execute("SELECT event_date, records_affected, perplexity_validated FROM EnrichedEvents "
+                       "WHERE enriched_event_id = 'eq1'").fetchone()
+    assert tuple(row) == (None, None, 0)                              # withheld and queued for research again
+    assert conn.execute("SELECT event_date FROM EnrichedEvents WHERE enriched_event_id = 'ek1'").fetchone()[0] == "2026-07-24"
+    assert conn.execute("SELECT event_date FROM EnrichedEvents WHERE enriched_event_id = 'eo1'").fetchone()[0] == "2025-06-30"
+    assert conn.execute("SELECT COUNT(*) FROM ImpossibleIncidentDates").fetchone()[0] == 1
+    assert idt.remove_dates_after_publication(conn).research == 0     # idempotent

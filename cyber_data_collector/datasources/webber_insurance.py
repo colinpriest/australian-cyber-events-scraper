@@ -25,7 +25,7 @@ from cyber_data_collector.models.events import (
 from cyber_data_collector.processing.active_evidence import shares_distinctive_words
 from cyber_data_collector.processing.incident_dates import (
     BASIS_STATED_IN_SOURCE,
-    BASIS_WEBBER_HEADING,
+    BASIS_WEBBER_PUBLICATION,
     incident_date_from_text,
 )
 from cyber_data_collector.utils import RateLimiter
@@ -259,18 +259,20 @@ class WebberInsuranceDataSource(DataSource):
 
             # A day counts as the incident's only when the wording ties it to the
             # breach ("occurred on", "discovered", "between X and Y"). The first date
-            # in an article is its byline or publication date. The list heading gives
-            # the month; the date in the link is the newsletter's (a publication date).
+            # in an article is its byline or publication date. The list heading is the
+            # month Webber published the item (owner, 2026-11-02), never the incident's:
+            # with no newsletter date in the link it is the publication month (the 15th,
+            # imputed), and it bounds the search for a tied day.
             near = section_date.date() if section_date else None
             stated = incident_date_from_text(content_block.get_text(" "), near=near)
             published = self._parse_url_date(url) or (item or {}).get("url_date")
+            if published is None and section_date:
+                published = datetime(section_date.year, section_date.month, 15)
             if stated:
                 event_date = datetime(stated.day.year, stated.day.month, stated.day.day)
                 precision, basis = "day", BASIS_STATED_IN_SOURCE
-            elif section_date:
-                event_date, precision, basis = section_date, "month", BASIS_WEBBER_HEADING
             else:
-                event_date, precision, basis = None, None, None
+                event_date, precision, basis = None, None, BASIS_WEBBER_PUBLICATION
 
             if organisation:
                 entity_name = organisation

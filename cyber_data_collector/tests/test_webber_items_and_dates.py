@@ -88,12 +88,14 @@ def test_a_publication_date_is_not_the_incident_date(monkeypatch, source):
     assert event.event_date_basis == idt.BASIS_STATED_IN_SOURCE
 
 
-def test_only_a_publication_date_leaves_the_heading_month(monkeypatch, source):
+def test_only_a_publication_date_gives_no_incident_date(monkeypatch, source):
+    """The heading month is when Webber published the item (owner, 2026-11-02): the record's publication month."""
     event = _scrape(monkeypatch, source,
                     "<html><h1>Vertel breach</h1><article>Published 1 June 2025. Vertel is investigating."
                     "</article></html>")
-    assert event.event_date.date() == date(2025, 6, 1) and event.event_date_precision == "month"
-    assert event.event_date_basis == idt.BASIS_WEBBER_HEADING
+    assert event.event_date is None and event.event_date_precision is None
+    assert event.event_date_basis == idt.BASIS_WEBBER_PUBLICATION
+    assert event.data_sources[0].publication_date.date() == date(2025, 6, 15)
 
 
 def test_a_page_about_something_else_keeps_the_lists_title_so_the_mismatch_shows(monkeypatch, source):
@@ -195,7 +197,7 @@ def _state(conn, raw):
                               "WHERE raw_event_id = ?", (raw,)).fetchone())
 
 
-def test_rederive_ties_days_and_returns_untied_ones_to_the_heading(conn):
+def test_rederive_ties_days_and_leaves_untied_ones_with_no_incident_date(conn):
     headings = {"https://news.example/old": date(2025, 6, 1), "https://news.example/oldtied": date(2025, 6, 1)}
     dry = idt.rederive_webber_dates(conn, dry_run=True, headings=headings)
     assert (dry.tied, dry.changed, dry.reverted, dry.unresolved) == (1, 1, 1, 0)
@@ -204,8 +206,8 @@ def test_rederive_ties_days_and_returns_untied_ones_to_the_heading(conn):
     out = idt.rederive_webber_dates(conn, headings=headings)
     assert (out.tied, out.changed, out.reverted, out.enriched) == (1, 1, 1, 3)
     assert _state(conn, "tied") == ("2025-05-02", "day", idt.BASIS_STATED_IN_SOURCE)
-    assert _state(conn, "plain") == ("2025-06-01", "month", idt.BASIS_WEBBER_HEADING)
-    assert _state(conn, "old") == ("2025-06-01", "month", idt.BASIS_WEBBER_HEADING)
+    assert _state(conn, "plain") == ("2025-06-01", "month", idt.BASIS_WEBBER_HEADING)      # moved by the repair
+    assert _state(conn, "old") == (None, None, idt.BASIS_WEBBER_PUBLICATION)
     assert _state(conn, "oldtied") == ("2025-05-20", "day", idt.BASIS_STATED_IN_SOURCE)
     assert conn.execute("SELECT event_date FROM EnrichedEvents WHERE enriched_event_id = 'etied'").fetchone()[0] == "2025-05-02"
 

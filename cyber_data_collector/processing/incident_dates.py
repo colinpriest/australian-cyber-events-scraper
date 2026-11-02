@@ -6,8 +6,11 @@ guesses (a 1st is "month only, or the 1st"); the recurrence analysis then
 treats every 1st as ambiguous. Precision is recorded where it is known instead:
 
 * ``RawEvents.event_date_precision`` / ``event_date_basis`` - what the source
-  itself established: a Webber list heading ("Vertel - June 2025") is a
-  month; a date stated in the source's page is a day.
+  itself established: a date the source's page ties to the incident is a day.
+  A Webber list heading ("Vertel - June 2025") is the month **Webber published**
+  the item, not the incident's (owner, 2026-11-02): it is the record's
+  publication month (the 15th of it, imputed) and an upper bound on the incident,
+  never an incident date (:func:`webber_month_is_publication`).
 * Perplexity's ``date_precision`` counts only for a date the citation check
   accepted (``EnrichmentFactSupport`` fact ``date`` = ``supported``).
 * ``DeduplicatedEvents.event_date_precision`` is set only from verified
@@ -22,9 +25,9 @@ treats every 1st as ambiguous. Precision is recorded where it is known instead:
 Webber records were stored on the 15th of the heading month - a day nobody
 reported - and the heading month outranked any date the article stated. All
 832 Webber records on 2026-10-28 were on the 15th. :func:`repair_webber_dates`
-moves them to the month interval (stored as the 1st, precision ``month``)
-and clears the heading month as their publication date (it is the list's
-heading, not the page's publication), so the page's own date is fetched.
+moved them to the month interval (stored as the 1st, precision ``month``);
+:func:`webber_month_is_publication` then takes that month off as an incident
+date, because it is the month Webber published the item.
 
 A day the article states is the *incident's* only when its wording ties it to
 the breach (:func:`incident_date_from_text`): "the breach occurred on 2 May
@@ -32,7 +35,8 @@ the breach (:func:`incident_date_from_text`): "the breach occurred on 2 May
 anywhere in an article is usually its byline or publication date ("Published 1
 June 2025"), which the parser used to store as an exact incident date.
 Publication, byline, "updated" and announcement dates never count; without a
-tied date the record keeps the list heading's month.
+tied date the record has no incident date of its own (until 2026-11-02 it kept
+the list heading's month, which is Webber's publication month).
 :func:`rederive_webber_dates` applies the rule to the stored records.
 """
 
@@ -44,7 +48,7 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -52,6 +56,7 @@ logger = logging.getLogger(__name__)
 PRECISIONS = ("day", "month", "year")
 BASIS_WEBBER_HEADING = "Webber list heading (month)"
 BASIS_STATED_IN_SOURCE = "stated in the source page"
+BASIS_WEBBER_PUBLICATION = "none: the Webber list month is when Webber published the item, not the incident date"
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -221,10 +226,6 @@ def repair_webber_dates(conn: sqlite3.Connection, dry_run: bool = False) -> Webb
             continue
         conn.execute("UPDATE RawEvents SET event_date = ?, event_date_precision = 'month', event_date_basis = ? "
                      "WHERE raw_event_id = ?", (month, BASIS_WEBBER_HEADING, raw_id))
-        if published_from == "source" and _day(published) == old_day:
-            conn.execute("UPDATE RawEvents SET publication_date = NULL, publication_date_source = NULL "
-                         "WHERE raw_event_id = ?", (raw_id,))
-            out.publication_cleared += 1
         for (enriched_id,) in conn.execute("SELECT enriched_event_id FROM EnrichedEvents WHERE raw_event_id = ? "
                                            "AND substr(event_date, 1, 10) = ?", (raw_id, old_day.isoformat())).fetchall():
             conn.execute("UPDATE EnrichedEvents SET event_date = ? WHERE enriched_event_id = ?", (month, enriched_id))
@@ -403,29 +404,76 @@ def incident_date_from_text(text: Optional[str], near: Optional[date] = None) ->
 class WebberRedate:
     records: int = 0          # records read
     tied: int = 0             # heading-month records whose text ties a day to the incident -> day precision
-    reverted: int = 0         # records the old rule dated from a day nothing ties -> heading month
+    reverted: int = 0         # records the old rule dated from a day nothing ties -> no incident date
     changed: int = 0          # records whose stored day moved to the day the text ties
     unresolved: int = 0       # old-rule records whose heading month is unknown (not changed)
     enriched: int = 0
 
     def summary(self) -> str:
         return (f"{self.records} Webber record(s) read: {self.tied} month(s) -> the day the text ties to the incident, "
-                f"{self.changed} day(s) moved to the tied day, {self.reverted} untied day(s) -> the heading month, "
+                f"{self.changed} day(s) moved to the tied day, {self.reverted} untied day(s) -> no incident date, "
                 f"{self.unresolved} untied day(s) whose heading month is unknown (left); "
                 f"{self.enriched} enriched record(s) re-dated")
+
+
+@dataclass
+class WebberPublication:
+    records: int = 0
+    enriched: int = 0
+    publication_set: int = 0
+
+    def summary(self) -> str:
+        return (f"{self.records} Webber record(s) no longer take the list month as their incident date (it is Webber's "
+                f"publication month); {self.enriched} research date(s) copied from it cleared; "
+                f"{self.publication_set} publication month(s) recorded")
+
+
+def webber_month_is_publication(conn: sqlite3.Connection, dry_run: bool = False) -> WebberPublication:
+    """The Webber list month is the month Webber published the item, not the incident's (owner, 2026-11-02).
+
+    Records still dated by the heading (basis :data:`BASIS_WEBBER_HEADING`) lose the incident date: the heading
+    month becomes their publication month where they have none (the 15th, imputed, source ``source``) and an
+    enrichment date copied from the heading is cleared, so the event is dated by what the reporting states, or by
+    its first report. A day the article ties to the incident is kept (:func:`rederive_webber_dates`). Idempotent;
+    commits unless ``dry_run``.
+    """
+    ensure_schema(conn)
+    out = WebberPublication()
+    rows = conn.execute("""SELECT raw_event_id, event_date, publication_date FROM RawEvents
+                           WHERE source_type = 'WebberInsurance' AND event_date_basis = ?""",
+                        (BASIS_WEBBER_HEADING,)).fetchall()
+    for raw_id, stored, published in rows:
+        day = _day(stored)
+        out.records += 1
+        if dry_run:
+            continue
+        conn.execute("UPDATE RawEvents SET event_date = NULL, event_date_precision = NULL, event_date_basis = ? "
+                     "WHERE raw_event_id = ?", (BASIS_WEBBER_PUBLICATION, raw_id))
+        if day is not None and not published:
+            conn.execute("UPDATE RawEvents SET publication_date = ?, publication_date_source = 'source' "
+                         "WHERE raw_event_id = ?", (date(day.year, day.month, 15).isoformat(), raw_id))
+            out.publication_set += 1
+        if day is not None:
+            out.enriched += conn.execute(
+                "UPDATE EnrichedEvents SET event_date = NULL WHERE raw_event_id = ? AND substr(event_date, 1, 10) = ?",
+                (raw_id, day.isoformat())).rowcount
+    if not dry_run:
+        conn.commit()
+    return out
 
 
 def rederive_webber_dates(conn: sqlite3.Connection, dry_run: bool = False,
                           headings: Optional[Dict[str, date]] = None) -> WebberRedate:
     """Apply :func:`incident_date_from_text` to the stored Webber records (idempotent). Commits unless ``dry_run``.
 
-    * A record on its heading month whose stored page text ties a day to the
-      incident gets that day (precision ``day``).
+    * A record with no incident date of its own (or still on its heading month) whose stored page text ties a
+      day to the incident gets that day (precision ``day``); the publication month bounds the search.
     * A record the old parser gave a day ("stated in the source page": the
       first date in the article, usually its byline) keeps it only if the text
-      ties it; otherwise it moves to the tied day, or back to its heading month
-      (``headings``: list URL -> any day of the heading's month, from the live
-      list; without it such a record is counted as unresolved and left).
+      ties it; otherwise it moves to the tied day, or has no incident date (the
+      month bounding the search is its publication month, else ``headings``:
+      list URL -> any day of the heading's month, from the live list; with
+      neither such a record is counted as unresolved and left).
 
     The records' enrichments are re-dated where they held the old date; an
     event's own date follows by member consensus at the next deduplication
@@ -434,28 +482,35 @@ def rederive_webber_dates(conn: sqlite3.Connection, dry_run: bool = False,
     ensure_schema(conn)
     out = WebberRedate()
     headings = headings or {}
-    rows = conn.execute("""SELECT raw_event_id, event_date, event_date_basis, raw_content, source_url
+    rows = conn.execute("""SELECT raw_event_id, event_date, event_date_basis, raw_content, source_url,
+                                  publication_date
                            FROM RawEvents WHERE source_type = 'WebberInsurance' AND raw_content IS NOT NULL
-                             AND event_date_basis IN (?, ?)""", (BASIS_WEBBER_HEADING, BASIS_STATED_IN_SOURCE)).fetchall()
-    for raw_id, stored, basis, content, url in rows:
+                             AND event_date_basis IN (?, ?, ?)""",
+                        (BASIS_WEBBER_HEADING, BASIS_STATED_IN_SOURCE, BASIS_WEBBER_PUBLICATION)).fetchall()
+    for raw_id, stored, basis, content, url, published in rows:
         out.records += 1
-        stored_day = _day(stored)
-        if stored_day is None:
-            continue
-        heading = (date(stored_day.year, stored_day.month, 1) if basis == BASIS_WEBBER_HEADING else headings.get(url))
-        found = incident_date_from_text(content, near=heading)
-        if basis == BASIS_WEBBER_HEADING:
-            if found is None:
+        stored_day, published_day = _day(stored), _day(published)
+        if basis == BASIS_WEBBER_HEADING and stored_day is not None:
+            month = date(stored_day.year, stored_day.month, 1)
+        elif published_day is not None:
+            month = date(published_day.year, published_day.month, 1)
+        else:
+            month = headings.get(url)
+        found = incident_date_from_text(content, near=month)
+        if basis in (BASIS_WEBBER_HEADING, BASIS_WEBBER_PUBLICATION):
+            if found is None or found.day == stored_day:
                 continue
             target, precision, new_basis = found.day, "day", BASIS_STATED_IN_SOURCE
             out.tied += 1
+        elif stored_day is None:
+            continue
         elif found is not None and found.day == stored_day:
             continue
         elif found is not None:
             target, precision, new_basis = found.day, "day", BASIS_STATED_IN_SOURCE
             out.changed += 1
-        elif heading is not None:
-            target, precision, new_basis = date(heading.year, heading.month, 1), "month", BASIS_WEBBER_HEADING
+        elif month is not None:
+            target, precision, new_basis = None, None, BASIS_WEBBER_PUBLICATION
             out.reverted += 1
         else:
             out.unresolved += 1
@@ -463,10 +518,96 @@ def rederive_webber_dates(conn: sqlite3.Connection, dry_run: bool = False,
         if dry_run:
             continue
         conn.execute("UPDATE RawEvents SET event_date = ?, event_date_precision = ?, event_date_basis = ? "
-                     "WHERE raw_event_id = ?", (target.isoformat(), precision, new_basis, raw_id))
-        out.enriched += conn.execute(
-            "UPDATE EnrichedEvents SET event_date = ? WHERE raw_event_id = ? AND substr(event_date, 1, 10) = ?",
-            (target.isoformat(), raw_id, stored_day.isoformat())).rowcount
+                     "WHERE raw_event_id = ?", (target.isoformat() if target else None, precision, new_basis, raw_id))
+        if stored_day is not None:
+            out.enriched += conn.execute(
+                "UPDATE EnrichedEvents SET event_date = ? WHERE raw_event_id = ? AND substr(event_date, 1, 10) = ?",
+                (target.isoformat() if target else None, raw_id, stored_day.isoformat())).rowcount
+    if not dry_run:
+        conn.commit()
+    return out
+
+
+#: Days an incident date may run past its record's publication date (time zones, a date-only stamp) before it is
+#: impossible.
+PUBLICATION_SLACK_DAYS = 7
+BASIS_AFTER_PUBLICATION = "removed: dated after the record's own publication date"
+
+IMPOSSIBLE_DATES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ImpossibleIncidentDates (
+    raw_event_id      TEXT NOT NULL,
+    enriched_event_id TEXT,
+    field             TEXT NOT NULL,     -- raw incident date / research date (with the research's count)
+    removed_value     TEXT,
+    publication_date  TEXT NOT NULL,
+    removed_at        TEXT NOT NULL
+);
+"""
+
+
+@dataclass
+class ImpossibleDates:
+    raw_dates: int = 0
+    research: int = 0
+    examples: List[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        return (f"{self.raw_dates} record incident date(s) and {self.research} research answer(s) dated after the "
+                f"record's own publication date removed; the research is queued again")
+
+
+def remove_dates_after_publication(conn: sqlite3.Connection, dry_run: bool = False) -> ImpossibleDates:
+    """An incident cannot happen after the report of it was published (owner, 2026-11-02).
+
+    Webber's May 2024 entry for Cyber Daily's report of 1 May 2024 on the Qantas app fault was researched as
+    "Qantas": Perplexity answered with the July 2025 attack, its date and its 6,000,000 records, and the record became
+    a second "July 2025" Qantas event. For every active record with a publication date the source gave for the item
+    itself (``publication_date_source = 'source'``: a feed's or listing's date; Webber's is the month Webber
+    published the item with an imputed 15th, so its bound is the end of that month). OAIC's is not used: every OAIC
+    record carries 2023-03-10, whatever its incident. Nor is a page's own metadata date: an evergreen page keeps its
+    first publication date while its content is updated (an ACSC warning of 2026 carries 2013):
+
+    * a record incident date more than :data:`PUBLICATION_SLACK_DAYS` after it is removed (the record is then dated
+      by what else it states, or by its publication, as any undated record);
+    * research that dates the incident after it described another, later incident: its date and records count are
+      withheld from the record and the research is queued again.
+
+    Each removal is kept in ``ImpossibleIncidentDates``. Idempotent. Commits unless ``dry_run``.
+    """
+    conn.executescript(IMPOSSIBLE_DATES_SCHEMA)
+    out = ImpossibleDates()
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        """SELECT r.raw_event_id, r.event_date, r.publication_date, e.enriched_event_id, e.event_date,
+                  e.records_affected, e.title, r.source_type
+           FROM RawEvents r JOIN EnrichedEvents e ON e.raw_event_id = r.raw_event_id AND e.status = 'Active'
+           WHERE r.publication_date IS NOT NULL AND r.publication_date_source = 'source'
+             AND r.source_type != 'OAIC'""").fetchall()
+    for raw_id, raw_date, published, enriched_id, enriched_date, count, title, source_type in rows:
+        limit = _day(published)
+        if limit is None:
+            continue
+        if source_type == "WebberInsurance":
+            limit = date(limit.year, limit.month, calendar.monthrange(limit.year, limit.month)[1])
+        limit = limit + timedelta(days=PUBLICATION_SLACK_DAYS)
+        raw_day, research_day = _day(raw_date), _day(enriched_date)
+        if raw_day is not None and raw_day > limit:
+            out.raw_dates += 1
+            out.examples.append(f"{title}: incident {raw_day} after publication {published}")
+            if not dry_run:
+                conn.execute("UPDATE RawEvents SET event_date = NULL, event_date_precision = NULL, "
+                             "event_date_basis = ? WHERE raw_event_id = ?", (BASIS_AFTER_PUBLICATION, raw_id))
+                conn.execute("INSERT INTO ImpossibleIncidentDates VALUES (?, ?, 'raw incident date', ?, ?, ?)",
+                             (raw_id, enriched_id, str(raw_date), published, now))
+        if research_day is not None and research_day > limit:
+            out.research += 1
+            if not dry_run:
+                conn.execute(
+                    "UPDATE EnrichedEvents SET event_date = NULL, records_affected = NULL, perplexity_validated = 0, "
+                    "perplexity_validated_at = NULL, perplexity_status = NULL, perplexity_attempt_count = 0, "
+                    "perplexity_last_error = NULL WHERE enriched_event_id = ?", (enriched_id,))
+                conn.execute("INSERT INTO ImpossibleIncidentDates VALUES (?, ?, 'research date and count', ?, ?, ?)",
+                             (raw_id, enriched_id, f"{enriched_date} / {count}", published, now))
     if not dry_run:
         conn.commit()
     return out
