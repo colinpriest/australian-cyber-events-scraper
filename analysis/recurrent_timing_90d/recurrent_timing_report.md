@@ -1,5 +1,18 @@
 # Repeat Cyber-Event Timing Analysis
 
+## Executive Summary
+
+**Is the data adequate for a reliable recurrence model?** Adequate for a simple model: 140 repeats, 13 per parameter of the models used here; but the full adjusted model is over-parameterised (26 parameters, 5.4 repeats each, 11 not identified), so it is not used for these conclusions; 56% of incident dates are unverified, so gaps can be resolved only to about a month: splits finer than 30 days are not attempted.
+
+**What are the best splits for recurrence time bands?** Best bands: 0-365, 366-1095, >1095 days, with 7.8, 3.5, 7.9 repeats per 100 organisation-years (positive evidence: 4.3 BIC better than a constant rate, holding size, prior event number and calendar period; search-adjusted p = 0.018).
+
+**Is there a delayed peak in recurrence 90-120 days after an event?** Cannot be tested reliably: only 5 repeats fall 91-120 days after an event (at least 10 are needed).
+
+**What fits recurrence rates best?** Best fit by AIC: piecewise 0-365, 366-1095, >1095. Unadjusted, on every spell, the constant rate is 14.4 AIC behind; the bands were chosen by the search, so that margin is optimistic.
+
+**Does organisation size predict recurrence rates?** Yes: the recurrence rate rises with organisation size. Rate relative to SMALL organisations: MEDIUM 1.0, LARGE 5.9, HUGE 14.6 (monotone model holding prior event number and calendar period, bootstrap p <= 0.002 (no simulated value as extreme in 500)). Size stands for visibility and exposure as much as size: this is prediction, not cause.
+
+
 ## Scope
 
 This analysis is conditional on an entity having at least one observed victim event. Single-event entities contribute right-censored post-event spells.
@@ -139,7 +152,7 @@ Full adjusted covariate table:
 
 Targeted contrast for the proposed low-then-rising pattern (hypothesis: the later bands are higher):
 
-- 91-365, 366-730 days vs 0-90 days (unadjusted): rate ratio 0.84 (95% CI 0.50-1.43), about 16% lower; two-sided p = 0.526. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.50 to 1.43, which includes 1. The estimate is in the opposite direction to the hypothesis (lower, not higher). Repeat events: 70 in 91-365, 366-730 days and 17 in 0-90 days.
+- 91-365, 366-730 days vs 0-90 days (unadjusted): rate ratio 0.84 (95% CI 0.50-1.43), no direction can be read from it; two-sided p = 0.526. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.50 to 1.43, which includes 1. Repeat events: 70 in 91-365, 366-730 days and 17 in 0-90 days.
 
 ## U-Shape Test
 
@@ -148,9 +161,9 @@ The adjusted phase model controls for the same size, sector, calendar-period, pr
 
 Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.705. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates do not have the hypothesised shape: long-term vs response goes the other way.
 
-- response vs immediate: rate ratio 0.92 (95% CI 0.54-1.56), about 8% lower; one-sided p = 0.375 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.54 to 1.56, which includes 1. Repeat events: 69 in the response period and 17 in the immediate period.
-- long-term vs response: rate ratio 0.90 (95% CI 0.62-1.31), about 10% lower; one-sided p = 0.705 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.62 to 1.31, which includes 1. The estimate is in the opposite direction to the hypothesis (lower, not higher). Repeat events: 52 in the long-term period and 69 in the response period.
-- long-term vs immediate: rate ratio 0.83 (95% CI 0.47-1.46), about 17% lower; two-sided p = 0.513. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.47 to 1.46, which includes 1. Repeat events: 52 in the long-term period and 17 in the immediate period.
+- response vs immediate: rate ratio 0.92 (95% CI 0.54-1.56), no direction can be read from it; one-sided p = 0.375 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.54 to 1.56, which includes 1. Repeat events: 69 in the response period and 17 in the immediate period.
+- long-term vs response: rate ratio 0.90 (95% CI 0.62-1.31), no direction can be read from it; one-sided p = 0.705 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.62 to 1.31, which includes 1. Repeat events: 52 in the long-term period and 69 in the response period.
+- long-term vs immediate: rate ratio 0.83 (95% CI 0.47-1.46), no direction can be read from it; two-sided p = 0.513. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.47 to 1.46, which includes 1. Repeat events: 52 in the long-term period and 17 in the immediate period.
 
 - phase-model LRT p-value versus constant elapsed-time risk: 0.773
 - directional U-shape p-value: 0.7052
@@ -230,9 +243,9 @@ Interpretation:
 
 Directional delayed peak test (all of: 91-180 vs 0-90 higher; 91-180 vs post-180 higher), intersection p = 0.310. Not statistically significant at the 5% level: the data do not reject the null of no delayed peak. The point estimates have the hypothesised shape. The weakest part is 91-180 vs 0-90 (p = 0.310).
 
-- 91-180 vs 0-90: rate ratio 1.18 (95% CI 0.61-2.30), about 18% higher; one-sided p = 0.310 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.61 to 2.30, which includes 1. Repeat events: 18 in 91-180 days and 17 in 0-90 days.
-- 91-180 vs post-180: rate ratio 1.42 (95% CI 0.85-2.36), about 42% higher; one-sided p = 0.090 (alternative: higher). Not statistically significant at the 5% level (borderline): the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.85 to 2.36, which includes 1. Repeat events: 18 in 91-180 days and 103 in post-180 days.
-- post-180 vs 0-90: rate ratio 0.83 (95% CI 0.49-1.41), about 17% lower; two-sided p = 0.498. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.41, which includes 1. Repeat events: 103 in post-180 days and 17 in 0-90 days.
+- 91-180 vs 0-90: rate ratio 1.18 (95% CI 0.61-2.30), no direction can be read from it; one-sided p = 0.310 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.61 to 2.30, which includes 1. Repeat events: 18 in 91-180 days and 17 in 0-90 days.
+- 91-180 vs post-180: rate ratio 1.42 (95% CI 0.85-2.36), no direction can be read from it; one-sided p = 0.090 (alternative: higher). Not statistically significant at the 5% level (borderline): the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.85 to 2.36, which includes 1. Repeat events: 18 in 91-180 days and 103 in post-180 days.
+- post-180 vs 0-90: rate ratio 0.83 (95% CI 0.49-1.41), no direction can be read from it; two-sided p = 0.498. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.41, which includes 1. Repeat events: 103 in post-180 days and 17 in 0-90 days.
 
 ## Unadjusted Parametric Survival Model Comparison (Descriptive)
 

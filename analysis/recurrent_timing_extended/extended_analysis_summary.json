@@ -1,7 +1,7 @@
 {
   "source_database": "D:\\dev\\australian-cyber-events-scraper\\instance\\cyber_events.db",
-  "snapshot_id": "snap-20261101150824-635331299f4f",
-  "snapshot_sha256": "635331299f4fab4021817295753c5b72517e236bcc25be60d70c3d7adf2a8dc6",
+  "snapshot_id": "snap-20261102091647-cf1f0248e2e5",
+  "snapshot_sha256": "cf1f0248e2e5588f8819662994aa5e8b12531ea03a81d9333f59d199d91edf26",
   "censor_date": "2026-11-01",
   "seed": 20260805,
   "bootstrap_replicates": 500,
