@@ -128,3 +128,46 @@ def test_an_exhausted_budget_makes_the_run_degraded(tmp_path, monkeypatch, budge
     with pytest.raises(ab.BudgetExhausted):
         budget.reserve("openai")
     assert pipeline.outcome([]) == "degraded"
+
+
+def test_a_paid_requests_call_has_a_total_deadline(budget, monkeypatch):
+    """2026-11-03: a Perplexity alias question with timeout=90 sat on an open connection for 17 minutes, because
+    requests' timeout bounds each read, not the answer. A paid call now ends at the deadline as a Timeout."""
+    monkeypatch.setattr(ab, "REQUEST_DEADLINE_SECONDS", 0.2)
+    release = threading.Event()
+
+    class Adapter(requests.adapters.BaseAdapter):
+        def send(self, request, **kwargs):
+            release.wait(5)                      # the answer that never finishes
+            response = requests.Response()
+            response.status_code = 200
+            return response
+
+        def close(self):
+            pass
+
+    session = requests.Session()
+    session.mount("https://", Adapter())
+    try:
+        with pytest.raises(requests.exceptions.Timeout):
+            session.post("https://api.perplexity.ai/chat/completions")
+        release.set()
+        # Other hosts are not bounded (a scrape may take its own time); a prompt paid answer is returned as is.
+        assert session.get("https://news.example/article").status_code == 200
+        assert session.post("https://api.perplexity.ai/chat/completions").status_code == 200
+    finally:
+        release.set()
+
+
+def test_an_error_in_a_paid_requests_call_reaches_the_caller(budget):
+    class Adapter(requests.adapters.BaseAdapter):
+        def send(self, request, **kwargs):
+            raise requests.exceptions.ConnectionError("refused")
+
+        def close(self):
+            pass
+
+    session = requests.Session()
+    session.mount("https://", Adapter())
+    with pytest.raises(requests.exceptions.ConnectionError):
+        session.post("https://api.perplexity.ai/chat/completions")

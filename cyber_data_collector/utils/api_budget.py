@@ -13,6 +13,13 @@ enriched, judgements in ``ModelJudgements``, timelines, corroborations) and
 picks up the rest on the next run. Code that counts failed attempts must not
 count a refusal - see :func:`is_budget_refusal`.
 
+A request to a paid host made through ``requests`` also has a total deadline
+(:data:`REQUEST_DEADLINE_SECONDS`). ``requests``' ``timeout`` bounds each socket
+read, not the whole answer: on 2026-11-03 a Perplexity alias question with
+``timeout=90`` held its connection open for over 17 minutes, idle, and stalled
+the refresh. Past the deadline the call raises ``requests.exceptions.Timeout``,
+which every caller already treats as a failed call to retry later.
+
 Limits come from ``API_BUDGET_OPENAI`` / ``API_BUDGET_PERPLEXITY`` /
 ``API_BUDGET_TYPESAFE`` (requests per run; unset or 0 = unlimited) or
 ``--api-budget openai=2000 perplexity=800``.
@@ -23,6 +30,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Dict, Iterable, Optional
 from urllib.parse import urlparse
 
@@ -34,6 +42,10 @@ HOSTS = {
     "api.typesafe.ai": "typesafe",
 }
 PROVIDERS = tuple(sorted(set(HOSTS.values())))
+
+
+#: Longest a ``requests`` call to a paid host may take, from sending to the last byte of the answer.
+REQUEST_DEADLINE_SECONDS = 300.0
 
 
 class BudgetExhausted(RuntimeError):
@@ -134,13 +146,13 @@ def install() -> None:
                     _wrap_send(cls, is_async=cls_name == "AsyncClient")
         try:
             import requests
-            _wrap_send(requests.Session, is_async=False)
+            _wrap_send(requests.Session, is_async=False, deadline=True)
         except ImportError:
             pass
         _installed = True
 
 
-def _wrap_send(cls: type, is_async: bool) -> None:
+def _wrap_send(cls: type, is_async: bool, deadline: bool = False) -> None:
     original = cls.send
     if getattr(original, "_api_budget_wrapped", False):
         return
@@ -148,12 +160,46 @@ def _wrap_send(cls: type, is_async: bool) -> None:
         async def send(self, request, *args, **kwargs):
             _guard(request.url)
             return await original(self, request, *args, **kwargs)
+    elif deadline:
+        def send(self, request, *args, **kwargs):
+            _guard(request.url)
+            if not provider_for(request.url) or kwargs.get("stream"):
+                return original(self, request, *args, **kwargs)
+            return _within_deadline(lambda: original(self, request, *args, **kwargs), request.url)
     else:
         def send(self, request, *args, **kwargs):
             _guard(request.url)
             return original(self, request, *args, **kwargs)
     send._api_budget_wrapped = True
     cls.send = send
+
+
+def _within_deadline(call, url: object):
+    """Run a non-streaming ``requests`` send (which reads the whole body) on a daemon thread and wait at most
+    :data:`REQUEST_DEADLINE_SECONDS`. A send still running then is abandoned - its session is the caller's, the
+    daemon thread cannot hold up the interpreter's exit - and the call raises ``requests.exceptions.Timeout``."""
+    import requests
+
+    outcome: Dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            outcome["response"] = call()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller's thread
+            outcome["error"] = exc
+
+    started = time.monotonic()
+    worker = threading.Thread(target=run, name="api-request", daemon=True)
+    worker.start()
+    worker.join(REQUEST_DEADLINE_SECONDS)
+    if worker.is_alive():
+        logger.warning("Request to %s abandoned after %.0f s (deadline %.0f s)",
+                       urlparse(str(url)).hostname, time.monotonic() - started, REQUEST_DEADLINE_SECONDS)
+        raise requests.exceptions.Timeout(
+            f"no complete answer from {urlparse(str(url)).hostname} within {REQUEST_DEADLINE_SECONDS:.0f} s")
+    if "error" in outcome:
+        raise outcome["error"]  # type: ignore[misc]
+    return outcome["response"]
 
 
 def limits_from_env() -> Dict[str, Optional[int]]:
