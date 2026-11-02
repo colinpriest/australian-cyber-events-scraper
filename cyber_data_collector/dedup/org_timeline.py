@@ -406,15 +406,21 @@ def research(conn: sqlite3.Connection, entity_id: int, name: str,
     return stored(conn, entity_id)
 
 
-def organisations_to_research(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
-    """Organisations with several events, plus any that already have a timeline and are still a victim.
+def organisations_to_research(conn: sqlite3.Connection, minimum: int = 2) -> List[Dict[str, Any]]:
+    """Organisations with at least ``minimum`` events (several by default), plus any that already have a timeline
+    and are still a victim.
+
+    ``minimum=1`` takes in every victim organisation (owner, 2026-11-02): researching only organisations with
+    several events and filling their gaps would add repeats only where repeats are already common, so the
+    recurrence rates would be biased upwards. Once researched, a single-event organisation stays in the set (it
+    has a timeline), so every later run keeps its history current and reconciles it.
 
     An organisation can drop to one event (a merge, a rejection) and keep its
     timeline, which the victim and reality judgements still read - so it must
     stay current too.
     """
     ensure_schema(conn)
-    orgs = {o["entity_id"]: o for o in organisations_with_several_events(conn)}
+    orgs = {o["entity_id"]: o for o in organisations_with_several_events(conn, minimum)}
     for entity_id, name in conn.execute(
             """SELECT DISTINCT v.entity_id, v.entity_name FROM OrganisationTimelines t
                JOIN EntitiesV2 v ON v.entity_id = t.entity_id
@@ -425,9 +431,25 @@ def organisations_to_research(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return sorted(orgs.values(), key=lambda o: o["entity_name"])
 
 
-def research_all(conn: sqlite3.Connection, search=None) -> int:
-    """Research (or reuse) a timeline for every organisation in :func:`organisations_to_research`."""
-    orgs = organisations_to_research(conn)
+def research_all(conn: sqlite3.Connection, search=None, minimum: int = 2, workers: int = 1) -> int:
+    """Research (or reuse) a timeline for every organisation in :func:`organisations_to_research`.
+
+    With ``workers`` above 1 the searches for stale timelines run concurrently first
+    (:class:`~cyber_data_collector.utils.prefetch.PrefetchedSearch`) and are stored one at a time as before.
+    """
+    orgs = organisations_to_research(conn, minimum)
+    if workers > 1:
+        from cyber_data_collector.dedup.corroboration import _perplexity_search
+        from cyber_data_collector.utils.prefetch import PrefetchedSearch
+
+        ensure_schema(conn)
+        stale = [o for o in orgs if is_stale(conn, o["entity_id"], o["entity_name"])]
+        if stale:
+            if search is None and not os.getenv("PERPLEXITY_API_KEY"):
+                raise RuntimeError("PERPLEXITY_API_KEY is not set: cannot research incident timelines")
+            search = PrefetchedSearch(search or _perplexity_search,
+                                      [build_query(conn, o["entity_id"], o["entity_name"]) for o in stale],
+                                      perplexity_model(), workers)
     done = sum(1 for o in orgs if research(conn, o["entity_id"], o["entity_name"], search=search))
     logger.info("%d of %d organisations have a current timeline", done, len(orgs))
     return done

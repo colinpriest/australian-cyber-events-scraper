@@ -213,7 +213,6 @@ def queue_gap(conn: sqlite3.Connection, entity_id: int, org: str, incident: Dict
     import os
 
     from cyber_data_collector.dedup.corroboration import _perplexity_search
-    from cyber_data_collector.dedup.source_gate import REPLACEMENT_PROMPT
     from cyber_data_collector.utils.llm_models import perplexity_model
 
     conn.executescript(GAPS_SCHEMA)
@@ -226,7 +225,7 @@ def queue_gap(conn: sqlite3.Connection, entity_id: int, org: str, incident: Dict
             raise RuntimeError("PERPLEXITY_API_KEY is not set: cannot search for coverage gaps (--queue-gaps)")
         search = _perplexity_search
     model = perplexity_model()
-    query = REPLACEMENT_PROMPT.format(org=org, date=incident["date"] or "unknown", summary=incident["what"][:600])
+    query = _gap_query(org, incident)
     try:
         result = search(query, model)
     except Exception as exc:
@@ -484,8 +483,37 @@ def apply_redates(conn: sqlite3.Connection, plans: List[Dict[str, Any]], cal: Di
     return batch_id
 
 
+def _gap_query(org: str, incident: Dict[str, str]) -> str:
+    from cyber_data_collector.dedup.source_gate import REPLACEMENT_PROMPT
+
+    return REPLACEMENT_PROMPT.format(org=org, date=incident["date"] or "unknown", summary=incident["what"][:600])
+
+
+def _prefetch_gap_searches(conn: sqlite3.Connection, organisations: List[Dict[str, Any]], search, workers: int):
+    """Search concurrently for every gap not yet in ``ReconciliationGaps``; the sequential pass stores them."""
+    import os
+
+    from cyber_data_collector.dedup.corroboration import _perplexity_search
+    from cyber_data_collector.utils.llm_models import perplexity_model
+    from cyber_data_collector.utils.prefetch import PrefetchedSearch
+
+    conn.executescript(GAPS_SCHEMA)
+    queries = []
+    for org in organisations:
+        for gap in org["gaps"]:
+            incident = gap["incident"]
+            if not conn.execute("SELECT 1 FROM ReconciliationGaps WHERE entity_id = ? AND incident_key = ?",
+                                (org["entity_id"], _incident_key(incident))).fetchone():
+                queries.append(_gap_query(org["organisation"], incident))
+    if not queries:
+        return search
+    if search is None and not os.getenv("PERPLEXITY_API_KEY"):
+        raise RuntimeError("PERPLEXITY_API_KEY is not set: cannot search for coverage gaps (--queue-gaps)")
+    return PrefetchedSearch(search or _perplexity_search, queries, perplexity_model(), workers)
+
+
 def reconcile_all(conn: sqlite3.Connection, judge=None, queue_gaps: bool = False, search=None,
-                  apply: bool = False, timeline_search=None,
+                  apply: bool = False, timeline_search=None, workers: int = 1,
                   redate_calibration_path: Path = REDATE_CALIBRATION_PATH,
                   redate_labels_path: Path = REDATE_LABELS_PATH) -> Dict[str, Any]:
     """Refresh timelines, reconcile every organisation, attach resolutions; with ``apply``, re-date.
@@ -497,11 +525,17 @@ def reconcile_all(conn: sqlite3.Connection, judge=None, queue_gaps: bool = False
     from cyber_data_collector.utils.jev import JevJudge
 
     labels = load_redate_labels(redate_labels_path, required=apply)
-    research_all(conn, search=timeline_search)
+    research_all(conn, search=timeline_search, workers=workers)
     owned = judge is None
     judge = judge or JevJudge(conn)
     organisations = []
     try:
+        if queue_gaps and workers > 1:
+            # A first pass finds the gaps (its judgements are stored, so the second pass asks nothing again); their
+            # searches then run concurrently and the second pass queues them one at a time.
+            first = [reconcile_organisation(conn, o["entity_id"], o["entity_name"], judge)
+                     for o in organisations_to_research(conn)]
+            search = _prefetch_gap_searches(conn, first, search, workers)
         for org in organisations_to_research(conn):
             organisations.append(reconcile_organisation(conn, org["entity_id"], org["entity_name"], judge,
                                                         queue_gaps=queue_gaps, search=search))

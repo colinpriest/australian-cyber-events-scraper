@@ -178,3 +178,27 @@ def test_redating_refuses_without_labels(conn, tmp_path):
         tr.reconcile_all(conn, judge=JevJudge(conn, client=FakeJev()), apply=True,
                          timeline_search=lambda q, m: {"answer": TIMELINE, "citations": []},
                          redate_labels_path=tmp_path / "missing.csv")
+
+
+def test_gaps_searched_concurrently_are_queued_once_each(conn, tmp_path):
+    """Owner, 2026-11-02: queue every coverage gap; with workers the searches run in parallel first."""
+    calls = []
+
+    def search(query, model):
+        calls.append(query)
+        return {"answer": "FOUND: yes\nINCIDENT: UWA Callista breach, July 2022.", "citations": ["https://news/uwa"]}
+
+    cal, lab = _redate_files(tmp_path, [("other", "unsure")])
+    conn.execute("CREATE TABLE IF NOT EXISTS DedupSnapshots (snapshot_id TEXT PRIMARY KEY, batch_id TEXT, "
+                 "deduplicated_event_id TEXT, payload_json TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    kwargs = dict(judge=JevJudge(conn, client=FakeJev()), queue_gaps=True, search=search, workers=4,
+                  timeline_search=lambda q, m: {"answer": TIMELINE, "citations": []},
+                  redate_calibration_path=cal, redate_labels_path=lab)
+    out = tr.reconcile_all(conn, **kwargs)
+    [gap] = out["organisations"][0]["gaps"]
+    assert gap["queued_raw_event_id"] and len(calls) == 1
+    queued = conn.execute("SELECT source_url, is_processed FROM RawEvents WHERE raw_event_id = ?",
+                          (gap["queued_raw_event_id"],)).fetchone()
+    assert queued == ("https://news/uwa", 0)                   # for normal ingestion, with its own URL
+    tr.reconcile_all(conn, **kwargs)
+    assert len(calls) == 1                                      # a queued gap is never searched again
