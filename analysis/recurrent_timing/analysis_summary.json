@@ -4,7 +4,7 @@
       {
         "key": "adequacy",
         "question": "Is the data adequate for a reliable recurrence model?",
-        "answer": "Adequate for a simple model: 140 repeats, 13 per parameter of the models used here; but the full adjusted model is over-parameterised (26 parameters, 5.4 repeats each, 11 not identified), so it is not used for these conclusions; 56% of incident dates are unverified, so gaps can be resolved only to about a month: splits finer than 30 days are not attempted.",
+        "answer": "Adequate for a simple model: 140 repeats, 16 per parameter of the models used here; but the full adjusted model is over-parameterised (26 parameters, 5.4 repeats each, 11 not identified), so it is not used for these conclusions; 56% of incident dates are unverified, so gaps can be resolved only to about a month: splits finer than 30 days are not attempted.",
         "adequate": true,
         "caveats": [
           "the full adjusted model is over-parameterised (26 parameters, 5.4 repeats each, 11 not identified), so it is not used for these conclusions",
@@ -14,28 +14,28 @@
       {
         "key": "splits",
         "question": "What are the best splits for recurrence time bands?",
-        "answer": "Best bands: 0-365, 366-1095, >1095 days, with 7.8, 3.5, 7.9 repeats per 100 organisation-years (positive evidence: 4.3 BIC better than a constant rate, holding size, prior event number and calendar period; search-adjusted p = 0.018)."
+        "answer": "Best bands: 0-365, 366-1095, >1095 days, with rates 1.00, 0.47, 1.01 times the first band's (strong evidence: 6.2 BIC better than a constant rate, holding size, prior event number and a calendar trend; search-adjusted p = 0.008). The long-term growth in recorded incidents does not explain it: the per-organisation rate changes by +3% a year (yearly effects from 2020, p = 0.67), and the bands hold under no calendar adjustment, a linear trend, monthly reporting intensity and yearly effects alike (p from 0.0003 to 0.0006)."
       },
       {
         "key": "delayed_peak",
-        "question": "Is there a delayed peak in recurrence 90-120 days after an event?",
-        "answer": "Cannot be tested reliably: only 5 repeats fall 91-120 days after an event (at least 10 are needed)."
+        "question": "Is there a delayed peak in recurrence 91-180 days after an event?",
+        "answer": "No evidence of a delayed peak: the adjusted rate 91-180 days after an event is not higher than at other times (one-sided p = 0.114; 18 repeats). The narrower 91-120 day window holds only 5 repeats, too few to test on its own."
       },
       {
         "key": "best_fit",
         "question": "What fits recurrence rates best?",
-        "answer": "Best fit by AIC: piecewise 0-365, 366-1095, >1095. Unadjusted, on every spell, the constant rate is 14.4 AIC behind; the bands were chosen by the search, so that margin is optimistic."
+        "answer": "Best fit by AIC, holding size, prior event number and a calendar trend: bands 0-365, 366-1095, >1095. The constant rate is 12.1 AIC behind. The bands were chosen by the search, so that margin is optimistic."
       },
       {
         "key": "size",
         "question": "Does organisation size predict recurrence rates?",
-        "answer": "Yes: the recurrence rate rises with organisation size. Rate relative to SMALL organisations: MEDIUM 1.0, LARGE 5.9, HUGE 14.6 (monotone model holding prior event number and calendar period, bootstrap p <= 0.002 (no simulated value as extreme in 500)). Size stands for visibility and exposure as much as size: this is prediction, not cause."
+        "answer": "Yes: the recurrence rate rises with organisation size. Rate relative to SMALL organisations: MEDIUM 1.0, LARGE 6.0, HUGE 14.0 (monotone model holding prior event number and a calendar trend, bootstrap p <= 0.002 (no simulated value as extreme in 500)). Size stands for visibility and exposure as much as size: this is prediction, not cause."
       }
     ],
     "repeats": 140,
     "unknown_size": {
       "spells": 45,
-      "repeats": 2
+      "repeats": 0
     },
     "unverified_date_share": 0.5565476190476191,
     "full_adjusted_model": {
@@ -80,9 +80,9 @@
         1095
       ],
       "selected_bands": "0-365, 366-1095, >1095",
-      "delta_bic_vs_constant": -4.328650054704212,
-      "search_adjusted_p": 0.017964071856287425,
-      "rates_per_100_organisation_years": "7.8, 3.5, 7.9",
+      "delta_bic_vs_constant": -6.186708657610325,
+      "search_adjusted_p": 0.007984031936127744,
+      "rates_per_100_organisation_years": "1.00, 0.47, 1.01",
       "top": [
         {
           "cuts": [
@@ -91,15 +91,15 @@
           ],
           "bands": "0-365, 366-1095, >1095",
           "repeats_per_band": [
-            63,
+            64,
             33,
-            42
+            43
           ],
           "n_params": 3,
-          "log_likelihood": -1636.5372734347181,
-          "aic": 3279.0745468694363,
-          "bic": 3287.856307924908,
-          "delta_bic_vs_constant": -4.328650054704212
+          "log_likelihood": -1679.0281916917531,
+          "aic": 3364.0563833835063,
+          "bic": 3372.8813106513344,
+          "delta_bic_vs_constant": -6.186708657610325
         },
         {
           "cuts": [
@@ -109,16 +109,16 @@
           ],
           "bands": "0-365, 366-730, 731-1095, >1095",
           "repeats_per_band": [
-            63,
+            64,
             23,
             10,
-            42
+            43
           ],
           "n_params": 4,
-          "log_likelihood": -1635.76242019886,
-          "aic": 3279.52484039772,
-          "bic": 3291.2338551383486,
-          "delta_bic_vs_constant": -0.9511028412634914
+          "log_likelihood": -1678.2096099342707,
+          "aic": 3364.4192198685414,
+          "bic": 3376.1857895589787,
+          "delta_bic_vs_constant": -2.8822297499659726
         },
         {
           "cuts": [
@@ -127,30 +127,34 @@
           ],
           "bands": "0-545, 546-1095, >1095",
           "repeats_per_band": [
-            75,
+            76,
             21,
-            42
+            43
           ],
           "n_params": 3,
-          "log_likelihood": -1638.5615699612442,
-          "aic": 3283.1231399224885,
-          "bic": 3291.90490097796,
-          "delta_bic_vs_constant": -0.2800570016520396
+          "log_likelihood": -1681.1932511110333,
+          "aic": 3368.3865022220666,
+          "bic": 3377.2114294898947,
+          "delta_bic_vs_constant": -1.8565898190499865
         },
         {
           "cuts": [
-            365
+            120,
+            365,
+            1095
           ],
-          "bands": "0-365, >365",
+          "bands": "0-120, 121-365, 366-1095, >1095",
           "repeats_per_band": [
-            63,
-            75
+            22,
+            42,
+            33,
+            43
           ],
-          "n_params": 2,
-          "log_likelihood": -1641.034945565139,
-          "aic": 3286.069891130278,
-          "bic": 3291.9243985005924,
-          "delta_bic_vs_constant": -0.2605594790197756
+          "n_params": 4,
+          "log_likelihood": -1678.7992552212131,
+          "aic": 3365.5985104424262,
+          "bic": 3377.3650801328636,
+          "delta_bic_vs_constant": -1.702939176081145
         },
         {
           "cuts": [
@@ -159,29 +163,71 @@
           ],
           "bands": "0-730, 731-1095, >1095",
           "repeats_per_band": [
-            86,
+            87,
             10,
-            42
+            43
           ],
           "n_params": 3,
-          "log_likelihood": -1638.6090088020626,
-          "aic": 3283.218017604125,
-          "bic": 3291.999778659597,
-          "delta_bic_vs_constant": -0.18517932001532245
+          "log_likelihood": -1681.3107079704819,
+          "aic": 3368.6214159409637,
+          "bic": 3377.446343208792,
+          "delta_bic_vs_constant": -1.621676100152854
         }
       ]
     },
-    "delayed_peak": {
-      "window": "91-120",
-      "repeats_in_window": 5,
-      "repeats_elsewhere": 133,
-      "rate_ratio": 1.1022861871997351,
-      "ci_low": 0.3521360701343092,
-      "ci_high": 2.6373935231511876,
-      "p_one_sided_higher": 0.47935246295241374,
-      "enough_repeats": false
-    },
+    "delayed_peak": [
+      {
+        "window": "91-180",
+        "repeats_in_window": 18,
+        "repeats_elsewhere": 122,
+        "rate_ratio": 1.4079284126887497,
+        "ci_low": 0.8074364363238176,
+        "ci_high": 2.3199507147394187,
+        "p_one_sided_higher": 0.11442531937995598,
+        "enough_repeats": true
+      },
+      {
+        "window": "91-120",
+        "repeats_in_window": 5,
+        "repeats_elsewhere": 135,
+        "rate_ratio": 1.080755215933586,
+        "ci_low": 0.34534003552736187,
+        "ci_high": 2.5849249568924826,
+        "p_one_sided_higher": 0.49602563907453034,
+        "enough_repeats": false
+      }
+    ],
     "timing_models": [
+      {
+        "model": "bands 0-365, 366-1095, >1095",
+        "n_params": 9,
+        "log_likelihood": -623.9606042652117,
+        "aic": 1265.9212085304234,
+        "delta_aic": 0.0
+      },
+      {
+        "model": "constant rate",
+        "n_params": 7,
+        "log_likelihood": -632.0189065442869,
+        "aic": 1278.0378130885738,
+        "delta_aic": 12.116604558150357
+      },
+      {
+        "model": "log elapsed time (Weibull-shaped)",
+        "n_params": 8,
+        "log_likelihood": -631.3426589935041,
+        "aic": 1278.6853179870081,
+        "delta_aic": 12.76410945658472
+      },
+      {
+        "model": "log elapsed time and its square (rise and fall)",
+        "n_params": 9,
+        "log_likelihood": -630.4178509670214,
+        "aic": 1278.8357019340428,
+        "delta_aic": 12.914493403619417
+      }
+    ],
+    "unadjusted_timing_models": [
       {
         "model": "piecewise 0-365, 366-1095, >1095",
         "n_params": 3,
@@ -225,24 +271,88 @@
         "delta_aic": 29.23651457969345
       }
     ],
+    "calendar": {
+      "primary": "linear_trend",
+      "coefficients": [
+        0.02803051687375381
+      ],
+      "robustness": [
+        {
+          "calendar": "linear_trend",
+          "calendar_params": 1,
+          "calendar_lr": 0.9151214531621008,
+          "calendar_p": 0.338759188283371,
+          "bands_lr": 16.116604558150584,
+          "bands_df": 2,
+          "bands_p": 0.0003164636163983724,
+          "band_rate_ratio": [
+            1.0,
+            0.47207081765147724,
+            1.0107962276895948
+          ]
+        },
+        {
+          "calendar": "none",
+          "calendar_params": 0,
+          "calendar_lr": null,
+          "calendar_p": null,
+          "bands_lr": 16.241284996231116,
+          "bands_df": 2,
+          "bands_p": 0.000297337560235258,
+          "band_rate_ratio": [
+            1.0,
+            0.4739950789465038,
+            1.0267646272132644
+          ]
+        },
+        {
+          "calendar": "log_intensity",
+          "calendar_params": 1,
+          "calendar_lr": 1.1743159744560216,
+          "calendar_p": 0.2785161954232857,
+          "bands_lr": 16.010558371572642,
+          "bands_df": 2,
+          "bands_p": 0.00033369632478880113,
+          "band_rate_ratio": [
+            1.0,
+            0.47390750378132585,
+            1.0149670551889718
+          ]
+        },
+        {
+          "calendar": "yearly_from_2020",
+          "calendar_params": 7,
+          "calendar_lr": 4.883298216783487,
+          "calendar_p": 0.6742024224006634,
+          "bands_lr": 14.754953536736366,
+          "bands_df": 2,
+          "bands_p": 0.0006251763622905522,
+          "band_rate_ratio": [
+            1.0,
+            0.4809443120745506,
+            0.9932713902613923
+          ]
+        }
+      ]
+    },
     "size_model": {
       "direction": "increasing",
       "bootstrap_p": 0.001996007984031936,
       "bootstrap_replicates": 500,
-      "likelihood_ratio": 63.21737411022298,
-      "n_params": 11,
-      "events_per_parameter": 12.545454545454545,
+      "likelihood_ratio": 60.44214703737384,
+      "n_params": 9,
+      "events_per_parameter": 15.555555555555555,
       "rate_ratio_vs_small": {
         "SMALL": 1.0,
         "MEDIUM": 1.0,
-        "LARGE": 5.878472148857262,
-        "HUGE": 14.585666371644246
+        "LARGE": 5.969619683873607,
+        "HUGE": 13.968301727718034
       },
       "unconstrained_rate_ratio_vs_small": {
         "SMALL": 1.0,
-        "MEDIUM": 0.3222387349880641,
-        "LARGE": 3.1973311937403768,
-        "HUGE": 7.955599461542059
+        "MEDIUM": 0.3283871602747864,
+        "LARGE": 3.2887590228236596,
+        "HUGE": 7.716431452555972
       },
       "constraint_binds": true,
       "bands": [
