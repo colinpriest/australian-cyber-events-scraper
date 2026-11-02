@@ -4078,6 +4078,9 @@ def cmd_find_supplier_victims(args) -> int:
         print(f"  {'split' if apply else 'would split'}  {sp['event'][:8]}: {sp['records']} record(s) of "
               f"{sp['customer']} leave" + (f" as {sp['new_event'][:8]}" if sp.get("new_event") else "")
               + f" ({sp['stays']} stays)")
+    for r in result.get("supplier_reports", []):
+        print(f"  {'supplier report' if apply else 'would make supplier report'}  {r['deduplicated_event_id'][:8]}  "
+              f"{r['title'][:70]}: victim {r['supplier']}; affected customers {', '.join(r['customers'])}")
     repairs = result.get("registry_repairs") or {}
     for r in repairs.get("stale_links_removed", []):
         print(f"  removed stale link  {r['supplier']} -> {r['customer']} ({r['event'][:8]} no longer records the supplier)")

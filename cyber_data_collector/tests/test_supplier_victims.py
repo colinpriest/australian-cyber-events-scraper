@@ -1041,3 +1041,38 @@ def test_an_earlier_cross_customer_merge_is_undone_where_the_records_say_whose_e
                  "'test', 'b', '2026-10-31')", (aid,))
     (plan,) = sl.merged_customer_plans(conn, EntityResolver(conn))
     assert plan.event_id == "t1" and plan.stays == "Monash University" and plan.leaving == {"NSW Health": ["n1"]}
+
+
+def test_a_report_of_the_suppliers_breach_naming_several_customers_becomes_the_suppliers_event(full):
+    """Owner, 2026-11-02: the OracleCMS hack report (victims Nissan and two councils) counted Nissan twice beside
+    Nissan's own notice; ZircoDATA's breach recorded Monash Health as a victim. With no headline victim and two or
+    more customers as victims, the event is the supplier's own: the supplier its victim, the customers affected."""
+    full.execute("UPDATE DeduplicatedEvents SET victim_organization_name = NULL WHERE deduplicated_event_id = 'ded-z1'")
+    full.commit()
+
+    def roles():
+        return sorted(tuple(r) for r in full.execute(
+            "SELECT v.entity_name, dee.relationship_type FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v "
+            "USING (entity_id) WHERE dee.deduplicated_event_id = 'ded-z1'"))
+
+    g = sv.gather(full)
+    planned = sl.convert(full, g, sl.Registry(full, g.resolver), apply=False)
+    assert [(r["supplier"], r["customers"]) for r in planned["supplier_reports"]] == [
+        ("ZircoDATA", ["Department of Home Affairs", "Monash Health"])]
+    assert ("Monash Health", "victim") in roles()                        # planning changes nothing
+    done = sl.convert(full, g, sl.Registry(full, g.resolver), apply=True)
+    assert len(done["supplier_reports"]) == 1
+    assert roles() == [("Department of Home Affairs", "affected_customer"), ("Monash Health", "affected_customer"),
+                       ("ZircoDATA", "victim")]
+    assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
+                        "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] == "ZircoDATA"
+    assert full.execute("SELECT COUNT(*) FROM SupplierLinkActions WHERE action = 'supplier-report'").fetchone()[0] == 1
+    g2 = sv.gather(full)
+    assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True)["supplier_reports"] == []   # idempotent
+
+
+def test_an_event_with_its_own_headline_victim_is_not_a_supplier_report(full):
+    """A customer's own event that records co-victims (victim column Monash Health) is left to the per-customer
+    split; it is not turned into the supplier's event."""
+    g = sv.gather(full)
+    assert sl.convert(full, g, sl.Registry(full, g.resolver), apply=True)["supplier_reports"] == []
