@@ -211,7 +211,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v8"
+ROLES_PROMPT_VERSION = "entity-roles-v9"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -237,6 +237,12 @@ ROLES_PROMPT_VERSION = "entity-roles-v8"
 # (:func:`own_organisation_vendors`), and a foreign victim moves to vendor only for an Australian party that is
 # another organisation (:func:`foreign_vendor_not_victim`): Nissan's December 2023 breach was stored with Nissan
 # Oceania as its vendor and no victim. v7 events with a vendor or no victim are classified again.
+# v9 (2026-11-02): the maker of a product whose vulnerability was exploited is the vendor, not the victim, and a
+# report naming no organisation whose own systems or data were affected has no victim. Every prompt since v2 said an
+# incident has a victim, so a report of Ivanti flaws exploited at customers (Endpoint Manager, Connect Secure twice,
+# EPMM) recorded Ivanti as the victim four times, and Ivanti counted as an organisation attacked again and again
+# (owner: "Ivanti as vendor"). Events classified under an older prompt whose victim is a known supplier (a vendor of
+# another event, or a supplier incident's supplier) are classified again (role_maintenance).
 #: Prompt versions whose every classification is redone, not only those with a vendor or no victim.
 RECLASSIFY_VERSIONS = frozenset({"entity-roles-v6"})
 #: Sentences shown per entity, and characters per sentence.
@@ -338,7 +344,10 @@ SYSTEM_PROMPT = (
     "researcher or agency that reported, researched, investigated, advised or "
     "responded (bystander, or regulator for an authority); an organisation "
     "credited for a photo, quote or data (bystander); a provider whose product "
-    "failed or had an outage without being attacked (bystander).\n"
+    "failed or had an outage without being attacked (bystander). The maker of "
+    "a product whose vulnerability was exploited at its customers is the "
+    "vendor, not the victim, unless the report says the maker's own systems "
+    "or data were breached.\n"
     "- affected_customer: an organisation harmed because a vendor it uses was "
     "breached.\n"
     "- regulator: an authority investigating or responding (OAIC, ACSC, "
@@ -358,8 +367,11 @@ SYSTEM_PROMPT = (
     "describes an incident, so when any listed organisation is the one whose "
     "systems or data were affected, label it victim - do not leave an incident "
     "without a victim because the report calls the target by a service or "
-    "programme name. Do not guess between organisations the report gives no "
-    "reason to choose between: label those bystander."
+    "programme name. When the report names no organisation whose own systems "
+    "or data were affected (an advisory, or a campaign exploiting a product at "
+    "unnamed customers), label no victim: never make a product's maker the "
+    "victim for want of another. Do not guess between organisations the report "
+    "gives no reason to choose between: label those bystander."
 )
 
 

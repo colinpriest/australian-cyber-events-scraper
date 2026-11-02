@@ -1142,3 +1142,29 @@ def test_a_split_link_lapses_when_neither_its_event_nor_its_origin_records_the_s
         "SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks")) == [
         ("si-d", "Stake"), ("si-o", "ClubsNSW")]
     assert not sl.repair_registry(conn, resolver, {}, pair_labels=[])["stale_links_removed"]     # idempotent
+
+
+def test_an_event_recording_a_known_supplier_as_its_victim_is_classified_again():
+    """v9 (owner, 2026-11-02, "Ivanti as vendor"): four advisories of exploited Ivanti products recorded Ivanti as
+    their victim. An event classified under an older prompt whose victim is a known supplier is redone; a current
+    one, or one whose victim supplies nobody, is not."""
+    from cyber_data_collector.dedup import entity_classification as ec
+    from cyber_data_collector.dedup import role_maintenance as rm
+
+    assert "maker of a product whose vulnerability was exploited" in ec.SYSTEM_PROMPT
+    assert "never make a product's maker the victim" in ec.SYSTEM_PROMPT
+    conn = _separate([("iv", "Ivanti", "2025-01-10", None), ("ct", "Coates Group", "2025-02-01", None)])
+    conn.execute("INSERT INTO SupplierIncidents VALUES ('si-i', 'ivanti', NULL, 'Ivanti', 'ded-iv', '2025-01-10', "
+                 "'2025-01-10', 'x', 'x')")
+    _roles(conn, "ded-iv", [("Ivanti", "victim")])
+    _roles(conn, "ded-ct", [("Coates Group", "victim")])
+    for did in ("ded-iv", "ded-ct"):
+        members = [r[0] for r in conn.execute("SELECT enriched_event_id FROM EventDeduplicationMap "
+                                              "WHERE deduplicated_event_id = ?", (did,))]
+        conn.execute("UPDATE DeduplicatedEvents SET roles_member_signature = ?, roles_prompt_version = 'entity-roles-v8' "
+                     "WHERE deduplicated_event_id = ?", (rm.signature_for_members(members), did))
+    stale = rm.stale_event_ids(conn)
+    assert "ded-iv" in stale and "ded-ct" not in stale
+    conn.execute("UPDATE DeduplicatedEvents SET roles_prompt_version = ? WHERE deduplicated_event_id = 'ded-iv'",
+                 (ec.ROLES_PROMPT_VERSION,))
+    assert "ded-iv" not in rm.stale_event_ids(conn)

@@ -4268,7 +4268,9 @@ def cmd_publication_dates(args) -> int:
     from cyber_data_collector.processing.incident_dates import (
         BASIS_STATED_IN_SOURCE,
         rederive_webber_dates,
+        remove_dates_after_publication,
         repair_webber_dates,
+        webber_month_is_publication,
     )
     from cyber_data_collector.processing.publication_dates import (
         backfill,
@@ -4297,6 +4299,8 @@ def cmd_publication_dates(args) -> int:
                 print(f"ERROR: Webber list could not be read ({type(exc).__name__}: {exc}); records dated by the "
                       "old parser keep their dates", file=sys.stderr)
                 webber_failed = True
+        moved = webber_month_is_publication(conn, dry_run=args.dry_run)
+        print("Webber months: " + moved.summary() + (" - dry run" if args.dry_run else ""))
         redated = rederive_webber_dates(conn, dry_run=args.dry_run, headings=headings)
         print("Webber dates: " + redated.summary() + (" - dry run" if args.dry_run else ""))
         listing = clear_listing_dates(conn, dry_run=args.dry_run)
@@ -4308,10 +4312,14 @@ def cmd_publication_dates(args) -> int:
         if args.dry_run:
             print(f"{report.candidates} record(s) of active events have no publication date and would be fetched.")
             return 0
+        impossible = remove_dates_after_publication(conn)
         events = refresh_event_dates(conn)
         conn.commit()
     finally:
         conn.close()
+    print(impossible.summary())
+    for line in impossible.examples[:20]:
+        print(f"  {line}")
     if not args.no_fetch:
         print(report.summary())
         for how, count in sorted(report.how.items(), key=lambda kv: -kv[1]):

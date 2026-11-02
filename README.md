@@ -1361,6 +1361,14 @@ Second owner review (2026-10-31):
   (Visa supplies nothing to Amex), and the supplier report reads these links. A link keeps `vendor` only for the
   event's chosen vendor or an entity a member record still labels vendor.
 
+* **The maker of an exploited product is the vendor, not the victim** (`entity-roles-v9`, owner 2026-11-02: "Ivanti
+  as vendor"). Every prompt since v2 told the classifier an incident has a victim, so four reports of Ivanti flaws
+  exploited at customers (Endpoint Manager, Connect Secure twice, Endpoint Manager Mobile) recorded Ivanti as their
+  victim and Ivanti counted as an organisation attacked four times. The prompt now says the maker of an exploited
+  product is the vendor unless its own systems were breached, and a report naming no organisation whose own systems
+  or data were affected has no victim. An event classified under an older prompt whose victim is a known supplier
+  (a vendor of another active event, or a supplier incident's supplier) is classified again (`roles-status`).
+
 **Coherence splits (2026-11-01).** `check-coherence` and `check-same-organisation` re-read an event once a split
 in the same run has happened (a split that re-attaches a record can merge a later event away; the run failed on
 WSU's SSO event), and a label made on an event that has since been merged carries to the event that holds the
@@ -2487,9 +2495,26 @@ dated by a report is re-dated when its first report changes.
 (`processing/incident_dates.py`). A raw record holds only an incident date its
 source states (`RawEvents.event_date_precision` / `event_date_basis`); the
 publication date is never copied into it, and the search window's first day is
-no longer stored as one. Webber list headings ("Vertel - June 2025") are a
-month, stored as the 1st with precision `month` - they used to become the 15th
-(all 832 Webber records), outranking any day the article stated. A day the
+no longer stored as one. A Webber list heading ("Vertel - June 2025") is the month **Webber published** the
+item, not the incident's (owner, 2026-11-02): it is the record's publication month (the 15th, imputed, as Webber's
+dates always were) and an upper bound on the incident, never an incident date. Until then it was stored as the
+incident month with `month` precision and counted as verified; `webber_month_is_publication` (run by
+`publication-dates`) takes it off the stored records, and a record whose article ties no day to the breach has no
+incident date of its own (its event is dated by its other records, else by its first report).
+
+**An incident cannot follow its report** (`remove_dates_after_publication`, run by `publication-dates`). Webber
+listed Cyber Daily's report of the May 2024 Qantas app fault in May 2024; Perplexity, asked about "Qantas",
+answered with the July 2025 attack, its date and its 6,000,000 records, and the record became a second "July 2025"
+Qantas event. A record incident date, or a research date, more than 7 days after the date the source gave for the
+item itself is removed; research so dated described another incident, so its date and records count are withheld
+and the record is queued for research again (`ImpossibleIncidentDates`). Webber's date counts to the end of its
+month; OAIC's (2023-03-10 on every record) and a page's own metadata date (an evergreen page keeps its first
+publication date) are not used. On the 2026-11-02 copy: 10 Webber research answers (two Qantas app-fault records,
+Yakult, Genea, MediSecure, Pound Road Medical Centre, Riverina Medical and Dental, an Optus 2022 answer on a 2020
+listing).
+
+Before 2026-11-02 the headings were stored as the incident month - they used to become the 15th (all 832 Webber
+records), outranking any day the article stated. A day the
 article states wins only when its wording ties it to the breach ("the breach
 occurred on", "discovered", "detected", "the attack on", "between X and Y");
 the first date in an article is usually its byline or publication date
