@@ -90,6 +90,26 @@ def test_the_analysis_takes_a_researched_size_from_a_variant_when_the_representa
     assert summary["organisations whose variants give conflicting known size bands"] == 0
 
 
+def test_events_before_2020_are_not_analysed_and_are_counted(tmp_path):
+    """Owner 2026-11-03: the collection does not search before 2020, so earlier incidents are not analysed. A 2016
+    Medibank event would have made its 2022 breach a repeat after six years; Old Co's only event is from 2018."""
+    db = tmp_path / "variants.db"
+    _variant_db(db)
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO EntitiesV2 (entity_id, entity_name, entity_kind) VALUES (8, 'Old Co', 'organisation')")
+    c.executemany("INSERT INTO DeduplicatedEvents (deduplicated_event_id, title, event_date, status) "
+                  "VALUES (?, ?, ?, 'Active')", [("m0", "Medibank 2016", "2016-05-01"), ("o1", "Old Co", "2018-03-03")])
+    c.executemany("INSERT INTO DeduplicatedEventEntities VALUES (?, ?, 'victim')", [("m0", 3), ("o1", 8)])
+    c.commit()
+    c.close()
+    events = art.load_victim_events(db)
+    assert min(events["event_date"]).isoformat() >= "2020-01-01"
+    assert set(events["deduplicated_event_id"]) == {"m1", "m2", "a1"}
+    assert events.attrs["observation"] == {
+        "observation start": "2020-01-01", "victim event attributions before it (excluded)": 2,
+        "events before it (excluded)": 2, "organisations with events only before it (excluded)": 1}
+
+
 # --- size specification ---------------------------------------------------------------------------------------
 
 def synthetic_events(seed=7, organisations=240):

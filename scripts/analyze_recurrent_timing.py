@@ -43,6 +43,7 @@ from scipy.special import gammaln
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from cyber_data_collector.reporting.population import DASHBOARD_REPORTING_START
 from scripts.build_recurrence_dashboard import DEFAULT_OUT as DEFAULT_DASHBOARD_OUT
 from scripts.build_recurrence_dashboard import build_html as build_recurrence_dashboard
 from scripts import recurrence_summary
@@ -74,6 +75,8 @@ DEFAULT_OUT_DIR = "analysis/recurrent_timing"
 DEFAULT_ELAPSED_BOUNDS = (0, 180, 365, 730, 1460, math.inf)
 DELAYED_PEAK_ELAPSED_BOUNDS = (0, 90, 180, 365, 730, 1460, math.inf)
 DEFAULT_CALENDAR_BOUNDS = ("2012-01-01", "2019-01-01", "2022-01-01", "2024-01-01")
+#: Events before it are not analysed: the collection searches for incidents from then on (the dashboards' window).
+OBSERVATION_START = DASHBOARD_REPORTING_START
 REQUESTED_COVARIATES = ("org_size_score", "org_size_unknown", "sector_proxy", "entity_kind_group", "prior_records_band")
 SIZE_SCORE = {"SMALL": 1.0, "MEDIUM": 2.0, "LARGE": 3.0, "HUGE": 4.0}
 #: How organisation size enters the adjusted models. ``score`` (primary): the ordinal score SMALL=1 ..
@@ -453,7 +456,18 @@ def load_victim_events(db_path: Path) -> pd.DataFrame:
         df = one_organisation_per_event(conn, df)
 
     df["event_date"] = pd.to_datetime(df["event_date"]).dt.date
-    return add_entity_covariates(df)
+    # The collection searches for incidents from 2020 on (DASHBOARD_REPORTING_START); an earlier one is recorded
+    # only when later reporting mentions it, so earlier histories are incomplete and an organisation's pre-2020
+    # event would turn its first event of the period into a "repeat" years later (owner, 2026-11-03).
+    before = df["event_date"] < OBSERVATION_START
+    out = add_entity_covariates(df[~before].copy())
+    out.attrs["observation"] = {
+        "observation start": OBSERVATION_START.isoformat(),
+        "victim event attributions before it (excluded)": int(before.sum()),
+        "events before it (excluded)": int(df.loc[before, "deduplicated_event_id"].nunique()),
+        "organisations with events only before it (excluded)":
+            int(len(set(df.loc[before, "entity_id"]) - set(df.loc[~before, "entity_id"])))}
+    return out
 
 
 # Entity attributes taken from the organisation's representative variant.
@@ -2602,6 +2616,7 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
     elapsed_bounds = args.elapsed_bounds
 
     events = load_victim_events(db_path)
+    observation = dict(events.attrs.get("observation", {}))
     events = events[events["event_date"] <= censor_date].copy()
     if events.empty:
         raise RuntimeError("No victim events are dated on or before the censor date.")
@@ -2710,6 +2725,7 @@ def _run(args: argparse.Namespace, source_db: Path, out_dir: Path, analysis_inpu
         "post-event spells": int(len(spells)),
         "observed repeat spells": int(spells["event"].sum()),
         "right-censored spells": int((1 - spells["event"]).sum()),
+        "observation window (events before its start are excluded)": observation,
         "censor date": censor_date.isoformat(),
         "elapsed-time bands": ", ".join(band_labels(elapsed_bounds)),
         "minimum event date": events["event_date"].min().isoformat(),
