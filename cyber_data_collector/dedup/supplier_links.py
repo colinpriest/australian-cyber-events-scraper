@@ -1425,68 +1425,280 @@ def demote_split_customers(conn: sqlite3.Connection, apply: bool = True) -> List
     return done
 
 
-SUPPLIER_REPORT_DECISION = ("owner 2026-11-02: a report of a supplier's breach naming several customers is the "
-                            "supplier's own event; its customers are affected customers, each counted through its own "
-                            "event (the OracleCMS hack report had counted Nissan twice; ZircoDATA's breach had Monash "
-                            "Health as a victim)")
+# The first version of the rule (2026-11-02) counted victim *names*, not organisations, and trusted a victim
+# column left empty or naming the supplier (Perplexity names the supplier even on a customer's own notice).
+# "University of Canberra", "UC staff" and "UC students" made UC's own Canvas event Instructure's, and the
+# duplicate check then merged it into Instructure's report; Nissan's, Bunnings', PwC's and Discovery Parks' own
+# events went the same way, while ZircoDATA's report (victim column Monash Health) was left alone. Its conversions
+# are reversed (:func:`reverse_name_counted_reports`) and the rule is :func:`double_counted_customers`.
+SUPPLIER_REPORT_DECISION_V1 = ("owner 2026-11-02: a report of a supplier's breach naming several customers is the "
+                               "supplier's own event; its customers are affected customers, each counted through its "
+                               "own event (the OracleCMS hack report had counted Nissan twice; ZircoDATA's breach had "
+                               "Monash Health as a victim)")
+OWN_EVENT_DECISION = ("owner 2026-11-02: each customer of a supplier's breach is counted once, through its own event; "
+                      "on another event of the breach it is an affected customer")
+SUPPLIER_REPORT_DECISION = ("owner 2026-11-02: a report of a supplier's breach whose customers each have their own "
+                            "event of it is the supplier's own event")
+REPORT_REVERSAL_DECISION = ("owner 2026-11-03: the 2026-11-02 supplier-report rule counted names, not organisations, "
+                            "and made customers' own events the supplier's (University of Canberra, Nissan, PwC); "
+                            "reversed")
 
 
-def supplier_breach_reports(conn: sqlite3.Connection, g, apply: bool) -> List[Dict[str, Any]]:
-    """Events that report a supplier's breach as a whole become the supplier's own event.
+def _vendor_names(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
+    """Event -> the names it records as vendor (the column and vendor roles)."""
+    out: Dict[str, Set[str]] = defaultdict(set)
+    for did_, vendor in conn.execute(
+            """SELECT deduplicated_event_id, vendor_organization_name FROM DeduplicatedEvents
+               WHERE vendor_organization_name IS NOT NULL AND vendor_organization_name != ''
+               UNION SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v USING (entity_id) WHERE dee.relationship_type = 'vendor'"""):
+        out[did_].add(vendor)
+    return out
 
-    Shape: the event records a supplier (vendor), no headline victim other than the supplier, and two or more of the
-    supplier's customers as victims. That is the breach of the supplier told through the customers it reached - the
-    Cyber Daily report "Huge trove of Australian client data leaked following OracleCMS call centre hack" (victims
-    Nissan and two councils), ZircoDATA's Black Basta breach (victims Monash Health, The Migration Translators and two
-    descriptions of Victorian agencies). Under the owner's model (2026-10-31: one event per customer, linked) such an
-    event cannot stand: each customer was a victim twice, once here and once in its own event (Nissan's report a week
-    later), and a single article cannot be split per customer. So the supplier becomes the event's victim, the
-    customers its affected customers (they reach the supplier's card through their own events or as customers named
-    in its reporting), audited in ``SupplierLinkActions`` (``supplier-report``). Idempotent: an event already
-    converted records the supplier as its victim and fewer than two customer victims.
+
+def _victim_organisations(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str],
+                          vendors: Dict[str, Set[str]]) -> Dict[str, List[List[Tuple[int, str]]]]:
+    """Active event recording a supplier -> its victims, grouped into organisations.
+
+    Left out: a name that is not one organisation ("UC staff", "Bunnings customers", a sector), a listed
+    description, and the event's own supplier. Names are one organisation when :func:`victim_fill.names_match`
+    says so ("University of Canberra" and "University of Canberra (UC)").
+    """
+    from cyber_data_collector.dedup import descriptive_names
+    from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    descriptions = descriptive_names.described(conn)
+    names: Dict[str, List[Tuple[int, str, Optional[str]]]] = defaultdict(list)
+    for did, eid, name, kind in conn.execute(
+            """SELECT dee.deduplicated_event_id, dee.entity_id, v.entity_name, v.entity_kind
+               FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               JOIN DeduplicatedEvents d ON d.deduplicated_event_id = dee.deduplicated_event_id
+               WHERE dee.relationship_type = 'victim' AND d.status = 'Active'
+               ORDER BY dee.deduplicated_event_id, v.entity_name"""):
+        names[did].append((eid, name, kind))
+    out: Dict[str, List[List[Tuple[int, str]]]] = {}
+    for did, rows in names.items():
+        if not vendors.get(did):
+            continue
+        groups: List[List[Tuple[int, str]]] = []
+        for eid, name, kind in rows:
+            if not sv.is_candidate_organisation(name, kind) or descriptive_names.is_listed(descriptions, name):
+                continue
+            if any(is_supplier(resolver, verdicts, s, name) for s in vendors.get(did, ())):
+                continue
+            home = next((g for g in groups if any(names_match(conn, name, n) for _e, n in g)), None)
+            if home is None:
+                groups.append([(eid, name)])
+            else:
+                home.append((eid, name))
+        out[did] = groups
+    return out
+
+
+def double_counted_customers(conn: sqlite3.Connection, resolver=None,
+                             apply: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+    """Each customer of a supplier's breach is a victim of one event of it: its own.
+
+    A customer's *own* event of a breach records the customer as its only victim organisation and the supplier as
+    its vendor, within :data:`supplier_victims.OWN_EVENT_WINDOW_DAYS`. On any other event that records the same
+    supplier and two or more victim organisations, that customer is an affected customer (``own-event-customer``
+    in ``SupplierLinkActions``): ZircoDATA's breach report recorded Monash Health, which has its own notice;
+    Instructure's "Aussie schools breach" recorded universities that each have their own Canvas event. When every
+    customer of such an event has its own event, the event is the supplier's report and the supplier becomes its
+    victim (``supplier-report``). An event that is some customer's own event (one victim organisation) is never
+    changed, so two events of one customer cannot take the customer from each other.
+
+    Run by ``find-supplier-victims`` and after every role classification, which re-derives roles. Idempotent;
+    an action row is written only for a role that changed. ``apply`` False rolls back.
+
+    Returns:
+        ``{"demoted": [...], "reports": [...]}``.
     """
     from cyber_data_collector.dedup import supplier_victims as sv
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
     from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
+    from cyber_data_collector.dedup.victim_fill import names_match
 
+    ensure_schema(conn)
+    resolver = resolver or EntityResolver(conn)
     verdicts = pair_verdicts(conn)
-    done: List[Dict[str, Any]] = []
-    for x in g.incidents:
-        if not x.vendors:
+    vendors = _vendor_names(conn)
+    rows = conn.execute("SELECT deduplicated_event_id, event_date, victim_organization_name, vendor_organization_name, "
+                        "title FROM DeduplicatedEvents WHERE status = 'Active'").fetchall()
+    dates = {r[0]: r[1] for r in rows}
+    scalar = {r[0]: r[2] for r in rows}
+    column_vendor = {r[0]: r[3] for r in rows}
+    titles = {r[0]: r[4] for r in rows}
+    orgs = _victim_organisations(conn, resolver, verdicts, vendors)
+    # Own events can only be events that record a supplier; index them by vendor name.
+    by_vendor: Dict[str, List[str]] = defaultdict(list)
+    for did, groups in orgs.items():
+        if len(groups) == 1:
+            for v in vendors.get(did, ()):
+                by_vendor[v].append(did)
+    supplier_cache: Dict[Tuple[str, str], bool] = {}
+
+    def same_supplier(s: str, v: str) -> bool:
+        if (s, v) not in supplier_cache:
+            supplier_cache[(s, v)] = sv.same_org(resolver, s, v) or is_supplier(resolver, verdicts, s, v)
+        return supplier_cache[(s, v)]
+
+    def own_event(x: str, members: List[Tuple[int, str]]) -> Optional[str]:
+        candidates = sorted({y for s in vendors.get(x, ()) for v, ys in by_vendor.items() if same_supplier(s, v)
+                             for y in ys if y != x})
+        for y in candidates:
+            if not any(names_match(conn, n, t) for _e, n in members for _f, t in orgs[y][0]):
+                continue
+            gap = sv._gap(dates.get(x), dates.get(y))
+            if gap is None or gap <= sv.OWN_EVENT_WINDOW_DAYS:
+                return y
+        return None
+
+    demoted: List[Dict[str, Any]] = []
+    reports: List[Dict[str, Any]] = []
+    for did, groups in sorted(orgs.items()):
+        if len(groups) < 2 or not vendors.get(did):
             continue
-        supplier = x.vendors[0]
-        row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ? "
-                           "AND status = 'Active'", (x.dedup_id,)).fetchone()
-        if row is None or (row[0] and not is_supplier(g.resolver, verdicts, supplier, row[0])):
+        gone = [(members, own) for members in groups for own in [own_event(did, members)] if own]
+        if not gone:
             continue
-        customers = [(e, n) for e, n, _k in sv.event_victims(conn, x.dedup_id)
-                     if not is_supplier(g.resolver, verdicts, supplier, n)]
-        if len(customers) < 2:
+        gone_names: Set[str] = set()
+        for members, own in gone:
+            changed = 0
+            for eid, _name in members:
+                changed += conn.execute(
+                    "UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
+                    "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
+                    (did, eid)).rowcount
+            customer = sorted({n for _e, n in members})
+            gone_names.update(customer)
+            if changed:
+                demoted.append({"deduplicated_event_id": did, "title": titles.get(did), "customer": customer,
+                                "own_event": own})
+                conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'own-event-customer', ?, ?, ?, ?, ?, ?)",
+                             (str(uuid.uuid4()), did, own, members[0][0],
+                              json.dumps({"customer": customer, "supplier": sorted(vendors[did])}),
+                              OWN_EVENT_DECISION, _now()))
+        left = [g for g in groups if all(g is not members for members, _own in gone)]
+        if left:
+            if scalar.get(did) in gone_names:
+                conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE "
+                             "deduplicated_event_id = ?", (left[0][0][1] if len(left) == 1 else None, did))
             continue
-        supplier_id = _entity_id(conn, g.index, supplier)
-        done.append({"deduplicated_event_id": x.dedup_id, "title": x.title, "supplier": supplier,
-                     "customers": sorted(n for _e, n in customers)})
-        if not apply:
-            continue
-        conn.executemany("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
-                         "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
-                         [(x.dedup_id, e) for e, _n in customers])
-        if supplier_id is not None:
-            if conn.execute("SELECT 1 FROM DeduplicatedEventEntities WHERE deduplicated_event_id = ? AND entity_id = ?",
-                            (x.dedup_id, supplier_id)).fetchone():
-                conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
-                             "WHERE deduplicated_event_id = ? AND entity_id = ?", (x.dedup_id, supplier_id))
-            else:
-                conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, "
-                             "relationship_type) VALUES (?, ?, 'victim')", (x.dedup_id, supplier_id))
-        conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ?",
-                     (supplier, x.dedup_id))
-        conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'supplier-report', ?, NULL, ?, ?, ?, ?)",
-                     (str(uuid.uuid4()), x.dedup_id, supplier_id,
-                      json.dumps({"supplier": supplier, "customers": [n for _e, n in customers]}),
-                      SUPPLIER_REPORT_DECISION, _now()))
+        # Every customer has its own event: this is the supplier's report.
+        supplier = column_vendor.get(did) or sorted(vendors[did])[0]
+        link = conn.execute(
+            """SELECT dee.entity_id FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'victim')
+               ORDER BY v.entity_name != ?, v.entity_name LIMIT 1""", (did, supplier)).fetchone()
+        changed = 0
+        if link is not None:
+            changed = conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' WHERE "
+                                   "deduplicated_event_id = ? AND entity_id = ? AND relationship_type != 'victim'",
+                                   (did, link[0])).rowcount
+        if scalar.get(did) != supplier:
+            conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ?",
+                         (supplier, did))
+            changed += 1
+        if changed:
+            reports.append({"deduplicated_event_id": did, "title": titles.get(did), "supplier": supplier,
+                            "customers": sorted(gone_names)})
+            conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'supplier-report', ?, NULL, ?, ?, ?, ?)",
+                         (str(uuid.uuid4()), did, link[0] if link else None,
+                          json.dumps({"supplier": supplier, "customers": sorted(gone_names)}),
+                          SUPPLIER_REPORT_DECISION, _now()))
     if apply:
         conn.commit()
-    return done
+    else:
+        conn.rollback()
+    return {"demoted": demoted, "reports": reports}
+
+
+def _merged_away_records(conn: sqlite3.Connection, event_id: str, since: str) -> List[str]:
+    """The records ``event_id`` held when a merge after ``since`` (local ISO time) took it into another event."""
+    for batch_id, payload in conn.execute(
+            "SELECT batch_id, payload_json FROM DedupSnapshots WHERE deduplicated_event_id = ? AND batch_id LIKE "
+            "'merge-%' ORDER BY rowid DESC", (event_id,)).fetchall():
+        try:
+            when = datetime.strptime(batch_id.split("-", 1)[1], "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        if when < datetime.fromisoformat(since[:19]):
+            return []
+        members = [m.get("enriched_event_id") for m in json.loads(payload).get("members", [])]
+        return [m for m in members if m]
+    return []
+
+
+def reverse_name_counted_reports(conn: sqlite3.Connection, apply: bool = True) -> List[Dict[str, Any]]:
+    """Undo the conversions of the first supplier-report rule (:data:`SUPPLIER_REPORT_DECISION_V1`).
+
+    The listed customers are victims again and the supplier its vendor; the victim column, set to the supplier,
+    goes back to the one remaining victim (else empty). A converted event that a later merge took into another
+    event - UC's and Tasmania's Canvas events, merged into Instructure's report once all three recorded Instructure
+    as victim - leaves that event again with the records it held (``DedupLedger.split_members``, with rulings).
+    :func:`double_counted_customers` then demotes only customers with their own events. Audited as
+    ``supplier-report-reversed``; idempotent. ``apply`` False reports without changing anything.
+    """
+    from cyber_data_collector.dedup.ledger import DedupLedger
+
+    ensure_schema(conn)
+    done_ids = {json.loads(d or "{}").get("action_id") for (d,) in conn.execute(
+        "SELECT detail_json FROM SupplierLinkActions WHERE action = 'supplier-report-reversed'")}
+    rows = conn.execute("SELECT action_id, deduplicated_event_id, entity_id, detail_json, created_at "
+                        "FROM SupplierLinkActions WHERE action = 'supplier-report' AND reason = ? ORDER BY created_at",
+                        (SUPPLIER_REPORT_DECISION_V1,)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for action_id, did, supplier_id, detail, created in rows:
+        if action_id in done_ids:
+            continue
+        info = json.loads(detail or "{}")
+        entry: Dict[str, Any] = {"action_id": action_id, "deduplicated_event_id": did,
+                                 "supplier": info.get("supplier"), "customers": info.get("customers", []),
+                                 "split_back": None}
+        out.append(entry)
+        if not apply:
+            continue
+        target = did
+        holder = resolve_event(conn, did)
+        if holder and holder != did:
+            records = [r for r in _merged_away_records(conn, did, created) if conn.execute(
+                "SELECT 1 FROM EventDeduplicationMap WHERE deduplicated_event_id = ? AND enriched_event_id = ?",
+                (holder, r)).fetchone()]
+            if records:
+                previous = conn.row_factory
+                conn.row_factory = sqlite3.Row
+                try:
+                    target = DedupLedger(conn).split_members(
+                        holder, records, reason=f"[supplier-report-reversed] {REPORT_REVERSAL_DECISION}", actor="rule")
+                finally:
+                    conn.row_factory = previous
+                entry["split_back"] = {"from": holder, "new_event": target, "records": len(records)}
+        customers = entry["customers"]
+        if customers:
+            conn.execute(
+                f"""UPDATE DeduplicatedEventEntities SET relationship_type = 'victim'
+                    WHERE deduplicated_event_id = ? AND relationship_type = 'affected_customer' AND entity_id IN
+                    (SELECT entity_id FROM EntitiesV2 WHERE entity_name IN ({','.join('?' * len(customers))}))""",
+                (target, *customers))
+        if supplier_id is not None:
+            conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'vendor' WHERE "
+                         "deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
+                         (target, supplier_id))
+        row = conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                           (target,)).fetchone()
+        if row and row[0] == entry["supplier"]:
+            remaining = [r[0] for r in conn.execute(
+                "SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v USING (entity_id) "
+                "WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'", (target,))]
+            conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ?",
+                         (remaining[0] if len(remaining) == 1 else None, target))
+        conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'supplier-report-reversed', ?, ?, ?, ?, ?, ?)",
+                     (str(uuid.uuid4()), did, target if target != did else None, supplier_id,
+                      json.dumps(entry), REPORT_REVERSAL_DECISION, _now()))
+        conn.commit()
+    return out
 
 
 def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split: bool = False) -> Dict[str, Any]:
@@ -1574,9 +1786,11 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split:
                            row[1] if row else None, (row[2] if row else None) or "attachment"))
         converted += 1
     demoted = demote_split_customers(conn, apply=apply)
-    reports = supplier_breach_reports(conn, g, apply=apply)
+    reports_reversed = reverse_name_counted_reports(conn, apply=apply)
+    customers = double_counted_customers(conn, g.resolver, apply=apply)
     return {"attachments_reversed": reversed_, "attachments_converted": converted, "splits": splits,
-            "ambiguous": ambiguous, "split_customers_demoted": demoted, "supplier_reports": reports}
+            "ambiguous": ambiguous, "split_customers_demoted": demoted, "supplier_reports": customers["reports"],
+            "own_event_customers": customers["demoted"], "supplier_reports_reversed": reports_reversed}
 
 
 # ----------------------------------------------------------------------

@@ -1043,32 +1043,131 @@ def test_an_earlier_cross_customer_merge_is_undone_where_the_records_say_whose_e
     assert plan.event_id == "t1" and plan.stays == "Monash University" and plan.leaving == {"NSW Health": ["n1"]}
 
 
-def test_a_report_of_the_suppliers_breach_naming_several_customers_becomes_the_suppliers_event(full):
-    """Owner, 2026-11-02: the OracleCMS hack report (victims Nissan and two councils) counted Nissan twice beside
-    Nissan's own notice; ZircoDATA's breach recorded Monash Health as a victim. With no headline victim and two or
-    more customers as victims, the event is the supplier's own: the supplier its victim, the customers affected."""
-    full.execute("UPDATE DeduplicatedEvents SET victim_organization_name = NULL WHERE deduplicated_event_id = 'ded-z1'")
-    full.commit()
+def _own_event(c, key, customer, vendor="ZircoDATA", date="2024-01-20"):
+    """An Active event of one customer that records the supplier as its vendor."""
+    from cyber_data_collector.tests.test_dedup_v3 import _add_event
 
-    def roles():
-        return sorted(tuple(r) for r in full.execute(
-            "SELECT v.entity_name, dee.relationship_type FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v "
-            "USING (entity_id) WHERE dee.deduplicated_event_id = 'ded-z1'"))
+    _add_event(c, key, f"{customer} notifies of {vendor} breach", f"https://x/{key}", victim=customer, date=date)
+    c.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = ? WHERE deduplicated_event_id = ?",
+              (vendor, f"ded-{key}"))
+    entity_id = c.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = ?", (customer,)).fetchone()[0]
+    c.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+              "VALUES (?, ?, 'victim')", (f"ded-{key}", entity_id))
+    c.commit()
 
-    g = sv.gather(full)
-    planned = sl.convert(full, g, sl.Registry(full, g.resolver), apply=False)
-    assert [(r["supplier"], r["customers"]) for r in planned["supplier_reports"]] == [
+
+def _roles(c, did):
+    return sorted(tuple(r) for r in c.execute(
+        "SELECT v.entity_name, dee.relationship_type FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v "
+        "USING (entity_id) WHERE dee.deduplicated_event_id = ?", (did,)))
+
+
+def test_a_customer_with_its_own_event_of_the_breach_is_an_affected_customer_of_the_other(full):
+    """Owner, 2026-11-02: ZircoDATA's breach recorded Monash Health as a victim beside Monash Health's own notice.
+    Each customer is counted once, through its own event; one without its own event stays a victim."""
+    _own_event(full, "mh", "Monash Health")
+    result = sl.double_counted_customers(full, apply=False)
+    assert [(r["deduplicated_event_id"], r["customer"], r["own_event"]) for r in result["demoted"]] == [
+        ("ded-z1", ["Monash Health"], "ded-mh")]
+    assert ("Monash Health", "victim") in _roles(full, "ded-z1")              # planning changes nothing
+    result = sl.double_counted_customers(full)
+    assert result["reports"] == []
+    assert _roles(full, "ded-z1") == [("Department of Home Affairs", "victim"), ("Monash Health", "affected_customer"),
+                                      ("ZircoDATA", "vendor")]
+    assert _roles(full, "ded-mh") == [("Monash Health", "victim")]           # its own event is never touched
+    assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
+                        "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] == "Department of Home Affairs"
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}  # idempotent
+
+
+def test_a_report_whose_customers_all_have_their_own_events_is_the_suppliers_event(full):
+    _own_event(full, "mh", "Monash Health")
+    _own_event(full, "ha", "Department of Home Affairs")
+    result = sl.double_counted_customers(full)
+    assert [(r["supplier"], r["customers"]) for r in result["reports"]] == [
         ("ZircoDATA", ["Department of Home Affairs", "Monash Health"])]
-    assert ("Monash Health", "victim") in roles()                        # planning changes nothing
-    done = sl.convert(full, g, sl.Registry(full, g.resolver), apply=True)
-    assert len(done["supplier_reports"]) == 1
-    assert roles() == [("Department of Home Affairs", "affected_customer"), ("Monash Health", "affected_customer"),
-                       ("ZircoDATA", "victim")]
+    assert _roles(full, "ded-z1") == [("Department of Home Affairs", "affected_customer"),
+                                      ("Monash Health", "affected_customer"), ("ZircoDATA", "victim")]
     assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
                         "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] == "ZircoDATA"
-    assert full.execute("SELECT COUNT(*) FROM SupplierLinkActions WHERE action = 'supplier-report'").fetchone()[0] == 1
-    g2 = sv.gather(full)
-    assert sl.convert(full, g2, sl.Registry(full, g2.resolver), apply=True)["supplier_reports"] == []   # idempotent
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+
+
+def test_own_events_of_another_supplier_or_a_distant_date_do_not_count(full):
+    _own_event(full, "mh", "Monash Health", vendor="Accellion")
+    _own_event(full, "ha", "Department of Home Affairs", date="2020-01-01")
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+
+
+def test_names_of_one_customer_are_one_customer_not_a_supplier_report(full):
+    """Owner, 2026-11-03: UC's own Canvas event recorded "University of Canberra", "UC staff" and "University of
+    Canberra students"; counted as names they made it Instructure's report. They are one organisation."""
+    from cyber_data_collector.tests.test_dedup_v3 import _add_event
+
+    for name in ("Instructure", "University of Canberra", "UC staff", "University of Canberra students"):
+        full.execute("INSERT INTO EntitiesV2 (entity_name) VALUES (?)", (name,))
+    _add_event(full, "uc", "University of Canberra affected by Instructure Canvas incident", "https://x/uc",
+               victim="Instructure", date="2026-04-25")
+    full.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = 'Instructure' "
+                 "WHERE deduplicated_event_id = 'ded-uc'")
+    full.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "SELECT 'ded-uc', entity_id, CASE entity_name WHEN 'Instructure' THEN 'vendor' ELSE 'victim' END "
+                 "FROM EntitiesV2 WHERE entity_name IN ('Instructure', 'University of Canberra', 'UC staff', "
+                 "'University of Canberra students')")
+    _own_event(full, "uc2", "University of Canberra", vendor="Instructure", date="2026-04-26")
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+    assert ("University of Canberra", "victim") in _roles(full, "ded-uc")
+
+
+def test_a_name_counted_report_is_reversed_and_a_later_merge_split_back(full):
+    """The first rule's conversions are undone: customers victims again, the supplier its vendor, and an event a
+    later merge took into another (UC's, into Instructure's report) leaves with the records it held."""
+    from cyber_data_collector.tests.test_dedup_v3 import _add_event
+
+    sl.ensure_schema(full)
+    _add_event(full, "u1", "Monash Health own notice", "https://x/u1", victim="ZircoDATA", date="2024-01-24")
+    full.execute("INSERT INTO EventDeduplicationMap (map_id, raw_event_id, enriched_event_id, deduplicated_event_id, "
+                 "contribution_type) VALUES ('map-u1', 'raw-u1', 'enr-u1', 'ded-u1', 'primary')")
+    ids = {r[1]: r[0] for r in full.execute("SELECT entity_id, entity_name FROM EntitiesV2")}
+    full.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                 "VALUES ('ded-u1', ?, 'affected_customer'), ('ded-u1', ?, 'victim')",
+                 (ids["Monash Health"], ids["ZircoDATA"]))
+    full.execute("INSERT INTO SupplierLinkActions VALUES ('act-1', 'supplier-report', 'ded-u1', NULL, ?, ?, ?, "
+                 "'2026-01-01T00:00:00')", (ids["ZircoDATA"], json.dumps({"supplier": "ZircoDATA",
+                                                                         "customers": ["Monash Health"]}),
+                                             sl.SUPPLIER_REPORT_DECISION_V1))
+    DedupLedger(full).merge_events("ded-z1", "ded-u1", reason="test", respect_overrides=False)
+    full.commit()
+    assert _event_of(full, "enr-u1") == "ded-z1"
+
+    planned = sl.reverse_name_counted_reports(full, apply=False)
+    assert [r["deduplicated_event_id"] for r in planned] == ["ded-u1"] and _event_of(full, "enr-u1") == "ded-z1"
+    (done,) = sl.reverse_name_counted_reports(full)
+    new = done["split_back"]["new_event"]
+    assert done["split_back"]["from"] == "ded-z1" and _event_of(full, "enr-u1") == new != "ded-z1"
+    assert full.execute("SELECT COUNT(*) FROM DedupOverrides WHERE verdict = 'different' AND active = 1 AND "
+                        "(left_enriched_event_id = 'enr-u1' OR right_enriched_event_id = 'enr-u1')").fetchone()[0] > 0
+    assert sl.reverse_name_counted_reports(full) == []                        # idempotent
+
+
+def test_an_active_name_counted_report_gets_its_victims_back(full):
+    sl.ensure_schema(full)
+    ids = {r[1]: r[0] for r in full.execute("SELECT entity_id, entity_name FROM EntitiesV2")}
+    full.execute("UPDATE DeduplicatedEventEntities SET relationship_type = CASE entity_id WHEN ? THEN 'victim' "
+                 "ELSE 'affected_customer' END WHERE deduplicated_event_id = 'ded-z1'", (ids["ZircoDATA"],))
+    full.execute("UPDATE DeduplicatedEvents SET victim_organization_name = 'ZircoDATA' "
+                 "WHERE deduplicated_event_id = 'ded-z1'")
+    full.execute("INSERT INTO SupplierLinkActions VALUES ('act-1', 'supplier-report', 'ded-z1', NULL, ?, ?, ?, "
+                 "'2026-01-01T00:00:00')", (ids["ZircoDATA"], json.dumps(
+                     {"supplier": "ZircoDATA", "customers": ["Department of Home Affairs", "Monash Health"]}),
+                     sl.SUPPLIER_REPORT_DECISION_V1))
+    full.commit()
+    (done,) = sl.reverse_name_counted_reports(full)
+    assert done["split_back"] is None
+    assert _roles(full, "ded-z1") == [("Department of Home Affairs", "victim"), ("Monash Health", "victim"),
+                                      ("ZircoDATA", "vendor")]
+    assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
+                        "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] is None   # two victims: none chosen
 
 
 def test_an_event_with_its_own_headline_victim_is_not_a_supplier_report(full):

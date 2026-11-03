@@ -1261,15 +1261,22 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   vendor. Ticketek's May 2024 breach had been split out of an event that recorded Outabox (another breach of that
   month, mentioned as background) as its vendor, and stayed listed under Outabox after the vendor was corrected
   (owner, 2026-11-02). Stake keeps DriveWealth: the event it was split from is DriveWealth's own.
-* **A report of the supplier's breach is the supplier's event** (owner, 2026-11-02). An event that records a supplier,
-  no headline victim (or the supplier) and two or more of its customers as victims tells the supplier's breach
-  through the customers it reached: the Cyber Daily report "Huge trove of Australian client data leaked following
-  OracleCMS call centre hack" recorded Nissan and two councils as victims, so Nissan was counted twice (here and in
-  its own notice a week later); ZircoDATA's Black Basta breach recorded Monash Health, The Migration Translators and
-  two descriptions of Victorian agencies as victims. A single article cannot be split per customer, so
-  `find-supplier-victims --apply` makes the supplier its victim and the customers affected customers
-  (`supplier_links.supplier_breach_reports`, audited in `SupplierLinkActions` as `supplier-report`); each customer
-  is then counted through its own event and listed on the supplier's card. 8 active events had this shape.
+* **Each customer of a supplier's breach is counted once, through its own event** (owner, 2026-11-02). ZircoDATA's
+  Black Basta breach recorded Monash Health as a victim beside Monash Health's own notice, so Monash Health was
+  counted twice. A customer's *own* event of a breach records it as the only victim organisation and the supplier as
+  vendor, within 365 days; on every other event that records the same supplier and two or more victim
+  organisations the customer is an affected customer, and an event whose customers all have their own events is the
+  supplier's report, with the supplier as its victim (`supplier_links.double_counted_customers`, run by
+  `find-supplier-victims --apply` and after every role classification; audited in `SupplierLinkActions` as
+  `own-event-customer` and `supplier-report`). An event with one victim organisation is never changed, so two events
+  of one customer cannot take it from each other. The first version of the rule (2026-11-02) counted victim *names*
+  and trusted a victim column left empty or naming the supplier: "University of Canberra", "UC staff" and "UC
+  students" made UC's own Canvas event Instructure's, the duplicate check then merged it (and Tasmania's) into
+  Instructure's report, and Nissan's, Bunnings', PwC's and Discovery Parks' own events lost their victims, while
+  ZircoDATA's (victim column Monash Health) was untouched. `reverse_name_counted_reports` undoes those 10
+  conversions (audited as `supplier-report-reversed`): customers are victims again, and an event merged afterwards
+  leaves with the records it held. On the 2026-11-03 copy the corrected rule demotes 7 customers with their own
+  events (Monash Health on ZircoDATA's report among them) and makes one event a supplier's report.
 * **An incident needs something to support it, and a named supplier** (2026-11-01). The report of that morning
   still carried cards for Delta Air Lines, ESET, IDCare, Gridware, Xen Technologies and Microsoft, "Oracle CMS"
   beside OracleCMS, "RMS" beside RMS Cloud, and "IT service provider" and "Australian sole trader" as vendors. The
@@ -2116,6 +2123,13 @@ end-of-run log lists requests per provider. Token costs are still reported by
 the token tracker; they cannot be capped directly because the GPT-5 snapshots
 have no listed price.
 
+**A paid request has a total deadline.** `requests`' `timeout=` bounds each socket
+read, not the whole answer: a Perplexity alias question with `timeout=90` sat on an
+open connection for 17 minutes and stalled the supplier step (2026-11-03). The same
+hook runs every non-streaming `requests` call to a paid host on a daemon thread and
+raises `requests.exceptions.Timeout` after 300 s (`api_budget.REQUEST_DEADLINE_SECONDS`),
+which every caller already treats as a failed call to retry.
+
 ### Dashboard safety
 
 Dashboards embed scraped titles, organisation names and descriptions. Data is
@@ -2142,6 +2156,12 @@ organisation is capped at the national population, while a genuinely global
 victim (Dell, Ticketmaster) keeps its real figure. Only over-statements are
 corrected - small counts are often exactly right ("6 senators confirm being
 targeted").
+
+A count below 1 is no count. The Perplexity gate once wrote a supported count of 0
+("no data was accessed") into `records_affected`, bypassing the rule every other path
+follows (`validate_records_affected`: zero is unknown), and new events copied it from
+their master record. The gate applies no count below 1, and event facts clear a stored
+count below 1 when no member gives a valid one (`dedup_admin.py refresh-facts`).
 
 ### Confidence is unknown, not 0.7
 
@@ -2344,6 +2364,14 @@ it matters (about 230 pairs were proposed that way on that copy; later runs ask
 only what changed). The decision it replaces is kept in
 `EntityAliasDecisionHistory`; a failed re-ask leaves a veto in force and the pair
 in `report.failed` (the fold is the risky direction).
+
+**The question shows what a person recorded about either name.** "Ministry of Health"
+and "NSW Health" were answered `same` on 2026-10-31 and `related` when asked again on
+changed evidence ("the NSW Ministry of Health is its system manager"), against the
+owner's decision that they are one entity, because the question never showed that
+decision. Each name is now listed with the aliases and alias decisions a person
+recorded about it, and they are part of the evidence hash for the pairs that touch
+one, so only those pairs are asked again.
 
 **A group is checked against every recorded verdict, not just its head.** Names
 were checked one by one against the group's chosen name, so A=B and A=C could
