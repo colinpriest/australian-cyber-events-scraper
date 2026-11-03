@@ -68,6 +68,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from collections import defaultdict
@@ -205,10 +206,12 @@ class Registry:
     """Supplier incidents and their links: the stored rows plus what this run adds."""
 
     def __init__(self, conn: sqlite3.Connection, resolver):
+        from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
         from cyber_data_collector.dedup.supplier_victims import OWN_EVENT_WINDOW_DAYS
 
         ensure_schema(conn)
         self.conn, self.resolver, self.window = conn, resolver, OWN_EVENT_WINDOW_DAYS
+        self.verdicts = pair_verdicts(conn)
         self.incidents: Dict[str, Incident] = {}
         for row in conn.execute(
                 """SELECT supplier_incident_id, supplier_key, supplier_name, supplier_entity_id, supplier_event_id,
@@ -235,25 +238,24 @@ class Registry:
                 inc.events.add(event)       # so a pair label against a stored member keeps an event out
 
     def key(self, supplier: str) -> str:
-        """The supplier's key; an organisation already stored under another spelling keeps that incident's key."""
-        from cyber_data_collector.dedup.supplier_victims import same_org
-
+        """The supplier's key; an organisation already stored under another spelling (:func:`is_supplier`) keeps that
+        incident's key."""
         key = self.resolver.key_for(supplier)
         if any(inc.supplier_key == key for inc in self.incidents.values()):
             return key
         matches = [(inc.supplier_name, inc.supplier_key) for inc in self.incidents.values()
-                   if same_org(self.resolver, inc.supplier_name, supplier)]
+                   if is_supplier(self.resolver, self.verdicts, inc.supplier_name, supplier)]
         best = closest_name(supplier, [name for name, _key in matches])
         return next(k for name, k in sorted(matches) if name == best) if best is not None else key
 
     def incident(self, supplier: str, event_date: Optional[str], anchor: str,
-                 supplier_event: Optional[str] = None, apart=None) -> Incident:
+                 supplier_event: Optional[str] = None, apart=None, create: bool = True) -> Optional[Incident]:
         """The incident an event belongs to.
 
         ``supplier_event``: the supplier's own event, which anchors its own incident (never shared with
         another of the supplier's events). Otherwise the supplier's incident nearest ``event_date`` within
-        the window, else a new one. ``apart(a, b)`` True means two events were ruled different incidents
-        (a pair label); an incident holding such an event is not joined.
+        the window, else a new one - or None when ``create`` is False. ``apart(a, b)`` True means two events
+        were ruled different incidents (a pair label); an incident holding such an event is not joined.
         """
         from cyber_data_collector.dedup.supplier_victims import OWN_EVENT_WINDOW_DAYS, _gap
 
@@ -293,6 +295,8 @@ class Registry:
                 best = (gap, inc.supplier_incident_id)
         if best is not None:
             inc = self.incidents[best[1]]
+        elif not create:
+            return None
         else:
             sid = "si-" + hashlib.sha1(f"{key}|{anchor}".encode("utf-8")).hexdigest()[:16]
             inc = self.incidents.setdefault(sid, Incident(sid, key, supplier))
@@ -425,16 +429,34 @@ def closest_name(name: str, candidates: Sequence[str]) -> Optional[str]:
     return min(sorted(candidates), key=lambda c: (_compact(c) != target, abs(len(_compact(c)) - len(target))))
 
 
+_CONFLICT_VERDICTS = ("different", "related", "parent_subsidiary")
+
+
+def _name_parts(name: str) -> Set[str]:
+    """A name and, for "X (Y)", X and Y: "Oracle Customer Management Solutions (OracleCMS)" is also both."""
+    whole = name.strip().lower()
+    parts = {whole}
+    match = re.fullmatch(r"(.+?)\s*\(([^()]+)\)", whole)
+    if match:
+        parts.update(p.strip() for p in match.groups() if p.strip())
+    return parts
+
+
 def is_supplier(resolver, verdicts: Dict[frozenset, str], supplier: str, name: str) -> bool:
-    """Whether ``name`` is the supplier itself: one organisation by name (``same_org``), or ruled ``same`` in a
-    supplier incident's context (``alias_learning.verify_supplier_pairs``: "Oracle Customer Management Solutions"
-    for OracleCMS). ``verdicts`` is :func:`multi_customer_incidents.pair_verdicts`."""
+    """Whether ``name`` is the supplier itself: ruled ``same`` in a supplier incident's context
+    (``alias_learning.verify_supplier_pairs``: "Oracle Customer Management Solutions (OracleCMS)" for OracleCMS), or
+    one organisation by name (``same_org``) when no verdict rules them apart. Verdicts are read for the names and for
+    the parts of an "X (Y)" name: "Oracle" and "Oracle Customer Management Solutions" are recorded as different, and
+    the name test took "Oracle Customer Management Solutions (OracleCMS)" for Oracle. ``verdicts`` is
+    :func:`multi_customer_incidents.pair_verdicts`."""
     from cyber_data_collector.dedup import supplier_victims as sv
 
-    if not name:
+    if not name or not supplier:
         return False
-    return (sv.same_org(resolver, supplier, name)
-            or verdicts.get(frozenset((supplier.strip().lower(), name.strip().lower()))) == "same")
+    found = {verdicts.get(frozenset((a, b))) for a in _name_parts(supplier) for b in _name_parts(name) if a != b}
+    if found & set(_CONFLICT_VERDICTS):
+        return False
+    return "same" in found or sv.same_org(resolver, supplier, name)
 
 
 def anchors_incident(conn: sqlite3.Connection, resolver, verdicts: Dict[frozenset, str], supplier: str,
@@ -562,7 +584,7 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
     verdicts = pair_verdicts(conn)
     report: Dict[str, Any] = {"stale_links_removed": [], "incidents_merged": [], "incidents_removed": [],
                               "shared_not_merged": [], "own_organisation_links_removed": [], "keys_joined": [],
-                              "own_events_replaced": []}
+                              "keys_reset": [], "own_events_replaced": []}
     incidents = {r[0]: {"key": r[1], "name": r[2], "event": r[3], "first": r[4]} for r in conn.execute(
         "SELECT supplier_incident_id, supplier_key, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
     for sid, entity_id, name, event_id in conn.execute(
@@ -624,18 +646,33 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         report["own_organisation_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                                          "customer": name})
 
-    first_name: Dict[str, str] = {}
-    for sid, inc in sorted(incidents.items(), key=lambda kv: (kv[1]["key"], kv[0])):
-        matches = {n: k for k, n in first_name.items() if k != inc["key"] and sv.same_org(resolver, n, inc["name"])}
-        closest = closest_name(inc["name"], list(matches))
-        joined = matches[closest] if closest is not None else None
-        if joined is None:
-            first_name.setdefault(inc["key"], inc["name"])
-            continue
-        conn.execute("UPDATE SupplierIncidents SET supplier_key = ?, updated_at = ? WHERE supplier_incident_id = ?",
-                     (joined, _now(), sid))
-        report["keys_joined"].append({"supplier_incident_id": sid, "supplier": inc["name"], "key": joined})
-        inc["key"] = joined
+    # Keys are worked out afresh from the names, not kept: a key taken from another supplier's incident outlives the
+    # match that gave it. Three OracleCMS incidents carried Oracle's key "oracle", so Oracle's 2025 cloud breach
+    # (Optus's event) was filed under OracleCMS, and "Oracle Customer Management Solutions (OracleCMS)" kept a key of
+    # its own, so its incident and OracleCMS's both held Nissan's April 2024 notice.
+    # Worked out before the merges below (spellings of one supplier group together) and again after them (an
+    # incident merged away no longer lends its key); written once, at the end.
+    stored_key = {sid: inc["key"] for sid, inc in incidents.items()}
+
+    def assign_keys() -> Set[str]:
+        """Each incident's key from its name, joined to the closest stored spelling of the same supplier."""
+        for sid, inc in incidents.items():
+            inc["key"] = resolver.key_for(inc["name"]) or stored_key[sid]
+        first_name: Dict[str, str] = {}
+        joined_ids: Set[str] = set()
+        for sid, inc in sorted(incidents.items(), key=lambda kv: (kv[1]["key"], kv[0])):
+            matches = {n: k for k, n in first_name.items()
+                       if k != inc["key"] and is_supplier(resolver, verdicts, n, inc["name"])}
+            closest = closest_name(inc["name"], list(matches))
+            joined = matches[closest] if closest is not None else None
+            if joined is None:
+                first_name.setdefault(inc["key"], inc["name"])
+                continue
+            inc["key"] = joined
+            joined_ids.add(sid)
+        return joined_ids
+
+    assign_keys()
 
     from cyber_data_collector.dedup.supplier_victims import OWN_EVENT_WINDOW_DAYS, _gap
 
@@ -801,6 +838,14 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         report["incidents_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
                                             "named_customers_dropped": named})
         incidents.pop(sid)
+    joined_ids = assign_keys()
+    for sid, inc in sorted(incidents.items()):
+        if inc["key"] == stored_key[sid]:
+            continue
+        conn.execute("UPDATE SupplierIncidents SET supplier_key = ?, updated_at = ? WHERE supplier_incident_id = ?",
+                     (inc["key"], _now(), sid))
+        report["keys_joined" if sid in joined_ids else "keys_reset"].append(
+            {"supplier_incident_id": sid, "supplier": inc["name"], "key": inc["key"], "was": stored_key[sid]})
     # The span is what is linked now, not what a removed or merged link once contributed.
     for sid in incidents:
         linked = sorted(events_of(sid))
@@ -967,9 +1012,19 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
             continue
         single, all_victims = customer_of(x.dedup_id, x.vendors[0])
         customer_events.append((x, single, all_victims))
+    # An event that records no victim names no customer, so it never starts an incident; it joins one of the
+    # supplier's incidents near its date, placed first from the events that do name a customer. A Whitehorse City
+    # Council report of OracleCMS's April 2024 breach, misdated 2022-05-11 and with no victim recorded, made an
+    # incident of its own, and the councils its reporting named were listed under a "2022" attack.
+    customer_events.sort(key=lambda item: not item[2])
     for x, single, all_victims in customer_events:
         vendor = x.vendors[0]
-        inc = incident_of[x.dedup_id] = registry.incident(vendor, x.event_date, x.dedup_id, apart=apart)
+        inc = registry.incident(vendor, x.event_date, x.dedup_id, apart=apart, create=bool(all_victims))
+        if inc is None:
+            ambiguous.append({"deduplicated_event_id": x.dedup_id, "title": x.title, "victims": [],
+                              "why": "records no victim, and no incident of its supplier is near its date"})
+            continue
+        incident_of[x.dedup_id] = inc
         if inc.supplier_entity_id is None:
             inc.supplier_entity_id = _entity_id(conn, g.index, vendor)
         if single is None:

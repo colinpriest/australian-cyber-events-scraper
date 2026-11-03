@@ -386,7 +386,7 @@ def test_a_supplier_is_not_its_own_customer_and_an_unanchored_incident_goes():
                  "VALUES ('ded-t', 12, 'affected_customer')")              # the judged event records Latrobe
     report = sl.repair_registry(conn, resolver, {})
     assert [r["customer"] for r in report["own_organisation_links_removed"]] == ["Accellion Inc"]
-    assert [r["supplier"] for r in report["keys_joined"]] in (["Oracle CMS"], ["OracleCMS"])
+    assert {(r["kept"], r["merged"]) for r in report["incidents_merged"]} >= {("si-o1", "si-o2")}  # spellings joined
     assert {r["supplier"] for r in report["incidents_removed"]} >= {"Nissan Oceania", "Delta Air Lines"}
     remaining = {r[0] for r in conn.execute("SELECT supplier_name FROM SupplierIncidents")}
     assert "Nissan Oceania" not in remaining and "Delta Air Lines" not in remaining
@@ -597,6 +597,53 @@ def test_a_spelling_joins_the_closest_supplier_and_unplanned_named_links_are_pru
     assert sorted(r[:2] for r in conn.execute("SELECT supplier_incident_id, customer_name FROM SupplierIncidentLinks")
                   ) == [("si-a", "Knox City Council"), ("si-a", "Optus"), ("si-b", "City of Monash"),
                         ("si-b", "Knox City Council"), ("si-b", "Optus")]
+
+
+def test_supplier_keys_come_from_names_and_a_bracketed_name_follows_its_verdicts():
+    """2026-11-03: three OracleCMS incidents carried Oracle's key, so Oracle's 2025 cloud breach was filed under
+    OracleCMS, while "Oracle Customer Management Solutions (OracleCMS)" - ruled the same as OracleCMS - kept a key of
+    its own, and Nissan's April 2024 notice sat in both incidents (owner's exception 2b621df0)."""
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
+
+    long_name = "Oracle Customer Management Solutions (OracleCMS)"
+    conn = _separate([("n", "Nissan", "2024-04-01", "OracleCMS"), ("o", "Optus", "2025-03-25", "Oracle")])
+    eav.ensure_schema(conn)
+    conn.executemany("INSERT INTO EntityAliasDecisions (name, other_name, verdict, model, prompt_version, decided_at) "
+                     "VALUES (?, ?, ?, 'sonar-pro', 'v', 'x')",
+                     [(long_name, "OracleCMS", "same"), ("Oracle", "Oracle Customer Management Solutions", "different")])
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, ?, NULL, ?, NULL, '2024-04-01', '2024-04-01', 'x', 'x')",
+                     [("si-c", "oracle", "OracleCMS"),
+                      ("si-l", "oracle customer management solutions oraclecms", long_name)])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, 1, 'Nissan', 'ded-n', ?, ?, ?, 'x', 'x')",
+                     [("si-c", "vendor-recorded", None, "rule"), ("si-l", "judged-same-incident", 0.9, "jev")])
+    conn.commit()
+    resolver = EntityResolver(conn)
+    resolver.fit(["OracleCMS", "Oracle", long_name])
+    verdicts = pair_verdicts(conn)
+    assert sl.is_supplier(resolver, verdicts, "OracleCMS", long_name)
+    assert not sl.is_supplier(resolver, verdicts, "Oracle", long_name)     # a part's recorded verdict holds
+
+    report = sl.repair_registry(conn, resolver, {})
+    assert [(r["supplier_incident_id"], r["was"]) for r in report["keys_reset"] + report["keys_joined"]] == [
+        ("si-c", "oracle")]                                                # Oracle's key is no longer OracleCMS's
+    assert len(report["incidents_merged"]) == 1
+    assert conn.execute("SELECT COUNT(DISTINCT supplier_incident_id) FROM SupplierIncidentLinks "
+                        "WHERE customer_event_id = 'ded-n'").fetchone()[0] == 1
+    registry = sl.Registry(conn, resolver)
+    assert registry.key(long_name) == registry.key("OracleCMS") != registry.key("Oracle")
+    again = sl.repair_registry(conn, resolver, {})                         # idempotent
+    assert not (again["keys_reset"] or again["keys_joined"] or again["incidents_merged"])
+
+
+def test_an_event_naming_no_customer_joins_an_incident_but_starts_none():
+    """2026-11-03: a Whitehorse City Council report of OracleCMS's April 2024 breach, misdated 2022-05-11 and
+    recording no victim, started a "2022" OracleCMS attack listing the councils its reporting named."""
+    conn, resolver = _accellion()
+    registry = sl.Registry(conn, resolver)
+    assert registry.incident("OracleCMS", "2022-05-11", "ded-w", create=False) is None
+    assert not any(inc.supplier_name == "OracleCMS" for inc in registry.incidents.values())
+    made = registry.incident("OracleCMS", "2024-04-04", "ded-c")
+    assert registry.incident("OracleCMS", "2024-04-12", "ded-w2", create=False) is made
 
 
 def test_a_placed_event_stays_in_its_incident():
