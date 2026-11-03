@@ -3076,8 +3076,8 @@ changes with time since the prior event.
 2020-01-01 on (`reporting/population.DASHBOARD_REPORTING_START`, the dashboards' window), so an earlier incident
 is recorded only when later reporting mentions it, and an organisation's pre-2020 event would turn its first event
 of the period into a "repeat" years later. `load_victim_events` drops them for every analysis (main and
-extended) and the data-quality summary counts them (`observation window`): 82 events, 86 victim rows on the
-2026-11-03 copy.
+extended) and the data-quality summary counts them (`observation window`): 82 events, 83 victim rows and 19
+organisations with only pre-2020 events on the 2026-11-03 copy.
 
 The analysis is conditional on an entity having at least one observed victim
 event. Single-event entities contribute right-censored post-event spells. The
@@ -3405,17 +3405,17 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-03 snapshot (`snap-20261103152805`, censor date 2026-11-03; 237 repeats, follow-up split by calendar
-month; the repeats added since 2026-11-02 are incidents the earlier data already showed as missing - customers of a
-supplier breach counted through their own events, the CrowdStrike outage dropped): adequate for a simple model (26
-repeats per parameter; the full model 8.8; 61% of incident dates unverified, so no split finer than 30 days is
-tried). Best bands **0-365 / 366-1095 / >1095 days**, the middle band at 0.52 times the first year's rate and the
-last at 1.06 (11.5 BIC better than a constant rate; search-adjusted p <= 0.002). Calendar growth does not explain
-it: the per-organisation rate changes by +1% a year (yearly effects from 2020 jointly p = 0.52), and the bands hold
-under every calendar adjustment (p < 0.0001). **No short-term vigilance** at 1-90 days (one-sided p = 0.90) and
-**no delayed peak at 91-180 days** (one-sided p = 0.16, 27 repeats; 91-120 alone holds 7). The recurrence rate
-**rises with size** (MEDIUM 1.1, LARGE 2.4 and HUGE 4.2 times SMALL; bootstrap p <= 0.002). The full adjusted
-model's "no elapsed-time pattern" (below) came from a model with more parameters than its repeats support.
+On the 2026-11-03 snapshot (`snap-20261103215735`, censor date 2026-11-03, events from 2020 on; 171 repeats, follow-up
+split by calendar month; customers of a supplier breach counted through their own events, the CrowdStrike outage
+dropped, the owner's victim labels applied): adequate for a simple model (19 repeats per parameter; the full model
+6.6; 62% of incident dates unverified, so no split finer than 30 days is tried). Best bands **0-365 / 366-1095 /
+>1095 days**, the middle band at 0.45 times the first year's rate and the last at 1.03 (12.5 BIC better than a
+constant rate; search-adjusted p <= 0.002). Calendar growth does not explain it: the per-organisation rate changes by
+-5% a year (yearly effects from 2020 jointly p = 0.84), and the bands hold under every calendar adjustment (p <
+0.0001). **No short-term vigilance** at 1-90 days (one-sided p = 0.95) and **no delayed peak at 91-180 days**
+(one-sided p = 0.13, 24 repeats; 91-120 alone holds 7). The recurrence rate **rises with size** (MEDIUM 1.1, LARGE
+2.9 and HUGE 6.1 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern" (below) came
+from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.

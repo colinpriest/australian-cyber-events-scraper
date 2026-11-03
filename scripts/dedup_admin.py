@@ -3518,8 +3518,8 @@ def cmd_apply_owner_labels(args) -> int:
     for f in found:
         print(f"  {'would reject' if args.dry_run else 'rejected'}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
     for v in victims:
-        print(f"  {'would re-attribute' if args.dry_run else 're-attributed'}  {v['deduplicated_event_id'][:8]}  "
-              f"{v['victim']} -> {v['new_victim']}")
+        print(f"  {'would be ' if args.dry_run else ''}{v['action']}  {v['deduplicated_event_id'][:8]}  {v['victim']}"
+              + (f" -> {v['new_victim']}" if v["new_victim"] else ""))
     print(f"{len(found)} owner-labelled non-incident(s) {'to reject' if args.dry_run else 'rejected'}; "
           f"{len(victims)} owner-labelled victim(s) {'to re-attribute' if args.dry_run else 're-attributed'}")
     return 0
