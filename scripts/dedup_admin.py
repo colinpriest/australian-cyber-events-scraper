@@ -2658,6 +2658,14 @@ def cmd_classify_entities(args) -> int:
         demoted = demote_split_customers(conn, apply=not args.dry_run)
         if demoted:
             print(f"{len(demoted)} split-out customer(s) no longer a victim of the event they left")
+        # The same holds for every customer with its own event of a supplier's breach: re-derived roles list it
+        # as a victim of the breach's other events again.
+        from cyber_data_collector.dedup.supplier_links import double_counted_customers
+
+        counted = double_counted_customers(conn, apply=not args.dry_run)
+        if counted["demoted"] or counted["reports"]:
+            print(f"{len(counted['demoted'])} customer(s) counted through their own event, "
+                  f"{len(counted['reports'])} supplier report(s)")
     finally:
         conn.close()
     return 1 if failed else 0
@@ -4078,9 +4086,17 @@ def cmd_find_supplier_victims(args) -> int:
         print(f"  {'split' if apply else 'would split'}  {sp['event'][:8]}: {sp['records']} record(s) of "
               f"{sp['customer']} leave" + (f" as {sp['new_event'][:8]}" if sp.get("new_event") else "")
               + f" ({sp['stays']} stays)")
+    for r in result.get("supplier_reports_reversed", []):
+        back = r.get("split_back")
+        print(f"  {'reversed' if apply else 'would reverse'} supplier report  {r['deduplicated_event_id'][:8]} "
+              f"({r['supplier']}): {', '.join(r['customers'])} victims again"
+              + (f"; its {back['records']} record(s) leave {back['from'][:8]} as {back['new_event'][:8]}" if back else ""))
+    for r in result.get("own_event_customers", []):
+        print(f"  {'own event' if apply else 'would demote'}  {r['deduplicated_event_id'][:8]}  {(r['title'] or '')[:60]}: "
+              f"{' / '.join(r['customer'])} counted through its own event {r['own_event'][:8]}")
     for r in result.get("supplier_reports", []):
         print(f"  {'supplier report' if apply else 'would make supplier report'}  {r['deduplicated_event_id'][:8]}  "
-              f"{r['title'][:70]}: victim {r['supplier']}; affected customers {', '.join(r['customers'])}")
+              f"{(r['title'] or '')[:70]}: victim {r['supplier']}; affected customers {', '.join(r['customers'])}")
     repairs = result.get("registry_repairs") or {}
     for r in repairs.get("stale_links_removed", []):
         print(f"  removed stale link  {r['supplier']} -> {r['customer']} ({r['event'][:8]} no longer records the supplier)")
