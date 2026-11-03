@@ -921,7 +921,10 @@ the rule says: with `--apply`, event reality and event scope reject events
 labelled not an incident / out of scope and restore labelled ones, report-only
 or not, and a label stands for the event its records are in now (merges are
 followed, `event_reality.resolve_labelled` - a labelled-real event merged into
-another used to leave that event unprotected). The rule:
+another used to leave that event unprotected). A `not_incident` label whose labeller is the owner
+(`owner ...`) rejects its event without a model call and whatever records it has gained since
+(`dedup_admin.py apply-owner-labels [--dry-run]`; `check-events` applies it too): the July 2024 CrowdStrike
+outage and the scam that impersonated it, owner 2026-11-03, are not cyber incidents. The rule:
 
 - the **exact one-sided Clopper-Pearson lower bound** on the action's precision,
   from the unweighted labelled counts at the cut-off, clears the floor;
@@ -2956,7 +2959,8 @@ publishes them as stored, stale ones marked. Reproducing a retained snapshot
 
 Retention: the last 5 published snapshots, the last 2 blocked / failed / analysis ones,
 and any snapshot an analysis result names; about 100 MB each, 0.8 to 1.2 GB in all.
-Expired copies keep their manifest (id and hash). Details:
+Expired copies keep their manifest (id and hash). One publication runs at a time (`.publish.lock`, holding the
+process id); a lock whose process has ended is taken over at once, not after it goes stale. Details:
 [docs/08-dashboard-generation.md](docs/08-dashboard-generation.md).
 
 ### Database
@@ -3394,17 +3398,17 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-02 snapshot (`snap-20261102091647`, censor date 2026-11-01; 140 repeats, 1,008 post-event spells,
-follow-up split by calendar month): adequate for a simple model (16 repeats per parameter; the full model 5.4, 11
-terms not identified; 56% of incident dates unverified). Best bands **0-365 / 366-1095 / >1095 days**, the middle
-band at 0.47 times the first year's rate and the last at 1.01 (6.2 BIC better than a constant rate; search-adjusted
-p = 0.008). The long-term growth in recorded incidents does not explain it: the per-organisation rate changes by
-+3% a year (yearly effects from 2020 jointly p = 0.67, i.e. the growth in incidents is matched by growth in
-organisations at risk), and the band contrast is the same under no calendar adjustment, the trend, monthly
-reporting intensity and yearly effects (p 0.0003-0.0006). **No delayed peak at 91-180 days** (one-sided p = 0.114,
-18 repeats; 91-120 alone holds 5). The recurrence rate **rises with size** (LARGE 6.0 and HUGE 14.0 times SMALL,
-MEDIUM pooled with SMALL by the constraint; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time
-pattern" (below) came from a model with more parameters than its repeats support.
+On the 2026-11-03 snapshot (`snap-20261103152805`, censor date 2026-11-03; 237 repeats, follow-up split by calendar
+month; the repeats added since 2026-11-02 are incidents the earlier data already showed as missing - customers of a
+supplier breach counted through their own events, the CrowdStrike outage dropped): adequate for a simple model (26
+repeats per parameter; the full model 8.8; 61% of incident dates unverified, so no split finer than 30 days is
+tried). Best bands **0-365 / 366-1095 / >1095 days**, the middle band at 0.52 times the first year's rate and the
+last at 1.06 (11.5 BIC better than a constant rate; search-adjusted p <= 0.002). Calendar growth does not explain
+it: the per-organisation rate changes by +1% a year (yearly effects from 2020 jointly p = 0.52), and the bands hold
+under every calendar adjustment (p < 0.0001). **No short-term vigilance** at 1-90 days (one-sided p = 0.90) and
+**no delayed peak at 91-180 days** (one-sided p = 0.16, 27 repeats; 91-120 alone holds 7). The recurrence rate
+**rises with size** (MEDIUM 1.1, LARGE 2.4 and HUGE 4.2 times SMALL; bootstrap p <= 0.002). The full adjusted
+model's "no elapsed-time pattern" (below) came from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
