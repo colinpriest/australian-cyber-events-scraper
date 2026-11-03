@@ -875,6 +875,38 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
     return batch_id
 
 
+def apply_owner_labels(conn: sqlite3.Connection, labels_path: Path = LABELS_PATH,
+                       apply: bool = True) -> List[Dict[str, Any]]:
+    """Re-attribute the pairs the owner labelled ``wrong`` to the victim the label names, with no model call.
+
+    A label decides, not a model, so this is done whether or not the calibration may act (the deployment rule held
+    the step back, and a held-back step made no plans at all), and the labelled victim is applied whether or not the
+    replacement judgement offered it: "Dr Felix Chan" is stored as a person, so his medical practice, the victim of
+    the breach the NSW Government's notice reported, was never a candidate (owner, 2026-11-03). Through the ledger
+    and the audit table, as every re-attribution; a pair whose recorded victim is no longer a victim of its event
+    (already applied, or the event merged away) is skipped.
+    """
+    from cyber_data_collector.dedup.supplier_links import resolve_event
+
+    labels = load_labels(labels_path)
+    plans = []
+    for pair_id, label in sorted(labels.items()):
+        if not (label.get("labeller") or "").lower().startswith("owner") or label.get("label") != "wrong":
+            continue
+        wanted = (label.get("correct_victim") or "").strip()
+        event, _, entity = pair_id.partition("|")
+        did = resolve_event(conn, event) or event
+        if not wanted or not entity.isdigit() or int(entity) not in {eid for eid, _ in _victims(conn, did)}:
+            continue
+        plans.append({"pair_id": pair_id, "deduplicated_event_id": did, "entity_id": int(entity),
+                      "victim": label.get("recorded_victim") or "", "action": "reattributed", "new_victim": wanted,
+                      "p_recorded_victim": 0.0, "replacement_probability": None,
+                      "reason": f"labelled wrong by the owner: {label.get('rationale') or ''}".strip()})
+    if apply and plans:
+        apply_actions(conn, plans, {"cutoff": None, "question_version": "owner label"})
+    return plans
+
+
 def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judge=None,
                              escalation_client=None, calibration_path: Path = CALIBRATION_PATH,
                              labels_path: Path = LABELS_PATH, extractor=None) -> Dict[str, Any]:
@@ -891,6 +923,8 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
     from cyber_data_collector.utils.jev import JevJudge
 
     labels = load_labels(labels_path, required=apply)
+    if apply:
+        apply_owner_labels(conn, labels_path)     # before judging: an owner's label is not a model's action
     owned = judge is None
     judge = judge or JevJudge(conn)
     inputs: Dict[str, Dict[str, str]] = {}

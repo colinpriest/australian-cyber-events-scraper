@@ -3497,17 +3497,24 @@ def cmd_check_events(args) -> int:
 
 
 def cmd_apply_owner_labels(args) -> int:
-    """Reject the events the owner labelled not an incident (no model call; ledger, reversible)."""
+    """Apply the owner's labels with no model call (ledger, reversible): reject the events labelled not an incident,
+    and re-attribute the event-victim pairs labelled wrong to the victim the label names."""
+    from cyber_data_collector.dedup import victim_judgement
     from cyber_data_collector.dedup.event_reality import apply_owner_labels
 
     conn = _connect(args.db)
     try:
         found = apply_owner_labels(conn, apply=not args.dry_run)
+        victims = victim_judgement.apply_owner_labels(conn, apply=not args.dry_run)
     finally:
         conn.close()
     for f in found:
         print(f"  {'would reject' if args.dry_run else 'rejected'}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
-    print(f"{len(found)} owner-labelled non-incident(s) {'to reject' if args.dry_run else 'rejected'}")
+    for v in victims:
+        print(f"  {'would re-attribute' if args.dry_run else 're-attributed'}  {v['deduplicated_event_id'][:8]}  "
+              f"{v['victim']} -> {v['new_victim']}")
+    print(f"{len(found)} owner-labelled non-incident(s) {'to reject' if args.dry_run else 'rejected'}; "
+          f"{len(victims)} owner-labelled victim(s) {'to re-attribute' if args.dry_run else 're-attributed'}")
     return 0
 
 
