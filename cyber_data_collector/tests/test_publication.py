@@ -426,6 +426,18 @@ def test_only_one_publication_runs_at_a_time(harness):
     assert (harness.out / "index.html").exists() and not lock.exists()
 
 
+def test_a_lock_whose_process_has_ended_is_taken_over_at_once(harness):
+    import subprocess
+    import sys
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    lock = harness.out.parent / pub.LOCK
+    lock.write_text(f"{dead.pid} {datetime.now().isoformat()}")     # a stopped run's lock, minutes old
+    harness.run()
+    assert (harness.out / "index.html").exists() and not lock.exists()
+
+
 def test_default_builders_cover_every_published_output():
     assert set(pub.DEFAULT_BUILDERS) == {"dashboard", "entities", "timelines", "dedup", "close_pairs",
                                        "supplier_incidents", "recurrence", "risk_matrix"}

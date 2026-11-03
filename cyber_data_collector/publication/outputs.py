@@ -252,6 +252,22 @@ def recover_interrupted(parent: Path) -> List[str]:
     return cleaned
 
 
+def _holder_alive(path: Path) -> bool:
+    """Whether the process that wrote a lock file is still running.
+
+    The lock holds ``<pid> <time>``. A publication that was stopped left its lock for :data:`LOCK_STALE_HOURS`
+    and refused the next one (2026-11-03, process 142880 stopped mid-build). A lock naming a process that no
+    longer exists is taken over at once; one that names none (or cannot be read) is judged by its age alone.
+    """
+    import psutil
+
+    try:
+        pid = int(path.read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return True
+    return pid == os.getpid() or psutil.pid_exists(pid)
+
+
 class locked:
     """One publication at a time: an exclusive lock file beside the output folder."""
 
@@ -264,7 +280,7 @@ class locked:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
                 age = datetime.now() - datetime.fromtimestamp(self.path.stat().st_mtime)
-                if age < timedelta(hours=LOCK_STALE_HOURS):
+                if age < timedelta(hours=LOCK_STALE_HOURS) and _holder_alive(self.path):
                     raise PublicationError(f"another publication is running ({self.path}, started {age} ago); "
                                            "nothing was changed") from None
                 logger.error("Taking over a stale publication lock (%s old)", age)
