@@ -104,6 +104,8 @@ EVIDENCE_VERSION = "victim-evidence-v2"
 
 ROOT = Path(__file__).resolve().parents[2]
 LABELS_PATH = ROOT / "evaluation" / "victim_attribution_labels.csv"
+#: Entity kinds that are never a victim: a victim is an organisation.
+NOT_ORGANISATION_KINDS = ("person", "threat_actor", "product")
 CALIBRATION_PATH = ROOT / "evaluation" / "victim_attribution_calibration.json"
 
 ACTIONS_SCHEMA = """
@@ -718,11 +720,15 @@ def replacement_entity(conn: sqlite3.Connection, dedup_id: str, name: str, old_e
     """
     from cyber_data_collector.dedup.org_timeline import is_same_name
 
+    # A victim is an organisation: "Dr Felix Chan's medical practice" passed as a spelling of the person "Dr Felix
+    # Chan" linked to the event, and the person became the victim (owner label, 2026-11-03).
     linked = conn.execute(
-        """SELECT DISTINCT v.entity_id, v.entity_name FROM EventDeduplicationMap m
+        f"""SELECT DISTINCT v.entity_id, v.entity_name FROM EventDeduplicationMap m
            JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
            JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
-           WHERE m.deduplicated_event_id = ? ORDER BY v.entity_id""", (dedup_id,)).fetchall()
+           WHERE m.deduplicated_event_id = ? AND COALESCE(v.entity_kind, '') NOT IN
+                 ({','.join('?' * len(NOT_ORGANISATION_KINDS))})
+           ORDER BY v.entity_id""", (dedup_id, *NOT_ORGANISATION_KINDS)).fetchall()
     for entity_id, entity_name in linked:
         if entity_id != old_entity_id and (entity_name.lower() == name.lower() or is_same_name(entity_name, name)):
             return entity_id
@@ -877,18 +883,22 @@ def apply_actions(conn: sqlite3.Connection, plans: Sequence[Dict[str, Any]], cal
 
 def apply_owner_labels(conn: sqlite3.Connection, labels_path: Path = LABELS_PATH,
                        apply: bool = True) -> List[Dict[str, Any]]:
-    """Re-attribute the pairs the owner labelled ``wrong`` to the victim the label names, with no model call.
+    """Make the victim the owner's label names the victim of its event, with no model call.
 
     A label decides, not a model, so this is done whether or not the calibration may act (the deployment rule held
     the step back, and a held-back step made no plans at all), and the labelled victim is applied whether or not the
     replacement judgement offered it: "Dr Felix Chan" is stored as a person, so his medical practice, the victim of
-    the breach the NSW Government's notice reported, was never a candidate (owner, 2026-11-03). Through the ledger
-    and the audit table, as every re-attribution; a pair whose recorded victim is no longer a victim of its event
-    (already applied, or the event merged away) is skipped.
+    the breach the NSW Government's notice reported, was never a candidate (owner, 2026-11-03). A pair is acted on
+    while its recorded victim is still a victim of the event, or while no organisation of the label's name is: role
+    classification runs again after every merge and split, and must not undo the owner's decision. A person, threat
+    actor or product holding a victim role on a labelled event is demoted with it (the classification made the person
+    "Dr Felix Chan" the victim). Through the ledger and the audit table, as every re-attribution.
     """
+    from cyber_data_collector.dedup.org_timeline import is_same_name
     from cyber_data_collector.dedup.supplier_links import resolve_event
 
     labels = load_labels(labels_path)
+    kinds = dict(conn.execute("SELECT entity_id, COALESCE(entity_kind, '') FROM EntitiesV2"))
     plans = []
     for pair_id, label in sorted(labels.items()):
         if not (label.get("labeller") or "").lower().startswith("owner") or label.get("label") != "wrong":
@@ -896,12 +906,21 @@ def apply_owner_labels(conn: sqlite3.Connection, labels_path: Path = LABELS_PATH
         wanted = (label.get("correct_victim") or "").strip()
         event, _, entity = pair_id.partition("|")
         did = resolve_event(conn, event) or event
-        if not wanted or not entity.isdigit() or int(entity) not in {eid for eid, _ in _victims(conn, did)}:
+        if not wanted or not entity.isdigit():
             continue
+        victims = _victims(conn, did)
+        stray = [(eid, name) for eid, name in victims if kinds.get(eid) in NOT_ORGANISATION_KINDS]
+        has_wanted = any(kinds.get(eid) not in NOT_ORGANISATION_KINDS
+                         and (name.lower() == wanted.lower() or is_same_name(name, wanted)) for eid, name in victims)
+        if has_wanted and int(entity) not in {eid for eid, _ in victims} and not stray:
+            continue
+        reason = f"labelled wrong by the owner: {label.get('rationale') or ''}".strip()
         plans.append({"pair_id": pair_id, "deduplicated_event_id": did, "entity_id": int(entity),
                       "victim": label.get("recorded_victim") or "", "action": "reattributed", "new_victim": wanted,
-                      "p_recorded_victim": 0.0, "replacement_probability": None,
-                      "reason": f"labelled wrong by the owner: {label.get('rationale') or ''}".strip()})
+                      "p_recorded_victim": 0.0, "replacement_probability": None, "reason": reason})
+        plans += [{"pair_id": f"{did}|{eid}", "deduplicated_event_id": did, "entity_id": eid, "victim": name,
+                   "action": "demoted", "new_victim": None, "p_recorded_victim": 0.0,
+                   "replacement_probability": None, "reason": f"not an organisation; {reason}"} for eid, name in stray]
     if apply and plans:
         apply_actions(conn, plans, {"cutoff": None, "question_version": "owner label"})
     return plans

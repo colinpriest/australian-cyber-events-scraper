@@ -267,6 +267,30 @@ def test_an_owner_label_reattributes_with_no_calibration_and_no_model_call(conn,
     assert vj.apply_owner_labels(conn, labels) == []                               # idempotent
 
 
+def test_an_owner_labelled_practice_is_an_organisation_not_the_doctor_and_survives_reclassification(conn, tmp_path):
+    """The label named "Dr Felix Chan's medical practice"; the person "Dr Felix Chan" linked to the event passed as
+    a spelling of it and became the victim, and role classification then left the event with no organisation."""
+    _event(conn, "fc1", ["NSW Government"],
+           [("Dr Felix Chan data breach", "IT systems of Dr Felix Chan's practice were attacked", "NSW Government")],
+           links=[("Dr Felix Chan", "bystander")])
+    conn.execute("UPDATE EntitiesV2 SET entity_kind = 'person' WHERE entity_name = 'Dr Felix Chan'")
+    nsw = _entity(conn, "NSW Government")
+    labels = _labels(tmp_path, [(f"fc1|{nsw}", "fc1", "NSW Government", "wrong", "Dr Felix Chan's medical practice",
+                                 "owner: the practice was attacked", "owner 2026-11-03")])
+    vj.apply_owner_labels(conn, labels)
+    assert _role(conn, "fc1", "Dr Felix Chan's medical practice") == "victim"
+    assert _role(conn, "fc1", "Dr Felix Chan") == "bystander" and _role(conn, "fc1", "NSW Government") != "victim"
+    assert conn.execute("SELECT entity_kind FROM EntitiesV2 WHERE entity_name = ?",
+                        ("Dr Felix Chan's medical practice",)).fetchone()[0] == "organisation"
+    # A later role classification makes the doctor the victim and drops the practice: the label is applied again.
+    conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = CASE entity_id WHEN ? THEN 'victim' "
+                 "ELSE 'bystander' END WHERE deduplicated_event_id = 'fc1'", (_entity(conn, "Dr Felix Chan"),))
+    vj.apply_owner_labels(conn, labels)
+    assert _role(conn, "fc1", "Dr Felix Chan's medical practice") == "victim"
+    assert _role(conn, "fc1", "Dr Felix Chan") != "victim"
+    assert vj.apply_owner_labels(conn, labels) == []                               # idempotent
+
+
 def test_apply_refuses_without_labels(conn, tmp_path):
     _afp(conn)
     for missing in (tmp_path / "absent.csv", tmp_path / "empty.csv"):

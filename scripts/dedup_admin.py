@@ -2666,6 +2666,13 @@ def cmd_classify_entities(args) -> int:
         if counted["demoted"] or counted["reports"]:
             print(f"{len(counted['demoted'])} customer(s) counted through their own event, "
                   f"{len(counted['reports'])} supplier report(s)")
+        # Re-derived roles must not undo the owner's victim labels (they made the person "Dr Felix Chan" the victim
+        # of his practice's breach again).
+        from cyber_data_collector.dedup import victim_judgement
+
+        owner = victim_judgement.apply_owner_labels(conn, apply=not args.dry_run)
+        if owner:
+            print(f"{len(owner)} owner-labelled victim role(s) re-applied")
     finally:
         conn.close()
     return 1 if failed else 0
