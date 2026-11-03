@@ -4119,6 +4119,10 @@ def cmd_find_supplier_victims(args) -> int:
         print(f"  merged incident  {r['supplier']}: {r['merged']} into {r['kept']} (both linked {r['shared_event'][:8]})")
     for r in repairs.get("shared_not_merged", []):
         print(f"  shared, not merged  {r['event'][:8]} in {', '.join(r['incidents'])}: {r['why']}")
+    for kind in ("keys_reset", "keys_joined"):
+        for r in repairs.get(kind, []):
+            print(f"  {'key reset' if kind == 'keys_reset' else 'key joined'}  {r['supplier_incident_id']} "
+                  f"{r['supplier']}: {r['was']} -> {r['key']}")
     for link in result["links"]:
         event = link["customer_event_id"]
         print(f"  link    {link['supplier_incident_id']}  {link['customer_name']}: "
