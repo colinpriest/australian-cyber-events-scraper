@@ -10,9 +10,9 @@
     0
   ],
   "exposure_days_by_band": [
-    136.0,
-    213.0,
-    234.0
+    186.0,
+    295.0,
+    332.0
   ],
   "minimum_events": 20,
   "one_sided_p_value": null,
