@@ -421,6 +421,29 @@ def labelled_non_incidents(path: Path = LABELS_PATH) -> set:
         return {r["deduplicated_event_id"] for r in csv.DictReader(fh) if r.get("label") == "not_incident"}
 
 
+def owner_labelled_non_incidents(path: Path = LABELS_PATH) -> set:
+    """Events the project owner labelled not an incident (labeller ``owner ...``).
+
+    Made on the database as it stands, not on a labelling snapshot, so no snapshot can show them unchanged: they
+    are rejected whatever they score (the July 2024 CrowdStrike faulty-update outage, filed as Woolworths' "cyber
+    incident": owner 2026-11-03, "drop it")."""
+    import csv
+    with Path(path).open(encoding="utf-8") as fh:
+        return {r["deduplicated_event_id"] for r in csv.DictReader(fh)
+                if r.get("label") == "not_incident" and (r.get("labeller") or "").startswith("owner")}
+
+
+def apply_owner_labels(conn: sqlite3.Connection, labels_path: Path = LABELS_PATH,
+                       apply: bool = True) -> List[Dict[str, Any]]:
+    """Reject the Active events the owner labelled not an incident, with no model call (ledger, reversible)."""
+    titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents WHERE status = 'Active'"))
+    found = [{"deduplicated_event_id": did, "title": titles[did], "label": "not_incident"}
+             for did in sorted(resolve_labelled(conn, owner_labelled_non_incidents(labels_path))) if did in titles]
+    if apply and found:
+        reject_events(conn, found, reason="labelled not an incident by the owner")
+    return found
+
+
 def labelled_out_of_scope(path: Path = LABELS_PATH) -> set:
     """Events labelled real incidents outside the dataset's scope (not Australian).
 
@@ -573,10 +596,11 @@ def check_events(conn: sqlite3.Connection, apply: bool = False, judge=None,
         candidates = sorted(resolve_labelled(conn, labelled_non_incidents(labels_path)) & set(probabilities)
                             - already - protected)
         gained = gained_since_labelling(conn, candidates, labelling_snapshot(conn, cal, snapshot_path))
+        owner = resolve_labelled(conn, owner_labelled_non_incidents(labels_path))
         for did in candidates:
             entry = {"deduplicated_event_id": did, "title": titles.get(did), "p_real": probabilities[did],
                      "label": "not_incident"}
-            unchanged = gained is not None and did not in gained
+            unchanged = did in owner or (gained is not None and did not in gained)
             if not unchanged and probabilities[did] < LABELLED_NON_INCIDENT_MAX_P:
                 by_score.add(did)
             (labelled_out if unchanged or probabilities[did] < LABELLED_NON_INCIDENT_MAX_P

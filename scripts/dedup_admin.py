@@ -3496,6 +3496,21 @@ def cmd_check_events(args) -> int:
     return _escalation_failures(result)
 
 
+def cmd_apply_owner_labels(args) -> int:
+    """Reject the events the owner labelled not an incident (no model call; ledger, reversible)."""
+    from cyber_data_collector.dedup.event_reality import apply_owner_labels
+
+    conn = _connect(args.db)
+    try:
+        found = apply_owner_labels(conn, apply=not args.dry_run)
+    finally:
+        conn.close()
+    for f in found:
+        print(f"  {'would reject' if args.dry_run else 'rejected'}  {f['deduplicated_event_id'][:8]}  {(f['title'] or '')[:80]}")
+    print(f"{len(found)} owner-labelled non-incident(s) {'to reject' if args.dry_run else 'rejected'}")
+    return 0
+
+
 def cmd_check_scope(args) -> int:
     """Judge whether each active event affects Australia; reject the out-of-scope below the calibrated cut-off.
 
@@ -4796,6 +4811,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Reject below the cut-off (only with a calibration matching the "
                         "current model and question; otherwise report only)")
     p.set_defaults(func=cmd_check_events)
+
+    p = sub.add_parser("apply-owner-labels",
+                       help="Reject the events the owner labelled not an incident (no model call)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_apply_owner_labels)
 
     p = sub.add_parser("check-scope",
                        help="Ask Jev whether each active event affects Australia and reject those "
