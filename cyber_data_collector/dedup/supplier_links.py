@@ -430,6 +430,26 @@ def closest_name(name: str, candidates: Sequence[str]) -> Optional[str]:
 
 
 _CONFLICT_VERDICTS = ("different", "related", "parent_subsidiary")
+_STATED_BASIS = "stated in the record"
+
+
+def placement_date(conn: sqlite3.Connection, event_id: str, event_date: Optional[str]) -> Optional[str]:
+    """The date an event is placed under a supplier's incident by: its own date, unless that is only the date it was
+    published or found ("may lag the incident") and one of its records states an earlier incident date in its own
+    text - then the earliest such. Research dates are not used: they can describe another of the organisation's
+    incidents. Singtel's report of data from Accellion's January 2021 attack, posted in October 2022, is dated by its
+    publication; placed by that date it started a second Accellion attack (owner, 2026-11-03)."""
+    from cyber_data_collector.dedup import date_provenance
+
+    if not event_date or "date_basis" not in {c[1] for c in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}:
+        return event_date
+    row = conn.execute("SELECT date_basis FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                       (event_id,)).fetchone()
+    if not row or not row[0] or "may lag" not in row[0]:
+        return event_date
+    stated = sorted(r["date"] for r in date_provenance.event_dates(conn, event_id, max_records=10_000)["records"]
+                    if r["date"] and r["basis"] == _STATED_BASIS and r["date"] < event_date[:10])
+    return stated[0] if stated else event_date
 
 
 def _name_parts(name: str) -> Set[str]:
@@ -680,6 +700,31 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
         row = conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
                            (event_id,)).fetchone()
         return row[0] if row else None
+
+    # A rule placement made by a publication date the event's own record contradicts moves to the supplier's
+    # incident nearest the stated date: placed events otherwise stay put, and Singtel's report stayed in the second
+    # Accellion incident its publication date had started.
+    for sid, entity_id, name, event_id in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
+            "WHERE basis = ? AND customer_event_id IS NOT NULL ORDER BY supplier_incident_id, customer_entity_id",
+            (BASIS_VENDOR,)).fetchall():
+        inc = incidents.get(sid)
+        now = resolve_event(conn, event_id) or event_id
+        stored = date_of(now)
+        when = placement_date(conn, now, stored)
+        if inc is None or not when or when == stored:
+            continue
+        own = _gap(when, inc["first"]) if inc["first"] else None
+        nearer = [(gap, other) for other, o in incidents.items() if other != sid and o["key"] == inc["key"]
+                  for gap in [_gap(when, o["first"]) if o["first"] else None]
+                  if gap is not None and gap <= OWN_EVENT_WINDOW_DAYS and (own is None or gap < own)]
+        if not nearer:
+            continue
+        conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ?",
+                     (sid, entity_id))
+        report["stale_links_removed"].append({
+            "supplier_incident_id": sid, "supplier": inc["name"], "customer": name, "event": now,
+            "why": f"its record states {when}, nearer the supplier's incident {min(nearer)[1]}"})
 
     for sid, inc in sorted(incidents.items()):
         if inc["event"] is None:
@@ -1019,7 +1064,8 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
     customer_events.sort(key=lambda item: not item[2])
     for x, single, all_victims in customer_events:
         vendor = x.vendors[0]
-        inc = registry.incident(vendor, x.event_date, x.dedup_id, apart=apart, create=bool(all_victims))
+        inc = registry.incident(vendor, placement_date(conn, x.dedup_id, x.event_date), x.dedup_id, apart=apart,
+                                create=bool(all_victims))
         if inc is None:
             ambiguous.append({"deduplicated_event_id": x.dedup_id, "title": x.title, "victims": [],
                               "why": "records no victim, and no incident of its supplier is near its date"})

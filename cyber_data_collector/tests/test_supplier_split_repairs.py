@@ -646,6 +646,40 @@ def test_an_event_naming_no_customer_joins_an_incident_but_starts_none():
     assert registry.incident("OracleCMS", "2024-04-12", "ded-w2", create=False) is made
 
 
+def test_an_event_dated_by_its_publication_is_placed_by_the_date_its_record_states():
+    """Owner 2026-11-03, "Accellion appears twice": Singtel's report of data from the January 2021 Accellion attack,
+    posted in October 2022, is dated by its publication; placed by that date it started a second Accellion attack,
+    which then listed Allens, ASIC, QIMR Berghofer and SBS a second time."""
+    conn = _separate([("a", "Allens", "2020-12-16", "Accellion"), ("s", "Singtel", "2022-10-09", "Accellion")])
+    for table, column in (("DeduplicatedEvents", "date_basis"), ("EnrichedEvents", "perplexity_enrichment_data"),
+                          ("RawEvents", "source_metadata"), ("RawEvents", "publication_date")):
+        if column not in {c[1] for c in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+    conn.execute("UPDATE DeduplicatedEvents SET date_basis = 'publication date (may lag the incident)' "
+                 "WHERE deduplicated_event_id = 'ded-s'")
+    conn.execute("UPDATE EnrichedEvents SET event_date = '2021-01-20' WHERE enriched_event_id = 'enr-s'")
+    conn.execute("UPDATE RawEvents SET publication_date = '2022-10-09', raw_content = 'Data stolen from Singtel in "
+                 "the Accellion attack on 20 January 2021 has been posted on a forum.' WHERE raw_event_id = 'raw-s'")
+    conn.executemany("INSERT INTO SupplierIncidents VALUES (?, 'accellion', NULL, 'Accellion', NULL, ?, ?, 'x', 'x')",
+                     [("si-a", "2020-12-16", "2020-12-16"), ("si-s", "2022-10-09", "2022-10-09")])
+    conn.executemany("INSERT INTO SupplierIncidentLinks VALUES (?, ?, ?, ?, ?, NULL, 'rule', 'x', 'x')",
+                     [("si-a", 1, "Allens", "ded-a", "vendor-recorded"), ("si-s", 2, "Singtel", "ded-s", "vendor-recorded"),
+                      ("si-s", 3, "SBS", None, "customer-named")])
+    conn.commit()
+    assert sl.placement_date(conn, "ded-s", "2022-10-09") == "2021-01-20"
+    assert sl.placement_date(conn, "ded-a", "2020-12-16") == "2020-12-16"      # its own date is not a report's
+
+    resolver = EntityResolver(conn)
+    resolver.fit(["Accellion"])
+    report = sl.repair_registry(conn, resolver, {})
+    assert [(r["supplier_incident_id"], r["customer"]) for r in report["stale_links_removed"]] == [("si-s", "Singtel")]
+    assert [r["supplier_incident_id"] for r in report["incidents_removed"]] == ["si-s"]
+    registry = sl.Registry(conn, resolver)
+    assert registry.incident("Accellion", sl.placement_date(conn, "ded-s", "2022-10-09"), "ded-s").supplier_incident_id \
+        == "si-a"
+    assert not sl.repair_registry(conn, resolver, {})["stale_links_removed"]  # idempotent
+
+
 def test_a_placed_event_stays_in_its_incident():
     """A later run used to file ASIC under whichever Accellion incident was nearest in date at the time."""
     conn, resolver = _accellion()
