@@ -282,3 +282,34 @@ def test_a_label_follows_its_event_through_a_merge():
         INSERT INTO EventDeduplicationMap VALUES ('r1', 'new'), ('r2', 'new'), ('r3', 'act');
     """)
     assert er.resolve_labelled(c, ["old", "act", "gone"]) == {"new", "act"}
+
+
+def test_an_owner_labelled_non_incident_is_rejected_without_a_model_call(conn, tmp_path):
+    """Owner, 2026-11-03: "drop it" (the July 2024 CrowdStrike outage, filed as a Woolworths cyber incident). An
+    owner label is made on the database as it stands, so no labelling snapshot is needed and nothing is judged."""
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,not_incident,an outage,none,owner 2026-11-03: drop it\n"
+                      "act,not_incident,a service page,packet,blind subagent\n", encoding="utf-8")
+    assert er.owner_labelled_non_incidents(labels) == {"lush"}
+    planned = er.apply_owner_labels(conn, labels, apply=False)
+    assert [f["deduplicated_event_id"] for f in planned] == ["lush"]
+    assert conn.execute("SELECT COUNT(*) FROM DeduplicatedEvents WHERE status = 'Active'").fetchone()[0] == 2
+    er.apply_owner_labels(conn, labels)
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    assert status == {"act": "Active", "lush": "Rejected"}
+    assert er.apply_owner_labels(conn, labels) == []                     # idempotent
+
+
+def test_check_events_rejects_an_owner_labelled_event_that_scores_real_without_a_snapshot(conn, tmp_path,
+                                                                                         monkeypatch):
+    monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,not_incident,an outage,none,owner 2026-11-03: drop it\n", encoding="utf-8")
+    judge = JevJudge(conn, client=FakeTypeSafe({"Business - ACT Government": 0.9, "LUSH data breach": 0.9}))
+    result = er.check_events(conn, timeline_search=NO_FINDINGS, escalation_client=NO_ESCALATION, apply=True,
+                             judge=judge, calibration_path=_calibration(tmp_path, 0.01), search=NO_FINDINGS,
+                             labels_path=labels)
+    assert [f["deduplicated_event_id"] for f in result["labelled_rejections"]] == ["lush"]
+    assert result["labelled_needing_review"] == []
