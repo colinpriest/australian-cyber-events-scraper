@@ -248,6 +248,25 @@ def test_without_calibration_nothing_changes(conn, tmp_path):
     assert _role(conn, "afp1", "Australian Federal Police") == "victim"
 
 
+def test_an_owner_label_reattributes_with_no_calibration_and_no_model_call(conn, tmp_path):
+    """Owner 2026-11-03: the Dr Felix Chan breach was filed under the NSW Government, which published the notice;
+    the attribution check flagged it on every run but, held back by the deployment rule, changed nothing, and the
+    practice (stored as a person) was never a candidate. A label names the victim; no model is asked."""
+    _afp(conn)
+    afp = _entity(conn, "Australian Federal Police")
+    labels = _labels(tmp_path, [(f"afp1|{afp}", "afp1", "Australian Federal Police", "wrong", "Aussie Fluid Power",
+                                 "owner: the AFP was not attacked", "owner 2026-11-03"),
+                                ("other|1", "other", "x", "wrong", "Somebody", "not the owner's", "subagent")])
+    planned = vj.apply_owner_labels(conn, labels, apply=False)
+    assert [(p["deduplicated_event_id"], p["new_victim"]) for p in planned] == [("afp1", "Aussie Fluid Power")]
+    assert _role(conn, "afp1", "Australian Federal Police") == "victim"          # planning changes nothing
+    vj.apply_owner_labels(conn, labels)
+    assert _role(conn, "afp1", "Aussie Fluid Power") == "victim"
+    assert _role(conn, "afp1", "Australian Federal Police") != "victim"
+    assert conn.execute("SELECT action, reason FROM VictimAttributionActions").fetchone()[0] == "reattributed"
+    assert vj.apply_owner_labels(conn, labels) == []                               # idempotent
+
+
 def test_apply_refuses_without_labels(conn, tmp_path):
     _afp(conn)
     for missing in (tmp_path / "absent.csv", tmp_path / "empty.csv"):
