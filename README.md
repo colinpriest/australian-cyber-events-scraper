@@ -3072,6 +3072,13 @@ incidents, each with its full merge ancestry.
 for victim entities is consistent with a memoryless process, or whether risk
 changes with time since the prior event.
 
+**Events before 2020 are not analysed** (owner, 2026-11-03): the collection searches for incidents from
+2020-01-01 on (`reporting/population.DASHBOARD_REPORTING_START`, the dashboards' window), so an earlier incident
+is recorded only when later reporting mentions it, and an organisation's pre-2020 event would turn its first event
+of the period into a "repeat" years later. `load_victim_events` drops them for every analysis (main and
+extended) and the data-quality summary counts them (`observation window`): 82 events, 86 victim rows on the
+2026-11-03 copy.
+
 The analysis is conditional on an entity having at least one observed victim
 event. Single-event entities contribute right-censored post-event spells. The
 primary model is a piecewise exponential recurrent-event model over elapsed
