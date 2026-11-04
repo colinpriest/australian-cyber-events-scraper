@@ -1,7 +1,7 @@
 scenario,replicates,order_group,median_repeats,p05_repeats,p95_repeats,median_rate_per_100_entity_years,p05_rate,p95_rate
-0% of organisations had an unobserved earlier incident,1,First,109.0,109.0,109.0,5.152788833019472,5.152788833019472,5.152788833019472
-0% of organisations had an unobserved earlier incident,1,Later,62.0,62.0,62.0,24.390651085141904,24.390651085141904,24.390651085141904
-25% of organisations had an unobserved earlier incident,100,First,82.0,75.0,87.05,5.1299736123428215,4.762015677616123,5.46176584559065
-25% of organisations had an unobserved earlier incident,100,Later,89.0,83.95,96.0,11.445184257292894,10.557305317256944,12.535508618466492
-50% of organisations had an unobserved earlier incident,100,First,55.0,48.0,64.0,5.206244378910631,4.373208232634298,6.0164793340141385
-50% of organisations had an unobserved earlier incident,100,Later,116.0,107.0,123.0,8.851200774661553,8.216701314863766,9.631368095450352
+0% of organisations had an unobserved earlier incident,1,First,110.0,110.0,110.0,5.20358445406884,5.20358445406884,5.20358445406884
+0% of organisations had an unobserved earlier incident,1,Later,63.0,63.0,63.0,24.486554648675682,24.486554648675682,24.486554648675682
+25% of organisations had an unobserved earlier incident,100,First,82.5,75.0,90.0,5.2119366927424355,4.808853810835695,5.590055261538281
+25% of organisations had an unobserved earlier incident,100,Later,90.5,83.0,98.0,11.560408508566569,10.633634938692186,12.460174308504385
+50% of organisations had an unobserved earlier incident,100,First,54.0,45.0,61.0,5.101373620557884,4.417011598267125,5.792446255273617
+50% of organisations had an unobserved earlier incident,100,Later,119.0,112.0,128.0,9.081021402269492,8.447694959661684,9.726712757911736

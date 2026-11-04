@@ -3449,19 +3449,19 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-04 snapshot (`snap-20261104114359`, censor date 2026-11-04, events from 2020 on; 171 repeats, follow-up
-split by calendar month; customers of a supplier breach counted through their own events, the owner's victim, scope
-and duplicate labels applied): adequate for a simple model (19 repeats per parameter; the full model 6.6; 62% of
-incident dates unverified, so no split finer than 30 days is tried). **No elapsed-time split is supported**: the best
-of 593 bandings (0-365 / 366-1095 / >1095 days, rates 1.00 / 0.55 / 1.00 per 100 organisation-years) beats a constant
-rate by 2.7 BIC, but searching constant-rate data does as well (search-adjusted p = 0.052), so the rate is treated as
-constant. The 2026-11-03 snapshot gave the same bands at 12.5 BIC (p <= 0.002); between the two, the owner's
-merges of duplicate reports (ASIC, FPSC, Bunnings, Reynella, WSU, ANZ, the University of Canberra's Canvas notice) and
-Singtel's scope rejection were applied.
-**No short-term vigilance** at 1-90 days (one-sided p = 0.89; 26 repeats against 21.2 expected) and **no delayed peak**
-at 91-180 days (one-sided p = 0.12; 24 against 18.7) or 91-120 days (7 against 6.5, rate ratio 1.07, 95% CI
-0.42-2.26; under 10 repeats, so flagged as too few to test). The recurrence rate **rises with size** (MEDIUM 1.3,
-LARGE 3.6 and HUGE 7.4 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
+On the 2026-11-04 16:25 snapshot (`snap-20261104162511`, censor date 2026-11-03, events from 2020 on; 173 repeats,
+follow-up split by calendar month; customers of a supplier breach counted through their own events, the owner's
+victim, scope and duplicate labels applied, and the duplicates the check had left apart merged: name initials,
+customers' own records, one customer under two names): adequate for a simple model (19 repeats per parameter; the
+full model 6.7; 63% of incident dates unverified, so no split finer than 30 days is tried). Best bands **0-365 /
+366-1095 / >1095 days**, the middle band at 0.52 times the first year's rate and the last at 0.97 (4.8 BIC better
+than a constant rate; search-adjusted p = 0.018). The 11:43 snapshot of the same day gave the same bands at 2.7 BIC
+(p = 0.052), the 2026-11-03 snapshot at 12.5 BIC (p <= 0.002): the split is real but its strength moves with each
+round of duplicate repairs. Calendar growth does not explain it (per-organisation rate -4% a year; yearly effects p =
+0.87; the bands hold under every calendar adjustment, p <= 0.0005). **No short-term vigilance** at 1-90 days
+(one-sided p = 0.95; 28 repeats against 21.4 expected) and **no delayed peak** at 91-180 days (one-sided p = 0.089;
+25 repeats); 91-120 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE
+3.6 and HUGE 7.4 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
 (below) came from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
