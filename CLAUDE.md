@@ -139,7 +139,7 @@ australian-cyber-events-scraper/
 ├── machine_learning_filter/       # Trained Random Forest model artifacts
 ├── instance/                      # SQLite database (gitignored)
 ├── dashboard/                     # Generated HTML dashboard (gitignored)
-└── risk_matrix/                   # Generated ASD risk matrix Excel files
+└── risk_matrix/                   # Generated ASD risk matrix Excel files (gitignored)
 ```
 
 ## Architecture Overview
