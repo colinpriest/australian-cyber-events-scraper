@@ -1285,6 +1285,16 @@ counted as customers. Owner review 2026-10-31 (Accellion) fixed three faults:
   conversions (audited as `supplier-report-reversed`): customers are victims again, and an event merged afterwards
   leaves with the records it held. On the 2026-11-03 copy the corrected rule demotes 7 customers with their own
   events (Monash Health on ZircoDATA's report among them) and makes one event a supplier's report.
+  **The customer's own records leave with it** (owner, 2026-11-04). Demoted in place, they kept an event that was
+  mostly the customer's under its other customers: Tasmania's DECYP Canvas event (two ABC reports of DECYP, a WA
+  notice, a Newcastle page) became Newcastle's and WA's and was never compared with DECYP's own event. A record whose
+  entity links name only that customer as harmed (or, with no links, whose research names it) now leaves as an event
+  of the customer, through the ledger (`SupplierLinkActions` `split`), and the calibrated duplicate check pairs it
+  with the customer's own event; a record naming any other organisation as harmed is general coverage and stays
+  (a first version also moved records listing TasTAFE beside USyd, UTS and QLearn, and the group absorbed TasTAFE's
+  own event; caught on a copy). Customers an earlier run demoted are covered too. On the 2026-11-04 copy: 19 record
+  groups split out over three runs (DECYP, Monash Health, Hertz, UC, Legacy, Red Cross, Agrimac, Ramsey Bros, BIG4,
+  Boroondara and others), and the duplicate check then joined most of them with their customers' own events.
 * **An incident needs something to support it, and a named supplier** (2026-11-01). The report of that morning
   still carried cards for Delta Air Lines, ESET, IDCare, Gridware, Xen Technologies and Microsoft, "Oracle CMS"
   beside OracleCMS, "RMS" beside RMS Cloud, and "IT service provider" and "Australian sole trader" as vendors. The
@@ -2350,7 +2360,10 @@ the Commonwealth, "CommBank"/"Commonwealth Bank") are listed in
 structure (containment, acronyms, spelling) - is **confirmed by Perplexity**
 before it is applied (`dedup/entity_alias_verification.py`): both names, an
 incident each appeared in, and a verdict of same / parent-subsidiary / related /
-different / unsure with citations. Only `same` folds. Structure alone is not
+different / unsure with citations. Only `same` folds. Name structure includes part of a name written as initials
+("Port Adelaide FC" / "Port Adelaide Football Club", `entity_merge.abbreviates_run`; 21 pairs on 2026-11-04, until
+then never proposed, so the club's two reports of one attack were never compared); counting never joins on it before
+the fold is confirmed. Structure alone is not
 safe: on 2026-10-28 it would have folded Marks & Spencer, Media Super and
 Moody's into Mackay Sugar ("MS"), IBM into Australian Cyber Security Magazine
 and a list of the four major banks into Westpac (an acronym now joins names only
@@ -2635,6 +2648,15 @@ in both directions. The labelling snapshot is a copy of the live database taken
 after `score` and before any AI merge (`ai-duplicates` in
 `evaluation/calibration_snapshots.json`). A pair is asked by one route only.
 Details: [docs/09-deduplication-v3.md section 8l](docs/09-deduplication-v3.md).
+
+**One customer under two names** (owner, 2026-11-04). The organisation route pairs only events sharing a victim, so
+one customer's two reports of one supplier breach under two of its names ("Halliburton" / "Halliburton Australia",
+"Westco Motors" / "Westco Motors Cairns", VETtrak / ReadyTech) were never compared. A pair is also a candidate
+(`duplicate_judgement.one_customer_pairs`) when the supplier step's calibrated same-incident judgement scored it at
+or above its deployed cut-off, each event records exactly one victim organisation, and a stored alias verdict lists
+the two victims as one customer (`same` or `parent_subsidiary`; a person's other verdict rules it out). The
+calibrated duplicate question decides; different customers' events of one breach stay apart. 4 pairs on 2026-11-04
+(`one_customer_pairs` in the findings' candidate counts).
 
 **Candidates are ranked, and capped only where a group is large.** Every pair
 sharing a victim was asked (229 in a sample, 170 of them more than a year apart;

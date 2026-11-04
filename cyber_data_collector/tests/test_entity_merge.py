@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from cyber_data_collector.dedup.entity_merge import (
+    _tokens,
+    abbreviates_run,
     canonical_groups,
     distinctive_core,
     initialism,
@@ -135,6 +137,18 @@ def test_initialism_skips_joining_words():
     assert initialism("Queensland University of Technology") == "qut"
     assert is_acronym_of("QUT", "Queensland University of Technology")
     assert not is_acronym_of("QUT", "Queensland Urban Utilities Board Ltd")
+
+
+def test_part_of_a_name_written_as_initials_is_proposed_for_verification():
+    # Owner 2026-11-04: Port Adelaide FC's two reports of one attack were never compared, because nothing
+    # proposed "FC" / "Football Club" to the alias question.
+    assert abbreviates_run(_tokens("Port Adelaide FC"), _tokens("Port Adelaide Football Club"))
+    assert same_organisation_by_structure("Port Adelaide FC", "Port Adelaide Football Club")
+    # The rest of the name must match: another club, or initials alone, are not this rule.
+    assert not abbreviates_run(_tokens("Melbourne FC"), _tokens("Melbourne City Football Club"))
+    assert not abbreviates_run(_tokens("FC"), _tokens("Football Club"))
+    # Counting never joins on it: only a verified fold does.
+    assert not same_organisation_by_structure("Port Adelaide FC", "Port Adelaide Football Club", acronyms=False)
 
 
 def test_preferred_name_avoids_shouting_and_whispering():

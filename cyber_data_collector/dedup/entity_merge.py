@@ -742,6 +742,37 @@ def is_acronym_of(short: str, long: str) -> bool:
     return letters in acronym_forms(long)
 
 
+def abbreviates_run(short: Sequence[str], long: Sequence[str]) -> bool:
+    """True when token list ``short`` is ``long`` with one or more runs of its words written as their initials.
+
+    "Port Adelaide FC" against "Port Adelaide Football Club": every other token is the same, in order, and "fc"
+    is the initials of "football club". Unlike a whole-name acronym, the rest of the name is spelled out, so the
+    fit is far less ambiguous; it is still a candidate for verification, like every structural fold. Until
+    2026-11-04 no rule proposed such a pair, so the two spellings were never put to the alias question and the
+    club's two reports of one November 2023 attack were never compared.
+    """
+    short, long = list(short), list(long)
+    if len(short) >= len(long) or not any(t in long for t in short):
+        return False
+    reached = {(0, 0): False}       # (position in short, position in long) -> an abbreviation used so far
+    for i in range(len(short)):
+        nxt: Dict[Tuple[int, int], bool] = {}
+        for (si, lj), used in reached.items():
+            if si != i:
+                continue
+            token = short[i]
+            if lj < len(long) and long[lj] == token:
+                nxt[(i + 1, lj + 1)] = nxt.get((i + 1, lj + 1), False) or used
+            if token.isalpha() and 2 <= len(token) <= 5 and lj + len(token) <= len(long):
+                run = long[lj:lj + len(token)]
+                if "".join(w[0] for w in run) == token and token not in run:
+                    nxt[(i + 1, lj + len(token))] = True
+        reached = nxt
+        if not reached:
+            return False
+    return reached.get((len(short), len(long)), False)
+
+
 def same_organisation_by_structure(
     left: str, right: str, rare_tokens: Optional[frozenset] = None, acronyms: bool = True
 ) -> bool:
@@ -775,6 +806,9 @@ def same_organisation_by_structure(
         return bool(a and a == b)
 
     if acronyms and (is_acronym_of(left, right) or is_acronym_of(right, left)):
+        return True
+    # "Port Adelaide FC" / "Port Adelaide Football Club": part of the name written as initials.
+    if acronyms and (abbreviates_run(a, b) or abbreviates_run(b, a)):
         return True
 
     if lines_of_business_conflict(left, right):
