@@ -735,7 +735,10 @@ the calibrated duplicate check.
 only when the event merged away holds nothing but labelled records; a merge blocked only by the source gate's own
 page rulings takes that page out). A labelled event is found where the strict majority of the records it held when
 labelled now are (`evaluation/duplicate_label_members.csv`, written by `--record-members`), so a split-off lead
-record no longer reads as "still two events".
+record no longer reads as "still two events". An owner's `same` label (labeller `owner ...`) also overrules a
+'different' ruling a rule or a model made between the two events' records, which is deactivated with a note; a
+person's ruling still blocks (owner 2026-11-04: Reynella East College's two June 2026 reports, held apart by a
+coherence split, though the duplicate check scored them 0.95).
 
 ### Close-together pairs are exceptions, not ties
 
@@ -924,7 +927,9 @@ followed, `event_reality.resolve_labelled` - a labelled-real event merged into
 another used to leave that event unprotected). A `not_incident` label whose labeller is the owner
 (`owner ...`) rejects its event without a model call and whatever records it has gained since
 (`dedup_admin.py apply-owner-labels [--dry-run]`; `check-events` applies it too): the July 2024 CrowdStrike
-outage and the scam that impersonated it, owner 2026-11-03, are not cyber incidents. The rule:
+outage and the scam that impersonated it, owner 2026-11-03, are not cyber incidents. An owner's `out_of_scope`
+label is applied the same way (Singtel's own 2021 Accellion breach in Singapore, filed as Australian because Singtel
+owns Optus, owner 2026-11-04). The rule:
 
 - the **exact one-sided Clopper-Pearson lower bound** on the action's precision,
   from the unweighted labelled counts at the cut-off, clears the floor;
@@ -2232,6 +2237,12 @@ python scripts/dedup_admin.py classify-entities --entity "Canvas" --show-roles
 python scripts/dedup_admin.py classify-entities
 ```
 
+When a supplier recorded as the victim is moved to vendor, its Australian customers become the victims: those
+the event's records label `affected_customer`, not only the event's own rows, which are written only for the chosen
+victim and vendor. Until 2026-11-04 only the event's rows were read, so Canvas customer events (Tasmania's DECYP, the
+University of Canberra, Flinders, TasTAFE and others) were left with no victim; `classify-entities` repairs such
+events with no model call (`repair_unpromoted_customers`).
+
 A role-labelled victim outranks the frequency heuristic. A product can never be
 returned as the victim, invented entities are discarded, and on LLM failure the
 rules apply - which never invent a victim.
@@ -2419,6 +2430,14 @@ decision overturns a fold: `canonicalise-entities` first undoes every applied
 fold decided by a model (`llm`, `structure`) whose pair now has a `different`,
 `parent_subsidiary`, `related` or `unsure` verdict, and again after verifying
 stored aliases; folds a person reviewed (`human`) are never reversed by a model.
+The `different` verdict an automatic reversal records is the rule's (`model = 'rule'`), which a later
+verification may overturn; until 2026-11-04 it was recorded as a person's, which nothing outranks. A name that lists
+what one organisation covers ("Department for Education, Children and Young People", Tasmania's DECYP; "Department
+of Environment, Land, Water and Planning") is no list of organisations: the first part heads an "of" / "for"
+complement, the last item is joined by "and", and no later part has an "of" / "for" of its own. Taken for a list by
+its comma, DECYP had been unfolded from its own spellings and could never rejoin them; `canonicalise-entities` now
+relabels those verdicts and drops the ones the list rule no longer gives
+(`entity_merge_ledger.relabel_automatic_reversals`).
 Folds made before the ledger existed have no record and still need review by
 hand.
 
@@ -2707,8 +2726,11 @@ decide first** and a subject a label settles is no longer asked about:
 `check-events --apply` skips events labelled real, `check-scope --apply` those
 labelled in or out of scope, the coherence checks members labelled
 same/different, `check-duplicates` pairs labelled same/different (each reports
-`settled_by_label`). Victim attribution still judges labelled pairs: its flag
-review needs the score of a pair labelled correct to confirm a flag. A stale low decision is asked again **only where it could
+`settled_by_label`). Since 2026-11-04 the same holds for victim attribution (a pair labelled `correct` confirms
+its flag with no score; one labelled `wrong` is re-attributed to the labelled victim when its records name it,
+else flagged), `fill-victims` (a labelled event is decided by its label, `named` or `none_named`; no choice is asked) and `judge-names` (a labelled
+name is not judged; `name_judgement.has_verdict` counts a label as a verdict), and for the supplier step's
+labelled victims and pairs. A stale low decision is asked again **only where it could
 affect a merge now**: the pair is a candidate this run (scored on its current
 state anyway), or it lies between events a proposed group joins and its old
 score was below the calibrated `different_cutoff` - then it is re-judged
@@ -3405,17 +3427,20 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-03 snapshot (`snap-20261103215735`, censor date 2026-11-03, events from 2020 on; 171 repeats, follow-up
-split by calendar month; customers of a supplier breach counted through their own events, the CrowdStrike outage
-dropped, the owner's victim labels applied): adequate for a simple model (19 repeats per parameter; the full model
-6.6; 62% of incident dates unverified, so no split finer than 30 days is tried). Best bands **0-365 / 366-1095 /
->1095 days**, the middle band at 0.45 times the first year's rate and the last at 1.03 (12.5 BIC better than a
-constant rate; search-adjusted p <= 0.002). Calendar growth does not explain it: the per-organisation rate changes by
--5% a year (yearly effects from 2020 jointly p = 0.84), and the bands hold under every calendar adjustment (p <
-0.0001). **No short-term vigilance** at 1-90 days (one-sided p = 0.95) and **no delayed peak at 91-180 days**
-(one-sided p = 0.13, 24 repeats; 91-120 alone holds 7). The recurrence rate **rises with size** (MEDIUM 1.1, LARGE
-2.9 and HUGE 6.1 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern" (below) came
-from a model with more parameters than its repeats support.
+On the 2026-11-04 snapshot (`snap-20261104114359`, censor date 2026-11-04, events from 2020 on; 171 repeats, follow-up
+split by calendar month; customers of a supplier breach counted through their own events, the owner's victim, scope
+and duplicate labels applied): adequate for a simple model (19 repeats per parameter; the full model 6.6; 62% of
+incident dates unverified, so no split finer than 30 days is tried). **No elapsed-time split is supported**: the best
+of 593 bandings (0-365 / 366-1095 / >1095 days, rates 1.00 / 0.55 / 1.00 per 100 organisation-years) beats a constant
+rate by 2.7 BIC, but searching constant-rate data does as well (search-adjusted p = 0.052), so the rate is treated as
+constant. The 2026-11-03 snapshot gave the same bands at 12.5 BIC (p <= 0.002); between the two, the owner's
+merges of duplicate reports (ASIC, FPSC, Bunnings, Reynella, WSU, ANZ, the University of Canberra's Canvas notice) and
+Singtel's scope rejection were applied.
+**No short-term vigilance** at 1-90 days (one-sided p = 0.89; 26 repeats against 21.2 expected) and **no delayed peak**
+at 91-180 days (one-sided p = 0.12; 24 against 18.7) or 91-120 days (7 against 6.5, rate ratio 1.07, 95% CI
+0.42-2.26; under 10 repeats, so flagged as too few to test). The recurrence rate **rises with size** (MEDIUM 1.3,
+LARGE 3.6 and HUGE 7.4 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
+(below) came from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.

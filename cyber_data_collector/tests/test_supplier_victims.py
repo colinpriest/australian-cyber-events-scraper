@@ -1175,3 +1175,12 @@ def test_an_event_with_its_own_headline_victim_is_not_a_supplier_report(full):
     split; it is not turned into the supplier's event."""
     g = sv.gather(full)
     assert sl.convert(full, g, sl.Registry(full, g.resolver), apply=True)["supplier_reports"] == []
+
+
+def test_a_labelled_item_is_not_asked_about():
+    """Owner, 2026-11-04: no model call to judge a decision the owner's labels already make."""
+    from cyber_data_collector.dedup import supplier_victims as sv
+
+    items = [("p1", {}), ("p2", {}), ("p3", {}), ("p4", {})]
+    labels = {(sv.KIND_PAIR, "p1"): "same", (sv.KIND_PAIR, "p2"): "different", (sv.KIND_PAIR, "p3"): "unsure"}
+    assert [sid for sid, _ in sv.unlabelled(items, labels, sv.KIND_PAIR)] == ["p3", "p4"]

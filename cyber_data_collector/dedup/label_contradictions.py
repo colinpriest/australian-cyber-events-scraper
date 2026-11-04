@@ -94,7 +94,16 @@ def labelled_same_pairs(path: Optional[Path] = None) -> List[Tuple[str, str]]:
     return labelled_pairs(path, "same")
 
 
-def labelled_pairs(path: Optional[Path], label: str) -> List[Tuple[str, str]]:
+def owner_labelled_same_pairs(path: Optional[Path] = None) -> Set[frozenset]:
+    """The pairs the project owner labelled the same incident (labeller ``owner ...``), as frozensets.
+
+    A person's decision made on the database as it stands: it outranks a split a rule or a model made (a
+    coherence split scored on another event's evidence held Reynella East College's two June 2026 reports apart
+    after the duplicate check scored them 0.95; owner 2026-11-04)."""
+    return {frozenset(pair) for pair in labelled_pairs(path, "same", labeller_prefix="owner")}
+
+
+def labelled_pairs(path: Optional[Path], label: str, labeller_prefix: str = "") -> List[Tuple[str, str]]:
     path = Path(path or LABELS_PATH)
     try:
         with Path(path).open(encoding="utf-8", newline="") as fh:
@@ -104,6 +113,8 @@ def labelled_pairs(path: Optional[Path], label: str) -> List[Tuple[str, str]]:
     pairs = []
     for row in rows:
         if (row.get("label") or "").strip() != label:
+            continue
+        if labeller_prefix and not (row.get("labeller") or "").strip().lower().startswith(labeller_prefix):
             continue
         parts = (row.get("pair_id") or "").strip().split("|")
         if len(parts) == 2 and all(parts):
@@ -307,6 +318,10 @@ def plan_merge(conn: sqlite3.Connection, c: Contradiction, labelled: Dict[str, S
         c.event, c.source, live_a, live_b = c.source, c.event, live_b, live_a
     c.side_a, c.side_b = sorted(live_a), sorted(live_b)
     labelled_records = labelled.get(c.a, set()) | labelled.get(c.b, set())
+    if frozenset((c.a, c.b)) in owner_labelled_same_pairs():
+        # The owner labelled the events as they stand now, whatever an earlier label recorded of one of them (the
+        # Fresh Produce Safety Centre's leak-site event had gained a record since it was labelled, 2026-11-04).
+        labelled_records |= live_a | live_b
     if not labelled_records:
         c.unresolved = "no record of which records the labelled events held (members file or snapshot)"
         return c
@@ -399,6 +414,7 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
     same = find_same(conn, path)
     if not contradictions and not same:
         return []
+    owner_same = owner_labelled_same_pairs(path)
     ids = sorted({e for c in contradictions + same for e in (c.a, c.b)})
     recorded = labelled_members()
     members = _snapshot_members(snapshot, [e for e in ids if e not in recorded]) if snapshot else {}
@@ -434,6 +450,8 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
                       f"two events; the {len(c.side_b)} record(s) of {c.source[:8]} join {c.event[:8]}")
             rulings = _blocking_rulings(conn, c.event, c.source)
             other = [r for r in rulings if not _is_source_gate_ruling(r[2], r[3])]
+            overruled = [r for r in other if r[3] == "rule"] if frozenset((c.a, c.b)) in owner_same else []
+            other = [r for r in other if r not in overruled]
             if other:
                 left, right, why, _ = other[0]
                 c.unresolved = (f"a 'different' ruling blocks the merge ({left[:8]} vs {right[:8]}: {why or 'no reason'})")
@@ -442,7 +460,16 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
             if labelled:
                 c.unresolved = f"the merge would join a labelled-different pair ({labelled})"
                 continue
-            junk = sorted({r[0] for r in rulings})
+            if overruled:
+                # The owner's decision outranks a split a rule or a model made; a person's ruling still blocks.
+                conn.executemany(
+                    "UPDATE DedupOverrides SET active = 0, reason = reason || ? WHERE active = 1 "
+                    "AND verdict = 'different' AND created_by = 'rule' AND ((left_enriched_event_id = ? "
+                    "AND right_enriched_event_id = ?) OR (left_enriched_event_id = ? AND right_enriched_event_id = ?))",
+                    [(f" [void: the owner labelled the two events one incident ({c.a[:8]} vs {c.b[:8]})]",
+                      left, right, right, left) for left, right, _, _ in overruled])
+                reason += f"; {len(overruled)} rule-made 'different' ruling(s) overruled by the owner's label"
+            junk = sorted({r[0] for r in rulings if _is_source_gate_ruling(r[2], r[3])})
             if junk:
                 # The source gate ruled these pages no evidence of the incident; take them out as it would have.
                 conn.executemany("UPDATE EnrichedEvents SET status = 'Inactive' WHERE enriched_event_id = ?",

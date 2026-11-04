@@ -2524,11 +2524,16 @@ def cmd_classify_entities(args) -> int:
             print(f"{sum(n for _, n in departed)} link(s) only split-out records carried removed from "
                   f"{len(departed)} event(s)")
         if not getattr(args, "dry_run", False):
-            from cyber_data_collector.dedup.entity_classification import repair_stale_vendors
+            from cyber_data_collector.dedup.entity_classification import (repair_stale_vendors,
+                                                                          repair_unpromoted_customers)
             stale_vendors = repair_stale_vendors(conn)
             conn.commit()
             if stale_vendors:
                 print(f"{stale_vendors} stale event-level vendor link(s) no classification supports set to affected")
+            promoted = repair_unpromoted_customers(conn)
+            conn.commit()
+            if promoted:
+                print(f"{promoted} event(s) with a vendor and no victim took the customers their records name")
         classifier = EntityRoleClassifier()
 
         rows = conn.execute("""
@@ -2713,12 +2718,15 @@ def cmd_canonicalise_entities(args) -> int:
 
     from cyber_data_collector.dedup import anti_aliases
     from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
-    from cyber_data_collector.dedup.entity_merge_ledger import reverse_overturned_merges
+    from cyber_data_collector.dedup.entity_merge_ledger import relabel_automatic_reversals, reverse_overturned_merges
 
     conn = _connect(args.db)
     try:
         schema.migrate(conn)
         if not args.dry_run:
+            relabelled = relabel_automatic_reversals(conn)
+            if relabelled:
+                print(f"Automatic reversal verdicts recorded as the rule's, or lapsed: {relabelled}")
             synced = anti_aliases.sync_from_verdicts(conn)
             conn.commit()
             print(f"Anti-aliases from stored verdicts: {synced.added} listed, {synced.removed} removed "
@@ -3504,8 +3512,8 @@ def cmd_check_events(args) -> int:
 
 
 def cmd_apply_owner_labels(args) -> int:
-    """Apply the owner's labels with no model call (ledger, reversible): reject the events labelled not an incident,
-    and re-attribute the event-victim pairs labelled wrong to the victim the label names."""
+    """Apply the owner's labels with no model call (ledger, reversible): reject the events labelled not an incident
+    or out of scope, and re-attribute the event-victim pairs labelled wrong to the victim the label names."""
     from cyber_data_collector.dedup import victim_judgement
     from cyber_data_collector.dedup.event_reality import apply_owner_labels
 
@@ -3520,7 +3528,8 @@ def cmd_apply_owner_labels(args) -> int:
     for v in victims:
         print(f"  {'would be ' if args.dry_run else ''}{v['action']}  {v['deduplicated_event_id'][:8]}  {v['victim']}"
               + (f" -> {v['new_victim']}" if v["new_victim"] else ""))
-    print(f"{len(found)} owner-labelled non-incident(s) {'to reject' if args.dry_run else 'rejected'}; "
+    print(f"{len(found)} owner-labelled non-incident or out-of-scope event(s) "
+          f"{'to reject' if args.dry_run else 'rejected'}; "
           f"{len(victims)} owner-labelled victim(s) {'to re-attribute' if args.dry_run else 're-attributed'}")
     return 0
 

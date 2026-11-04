@@ -112,9 +112,38 @@ def sentence_for(conn: sqlite3.Connection, name: str) -> str:
 
 # ---------------------------------------------------------------- judging
 
-def judge_names(conn: sqlite3.Connection, items: Sequence[Tuple[str, str]], judge=None) -> Dict[str, float]:
-    """P(proper name) for each ``(name, sentence)``; stored answers are reused. Raises on a Jev failure."""
+def labelled_names() -> Set[str]:
+    """Lowercase names a label decides: labelled ``named`` or ``descriptive`` (``name_labels.csv``), or given as
+    an event's victim by a victim-fill label. Labels decide first, so these are not asked about (owner 2026-11-04)."""
+    return ({" ".join(n.split()).lower() for n, r in load_labels().items()
+             if (r.get("label") or "").strip() in ("named", "descriptive")} | labelled_victim_names())
+
+
+class _Verdicts:
+    """Membership in either the model's verdicts or the labels (``in`` only)."""
+
+    def __init__(self, judged, labelled: Set[str]):
+        self.judged, self.labelled = judged, labelled
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.judged or key in self.labelled
+
+
+def has_verdict(conn: sqlite3.Connection) -> "_Verdicts":
+    """Lowercase names with a verdict (test with ``in``): judged by the model, or decided by a label."""
+    return _Verdicts(stored_probabilities(conn), labelled_names())
+
+
+def judge_names(conn: sqlite3.Connection, items: Sequence[Tuple[str, str]], judge=None,
+                skip_labelled: bool = True) -> Dict[str, float]:
+    """P(proper name) for each ``(name, sentence)``; stored answers are reused. Raises on a Jev failure.
+
+    A name a label decides is not asked about (``skip_labelled``)."""
     from cyber_data_collector.utils.jev import JevJudge
+
+    if skip_labelled:
+        labelled = labelled_names()
+        items = [(n, s) for n, s in items if " ".join(n.split()).lower() not in labelled]
 
     owned = judge is None
     judge = judge or JevJudge(conn)
@@ -193,8 +222,8 @@ def names_to_judge(conn: sqlite3.Connection) -> List[str]:
                 continue
     except sqlite3.OperationalError:
         pass
-    done = stored_probabilities(conn)
-    return [n for key, n in sorted(names.items()) if key not in done]
+    done = has_verdict(conn)
+    return [n for key, n in sorted(names.items()) if " ".join(key.split()) not in done]
 
 
 def judge_new_names(conn: sqlite3.Connection, judge=None, limit: Optional[int] = None) -> Dict[str, float]:
@@ -209,6 +238,10 @@ def judge_new_names(conn: sqlite3.Connection, judge=None, limit: Optional[int] =
 
 def load_labels(path: Path = LABELS_PATH) -> Dict[str, Dict[str, str]]:
     """Labels by lowercase name; an absent file is no labels (acting on verdicts is gated by the calibration)."""
+    return _load_labels_from(path)
+
+
+def _load_labels_from(path: Path) -> Dict[str, Dict[str, str]]:
     try:
         with Path(path).open(encoding="utf-8", newline="") as fh:
             return {r["name"].strip().lower(): r for r in csv.DictReader(fh) if r.get("name")}

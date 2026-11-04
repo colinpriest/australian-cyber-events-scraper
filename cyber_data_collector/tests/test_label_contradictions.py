@@ -219,6 +219,37 @@ def test_a_ruling_against_the_merge_is_reported_not_forced(apart):
     assert result[0].unresolved and "ruling blocks" in result[0].unresolved and _event_of(conn, "enr-b") == "ded-b"
 
 
+def test_the_owners_label_overrules_a_rule_made_ruling_but_not_a_persons(apart, tmp_path, monkeypatch):
+    """Owner, 2026-11-04: Reynella East College's two June 2026 reports are one incident. A coherence split had
+    cached rule-made 'different' rulings between them; the owner's label outranks those, a person's ruling not."""
+    conn, snapshot, _ = apart
+    owner = tmp_path / "owner_labels.csv"
+    owner.write_text("pair_id,label,rationale,corroboration,labeller\n"
+                     "ded-a|ded-b,same,one incident,,owner 2026-11-04\n", encoding="utf-8")
+    monkeypatch.setattr(lc, "LABELS_PATH", owner)
+    assert lc.owner_labelled_same_pairs() == {frozenset(("ded-a", "ded-b"))}
+    DedupLedger(conn).add_override("enr-b", "enr-a", OverrideVerdict.DIFFERENT,
+                                   reason="split: [coherence] stray record(s) about Other Org: P(same) 0.120",
+                                   created_by="rule")
+    conn.commit()
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert result[0].unresolved is None and _event_of(conn, "enr-b") == "ded-a"
+    assert [r[0] for r in conn.execute("SELECT active FROM DedupOverrides")] == [0]
+    assert lc.resolve(conn, snapshot, apply=True) == []
+
+
+def test_a_persons_ruling_still_blocks_the_owners_label(apart, tmp_path, monkeypatch):
+    conn, snapshot, _ = apart
+    owner = tmp_path / "owner_labels.csv"
+    owner.write_text("pair_id,label,rationale,corroboration,labeller\n"
+                     "ded-a|ded-b,same,one incident,,owner 2026-11-04\n", encoding="utf-8")
+    monkeypatch.setattr(lc, "LABELS_PATH", owner)
+    DedupLedger(conn).add_override("enr-a", "enr-b", OverrideVerdict.DIFFERENT, reason="checked")
+    conn.commit()
+    result = lc.resolve(conn, snapshot, apply=True)
+    assert result[0].unresolved and "ruling blocks" in result[0].unresolved and _event_of(conn, "enr-b") == "ded-b"
+
+
 def test_a_page_the_source_gate_ruled_out_leaves_and_the_event_merges(apart):
     """The source gate split ``b``'s page out of ``a`` (no incident report); the label says ``b`` is ``a``'s
     incident. The page goes, as the gate ruled, and the event joins: no split-merge loop."""

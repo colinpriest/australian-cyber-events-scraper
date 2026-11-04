@@ -270,3 +270,19 @@ def test_rule_made_aliases_are_verified_once_and_rejected_ones_removed():
         "NAB": "llm", "ORICA AUSTRALIA PTY. LTD.": "rule"}
     eav.verify_stored_aliases(conn, search=search)
     assert len(asked) == 2                                                          # verdicts stored
+
+
+def test_a_name_listing_what_one_department_covers_is_not_a_list():
+    """Tasmania's "Department for Education, Children and Young People" was taken for two organisations by its
+    comma and unfolded from its own spellings (owner, 2026-11-04)."""
+    from cyber_data_collector.dedup.entity_merge import is_organisation_list
+
+    for name in ("Department for Education, Children and Young People",
+                 "Tasmanian Department of Education, Children and Young People",
+                 "Department for Education, Children and Young People, Tasmania",
+                 "Department of Environment, Land, Water and Planning"):
+        assert not is_organisation_list(name), name
+    for name in ("ANZ, NAB, Westpac, Commonwealth Bank",
+                 "University of Sydney, University of Melbourne and Monash University",
+                 "Australia and New Zealand Banking Group Limited, Commonwealth Bank of Australia"):
+        assert is_organisation_list(name), name

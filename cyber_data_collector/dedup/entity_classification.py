@@ -27,7 +27,7 @@ import logging
 import os
 import sqlite3
 from enum import Enum
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -998,6 +998,92 @@ def clear_stale_vendors(conn, deduplicated_event_id: str, vendor: Optional[str])
     return changed
 
 
+def promote_customers(conn, deduplicated_event_id: str, vendor: Optional[str]) -> List[Tuple[int, str]]:
+    """Make the Australian customers of a demoted supplier the event's victims; returns ``(entity_id, name)``
+    of those promoted (the ProctorU shape: the vendor breached, its customers' data lost)."""
+    # The classifier writes its roles to the records; the event's own rows change only for the chosen victim
+    # and vendor, so an event-level 'affected_customer' row is rarely there. Read the records' roles too: until
+    # 2026-11-04 the customers of a demoted supplier were never promoted, which left Canvas customer events
+    # (Tasmania's DECYP, the University of Canberra, Flinders, TasTAFE, ...) with no victim at all.
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    customers = conn.execute(
+        f"""
+        SELECT DISTINCT v.entity_id, v.entity_name
+        FROM EntitiesV2 v
+        WHERE v.is_australian = 1
+          AND COALESCE(v.entity_kind, 'organisation') IN ('organisation', 'government_body')
+          AND v.entity_id IN (
+              SELECT dee.entity_id FROM DeduplicatedEventEntities dee
+              WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'affected_customer'
+              UNION
+              SELECT eee.entity_id FROM EnrichedEventEntities eee
+              JOIN EventDeduplicationMap m ON m.enriched_event_id = eee.enriched_event_id
+              JOIN EnrichedEvents ee ON ee.enriched_event_id = eee.enriched_event_id
+              WHERE m.deduplicated_event_id = ? AND eee.relationship_type = 'affected_customer'
+                {member_condition(conn, "ee")})
+        ORDER BY v.entity_id
+        """, (deduplicated_event_id, deduplicated_event_id)).fetchall()
+    # A collective ("TAFEs", "Australian hospitals") names a group, not the
+    # organisation whose systems were attacked, so it is never promoted.
+    # A customer split out as its own event, linked to the supplier, has its incident there: on this event it
+    # stays an affected customer (owner decision 2026-10-31). Promoting it made Stake the victim of DriveWealth's
+    # event again after the split.
+    from cyber_data_collector.dedup.supplier_links import departed_customers
+    from cyber_data_collector.dedup.victim_fill import names_match
+
+    # A description is no organisation ("Clubs in NSW and ACT", judged descriptive), and the supplier is not its
+    # own customer (OracleCMS, an affected customer on a record of its own report).
+    from cyber_data_collector.dedup import descriptive_names
+
+    descriptions = descriptive_names.described(conn)
+    departed = departed_customers(conn, deduplicated_event_id)
+    real = [c for c in customers if not is_non_organisation(c[1])
+            and not descriptive_names.is_listed(descriptions, c[1])
+            and not (vendor and names_match(conn, c[1], vendor))
+            and not any(names_match(conn, c[1], d) for d in departed)]
+    for entity_id, name in real:
+        conn.execute(
+            "INSERT OR IGNORE INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, "
+            "relationship_type) VALUES (?, ?, 'victim')", (deduplicated_event_id, entity_id))
+        conn.execute(
+            "UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
+            "WHERE deduplicated_event_id = ? AND entity_id = ?",
+            (deduplicated_event_id, entity_id))
+        conn.execute(
+            "UPDATE EnrichedEventEntities SET relationship_type = 'victim' "
+            "WHERE entity_id = ? AND enriched_event_id IN (SELECT enriched_event_id "
+            "FROM EventDeduplicationMap WHERE deduplicated_event_id = ?)",
+            (entity_id, deduplicated_event_id))
+        logger.info("Promoted %r to victim on %s (customer of demoted vendor %r)",
+                    name, deduplicated_event_id, vendor)
+    return real
+
+
+def repair_unpromoted_customers(conn) -> int:
+    """Classified Active events with a vendor and no victim whose records name the supplier's customers: promote
+    them (:func:`promote_customers`), with no model call; run by ``classify-entities``. Returns the events changed.
+
+    Until 2026-11-04 the promotion read only the event's own rows, which are never written as customers, so these
+    events were left with no victim after their supplier was demoted to vendor."""
+    changed = 0
+    for did, vendor in conn.execute(
+            """SELECT d.deduplicated_event_id, d.vendor_organization_name FROM DeduplicatedEvents d
+               WHERE d.status = 'Active' AND d.roles_classified_at IS NOT NULL
+                 AND EXISTS (SELECT 1 FROM DeduplicatedEventEntities dee WHERE dee.deduplicated_event_id =
+                             d.deduplicated_event_id AND dee.relationship_type = 'vendor')
+                 AND NOT EXISTS (SELECT 1 FROM DeduplicatedEventEntities dee WHERE dee.deduplicated_event_id =
+                                 d.deduplicated_event_id AND dee.relationship_type = 'victim')""").fetchall():
+        real = promote_customers(conn, did, vendor)
+        if not real:
+            continue
+        changed += 1
+        if len(real) == 1:
+            conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ? "
+                         "AND victim_organization_name IS NULL", (real[0][1], did))
+    return changed
+
+
 def repair_stale_vendors(conn) -> int:
     """:func:`clear_stale_vendors` for every Active event (run by ``classify-entities``)."""
     total = 0
@@ -1060,40 +1146,7 @@ def resolve_victim(
     # student data. Promoting them is what makes the dashboard name a victim
     # instead of the vendor, because the dashboard reads roles, not this scalar.
     if demoted and not dry_run:
-        customers = conn.execute(
-            """
-            SELECT DISTINCT v.entity_id, v.entity_name
-            FROM DeduplicatedEventEntities dee
-            JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-            WHERE dee.deduplicated_event_id = ?
-              AND dee.relationship_type = 'affected_customer'
-              AND v.is_australian = 1
-              AND COALESCE(v.entity_kind, 'organisation')
-                  IN ('organisation', 'government_body')
-            """, (deduplicated_event_id,)).fetchall()
-        # A collective ("TAFEs", "Australian hospitals") names a group, not the
-        # organisation whose systems were attacked, so it is never promoted.
-        # A customer split out as its own event, linked to the supplier, has its incident there: on this event it
-        # stays an affected customer (owner decision 2026-10-31). Promoting it made Stake the victim of DriveWealth's
-        # event again after the split.
-        from cyber_data_collector.dedup.supplier_links import departed_customers
-        from cyber_data_collector.dedup.victim_fill import names_match
-
-        departed = departed_customers(conn, deduplicated_event_id)
-        real = [c for c in customers if not is_non_organisation(c[1])
-                and not any(names_match(conn, c[1], d) for d in departed)]
-        for entity_id, name in real:
-            conn.execute(
-                "UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
-                "WHERE deduplicated_event_id = ? AND entity_id = ?",
-                (deduplicated_event_id, entity_id))
-            conn.execute(
-                "UPDATE EnrichedEventEntities SET relationship_type = 'victim' "
-                "WHERE entity_id = ? AND enriched_event_id IN (SELECT enriched_event_id "
-                "FROM EventDeduplicationMap WHERE deduplicated_event_id = ?)",
-                (entity_id, deduplicated_event_id))
-            logger.info("Promoted %r to victim on %s (customer of demoted vendor %r)",
-                        name, deduplicated_event_id, vendor)
+        real = promote_customers(conn, deduplicated_event_id, vendor)
         # One customer can name the scalar field; several are co-equal victims
         # and picking one would repeat the misattribution being corrected.
         if len(real) == 1:

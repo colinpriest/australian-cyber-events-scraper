@@ -556,6 +556,15 @@ def choose_replacement(conn: sqlite3.Connection, dedup_id: str, wrong: Sequence[
 
 # ---------------------------------------------------------------- labels and calibration
 
+#: The score a label stands for in the action rows, which record one: a pair the label decides is not asked about.
+LABEL_SCORE = {"correct": 1.0, "wrong": 0.0}
+
+
+def decided_by_label(label: Optional[Dict[str, str]]) -> bool:
+    """A ``correct`` or ``wrong`` label settles the pair; ``unsure`` and other labels leave it to the model."""
+    return bool(label) and label.get("label") in LABEL_SCORE
+
+
 def load_labels(path: Path = LABELS_PATH, required: bool = False) -> Dict[str, Dict[str, str]]:
     """Labels by pair id. With ``required``, a missing, unreadable or empty file raises.
 
@@ -668,19 +677,20 @@ def plan_confirmations(pairs: Sequence[Dict[str, Any]], flags: Dict[str, Dict[st
     for pair in pairs:
         flag = flags.get(pair["pair_id"])
         p = scores.get(pair["pair_id"])
-        if flag is None or p is None:
-            continue
         label = labels.get(pair["pair_id"])
+        if flag is None or (p is None and not decided_by_label(label)):
+            continue
         change = _change_since(flag, inputs.get(pair["pair_id"]))
         if label and label.get("label") == "correct":
-            reason = f"labelled correct ({change})"
+            reason = "labelled correct (not asked: the label decides)" if p is None else f"labelled correct ({change})"
         elif label and label.get("label") == "wrong":
             continue
         elif p >= cal["cutoff"]:
             reason = f"re-judged {p:.2f} >= cut-off {cal['cutoff']:.2f} ({change})"
         else:
             continue
-        plans.append({**pair, "p_recorded_victim": p, "label": label, "action": "confirmed", "new_victim": None,
+        plans.append({**pair, "p_recorded_victim": LABEL_SCORE["correct"] if p is None else p, "label": label,
+                      "action": "confirmed", "new_victim": None,
                       "replacement_probability": None, "reason": reason})
     return plans
 
@@ -776,12 +786,14 @@ def plan_actions(conn: sqlite3.Connection, scores: Dict[str, float], cal: Dict[s
     threshold = cal.get("replacement_threshold")
     by_event: Dict[str, List[Dict[str, Any]]] = {}
     for pair in pairs_to_check(conn):
-        p = scores.get(pair["pair_id"])
-        if p is None or p >= cutoff:
-            continue
         label = labels.get(pair["pair_id"])
         if label and label.get("label") == "correct":
             continue   # ground truth: never acted on the other way
+        p = scores.get(pair["pair_id"])
+        if label and label.get("label") == "wrong":
+            p = LABEL_SCORE["wrong"]   # decided by the label, not asked about
+        if p is None or p >= cutoff:
+            continue
         by_event.setdefault(pair["deduplicated_event_id"], []).append({**pair, "p_recorded_victim": p,
                                                                      "label": label})
     plans = []
@@ -791,6 +803,16 @@ def plan_actions(conn: sqlite3.Connection, scores: Dict[str, float], cal: Dict[s
         if keep:
             plans += [{**w, "action": "demoted", "new_victim": None, "replacement_probability": None,
                        "reason": f"other recorded victim(s) kept: {', '.join(n for _, n in keep)}"} for w in wrong]
+            continue
+        named = {(w["label"] or {}).get("correct_victim", "").strip() for w in wrong}
+        if all(w["label"] and w["label"].get("label") == "wrong" for w in wrong) and len(named) == 1 and "" not in named:
+            # Every pair is labelled wrong with one correct victim: the label decides, no model chooses.
+            name = named.pop()
+            reason = (None if _named_in_records(conn, did, name)
+                      else f"labelled correct victim {name!r} is not named in the records' text")
+            plans += [{**w, "action": "flagged" if reason else "reattributed", "new_victim": None if reason else name,
+                       "candidate": name, "replacement_probability": None,
+                       "reason": reason or "labelled correct victim"} for w in wrong]
             continue
         try:
             choice = choose_replacement(conn, did, [w["victim"] for w in wrong], judge, extractor=extractor)
@@ -950,12 +972,15 @@ def check_victim_attribution(conn: sqlite3.Connection, apply: bool = False, judg
     errors: List[Dict[str, str]] = []
     try:
         pairs = pairs_to_check(conn)
-        scores = judge_pairs(conn, pairs, judge=judge, escalation_client=escalation_client, inputs=inputs)
+        # Labels decide first: a pair labelled correct or wrong is not asked about (owner, 2026-11-04).
+        asked = [p for p in pairs if not decided_by_label(labels.get(p["pair_id"]))]
+        scores = judge_pairs(conn, asked, judge=judge, escalation_client=escalation_client, inputs=inputs)
         cal = active_calibration(calibration_path)
-        report = [{**p, "p_recorded_victim": scores[p["pair_id"]]} for p in pairs
+        report = [{**p, "p_recorded_victim": scores[p["pair_id"]]} for p in asked
                   if scores.get(p["pair_id"], 1.0) < (cal["cutoff"] if cal else REPORT_BELOW)]
         report.sort(key=lambda f: f["p_recorded_victim"])
-        flags = {pid: a for pid, a in latest_actions(conn).items() if a["action"] == "flagged" and pid in scores}
+        checked = {p["pair_id"] for p in pairs}
+        flags = {pid: a for pid, a in latest_actions(conn).items() if a["action"] == "flagged" and pid in checked}
         plans = (plan_actions(conn, scores, cal, labels, judge, extractor=extractor, errors=errors)
                  + plan_confirmations(pairs, flags, scores, cal, labels, inputs)) if cal else []
         for plan in plans:

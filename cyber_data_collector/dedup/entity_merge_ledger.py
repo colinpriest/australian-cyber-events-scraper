@@ -342,7 +342,7 @@ def load_merge(conn: sqlite3.Connection, merge_id: str) -> Dict[str, Any]:
 
 
 def unmerge_entity(conn: sqlite3.Connection, merge_id: str, reason: str = "", keep_alias: bool = False,
-                   dry_run: bool = False) -> UnmergeReport:
+                   dry_run: bool = False, decided_by: str = "human") -> UnmergeReport:
     """Undo one recorded fold: bring the dropped entity back with its id, links, roles and attributes.
 
     Checks first, changes nothing when one fails (:class:`UnmergeError`): the
@@ -352,7 +352,8 @@ def unmerge_entity(conn: sqlite3.Connection, merge_id: str, reason: str = "", ke
     them; a link that has since moved elsewhere is reported, not recreated.
     Attributes changed since the fold stay as they are. The alias that
     resolved the dropped name to the kept one is removed (``keep_alias`` keeps
-    it), and the pair is recorded as ``different`` so it is not proposed again.
+    it), and the pair is recorded as ``different`` so it is not proposed again: by ``decided_by``, ``human``
+    for a person's unmerge, ``rule`` for an automatic reversal, which a later verification may overturn.
     Does not commit.
     """
     from cyber_data_collector.dedup.entity_merge import EXPLICIT_ALIASES
@@ -417,7 +418,7 @@ def unmerge_entity(conn: sqlite3.Connection, merge_id: str, reason: str = "", ke
             report.alias_removed = bool(conn.execute(
                 "DELETE FROM EntityAliases WHERE raw_name = ? AND canonical_name = ?",
                 (drop_name, entry["kept_name"])).rowcount)
-            _record_not_same(conn, entry["kept_name"], drop_name, reason or "entity merge reversed")
+            _record_not_same(conn, entry["kept_name"], drop_name, reason or "entity merge reversed", decided_by)
         if EXPLICIT_ALIASES.get(drop_name) == entry["kept_name"]:
             report.still_aliased_by = "EXPLICIT_ALIASES"
         if dry_run:
@@ -433,7 +434,7 @@ def unmerge_entity(conn: sqlite3.Connection, merge_id: str, reason: str = "", ke
     return report
 
 
-def _record_not_same(conn: sqlite3.Connection, a: str, b: str, reason: str) -> None:
+def _record_not_same(conn: sqlite3.Connection, a: str, b: str, reason: str, decided_by: str = "human") -> None:
     """Remember the pair as ``different`` so it is not proposed again.
 
     Replaces a stored ``same`` (the verdict being overturned); a stored verdict that is already
@@ -447,8 +448,8 @@ def _record_not_same(conn: sqlite3.Connection, a: str, b: str, reason: str) -> N
     conn.execute("DELETE FROM EntityAliasDecisions WHERE name = ? AND other_name = ? AND prompt_version = ? "
                  "AND verdict = 'same'", (key[0], key[1], PROMPT_VERSION))
     conn.execute("INSERT OR IGNORE INTO EntityAliasDecisions (name, other_name, verdict, canonical_name, reason, "
-                 "citations_json, model, prompt_version, decided_at) VALUES (?, ?, 'different', NULL, ?, '[]', 'human', ?, ?)",
-                 (key[0], key[1], reason[:500], PROMPT_VERSION, datetime.now().isoformat(timespec="seconds")))
+                 "citations_json, model, prompt_version, decided_at) VALUES (?, ?, 'different', NULL, ?, '[]', ?, ?, ?)",
+                 (key[0], key[1], reason[:500], decided_by, PROMPT_VERSION, datetime.now().isoformat(timespec="seconds")))
 
 
 def list_merges(conn: sqlite3.Connection, status: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -490,6 +491,36 @@ def overturned_merges(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     return out
 
 
+#: Who an automatic reversal's ``different`` verdict is recorded as: a rule, not a person, so a later verification
+#: may overturn it. Until 2026-11-04 these were recorded as ``human``, which nothing outranks: Tasmania's
+#: "Department for Education, Children and Young People", unfolded as an "organisation list" by the comma in its
+#: name, could never again be joined to its own spellings.
+AUTOMATIC_REVERSAL = "rule"
+AUTOMATIC_REVERSAL_REASON = "verdict changed to %"
+
+
+def relabel_automatic_reversals(conn: sqlite3.Connection) -> int:
+    """Record earlier automatic reversals as the rule's, not a person's (idempotent); returns the rows changed.
+
+    A ``different`` verdict that a later rule no longer gives (a portfolio name is no organisation list now) is
+    removed with the anti-alias listed from it, so the pair can be verified again."""
+    from cyber_data_collector.dedup import anti_aliases
+    from cyber_data_collector.dedup.entity_merge import is_organisation_list
+
+    _ensure_decisions_table(conn)
+    changed = conn.execute("UPDATE EntityAliasDecisions SET model = ? WHERE model = 'human' AND reason LIKE ?",
+                           (AUTOMATIC_REVERSAL, AUTOMATIC_REVERSAL_REASON)).rowcount
+    for rowid, name, other in conn.execute(
+            "SELECT rowid, name, other_name FROM EntityAliasDecisions WHERE model = ? AND reason LIKE ?",
+            (AUTOMATIC_REVERSAL, "verdict changed to organisation list%")).fetchall():
+        if not is_organisation_list(name) and not is_organisation_list(other):
+            conn.execute("DELETE FROM EntityAliasDecisions WHERE rowid = ?", (rowid,))
+            anti_aliases.remove(conn, name, other, source=anti_aliases.SOURCE_LLM)
+            changed += 1
+    conn.commit()
+    return changed
+
+
 def reverse_overturned_merges(conn: sqlite3.Connection, dry_run: bool = False
                               ) -> Tuple[List[UnmergeReport], List[Tuple[Dict[str, Any], str]]]:
     """Unmerge every fold a later verdict overturned; return ``(reports, refusals)``. Commits unless ``dry_run``.
@@ -504,7 +535,7 @@ def reverse_overturned_merges(conn: sqlite3.Connection, dry_run: bool = False
         try:
             report = unmerge_entity(conn, entry["merge_id"],
                                     reason=f"verdict changed to {entry['verdict']}: {entry['reason'] or ''}".strip(),
-                                    dry_run=dry_run)
+                                    dry_run=dry_run, decided_by=AUTOMATIC_REVERSAL)
         except UnmergeError as exc:
             refused.append((entry, str(exc)))
             continue
