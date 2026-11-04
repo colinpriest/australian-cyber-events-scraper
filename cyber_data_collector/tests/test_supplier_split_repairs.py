@@ -1249,3 +1249,58 @@ def test_an_event_recording_a_known_supplier_as_its_victim_is_classified_again()
     conn.execute("UPDATE DeduplicatedEvents SET roles_prompt_version = ? WHERE deduplicated_event_id = 'ded-iv'",
                  (ec.ROLES_PROMPT_VERSION,))
     assert "ded-iv" not in rm.stale_event_ids(conn)
+
+
+def test_the_customer_of_a_demoted_supplier_is_promoted_from_its_records_roles():
+    """Tasmania's DECYP Canvas event: the classifier labelled DECYP an affected customer on its records and named
+    no victim; Instructure, the stored victim, became the vendor. The customer was looked for only among the
+    event's own rows, which are never written as 'affected_customer', so the event was left with no victim."""
+    from cyber_data_collector.dedup.entity_classification import (EntityAssignment, EntityKind, EntityRole,
+                                                                  EventEntityRoles, resolve_victim)
+
+    conn, _, big = _world([("c1", "Instructure", "vendor"), ("c2", "DECYP", "affected_customer")],
+                          victim="Instructure")
+    # As the live events were: the supplier a vendor, every other link 'affected' as deduplication writes them.
+    conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = CASE WHEN entity_id = (SELECT entity_id "
+                 "FROM EntitiesV2 WHERE entity_name = 'Instructure') THEN 'vendor' ELSE 'affected' END")
+    conn.execute("UPDATE EntitiesV2 SET is_australian = 1, entity_kind = 'organisation'")
+    result = EventEntityRoles(assignments=[
+        EntityAssignment(name="Instructure", kind=EntityKind.ORGANISATION, role=EntityRole.VENDOR, confidence=0.9),
+        EntityAssignment(name="DECYP", kind=EntityKind.ORGANISATION, role=EntityRole.AFFECTED_CUSTOMER,
+                         confidence=0.9)])
+    victim, vendor = resolve_victim(conn, big, result)
+    assert (victim, vendor) == ("DECYP", "Instructure")
+    assert _victims(conn, big) == ["DECYP"]
+
+
+def test_events_left_with_no_victim_take_their_records_customers_with_no_model_call():
+    from cyber_data_collector.dedup.entity_classification import repair_unpromoted_customers
+
+    conn, _, big = _world([("c1", "Instructure", "vendor"), ("c2", "DECYP", "affected_customer")], victim=None)
+    conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = CASE WHEN entity_id = (SELECT entity_id "
+                 "FROM EntitiesV2 WHERE entity_name = 'Instructure') THEN 'vendor' ELSE 'affected' END")
+    conn.execute("UPDATE EntitiesV2 SET is_australian = 1, entity_kind = 'organisation'")
+    conn.execute("UPDATE DeduplicatedEvents SET roles_classified_at = '2026-11-03', victim_organization_name = NULL")
+    assert repair_unpromoted_customers(conn) == 1
+    assert _victims(conn, big) == ["DECYP"]
+    assert conn.execute("SELECT victim_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                        (big,)).fetchone()[0] == "DECYP"
+    assert repair_unpromoted_customers(conn) == 0                                    # idempotent
+
+
+def test_a_description_or_the_supplier_itself_is_never_promoted_to_victim():
+    """The repair promoted "Clubs in NSW and ACT" (judged a description) and OracleCMS on its own report."""
+    from cyber_data_collector.dedup import descriptive_names
+    from cyber_data_collector.dedup.entity_classification import repair_unpromoted_customers
+
+    conn, _, big = _world([("c1", "OracleCMS", "vendor"), ("c2", "Clubs in NSW and ACT", "affected_customer"),
+                           ("c3", "OracleCMS", "affected_customer")], victim=None)
+    conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = CASE WHEN entity_id = (SELECT entity_id "
+                 "FROM EntitiesV2 WHERE entity_name = 'OracleCMS') THEN 'vendor' ELSE 'affected' END")
+    conn.execute("UPDATE DeduplicatedEvents SET vendor_organization_name = 'OracleCMS', "
+                 "roles_classified_at = '2026-11-03', victim_organization_name = NULL")
+    conn.execute("UPDATE EntitiesV2 SET is_australian = 1, entity_kind = 'organisation'")
+    descriptive_names.ensure_schema(conn)
+    descriptive_names.add(conn, "Clubs in NSW and ACT", "a description")
+    assert repair_unpromoted_customers(conn) == 0
+    assert _victims(conn, big) == []

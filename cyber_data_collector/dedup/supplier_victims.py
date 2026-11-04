@@ -911,6 +911,14 @@ def active_calibration(path: Path = CALIBRATION_PATH) -> Dict[str, Any]:
     return deployment.gate("supplier-victims", cal, path)
 
 
+def unlabelled(items: Sequence[Tuple[str, Dict[str, Any]]], labels: Dict[Tuple[str, str], str],
+               kind: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """The items no label decides: a label settles its item both ways, so asking a model about it buys an
+    answer nothing reads (owner, 2026-11-04). An ``unsure`` label decides nothing and is still asked."""
+    decided = {POSITIVE[kind], *NEGATIVE[kind]}
+    return [(sid, state) for sid, state in items if labels.get((kind, sid)) not in decided]
+
+
 def accepted(scores: Dict[str, float], labels: Dict[Tuple[str, str], str], kind: str,
              cutoff: Optional[float]) -> Dict[str, str]:
     """subject id -> how it was accepted ('label' or 'model'), labels winning both ways."""
@@ -1536,8 +1544,9 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
     registry = sl.Registry(conn, before.resolver)
     conversion = sl.convert(conn, before, registry, apply, split=split)
     g = gather(conn, limit) if apply else before
-    victim_items = g.victim_items(conn)
-    pair_items = g.pair_items(conn)
+    # Labels decide first, both ways (:func:`accepted`), so a labelled item is not asked about.
+    victim_items = unlabelled(g.victim_items(conn), labels, KIND_VICTIM)
+    pair_items = unlabelled(g.pair_items(conn), labels, KIND_PAIR)
     vscores = judge(conn, victim_items, KIND_VICTIM, judge_client, escalation_client)
     pscores = judge(conn, pair_items, KIND_PAIR, judge_client, escalation_client)
     vcut = (cal.get("victim") or {}).get("cutoff") if apply else None
@@ -1607,7 +1616,7 @@ def find_supplier_victims(conn: sqlite3.Connection, apply: bool = False, researc
         # incident's context): the report reads both. Then a description of each attack the report lists.
         from cyber_data_collector.dedup import alias_learning, name_judgement
 
-        done = name_judgement.stored_probabilities(conn)
+        done = name_judgement.has_verdict(conn)
         todo = sorted({n.strip() for (n,) in conn.execute("SELECT customer_name FROM SupplierIncidentLinks "
                                                           "UNION SELECT supplier_name FROM SupplierIncidents")
                        if n and n.strip() and " ".join(n.split()).lower() not in done})

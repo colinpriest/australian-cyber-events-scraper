@@ -301,6 +301,22 @@ def test_an_owner_labelled_non_incident_is_rejected_without_a_model_call(conn, t
     assert er.apply_owner_labels(conn, labels) == []                     # idempotent
 
 
+def test_an_owner_labelled_out_of_scope_event_is_rejected_without_a_model_call(conn, tmp_path):
+    """Owner, 2026-11-04: Singtel's own Accellion breach in Singapore is out of scope. A blind labeller's
+    out_of_scope label waits for check-events / check-scope; the owner's is applied at once."""
+    labels = tmp_path / "labels.csv"
+    labels.write_text("deduplicated_event_id,label,rationale,corroboration,labeller\n"
+                      "lush,out_of_scope,a Singapore breach,none,owner 2026-11-04: out of scope\n"
+                      "act,out_of_scope,a UK breach,packet,blind subagent\n", encoding="utf-8")
+    assert er.owner_labelled_out_of_scope(labels) == {"lush"}
+    planned = er.apply_owner_labels(conn, labels, apply=False)
+    assert [(f["deduplicated_event_id"], f["label"]) for f in planned] == [("lush", "out_of_scope")]
+    er.apply_owner_labels(conn, labels)
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    assert status == {"act": "Active", "lush": "Rejected"}
+    assert er.apply_owner_labels(conn, labels) == []                     # idempotent
+
+
 def test_check_events_rejects_an_owner_labelled_event_that_scores_real_without_a_snapshot(conn, tmp_path,
                                                                                          monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-1.14.0")

@@ -433,14 +433,30 @@ def owner_labelled_non_incidents(path: Path = LABELS_PATH) -> set:
                 if r.get("label") == "not_incident" and (r.get("labeller") or "").startswith("owner")}
 
 
+def owner_labelled_out_of_scope(path: Path = LABELS_PATH) -> set:
+    """Events the project owner labelled real incidents outside the dataset (labeller ``owner ...``): Singtel's own
+    2021 Accellion breach in Singapore, filed as an Australian event because Singtel owns Optus (owner 2026-11-04)."""
+    import csv
+    with Path(path).open(encoding="utf-8") as fh:
+        return {r["deduplicated_event_id"] for r in csv.DictReader(fh)
+                if r.get("label") == "out_of_scope" and (r.get("labeller") or "").startswith("owner")}
+
+
 def apply_owner_labels(conn: sqlite3.Connection, labels_path: Path = LABELS_PATH,
                        apply: bool = True) -> List[Dict[str, Any]]:
-    """Reject the Active events the owner labelled not an incident, with no model call (ledger, reversible)."""
+    """Reject the Active events the owner labelled not an incident or out of scope, with no model call (ledger,
+    reversible). Other out-of-scope labels are applied by ``check-events --apply`` and ``check-scope --apply``."""
     titles = dict(conn.execute("SELECT deduplicated_event_id, title FROM DeduplicatedEvents WHERE status = 'Active'"))
-    found = [{"deduplicated_event_id": did, "title": titles[did], "label": "not_incident"}
-             for did in sorted(resolve_labelled(conn, owner_labelled_non_incidents(labels_path))) if did in titles]
-    if apply and found:
-        reject_events(conn, found, reason="labelled not an incident by the owner")
+    found: List[Dict[str, Any]] = []
+    for label, ids, reason in (
+            ("not_incident", owner_labelled_non_incidents(labels_path), "labelled not an incident by the owner"),
+            ("out_of_scope", owner_labelled_out_of_scope(labels_path), "labelled out of scope by the owner")):
+        group = [{"deduplicated_event_id": did, "title": titles[did], "label": label}
+                 for did in sorted(resolve_labelled(conn, ids)) if did in titles
+                 and did not in {f["deduplicated_event_id"] for f in found}]
+        if apply and group:
+            reject_events(conn, group, reason=reason)
+        found.extend(group)
     return found
 
 

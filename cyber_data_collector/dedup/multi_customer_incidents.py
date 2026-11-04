@@ -215,7 +215,7 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
         return []
     described = descriptive_names.described(conn) if "DescriptiveNames" in tables else set(name_judgement._DESCRIPTIVE)
     judged_descriptive = name_judgement.descriptive_names(conn)
-    judged = name_judgement.stored_probabilities(conn)
+    judged = name_judgement.has_verdict(conn)
     verdicts = pair_verdicts(conn)
 
     def named(vendor: Optional[str]) -> bool:

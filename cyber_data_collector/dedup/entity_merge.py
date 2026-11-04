@@ -171,12 +171,35 @@ def preferred_name(names: Sequence[str], usage: Dict[str, int]) -> str:
 _CAPTION = re.compile(r"\S\s+(?:v|vs|v\.|vs\.)\s+\S")
 
 
+#: "of" / "for" heading a complement that the commas then continue ("Department for Education, Children ...").
+_COMPLEMENT = re.compile(r"\s(?:of|for)\s", re.IGNORECASE)
+_CONJUNCTION = re.compile(r"\s(?:and|&)\s", re.IGNORECASE)
+
+
+def _portfolio_title(parts: Sequence[str]) -> bool:
+    """One organisation whose name lists what it covers: "Department for Education, Children and Young People",
+    "Department of Environment, Land, Water and Planning". The first part heads an "of" / "for" complement, the
+    commas continue that complement, and the last item is joined by "and". A later part with an "of" / "for" of
+    its own heads another name ("..., Commonwealth Bank of Australia"), so the commas then separate names. A
+    one-word place after the title ("..., Children and Young People, Tasmania") qualifies it."""
+    parts = list(parts)
+    while len(parts) > 2 and len(parts[-1].split()) == 1:
+        parts.pop()
+    if len(parts) < 2 or not _COMPLEMENT.search(parts[0]) or not _CONJUNCTION.search(parts[-1]):
+        return False
+    return not any(_COMPLEMENT.search(f" {part} ") for part in parts[1:])
+
+
 def is_organisation_list(name: str) -> bool:
     """A name listing several organisations ("ANZ, NAB, Westpac, Commonwealth Bank"), or a case caption
-    naming two parties ("ASIC v Fortnum Private Wealth Ltd")."""
+    naming two parties ("ASIC v Fortnum Private Wealth Ltd"). A name that lists what one organisation covers
+    ("Department for Education, Children and Young People", Tasmania's DECYP) is not a list: it had been
+    unfolded from its own spellings as one (2026-11-04)."""
     if _CAPTION.search(name or ""):
         return True
     parts = [part for part in re.split(r",|;", name or "") if part.strip()]
+    if _portfolio_title(parts):
+        return False
     # Each part a name of its own (two or more words): "Smith, Jones & Co" is one firm. Three or more parts
     # are a list whatever their length ("ANZ, NAB, Westpac, Commonwealth Bank").
     return len(parts) >= 3 or (len(parts) >= 2 and all(len(_tokens(part)) >= 2 for part in parts))

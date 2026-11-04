@@ -322,12 +322,23 @@ def test_a_replacement_for_a_wrong_victim_also_sees_the_text_named_agency(conn):
 
 # ------------------------------------------------------------------ the proper-name judgement
 
+def test_a_name_a_label_decides_is_not_asked_about(conn, tmp_path, monkeypatch):
+    """Owner, 2026-11-04: no model call for a decision a label already makes."""
+    labels = tmp_path / "names.csv"
+    labels.write_text("name,label,rationale,labeller\nLabelled Org,named,r,t\n", encoding="utf-8")
+    monkeypatch.setattr(nj, "load_labels", lambda path=labels: nj._load_labels_from(labels))
+    _event(conn, "e1", "page", victims=["Labelled Org", "Unlabelled Org"])
+    fake = FakeJev(proper={"Labelled Org": 0.2, "Unlabelled Org": 0.9})
+    assert nj.judge_new_names(conn, judge=JevJudge(conn, client=fake)) == {"Unlabelled Org": 0.9}
+    assert nj.names_to_judge(conn) == [] and "labelled org" in nj.has_verdict(conn)
+
+
 def test_names_are_judged_once_and_act_only_with_a_calibration_or_a_label(conn, tmp_path):
-    _event(conn, "e1", "page", victims=["government agency in Australia", "Services Australia"])
-    fake = FakeJev(proper={"government agency in Australia": 0.03, "Services Australia": 0.97})
+    _event(conn, "e1", "page", victims=["government agency in Australia", "Acme Health Pty Ltd"])
+    fake = FakeJev(proper={"government agency in Australia": 0.03, "Acme Health Pty Ltd": 0.97})
     judge = JevJudge(conn, client=fake)
     scores = nj.judge_new_names(conn, judge=judge)
-    assert scores == {"Services Australia": 0.97, "government agency in Australia": 0.03}
+    assert scores == {"Acme Health Pty Ltd": 0.97, "government agency in Australia": 0.03}
     assert nj.names_to_judge(conn) == []
     nj.judge_new_names(conn, judge=judge)
     assert fake.asked.count(nj.QUESTION_ID) == 2              # asked once per name
@@ -337,13 +348,13 @@ def test_names_are_judged_once_and_act_only_with_a_calibration_or_a_label(conn, 
     cal = tmp_path / "cal.json"
     cal.write_text(json.dumps({**nj.calibration_identity(), "cutoff": 0.5}), encoding="utf-8")
     assert nj.activate(conn, cal, tmp_path / "none.csv") == 1
-    assert nj.is_descriptive_name("Government Agency in Australia") and not nj.is_descriptive_name("Services Australia")
+    assert nj.is_descriptive_name("Government Agency in Australia") and not nj.is_descriptive_name("Acme Health Pty Ltd")
     # Labels are ground truth: a name labelled named is never a description, one labelled descriptive always is.
     labels = tmp_path / "names.csv"
     labels.write_text("name,label,rationale,labeller\ngovernment agency in Australia,named,r,t\n"
-                      "Services Australia,descriptive,r,t\n", encoding="utf-8")
+                      "Acme Health Pty Ltd,descriptive,r,t\n", encoding="utf-8")
     nj.activate(conn, cal, labels)
-    assert not nj.is_descriptive_name("government agency in Australia") and nj.is_descriptive_name("Services Australia")
+    assert not nj.is_descriptive_name("government agency in Australia") and nj.is_descriptive_name("Acme Health Pty Ltd")
 
 
 def test_a_description_is_not_a_victim_candidate_or_a_usable_victim(conn, tmp_path):

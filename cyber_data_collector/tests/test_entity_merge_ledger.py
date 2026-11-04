@@ -296,3 +296,36 @@ def test_a_name_folded_into_a_description_is_undone_and_its_alias_ignored(conn):
     assert conn.execute("SELECT COUNT(*) FROM EntityAliases WHERE raw_name = 'Other Org'").fetchone()[0] == 0
     EntityResolver(conn).learn_alias(conn, "Other Org", "Acme Health", source="human")
     assert stored_aliases(conn, ("human",)) == {"Other Org": "Acme Health"}
+
+
+def test_an_automatic_reversal_is_the_rules_verdict_and_lapses_with_the_rule(conn):
+    """An automatic reversal recorded its "different" as a person's, which nothing outranks: Tasmania's DECYP,
+    unfolded as an "organisation list" by the comma in its name, could never rejoin its spellings (2026-11-04)."""
+    from cyber_data_collector.dedup import anti_aliases
+
+    merge_entities(conn, "Acme Health", ["ACME HEALTH PTY LTD"], source="llm")
+    anti_aliases.add(conn, "Acme Health", "ACME HEALTH PTY LTD", "x", relation="different",
+                     source=anti_aliases.SOURCE_LLM, model="sonar-pro")
+    conn.execute("DELETE FROM EntityAliasDecisions")
+    (report,), _ = ledger.reverse_overturned_merges(conn)
+    assert conn.execute("SELECT model FROM EntityAliasDecisions").fetchall() == [("rule",)]
+    anti_aliases.remove(conn, "Acme Health", "ACME HEALTH PTY LTD")
+    # Earlier reversals were stored as 'human'; one an old list rule made lapses once the name is no list.
+    portfolio = ("Department for Education, Children and Young People",
+                 "Tasmanian Department of Education, Children and Young People")
+    conn.execute("DELETE FROM EntityAliasDecisions")
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, reason, citations_json, model, "
+                 "prompt_version, decided_at) VALUES (?, ?, 'different', 'verdict changed to organisation list: x', "
+                 "'[]', 'human', ?, '2026-10-30')", (*portfolio, eav.PROMPT_VERSION))
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, reason, citations_json, model, "
+                 "prompt_version, decided_at) VALUES ('A', 'B', 'different', 'verdict changed to description: x', "
+                 "'[]', 'human', ?, '2026-10-30')", (eav.PROMPT_VERSION,))
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, reason, citations_json, model, "
+                 "prompt_version, decided_at) VALUES ('C', 'D', 'different', 'owner: not the same', "
+                 "'[]', 'human', ?, '2026-10-30')", (eav.PROMPT_VERSION,))
+    anti_aliases.add(conn, *portfolio, "x", relation="different", source=anti_aliases.SOURCE_LLM, model="human")
+    assert ledger.relabel_automatic_reversals(conn) == 3
+    rows = conn.execute("SELECT name, model FROM EntityAliasDecisions ORDER BY name").fetchall()
+    assert rows == [("A", "rule"), ("C", "human")]                         # a person's verdict is kept as it is
+    assert not anti_aliases.is_anti_alias(anti_aliases.pair_set(conn), *portfolio)
+    assert ledger.relabel_automatic_reversals(conn) == 0                   # idempotent

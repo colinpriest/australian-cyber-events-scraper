@@ -362,11 +362,19 @@ def test_labels_are_ground_truth(conn, tmp_path):
         conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path),
         labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "correct", "", "r", "t")]))
     assert kept["counts"] == {}
+    # A wrong label naming an organisation the records never name is flagged, not acted on; no model chooses.
     other = vj.check_victim_attribution(
         conn, apply=True, judge=judge, calibration_path=_calibration(tmp_path),
-        labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "wrong", "Anubis Victim Pty", "r", "t")]))
+        labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "wrong", "Zzyzx Holdings", "r", "t")]))
     assert other["counts"] == {"flagged": 1}
     assert _role(conn, "afp1", "Australian Federal Police") == "victim"
+    # One the records name is adopted from the label (owner, 2026-11-04: labels decide, no model call).
+    named = vj.check_victim_attribution(
+        conn, apply=True, judge=JevJudge(conn, client=FakeJev({}, pick="Somebody Else")),
+        calibration_path=_calibration(tmp_path),
+        labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "wrong", "Aussie Fluid Power", "r", "t")]))
+    assert named["counts"] == {"reattributed": 1}
+    assert _role(conn, "afp1", "Aussie Fluid Power") == "victim"
 
 
 def test_a_calibration_for_another_question_is_report_only(conn, tmp_path, caplog):
@@ -510,7 +518,11 @@ def test_a_flag_on_a_pair_labelled_correct_is_confirmed(conn, tmp_path):
         labels_path=_labels(tmp_path, [(pid, "afp1", "Australian Federal Police", "correct", "", "r", "t")]),
         judge=JevJudge(conn, client=FakeJev({"Australian Federal Police": 0.03})))
     assert result["counts"] == {"confirmed": 1} and not vj.unresolved_attributions(conn)
-    assert "labelled correct (input unchanged)" in result["actions"][0]["reason"]
+    assert "labelled correct (not asked: the label decides)" in result["actions"][0]["reason"]
+    # Owner, 2026-11-04: no model call for a pair a label decides.
+    assert conn.execute("SELECT COUNT(*) FROM ModelJudgements WHERE subject_id = ? AND created_at > "
+                        "(SELECT MAX(created_at) FROM VictimAttributionActions WHERE action = 'flagged')",
+                        (pid,)).fetchone()[0] == 0
 
 
 def test_a_flag_without_a_calibration_is_left_unresolved(conn, tmp_path):

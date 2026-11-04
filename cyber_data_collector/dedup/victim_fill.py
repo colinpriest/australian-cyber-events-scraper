@@ -220,13 +220,14 @@ class EscalationFailed(RuntimeError):
 
 
 def choose_victim(conn: sqlite3.Connection, dedup_id: str, judge, extractor=None, escalation_client=None,
-                  use_text: bool = True, stored_text_only: bool = False) -> Dict[str, Any]:
+                  use_text: bool = True, stored_text_only: bool = False, ask: bool = True) -> Dict[str, Any]:
     """The best-supported victim candidate for an event with none recorded.
 
     Returns ``{"name", "probability", "candidates", "escalated", "best", "best_probability"}``: ``name`` is the
     leading candidate when it beats ``none`` (else None), ``probability`` its final probability.
     ``stored_text_only`` reads only extractions already stored (a dry run that asks no model). Raises
-    :class:`event_organisations.ExtractionFailed` or :class:`EscalationFailed`.
+    :class:`event_organisations.ExtractionFailed` or :class:`EscalationFailed`. ``ask`` False returns the
+    candidates with no choice made, for an event a label decides (no model is asked).
     """
     from cyber_data_collector.dedup import event_organisations
     from cyber_data_collector.dedup import victim_judgement as vj
@@ -237,8 +238,8 @@ def choose_victim(conn: sqlite3.Connection, dedup_id: str, judge, extractor=None
                                                                 stored_only=stored_text_only)
     needs_extraction = bool(use_text and stored_text_only and organisations is None)
     candidates = vj.replacement_candidates(conn, dedup_id, [], organisations=organisations, include_scalar=True)
-    if not candidates:
-        return {"name": None, "probability": None, "candidates": [], "escalated": False, "best": None,
+    if not candidates or not ask:
+        return {"name": None, "probability": None, "candidates": candidates, "escalated": False, "best": None,
                 "best_probability": None, "needs_extraction": needs_extraction}
     state = vj.candidate_state(conn, dedup_id, candidates, vj.acting_parties(conn, dedup_id, organisations))
     state["recorded_victim"] = None
@@ -308,7 +309,7 @@ def _is_description(conn: sqlite3.Connection, name: str, title: str, judge) -> b
     """
     from cyber_data_collector.dedup import name_judgement
 
-    if name.strip().lower() not in name_judgement.stored_probabilities(conn):
+    if " ".join(name.split()).lower() not in name_judgement.has_verdict(conn):
         name_judgement.judge_names(conn, [(name, name_judgement.sentence_for(conn, name) or title)], judge=judge)
         name_judgement.activate(conn)
     return name_judgement.is_descriptive_name(name)
@@ -330,9 +331,13 @@ def plan_fills(conn: sqlite3.Connection, events: Sequence[Dict[str, Any]], cal: 
     for event in events:
         did = event["deduplicated_event_id"]
         label = labels.get(did) or {}
+        # Labels decide first: an event labelled named or none_named is not asked about (owner, 2026-11-04); its
+        # stored candidates only supply the spelling of a labelled victim.
+        decided = label.get("label") in ("named", "none_named")
         try:
             choice = choose_victim(conn, did, judge, extractor=extractor, escalation_client=escalation_client,
-                                   use_text=use_text, stored_text_only=stored_text_only)
+                                   use_text=use_text, stored_text_only=stored_text_only or decided,
+                                   ask=not decided)
         except (ExtractionFailed, EscalationFailed) as exc:
             if errors is None:
                 raise
