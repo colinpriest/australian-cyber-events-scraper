@@ -410,7 +410,7 @@ australian-cyber-events-scraper/
 ├── instance/                      # SQLite database (gitignored)
 ├── logs/                          # Log files (unified_pipeline.log, etc.)
 ├── dashboard/                     # Generated HTML dashboard (gitignored)
-└── risk_matrix/                   # Generated ASD risk matrix Excel files
+└── risk_matrix/                   # Generated ASD risk matrix Excel files (gitignored)
 ```
 
 ---

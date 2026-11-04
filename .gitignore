@@ -76,3 +76,7 @@ pdf_analysis_output.txt
 # Publication staging and lock (cyber_data_collector/publication/outputs.py)
 .publish-*/
 .publish.lock
+
+# Generated ASD risk matrices (written by scripts/publish_outputs.py from a retained snapshot;
+# publication.json records their hashes, and --snapshot-id reproduces them)
+risk_matrix/
