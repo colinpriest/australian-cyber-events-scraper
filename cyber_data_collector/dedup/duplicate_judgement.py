@@ -227,6 +227,71 @@ class PairUniverse:
             uncapped_max=bounded.UNCAPPED_GROUP_MAX if uncapped_max is None else uncapped_max)
 
 
+#: The verdicts of the supplier step's alias question that list two names under one customer
+#: (``multi_customer_incidents``): one organisation, or an organisation and its own arm.
+ONE_CUSTOMER_VERDICTS = ("same", "parent_subsidiary")
+
+
+def one_customer_pairs(conn: sqlite3.Connection, universe: "PairUniverse", cutoff: Optional[float],
+                       skip: Skip = None) -> List[Dict[str, Any]]:
+    """Pairs the victim route never forms although both events are one customer's report of one supplier breach.
+
+    The supplier step's calibrated judgement scored the two events the same incident (``supplier-same-incident``
+    at or above its deployed cut-off), each event records exactly one victim organisation, and a stored alias
+    verdict lists those two victims as one customer (:data:`ONE_CUSTOMER_VERDICTS`; a person's ``different`` or
+    ``related`` verdict on the pair rules it out). Different customers' events of one breach stay apart (owner
+    decision 2026-10-31); these are not different customers: "Halliburton" and "Halliburton Australia", "Westco
+    Motors" and "Westco Motors Cairns", "Ministry of Health" and NSW Health. The pair is put to the same
+    calibrated duplicate question, which decides; nothing merges on the supplier score. Owner 2026-11-04.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if cutoff is None or not {"FinalDecisions", "EntityAliasDecisions"} <= tables:
+        return []           # no supplier judgement or no alias verdict has been stored: nothing to pair on
+    skipped = _skip_predicate(skip)
+    status = dict(conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents"))
+    victims: Dict[str, List[Tuple[int, str]]] = defaultdict(list)
+    for did, eid, name in conn.execute(
+            """SELECT dee.deduplicated_event_id, dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
+               JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.relationship_type = 'victim'"""):
+        victims[did].append((int(eid), name or ""))
+    verdicts: Dict[frozenset, Tuple[str, str]] = {}
+    for name, other, verdict, model in conn.execute(
+            "SELECT name, other_name, verdict, model FROM EntityAliasDecisions ORDER BY decided_at"):
+        key = frozenset((str(name).strip().lower(), str(other).strip().lower()))
+        if verdicts.get(key, ("", ""))[1] != "human" or model == "human":
+            verdicts[key] = (verdict, model)
+    latest: Dict[str, float] = {}
+    for subject, score in conn.execute("SELECT subject_id, final_score FROM FinalDecisions "
+                                       "WHERE step = 'supplier-same-incident' ORDER BY decided_at"):
+        latest[subject] = score
+    spans: Dict[str, bounded.Span] = {}
+    for group in universe.groups.values():
+        for event_id, span in group.items():
+            spans.setdefault(event_id, span)
+    out: Dict[str, Dict[str, Any]] = {}
+    for subject, score in sorted(latest.items()):
+        if score is None or score < cutoff or subject.count("|") != 1:
+            continue
+        a, b = subject.split("|")
+        if status.get(a) != "Active" or status.get(b) != "Active" or universe.pair(a, b) is not None:
+            continue
+        if skipped is not None and skipped(a, b):
+            continue
+        if len({n.lower() for _e, n in victims.get(a, [])}) != 1 or len({n.lower() for _e, n in victims.get(b, [])}) != 1:
+            continue
+        (ea, na), (_eb, nb) = victims[a][0], victims[b][0]
+        if verdicts.get(frozenset((na.strip().lower(), nb.strip().lower())), ("", ""))[0] not in ONE_CUSTOMER_VERDICTS:
+            continue
+        sa, sb = spans.get(a), spans.get(b)
+        gap = bounded.span_gap(*sorted((sa, sb), key=bounded.span_order)) if sa and sb else None
+        first, second = (a, b) if not (sa and sb) or bounded.span_order(sa) <= bounded.span_order(sb) else (b, a)
+        out[pair_id(a, b)] = {"pair_id": pair_id(a, b), "a": first, "b": second,
+                              "organisation": f"{na} / {nb}" if na != nb else na, "entity_id": ea,
+                              "group": None, "gap_days": gap if gap is not None else GAP_UNKNOWN,
+                              "route_reason": f"one customer of one supplier breach (supplier score {score:.2f})"}
+    return [out[k] for k in sorted(out)]
+
+
 def candidate_pairs(conn: sqlite3.Connection, skip: Skip = None) -> List[Dict[str, Any]]:
     """Every pair of active events sharing a victim, earliest first within each pair (:class:`PairUniverse`).
 
@@ -790,6 +855,18 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     ai_pairs, ai_stats = ai_universe.ranked(corpus, **options) if include_ai else ([], None)
     # Pairs are retrieved and ranked per group (bounded_candidates): the pairs that are not asked are never built.
     pairs, org_stats = universe.ranked(corpus, skip=ai_universe.owns if include_ai else None, **org_options)
+    # One customer's two reports of one supplier breach, recorded under two names of the customer.
+    from cyber_data_collector.dedup import supplier_victims as sv
+    try:
+        supplier_cutoff = (sv.active_calibration().get("same_incident") or {}).get("cutoff")
+    except sv.CalibrationError:
+        supplier_cutoff = None
+    asked = {p["pair_id"] for p in pairs}
+    extra = [p for p in one_customer_pairs(conn, universe, supplier_cutoff,
+                                           skip=ai_universe.owns if include_ai else None)
+             if p["pair_id"] not in asked]
+    pairs = pairs + extra
+    org_stats = {**(org_stats or {}), "one_customer_pairs": len(extra)}
     labels = labelled_pairs(labels_path)
     # Labels decide first: a pair labelled same is merged and one labelled different never is, whatever the model
     # says, so neither is (re-)asked about.

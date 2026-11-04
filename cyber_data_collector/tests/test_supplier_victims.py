@@ -1069,15 +1069,55 @@ def test_a_customer_with_its_own_event_of_the_breach_is_an_affected_customer_of_
     result = sl.double_counted_customers(full, apply=False)
     assert [(r["deduplicated_event_id"], r["customer"], r["own_event"]) for r in result["demoted"]] == [
         ("ded-z1", ["Monash Health"], "ded-mh")]
+    assert [(r["customer"], r["records"], r["new_event"]) for r in result["split_out"]] == [
+        (["Monash Health"], 2, None)]
     assert ("Monash Health", "victim") in _roles(full, "ded-z1")              # planning changes nothing
+    assert _event_of(full, "enr-m1") == "ded-z1"
     result = sl.double_counted_customers(full)
     assert result["reports"] == []
+    # Owner 2026-11-04: the customer's own records leave with it, together, as an event the duplicate check can
+    # put beside its own event; they are not left behind under the other customers.
+    (moved,) = result["split_out"]
+    assert _event_of(full, "enr-m1") == _event_of(full, "enr-m2") == moved["new_event"] not in ("ded-z1", "ded-mh")
+    assert _event_of(full, "enr-z1") == _event_of(full, "enr-h1") == "ded-z1"
     assert _roles(full, "ded-z1") == [("Department of Home Affairs", "victim"), ("Monash Health", "affected_customer"),
                                       ("ZircoDATA", "vendor")]
     assert _roles(full, "ded-mh") == [("Monash Health", "victim")]           # its own event is never touched
     assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
                         "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] == "Department of Home Affairs"
-    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}  # idempotent
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": [], "split_out": []}  # idempotent
+
+
+def test_a_customer_demoted_by_an_earlier_run_still_takes_its_records_to_its_own_event(full):
+    """Every demotion before 2026-11-04 left the customer's records behind (Tasmania's DECYP on its Canvas event);
+    a later run moves them. The connection returns sqlite3.Row rows, as dedup_admin's does."""
+    _own_event(full, "mh", "Monash Health")
+    monash = full.execute("SELECT entity_id FROM EntitiesV2 WHERE entity_name = 'Monash Health'").fetchone()[0]
+    full.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
+                 "WHERE deduplicated_event_id = 'ded-z1' AND entity_id = ?", (monash,))
+    full.execute("INSERT INTO SupplierLinkActions VALUES ('old', 'own-event-customer', 'ded-z1', 'ded-mh', ?, "
+                 "'{}', 'test', '2026-11-03')", (monash,))
+    full.commit()
+    result = sl.double_counted_customers(full)
+    assert [(r["customer"], r["records"]) for r in result["split_out"]] == [(["Monash Health"], 2)]
+    assert _event_of(full, "enr-m1") == result["split_out"][0]["new_event"] != "ded-z1"
+    assert sl.double_counted_customers(full)["split_out"] == []
+
+
+def test_a_record_naming_another_organisation_as_harmed_stays_with_the_report(full):
+    """Trial on a copy, 2026-11-04: Canvas report records listing TasTAFE beside USyd, UTS and QLearn were taken as
+    TasTAFE's because only TasTAFE was a victim of that event; the group then absorbed TasTAFE's own event."""
+    _own_event(full, "mh", "Monash Health")
+    full.execute("INSERT INTO EntitiesV2 (entity_name) VALUES ('Alfred Health')")
+    ids = {r[1]: r[0] for r in full.execute("SELECT entity_id, entity_name FROM EntitiesV2")}
+    full.executemany("INSERT INTO EnrichedEventEntities (enriched_event_id, entity_id, relationship_type) "
+                     "VALUES (?, ?, 'victim')", [("enr-m1", ids["Monash Health"]), ("enr-m2", ids["Monash Health"]),
+                                                 ("enr-m2", ids["Alfred Health"])])
+    full.commit()
+    (moved,) = sl.double_counted_customers(full)["split_out"]
+    assert moved["records"] == 1
+    assert _event_of(full, "enr-m1") == moved["new_event"]
+    assert _event_of(full, "enr-m2") == "ded-z1"                 # names Alfred Health too: general coverage
 
 
 def test_a_report_whose_customers_all_have_their_own_events_is_the_suppliers_event(full):
@@ -1090,13 +1130,13 @@ def test_a_report_whose_customers_all_have_their_own_events_is_the_suppliers_eve
                                       ("Monash Health", "affected_customer"), ("ZircoDATA", "victim")]
     assert full.execute("SELECT victim_organization_name FROM DeduplicatedEvents "
                         "WHERE deduplicated_event_id = 'ded-z1'").fetchone()[0] == "ZircoDATA"
-    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": [], "split_out": []}
 
 
 def test_own_events_of_another_supplier_or_a_distant_date_do_not_count(full):
     _own_event(full, "mh", "Monash Health", vendor="Accellion")
     _own_event(full, "ha", "Department of Home Affairs", date="2020-01-01")
-    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": [], "split_out": []}
 
 
 def test_names_of_one_customer_are_one_customer_not_a_supplier_report(full):
@@ -1115,7 +1155,7 @@ def test_names_of_one_customer_are_one_customer_not_a_supplier_report(full):
                  "FROM EntitiesV2 WHERE entity_name IN ('Instructure', 'University of Canberra', 'UC staff', "
                  "'University of Canberra students')")
     _own_event(full, "uc2", "University of Canberra", vendor="Instructure", date="2026-04-26")
-    assert sl.double_counted_customers(full) == {"demoted": [], "reports": []}
+    assert sl.double_counted_customers(full) == {"demoted": [], "reports": [], "split_out": []}
     assert ("University of Canberra", "victim") in _roles(full, "ded-uc")
 
 

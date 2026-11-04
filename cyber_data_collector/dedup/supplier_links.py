@@ -1656,16 +1656,89 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
                 return y
         return None
 
+    def customer_records(did: str, members: List[Tuple[int, str]], groups: List[List[Tuple[int, str]]]) -> List[str]:
+        """The records of ``did`` that are this customer's own: every organisation their entity links give as
+        harmed (the supplier aside) is this customer; or, for a record whose links name none, its Perplexity
+        research names it. A record naming any other organisation as harmed is general coverage and stays,
+        whether or not that organisation is recorded on the event: the Canvas report's records listing TasTAFE
+        beside USyd, UTS and QLearn were taken as TasTAFE's (only TasTAFE was a victim there), and the group
+        then absorbed TasTAFE's own event (trial on a copy, 2026-11-04). Empty unless some record stays."""
+        names = [n for _e, n in members]
+        supplier = vendors.get(did, ())
+        records = _record_orgs(conn, did)
+        mine = []
+        for m in records:
+            harmed = [h for h in m["harmed"] if not any(same_supplier(h, v) for v in supplier)]
+            if harmed:
+                if all(any(names_match(conn, h, n) for n in names) for h in harmed):
+                    mine.append(m["id"])
+            elif m["org"] and not any(same_supplier(m["org"], v) for v in supplier) and \
+                    any(names_match(conn, m["org"], n) for n in names) and \
+                    [i for i, g in enumerate(groups) if any(names_match(conn, m["org"], n) for _e, n in g)] == \
+                    [groups.index(members)]:
+                mine.append(m["id"])
+        return mine if 0 < len(mine) < len(records) else []
+
+    # Customers an earlier run demoted here are still customers of the event for the split: their records stayed
+    # behind (every demotion before 2026-11-04). Their own event is the one recorded with the demotion.
+    earlier: Dict[str, List[Tuple[List[Tuple[int, str]], str]]] = defaultdict(list)
+    for did, own, entity_id in conn.execute(
+            """SELECT a.deduplicated_event_id, a.new_event_id, a.entity_id FROM SupplierLinkActions a
+               JOIN DeduplicatedEventEntities dee ON dee.deduplicated_event_id = a.deduplicated_event_id
+                AND dee.entity_id = a.entity_id AND dee.relationship_type = 'affected_customer'
+               WHERE a.action = 'own-event-customer' ORDER BY a.created_at""").fetchall():
+        own = resolve_event(conn, own) or own
+        name = conn.execute("SELECT entity_name FROM EntitiesV2 WHERE entity_id = ?", (entity_id,)).fetchone()
+        status = conn.execute("SELECT status FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
+                              (own,)).fetchone() if own else None
+        if did in orgs and own and own != did and name and status is not None and status[0] == "Active" and \
+                not any(names_match(conn, name[0], n) for g in orgs[did] for _e, n in g) and \
+                not any(names_match(conn, name[0], n) for g, _o in earlier[did] for _e, n in g):
+            earlier[did].append(([(entity_id, name[0])], own))
+
     demoted: List[Dict[str, Any]] = []
     reports: List[Dict[str, Any]] = []
+    split_out: List[Dict[str, Any]] = []
     for did, groups in sorted(orgs.items()):
-        if len(groups) < 2 or not vendors.get(did):
+        if not vendors.get(did):
+            continue
+        before = earlier.get(did, [])
+        groups = groups + [g for g, _own in before]
+        if len(groups) < 2:
             continue
         gone = [(members, own) for members in groups for own in [own_event(did, members)] if own]
+        gone += [(g, own) for g, own in before if all(g is not m for m, _o in gone)]
         if not gone:
             continue
         gone_names: Set[str] = set()
         for members, own in gone:
+            # The customer's own records leave with it (owner 2026-11-04). Demoted in place, they kept an event
+            # that is mostly the customer's under its other customers: Tasmania's DECYP Canvas event (two ABC
+            # reports of DECYP, one WA notice, one Newcastle page) became Newcastle's and WA's, and was never
+            # compared with DECYP's own event. Split out, they are an event of the customer that the calibrated
+            # duplicate check pairs with its own event.
+            records = customer_records(did, members, groups)
+            if records:
+                customer = sorted({n for _e, n in members})
+                if apply:
+                    from cyber_data_collector.dedup.ledger import DedupLedger
+                    previous = conn.row_factory
+                    conn.row_factory = sqlite3.Row
+                    try:
+                        new = DedupLedger(conn).split_members(
+                            did, records, actor="rule",
+                            reason=f"[supplier-split] {OWN_EVENT_DECISION}: the records of {customer[0]} leave "
+                                   f"{did[:8]}; its own event of the breach is {own[:8]}")
+                    finally:
+                        conn.row_factory = previous
+                    conn.execute("INSERT INTO SupplierLinkActions VALUES (?, 'split', ?, ?, NULL, ?, ?, ?)",
+                                 (str(uuid.uuid4()), did, new,
+                                  json.dumps({"customer": customer[0], "records": records, "own_event": own}),
+                                  OWN_EVENT_DECISION, _now()))
+                else:
+                    new = None
+                split_out.append({"deduplicated_event_id": did, "customer": customer, "records": len(records),
+                                  "new_event": new, "own_event": own})
             changed = 0
             for eid, _name in members:
                 changed += conn.execute(
@@ -1713,7 +1786,7 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
         conn.commit()
     else:
         conn.rollback()
-    return {"demoted": demoted, "reports": reports}
+    return {"demoted": demoted, "reports": reports, "split_out": split_out}
 
 
 def _merged_away_records(conn: sqlite3.Connection, event_id: str, since: str) -> List[str]:

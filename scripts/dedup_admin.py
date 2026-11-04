@@ -2668,9 +2668,10 @@ def cmd_classify_entities(args) -> int:
         from cyber_data_collector.dedup.supplier_links import double_counted_customers
 
         counted = double_counted_customers(conn, apply=not args.dry_run)
-        if counted["demoted"] or counted["reports"]:
+        if counted["demoted"] or counted["reports"] or counted["split_out"]:
             print(f"{len(counted['demoted'])} customer(s) counted through their own event, "
-                  f"{len(counted['reports'])} supplier report(s)")
+                  f"{len(counted['reports'])} supplier report(s), "
+                  f"{len(counted['split_out'])} customer record group(s) split out to join their own event")
         # Re-derived roles must not undo the owner's victim labels (they made the person "Dr Felix Chan" the victim
         # of his practice's breach again).
         from cyber_data_collector.dedup import victim_judgement

@@ -240,3 +240,31 @@ def test_a_record_with_no_provenance_is_an_error_not_a_blank(conn, monkeypatch):
     monkeypatch.setattr(date_provenance, "event_dates", lambda *a, **k: {**real(*a, **k), "records": []})
     with pytest.raises(ValueError, match="no date provenance"):
         dj.build_pair_state(conn, dj.candidate_pairs(conn)[0])
+
+
+def test_one_customers_two_reports_of_a_supplier_breach_are_paired_under_two_names(conn):
+    """Owner 2026-11-04: two reports of one customer under two of its names were never compared, because the
+    victim route pairs only events sharing a victim. The supplier step's calibrated same-incident score and an
+    alias verdict listing the names as one customer make the pair a candidate; the duplicate question decides."""
+    conn.executescript("""
+        INSERT INTO EntitiesV2 VALUES (2, 'ACT Health Directorate');
+        UPDATE DeduplicatedEventEntities SET entity_id = 2 WHERE deduplicated_event_id = 'e2';
+        UPDATE DeduplicatedEvents SET victim_organization_name = 'ACT Health Directorate'
+            WHERE deduplicated_event_id = 'e2';
+        CREATE TABLE FinalDecisions (step TEXT, subject_id TEXT, final_score REAL, decided_at TEXT);
+        CREATE TABLE EntityAliasDecisions (name TEXT, other_name TEXT, verdict TEXT, canonical_name TEXT, reason TEXT,
+            citations_json TEXT, model TEXT, prompt_version TEXT, decided_at TEXT, evidence_hash TEXT);
+        INSERT INTO FinalDecisions VALUES ('supplier-same-incident', 'e1|e2', 0.95, '2026-11-04');
+    """)
+    universe = dj.PairUniverse(conn)
+    assert universe.pair("e1", "e2") is None                      # the victim route never forms it
+    assert dj.one_customer_pairs(conn, universe, 0.87) == []      # no verdict lists them as one customer
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, model, decided_at) VALUES "
+                 "('ACT Government', 'ACT Health Directorate', 'parent_subsidiary', 'sonar-pro', '2026-11-01')")
+    (pair,) = dj.one_customer_pairs(conn, universe, 0.87)
+    assert (pair["pair_id"], pair["a"], pair["gap_days"]) == ("e1|e2", "e1", 15)
+    assert dj.one_customer_pairs(conn, universe, 0.96) == []      # below the supplier step's cut-off
+    assert dj.one_customer_pairs(conn, universe, None) == []      # no deployed cut-off: no route
+    conn.execute("INSERT INTO EntityAliasDecisions (name, other_name, verdict, model, decided_at) VALUES "
+                 "('ACT Government', 'ACT Health Directorate', 'different', 'human', '2026-11-02')")
+    assert dj.one_customer_pairs(conn, universe, 0.87) == []      # a person's verdict outranks the model's
