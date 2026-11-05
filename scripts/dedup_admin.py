@@ -3956,6 +3956,38 @@ def cmd_judge_names(args) -> int:
     return 0
 
 
+def cmd_check_covictims(args) -> int:
+    """Ask, for each pair of victims of one active event, whether they name one organisation in that incident.
+
+    See :mod:`cyber_data_collector.dedup.covictim_coreference`. A ``same`` verdict holds for that event only:
+    victim counting and the entity dashboard count the organisation once there; nothing is folded globally.
+    Exit 2 without a Perplexity key when there is something to ask; exit 1 when a question failed (asked again
+    next run).
+    """
+    import os
+
+    from cyber_data_collector.dedup import covictim_coreference as cc
+
+    conn = _connect(args.db)
+    try:
+        cc.ensure_schema(conn)
+        if not args.dry_run and not os.getenv("PERPLEXITY_API_KEY"):
+            pending = cc.verify(conn, limit=args.limit or None, dry_run=True)
+            if pending.asked:
+                print(f"ERROR: PERPLEXITY_API_KEY not set; {pending.asked} co-victim pair(s) cannot be asked.",
+                      file=sys.stderr)
+                return 2
+        report = cc.verify(conn, limit=args.limit or None, dry_run=args.dry_run)
+        for did, a, b in report.same[:60]:
+            print(f"  same  {did[:8]}  {a!r} = {b!r}")
+        mode = "would ask" if args.dry_run else "asked"
+        print(f"{report.proposed} co-victim pair(s): {mode} {report.asked}, reused {report.reused}, "
+              f"by a person {report.by_person}, failed {len(report.failed)}; verdicts {report.verdicts}")
+    finally:
+        conn.close()
+    return 1 if report.failed else 0
+
+
 def cmd_fill_victims(args) -> int:
     """Give every active event with no usable victim the organisation its evidence says it happened to.
 
@@ -4968,6 +5000,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="List the names that would be asked; ask nothing")
     p.add_argument("--limit", type=int, default=0, help="Judge at most this many names")
     p.set_defaults(func=cmd_judge_names)
+
+    p = sub.add_parser("check-covictims",
+                       help="Ask Perplexity whether two victims of one event name one organisation in that incident "
+                            "(event-scoped; stored against the question; folds nothing globally)")
+    p.add_argument("--dry-run", action="store_true", help="Count the pairs that would be asked; ask nothing")
+    p.add_argument("--limit", type=int, default=0, help="Ask at most this many pairs")
+    p.set_defaults(func=cmd_check_covictims)
 
     p = sub.add_parser("fill-victims",
                        help="Give every incident with no usable victim the organisation its own evidence says it "

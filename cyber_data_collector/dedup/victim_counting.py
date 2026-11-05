@@ -413,11 +413,16 @@ def _resolved_to(resolver: EntityResolver, resolutions: Iterable[Tuple[str, str]
 
 
 def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, str, str]],
-                            resolver: Optional[EntityResolver] = None) -> set:
+                            resolver: Optional[EntityResolver] = None, use_coreference: bool = True) -> set:
     """``(entity id, event id)`` rows that repeat another victim of the same event under another name.
 
     ``rows`` are ``(entity id, entity name, event id)``. Within each event the
-    variant with most victim roles overall is kept (then the lowest id).
+    variant with most victim roles overall is kept (then the lowest id). Two
+    names are one victim when the name tests say so, when the event's context
+    resolved an acronym in one to the other, or (``use_coreference``) when the
+    event's co-victim question was answered ``same`` on its current reporting
+    (:mod:`covictim_coreference`; "UOW" / "University of Wollongong", "Perth uni"
+    / the University of Notre Dame Australia).
     """
     resolver = with_acronym_policy(conn, resolver) if resolver else _resolver(conn)
     weight: Dict[int, int] = defaultdict(int)
@@ -433,12 +438,18 @@ def within_event_duplicates(conn: sqlite3.Connection, rows: Iterable[Tuple[int, 
         if (int(eid), name) not in by_event[did]:
             by_event[did].append((int(eid), name))
     resolved = _resolved_acronyms(conn, by_event)
+    coreferent: Dict[str, set] = {}
+    if use_coreference:
+        from cyber_data_collector.dedup.covictim_coreference import same_pairs
+
+        coreferent = same_pairs(conn, [d for d, v in by_event.items() if len({n for _, n in v}) > 1])
     drop = set()
     for did, victims in by_event.items():
         kept: List[Tuple[int, str]] = []
         for eid, name in sorted(victims, key=lambda v: (-weight.get(v[0], 0), v[0])):
             if any(k[0] == eid or same_within_event(resolver, k[1], name)
-                   or _resolved_to(resolver, resolved.get(did, ()), k[1], name) for k in kept):
+                   or _resolved_to(resolver, resolved.get(did, ()), k[1], name)
+                   or frozenset((k[1], name)) in coreferent.get(did, ()) for k in kept):
                 if not any(k[0] == eid for k in kept):
                     drop.add((eid, did))
                 continue
