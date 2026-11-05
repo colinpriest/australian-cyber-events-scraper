@@ -1729,8 +1729,13 @@ def prepare_oaic_cyber_incidents_data(oaic_data: List[Dict[str, Any]]) -> Dict[s
 
 
 def prepare_oaic_attack_types_data(oaic_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Prepare OAIC attack types breakdown over time."""
+    """OAIC attack types over time, each as a percentage of the period's cyber incidents.
+
+    Percentages are the one measure OAIC publishes for every report (counts are missing for several periods, and
+    estimates of them were about 1.6 times too high). A period OAIC gives no split for is listed in ``not_published``.
+    """
     periods = []
+    not_published = []
     attack_types = {
         'ransomware': [],
         'phishing': [],
@@ -1747,13 +1752,17 @@ def prepare_oaic_attack_types_data(oaic_data: List[Dict[str, Any]]) -> Dict[str,
         if year and period:
             period_key = f"{year} {period}"
             periods.append(period_key)
+            shares = record.get('cyber_incident_breakdown_pct') or record.get('cyber_incident_method_pct') or {}
+            if not shares:
+                not_published.append(period_key)
 
             for attack_type in attack_types.keys():
-                attack_types[attack_type].append(record.get(attack_type))
+                attack_types[attack_type].append(shares.get(attack_type))
 
     return {
         'periods': periods,
-        'attack_types': attack_types
+        'attack_types': attack_types,
+        'not_published': not_published
     }
 
 
@@ -3041,7 +3050,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       </div>
       <div class="col-lg-6 col-md-12">
         <div class="chart-container">
-          <div class="chart-title">OAIC: Attack Types Over Time</div>
+          <div class="chart-title">OAIC: Attack Types Over Time (% of cyber incidents)</div>
           <canvas id="oaicAttackTypesChart"></canvas>
         </div>
       </div>
@@ -3937,10 +3946,13 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
       const data = oaicAttackTypes;
       if (!data.periods || data.periods.length === 0) {
         document.getElementById('oaicAttackTypesChart').parentElement.innerHTML =
-          '<div class="chart-title">OAIC: Attack Types Over Time</div>' +
+          '<div class="chart-title">OAIC: Attack Types Over Time (% of cyber incidents)</div>' +
           '<div class="text-center text-muted mt-5"><p>No OAIC data available.</p></div>';
         return;
       }
+
+      const attackTypesNote = (data.not_published && data.not_published.length)
+        ? 'OAIC publishes no split by attack type for ' + data.not_published.join(', ') : '';
 
       const datasets = [];
       const attackColors = {
@@ -3976,9 +3988,25 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             mode: 'index',
             intersect: false
           },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: '% of cyber incidents' },
+              ticks: { callback: value => value + '%' }
+            }
+          },
           plugins: {
+            subtitle: {
+              display: !!attackTypesNote,
+              text: attackTypesNote
+            },
             legend: {
               position: 'top'
+            },
+            tooltip: {
+              callbacks: {
+                label: item => item.dataset.label + ': ' + item.formattedValue + '%'
+              }
             }
           }
         }

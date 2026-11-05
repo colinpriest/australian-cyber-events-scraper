@@ -3713,6 +3713,29 @@ and older Power BI method counts are withheld. A malformed semester is an
 error, not "the current year's H1"; the Power BI semester list is derived and
 stops at Jan-Jun 2025 (later periods come from data.gov.au).
 
+#### The older reports' totals and attack types (owner review, 2026-11-06)
+
+The PDF scraper took the first number a loose pattern matched, so every total from 2019 H2 to 2022 H2 was wrong: 106
+(a month's count; the report says 537), 447 (518), 512 (539), 530 (446), 436 (464), 250 (396) and 350 (497), some of
+them another period's total or the malicious-attack count. Its attack-type fields mixed percentages with counts and
+misreadings, and never held brute force or compromised credentials, and the chart read only those fields, so it was
+blank from 2023 on. `scripts/oaic/oaic_report_figures.py` reads each report with a pattern written for its wording (no
+match is an error, not a blank). It reads the "Cyber incident breakdown" chart, an image in several reports, once per
+page with the vision model, and commits the reading in `scripts/oaic/report_chart_readings.json` against the PDF's
+hash. Records are promoted through the usual consistency checks. All seven readings were compared with the pages by
+eye.
+
+`index.html` now plots each attack type as a percentage of the period's cyber incidents, the one measure OAIC publishes
+for every report, and names the periods with no split (2025 H2). 2023 H1 to 2025 H1 use the percentages of OAIC's Power
+BI dashboard, which differ from the PDFs by up to 3 points where both exist (2023 H1 ransomware 28% against 31%). Only
+the totals, malicious-attack counts, cyber-incident counts and attack shares of 2019 H2 to 2022 H2 were re-read; the
+sector and individuals-affected figures of those periods have not been checked.
+
+```bash
+python scripts/oaic/oaic_report_figures.py --dry-run
+python scripts/oaic/oaic_report_figures.py
+```
+
 #### Where each OAIC period comes from
 
 OAIC has changed publication channel twice, and **each channel stopped being

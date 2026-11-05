@@ -1,0 +1,111 @@
+{
+  "2019 H2": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 14,
+    "pdf": "notifiable-data-breaches-report-july-december-2019.pdf",
+    "pdf_sha256": "7a102a7b44841d64d1fca316e0f3403606476546feb9c90457041e6d5abfb6b3",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 6,
+      "compromised_credentials": 32,
+      "hacking": 6,
+      "malware": 10,
+      "other": 4,
+      "phishing": 36,
+      "ransomware": 6
+    }
+  },
+  "2020 H1": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 15,
+    "pdf": "notifiable-data-breaches-report-jan-jun-2020.pdf",
+    "pdf_sha256": "3878099c26e204f6c0c5c7868015f3a3e7c56631eee38a4ce56d5e1985286e67",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 6,
+      "compromised_credentials": 25,
+      "hacking": 13,
+      "malware": 4,
+      "other": 1,
+      "phishing": 36,
+      "ransomware": 15
+    }
+  },
+  "2020 H2": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 19,
+    "pdf": "notifiable-data-breaches-report-july-dec-2020.pdf",
+    "pdf_sha256": "5061adec5f06932c15a2133f2df4ebae621c94133754ee65536163a467c39039",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 8,
+      "compromised_credentials": 25,
+      "hacking": 14,
+      "malware": 7,
+      "other": 3,
+      "phishing": 25,
+      "ransomware": 17
+    }
+  },
+  "2021 H1": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 18,
+    "pdf": "oaic-notifiable-data-breaches-report-jan-june-2021.pdf",
+    "pdf_sha256": "0bdd9bb0f9afe424812e56824459619b9a2d30c9669f1e03d60a8dd04ebafd3c",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 5,
+      "compromised_credentials": 27,
+      "hacking": 9,
+      "malware": 5,
+      "phishing": 30,
+      "ransomware": 24
+    }
+  },
+  "2021 H2": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 17,
+    "pdf": "Final-Notifiable-Data-Breaches-Report-Jul-Dec-2021.pdf",
+    "pdf_sha256": "c6af9ffda8584bc2b36ecb03354e3393cd7bcdcefff100e6f68a3fe20ec05efa",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 5,
+      "compromised_credentials": 28,
+      "hacking": 8,
+      "malware": 3,
+      "other": 1,
+      "phishing": 32,
+      "ransomware": 23
+    }
+  },
+  "2022 H1": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 19,
+    "pdf": "OAIC-Notifiable-Data-Breaches-Report-Jan-Jun-2022.pdf",
+    "pdf_sha256": "41c8ec5ccbd9dc52ec87e6227465848d6cedfe75472178e4eaf31515ab5a8676",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 3,
+      "compromised_credentials": 25,
+      "hacking": 9,
+      "malware": 6,
+      "phishing": 26,
+      "ransomware": 31
+    }
+  },
+  "2022 H2": {
+    "model": "gpt-5.5-2026-04-23",
+    "page": 22,
+    "pdf": "OAIC-Notifiable-data-breaches-report-July-December-2022.pdf",
+    "pdf_sha256": "8d564a258caea943d4c0d94b52ca5913d776dce183877587479586e4c1f60d66",
+    "prompt_version": "cyber-breakdown-v1",
+    "shares": {
+      "brute_force": 9,
+      "compromised_credentials": 27,
+      "hacking": 8,
+      "malware": 4,
+      "phishing": 23,
+      "ransomware": 29
+    }
+  }
+}
