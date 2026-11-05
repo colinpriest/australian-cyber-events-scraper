@@ -196,7 +196,7 @@ def load_dedup_records(conn: sqlite3.Connection,
     for did, name in conn.execute(
         """SELECT dee.deduplicated_event_id, v.entity_name
            FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-           WHERE dee.relationship_type IN ('victim', 'vendor', 'affected_customer')"""):
+           WHERE dee.relationship_type IN ('victim', 'vendor', 'service_provider', 'affected_customer')"""):
         names.setdefault(did, set()).add(name)
     for did, pe, desc, summ, url in conn.execute(
         """SELECT m.deduplicated_event_id, e.perplexity_enrichment_data, e.description,
@@ -2524,6 +2524,13 @@ def cmd_classify_entities(args) -> int:
             print(f"{sum(n for _, n in departed)} link(s) only split-out records carried removed from "
                   f"{len(departed)} event(s)")
         if not getattr(args, "dry_run", False):
+            from cyber_data_collector.dedup import supplier_role_labels
+
+            labelled = supplier_role_labels.apply_stored(conn)
+            conn.commit()
+            if labelled:
+                print(f"{len(labelled)} supplier role(s) cleared by owner labels")
+        if not getattr(args, "dry_run", False):
             from cyber_data_collector.dedup.entity_classification import (repair_stale_vendors,
                                                                           repair_unpromoted_customers)
             stale_vendors = repair_stale_vendors(conn)
@@ -4100,6 +4107,13 @@ def cmd_find_supplier_victims(args) -> int:
     apply = args.apply and not args.dry_run
     conn = _connect(args.db)
     refresher = _make_refresher(args) if apply else None
+    if apply:
+        from cyber_data_collector.dedup import supplier_role_labels
+
+        labelled = supplier_role_labels.apply_stored(conn)
+        conn.commit()
+        if labelled:
+            print(f"{len(labelled)} supplier role(s) cleared by owner labels")
     try:
         result = sv.find_supplier_victims(conn, apply=apply, research=args.research,
                                           role_refresher=refresher, limit=args.limit,

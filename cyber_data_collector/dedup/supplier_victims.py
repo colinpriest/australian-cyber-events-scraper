@@ -274,9 +274,9 @@ def supplier_incidents(conn: sqlite3.Connection,
         roles = conn.execute(
             """SELECT v.entity_id, v.entity_name, dee.relationship_type
                FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'victim')
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'service_provider', 'victim')
                ORDER BY v.entity_name""", (did,)).fetchall()
-        for name in [vendor] + [r[1] for r in roles if r[2] == "vendor"]:
+        for name in [vendor] + [r[1] for r in roles if r[2] in ("vendor", "service_provider")]:
             if _usable_vendor(name) and not any(resolver.same_organisation(name, v) or name == v
                                               for v in vendors):
                 vendors.append(name)
@@ -580,7 +580,8 @@ def pair_candidates(conn: sqlite3.Connection, incidents: Sequence[SupplierIncide
     for did, name in conn.execute(
             """SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
                JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-               WHERE dee.relationship_type IN ('vendor', 'victim', 'affected_customer', 'affected')"""):
+               WHERE dee.relationship_type IN ('vendor', 'service_provider', 'victim', 'affected_customer',
+                                               'affected')"""):
         if did in events and name:
             names[did].add(name)
     for did, r in events.items():

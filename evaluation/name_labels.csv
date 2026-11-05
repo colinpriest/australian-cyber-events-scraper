@@ -199,3 +199,4 @@ Bendigo and Adelaide Bank,named,Bendigo and Adelaide Bank is a specific bank.,cl
 Smithfield NSW switchboard manufacturer,descriptive,Describes an unnamed manufacturer by location and product.,claude-opus-5.5 subagent
 government agencies,descriptive,Generic plural 'government agencies'.,claude-opus-5.5 subagent
 Heart Foundation,named,Heart Foundation is a specific charity.,claude-opus-5.5 subagent
+Bunnings customers,descriptive,"Owner decision 2026-11-04: the people whose data was taken, not an organisation.","owner (Colin Priest), 2026-11-04"

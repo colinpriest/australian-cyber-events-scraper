@@ -1393,6 +1393,56 @@ Second owner review (2026-10-31):
   product is the vendor unless its own systems were breached, and a report naming no organisation whose own systems
   or data were affected has no victim. An event classified under an older prompt whose victim is a known supplier
   (a vendor of another active event, or a supplier incident's supplier) is classified again (`roles-status`).
+* **The owner's definitions of victim, vendor and service provider** (`entity-roles-v10`, owner 2026-11-04).
+  - *Victim:* an organisation whose systems were accessed without authorisation, disrupted, damaged or encrypted, or
+    whose data (data it collected, or held on its systems) was taken, exposed or destroyed. When one organisation's
+    data sat on another's systems, both are victims, each of its own report. Never the people or groups whose
+    information was in the data: "Bunnings customers" was a co-victim of Bunnings' FlexBooker breach. Never an
+    organisation whose name was only impersonated. The organisation that ran the system or owned the data, not its
+    parent.
+  - *Vendor:* the company that makes or runs a software product, platform or device other organisations use, when
+    the attack came through it - a flaw in the product, or a breach of its hosted platform holding customers' data.
+    A customer's own stolen credentials used on a product with no flaw make no vendor.
+  - *Service provider* (new role `service_provider`): a firm providing services, not software (law firm, call
+    centre, records storage, consultancy), whose own systems were breached and held the client's data. It is never
+    a vendor; the client's notice records it as the service provider, and the firm's own report has it as the
+    victim. Its clients' events are linked to it in the supplier registry as a vendor's are, and
+    `dashboard/supplier_incidents.html` marks its card "(service provider)".
+
+  An *affected customer* is a customer named among others in a report about the vendor, the provider or several of
+  their customers; in a report about one customer's own exposure that customer is the victim. v9 said "harmed via
+  the vendor", so the model made Bunnings an affected customer of FlexBooker, and its two promoted names (Bunnings
+  Group and Bunnings New Zealand) left the victim column empty; promoted customers that are one organisation now name
+  it (`one_organisation`). An event-level victim link that every member record labels a bystander is cleared
+  (`clear_bystander_victims`), and a stale service-provider link like a stale vendor link. Events classified under an
+  older prompt that record a vendor, no victim or more than one victim are classified again (503 on the 2026-11-04
+  copy).
+
+  A first trial of v10 on a copy (2026-11-04) undid four of the owner's earlier corrections, each fixed by a rule:
+  - *A known supplier labelled a victim beside its customers is the report's supplier* (`supplier_victims`). v10 made
+    Instructure, its customers and the report's victim column all victims of the Canvas roundup, so the counted-once
+    rule no longer saw a supplier report. A known supplier (`role_maintenance._supplier_names`) labelled a victim
+    beside other victim organisations is recorded as the vendor, and `double_counted_customers` then gives each
+    customer with its own event to that event, and makes the report the supplier's when every customer has one.
+  - *A customer's own event is never put to the duplicate question with a multi-customer report of its supplier*
+    (`duplicate_judgement.supplier_report_pairs`, unless a label covers the pair). Stake's own DriveWealth report and
+    the University of Adelaide's own Canvas notice shared a victim with those reports and were merged into them; the
+    supplier step links them instead.
+  - *A customer's own event is found through the suppliers its records name* (`supplier_links._record_supplier_names`).
+    Monash Health's own event holds its January 2024 Health Management Systems records and its November 2024
+    ZircoDATA notices; the event records only HMS, so Monash Health stayed a victim of ZircoDATA's report.
+  - *A firm breached in another incident, mentioned as background, is no service provider* (prompt text). The
+    model still named Outabox as Ticketek's service provider and OracleCMS as that of Nissan's own December 2023
+    attack, both against the owner's rulings (2026-11-02, 2026-11-01), so those rulings are **owner labels**
+    (`evaluation/supplier_role_labels.csv`, `dedup/supplier_role_labels.py`: `deduplicated_event_id, organisation,
+    not_supplier`). A label decides without a model call: the organisation is no vendor or service provider of the
+    event at classification and in what is stored (`classify-entities` and `find-supplier-victims --apply` apply
+    them first), and the event joins no incident of that supplier, whatever the link's basis. On live both had
+    passed only by accident: each event also recorded a second victim (TEG; a Nissan arm), which kept it out of
+    the registry as "records several victims".
+  - *A customer split out of an event is demoted there even as its recorded victim* (`demote_split_customers`): v10
+    made Stake the recorded victim of DriveWealth's report, the event Stake's own event was split out of, and the
+    rule's guard for an event's own victim kept it there.
 
 **Coherence splits (2026-11-01).** `check-coherence` and `check-same-organisation` re-read an event once a split
 in the same run has happened (a split that re-attaches a record can merge a later event away; the run failed on
@@ -2576,6 +2626,19 @@ publication date) are not used. On the 2026-11-02 copy: 10 Webber research answe
 Yakult, Genea, MediSecure, Pound Road Medical Centre, Riverina Medical and Dental, an Optus 2022 answer on a 2020
 listing).
 
+**A report date gives way to the incident date the records state** (`publication_dates.members_incident_date`,
+owner 2026-11-04). The AI agent that hacked a gym happened in April 2026 and was reported in August. A merge
+re-derived April from its members, but the event kept the basis of an earlier dating by its 9 August report, so
+`publication-dates` put it back to August on every run. An event dated by a report now takes the incident date its
+active records give, by member consensus, when one does: only checked dates count (a source-stated precision, or a
+research date the citation check supported - unchecked research often answers with another incident of the
+organisation), none more than 7 days after the first report, and a date in its own record's publication month gives
+way when another record gives an earlier one. The checked date must also fall in the month that the consensus of
+all the members' dates gives - the date a merge derives, which the stale basis kept overwriting: Nissan's April 2024
+OracleCMS event holds two checked December 2023 dates of Nissan's own breach, and was re-dated to December by the
+first version of this rule (trial on a copy, 2026-11-04). The same reporting-month rule settles conflicting checked
+precision (`incident_dates.discount_reporting_months`).
+
 Before 2026-11-02 the headings were stored as the incident month - they used to become the 15th (all 832 Webber
 records), outranking any day the article stated. A day the
 article states wins only when its wording ties it to the breach ("the breach
@@ -3449,19 +3512,21 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-04 16:25 snapshot (`snap-20261104162511`, censor date 2026-11-03, events from 2020 on; 173 repeats,
-follow-up split by calendar month; customers of a supplier breach counted through their own events, the owner's
-victim, scope and duplicate labels applied, and the duplicates the check had left apart merged: name initials,
-customers' own records, one customer under two names): adequate for a simple model (19 repeats per parameter; the
-full model 6.7; 63% of incident dates unverified, so no split finer than 30 days is tried). Best bands **0-365 /
-366-1095 / >1095 days**, the middle band at 0.52 times the first year's rate and the last at 0.97 (4.8 BIC better
-than a constant rate; search-adjusted p = 0.018). The 11:43 snapshot of the same day gave the same bands at 2.7 BIC
-(p = 0.052), the 2026-11-03 snapshot at 12.5 BIC (p <= 0.002): the split is real but its strength moves with each
-round of duplicate repairs. Calendar growth does not explain it (per-organisation rate -4% a year; yearly effects p =
-0.87; the bands hold under every calendar adjustment, p <= 0.0005). **No short-term vigilance** at 1-90 days
-(one-sided p = 0.95; 28 repeats against 21.4 expected) and **no delayed peak** at 91-180 days (one-sided p = 0.089;
-25 repeats); 91-120 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE
-3.6 and HUGE 7.4 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
+On the 2026-11-05 11:28 snapshot (`snap-20261105112819`, censor date 2026-11-03, events from 2020 on; 157 repeats,
+follow-up split by calendar month; roles classified under `entity-roles-v10` with the owner's definitions of victim,
+vendor and service provider, owner supplier-role labels applied, and report-dated events re-dated from their records'
+checked incident dates): adequate for a simple model (20 repeats per parameter; the full model 6.0; 51% of incident
+dates unverified, down from 63%, so no split finer than 30 days is tried). Best bands **0-270 / >270 days**, the
+second at 0.55 times the first band's rate (6.5 BIC better than a constant rate; search-adjusted p = 0.008; 0-365 /
+366-730 / >730 and 0-365 / 366-1095 / >1095 are within 0.4 BIC of it). The 2026-11-04 16:25 snapshot gave 0-365 /
+366-1095 / >1095 at 4.8 BIC (p = 0.018): a lower rate after the first year or so holds across these rounds of repairs,
+but where it is cut moves. Calendar growth does not explain it (per-organisation rate +0% a year; yearly effects p =
+0.64; the bands hold under every calendar adjustment, p <= 0.0005). **No short-term vigilance** at 1-90 days
+(one-sided p = 0.98; 27 repeats against 18.8 expected). **A delayed peak** at 91-180 days: 1.60 times the rate at other
+times (95% CI 1.00-2.46; one-sided p = 0.026; 25 repeats against 16.6 expected), where the 2026-11-04 snapshot gave
+one-sided p = 0.089 - the lower bound sits at 1.00 and the window was one of several the earlier reports looked at, so
+it is weak evidence; 91-120 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM
+1.4, LARGE 3.6 and HUGE 8.2 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
 (below) came from a model with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),

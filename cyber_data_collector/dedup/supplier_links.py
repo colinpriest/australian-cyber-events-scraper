@@ -406,13 +406,15 @@ def _rank_row(row: Tuple) -> Tuple[int, int, float]:
 
 
 def _event_vendors(conn: sqlite3.Connection, event_id: str) -> List[str]:
-    """The suppliers an event records: its vendor column and its vendor roles."""
+    """The suppliers an event records: its vendor column and its vendor and service-provider roles (a service
+    firm is no vendor, owner 2026-11-04, but its clients' events are linked to it the same way)."""
     row = conn.execute("SELECT vendor_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id = ?",
                        (event_id,)).fetchone()
     names = [row[0]] if row and row[0] else []
     return names + [r[0] for r in conn.execute(
         """SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'""", (event_id,))]
+           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'service_provider')""",
+        (event_id,))]
 
 
 def _compact(name: str) -> str:
@@ -604,9 +606,23 @@ def repair_registry(conn: sqlite3.Connection, resolver, labels: Optional[Dict] =
     verdicts = pair_verdicts(conn)
     report: Dict[str, Any] = {"stale_links_removed": [], "incidents_merged": [], "incidents_removed": [],
                               "shared_not_merged": [], "own_organisation_links_removed": [], "keys_joined": [],
-                              "keys_reset": [], "own_events_replaced": []}
+                              "keys_reset": [], "own_events_replaced": [], "labelled_links_removed": []}
     incidents = {r[0]: {"key": r[1], "name": r[2], "event": r[3], "first": r[4]} for r in conn.execute(
         "SELECT supplier_incident_id, supplier_key, supplier_name, supplier_event_id, first_date FROM SupplierIncidents")}
+    # An event the owner labelled not the supplier's is in no incident of it, whatever the link's basis.
+    from cyber_data_collector.dedup import supplier_role_labels
+
+    role_labels = supplier_role_labels.not_suppliers(conn)
+    for sid, entity_id, event_id in conn.execute(
+            "SELECT supplier_incident_id, customer_entity_id, customer_event_id FROM SupplierIncidentLinks "
+            "WHERE customer_event_id IS NOT NULL").fetchall():
+        inc = incidents.get(sid)
+        now = resolve_event(conn, event_id)
+        if inc and now and supplier_role_labels.contradicts(conn, role_labels, now, inc["name"]):
+            conn.execute("DELETE FROM SupplierIncidentLinks WHERE supplier_incident_id = ? AND customer_entity_id = ? "
+                         "AND customer_event_id = ?", (sid, entity_id, event_id))
+            report["labelled_links_removed"].append({"supplier_incident_id": sid, "supplier": inc["name"],
+                                                     "customer_event_id": now})
     for sid, entity_id, name, event_id in conn.execute(
             "SELECT supplier_incident_id, customer_entity_id, customer_name, customer_event_id FROM SupplierIncidentLinks "
             "WHERE basis = ? AND customer_event_id IS NOT NULL", (BASIS_VENDOR,)).fetchall():
@@ -1015,12 +1031,15 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
     from cyber_data_collector.dedup import supplier_victims as sv
     from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
 
+    from cyber_data_collector.dedup import supplier_role_labels
+
     ambiguous: List[Dict[str, Any]] = []
     own = sv.victim_events(conn)
     verdicts = pair_verdicts(conn)
     names = dict(conn.execute("SELECT entity_id, entity_name FROM EntitiesV2"))
     by_id = g.by_id
     incident_of: Dict[str, Incident] = {}
+    role_labels = supplier_role_labels.not_suppliers(conn)
 
     def customer_of(did: str, supplier: Optional[str] = None) -> Tuple[Optional[Tuple[int, str]], List[str]]:
         """The event's one customer and all its victims; with ``supplier``, the supplier recorded beside its
@@ -1064,6 +1083,8 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
     customer_events.sort(key=lambda item: not item[2])
     for x, single, all_victims in customer_events:
         vendor = x.vendors[0]
+        if supplier_role_labels.contradicts(conn, role_labels, x.dedup_id, vendor):
+            continue        # the owner labelled this event not one of the supplier's
         inc = registry.incident(vendor, placement_date(conn, x.dedup_id, x.event_date), x.dedup_id, apart=apart,
                                 create=bool(all_victims))
         if inc is None:
@@ -1093,6 +1114,8 @@ def plan_links(conn: sqlite3.Connection, g, labels, vscores, pscores, vcut: Opti
                     i.supplier_event_id == p.other_id for i in registry.incidents.values()):
                 inc.supplier_event_id = p.other_id
             continue
+        if supplier_role_labels.contradicts(conn, role_labels, p.other_id, inc.supplier_name):
+            continue        # the owner labelled this event not one of the supplier's
         single, all_victims = customer_of(p.other_id, inc.supplier_name)
         if single is None:
             ambiguous.append({"deduplicated_event_id": p.other_id, "victims": all_victims,
@@ -1502,22 +1525,36 @@ def demote_split_customers(conn: sqlite3.Connection, apply: bool = True) -> List
         victims[did].append((eid, name))
     scalar = dict(conn.execute("SELECT deduplicated_event_id, victim_organization_name FROM DeduplicatedEvents"))
     split_from: Dict[str, Set[str]] = defaultdict(set)
-    for origin, new in conn.execute("SELECT deduplicated_event_id, new_event_id FROM SupplierLinkActions "
-                                    "WHERE action = 'split' AND new_event_id IS NOT NULL"):
+    named: Dict[str, Set[str]] = defaultdict(set)          # origin -> the customers its split actions recorded
+    for origin, new, detail in conn.execute("SELECT deduplicated_event_id, new_event_id, detail_json "
+                                            "FROM SupplierLinkActions WHERE action = 'split' AND new_event_id IS NOT NULL"):
         split_from[origin].add(resolve_event(conn, new) or new)
+        try:
+            customer = (json.loads(detail or "{}") or {}).get("customer")
+        except (TypeError, ValueError):
+            customer = None
+        if customer:
+            named[origin].add(customer)
     done = []
     for origin, parts in sorted(split_from.items()):
         if origin not in victims:
             continue
         theirs = [name for p in parts if p != origin for _, name in victims.get(p, [])]
         for eid, name in victims[origin]:
-            # The origin's own recorded victim is not a departed customer, whatever its parts record.
-            if scalar.get(origin) and names_match(conn, name, scalar[origin]):
+            # The origin's own recorded victim is not a departed customer, whatever its parts record - unless the
+            # split recorded it as the customer that left: entity-roles-v10 made Stake the recorded victim of
+            # DriveWealth's report, the event Stake's own event was split out of (trial, 2026-11-05).
+            departed = any(names_match(conn, name, c) for c in named.get(origin, ()))
+            if scalar.get(origin) and names_match(conn, name, scalar[origin]) and not departed:
                 continue
             if any(names_match(conn, name, t) for t in theirs):
                 conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected_customer' "
                              "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
                              (origin, eid))
+                if scalar.get(origin) and names_match(conn, name, scalar[origin]):
+                    left = [n for e, n in victims[origin] if e != eid and not any(names_match(conn, n, t) for t in theirs)]
+                    conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? "
+                                 "WHERE deduplicated_event_id = ?", (left[0] if len(left) == 1 else None, origin))
                 done.append({"deduplicated_event_id": origin, "customer": name})
     if apply:
         conn.commit()
@@ -1546,14 +1583,32 @@ REPORT_REVERSAL_DECISION = ("owner 2026-11-03: the 2026-11-02 supplier-report ru
 
 
 def _vendor_names(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
-    """Event -> the names it records as vendor (the column and vendor roles)."""
+    """Event -> the names it records as supplier (the vendor column, vendor and service-provider roles)."""
     out: Dict[str, Set[str]] = defaultdict(set)
     for did_, vendor in conn.execute(
             """SELECT deduplicated_event_id, vendor_organization_name FROM DeduplicatedEvents
                WHERE vendor_organization_name IS NOT NULL AND vendor_organization_name != ''
                UNION SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
-               JOIN EntitiesV2 v USING (entity_id) WHERE dee.relationship_type = 'vendor'"""):
+               JOIN EntitiesV2 v USING (entity_id) WHERE dee.relationship_type IN ('vendor', 'service_provider')"""):
         out[did_].add(vendor)
+    return out
+
+
+def _record_supplier_names(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
+    """Active event -> the names its active member records label vendor or service provider."""
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    out: Dict[str, Set[str]] = defaultdict(set)
+    for did, name in conn.execute(
+            f"""SELECT m.deduplicated_event_id, v.entity_name FROM EventDeduplicationMap m
+                JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
+                JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+                WHERE d.status = 'Active' AND ee.relationship_type IN ('vendor', 'service_provider')
+                  {member_condition(conn, "e")}"""):
+        if name:
+            out[did].add(name)
     return out
 
 
@@ -1632,11 +1687,14 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
     column_vendor = {r[0]: r[3] for r in rows}
     titles = {r[0]: r[4] for r in rows}
     orgs = _victim_organisations(conn, resolver, verdicts, vendors)
-    # Own events can only be events that record a supplier; index them by vendor name.
+    # Own events can only be events that record a supplier; index them by vendor name. An event's records may name
+    # a supplier the event does not: Monash Health's own event holds its January 2024 Health Management Systems
+    # records and its November 2024 ZircoDATA notices, and the event records only HMS (trial, 2026-11-04).
+    record_suppliers = _record_supplier_names(conn)
     by_vendor: Dict[str, List[str]] = defaultdict(list)
     for did, groups in orgs.items():
         if len(groups) == 1:
-            for v in vendors.get(did, ()):
+            for v in set(vendors.get(did, ())) | record_suppliers.get(did, set()):
                 by_vendor[v].append(did)
     supplier_cache: Dict[Tuple[str, str], bool] = {}
 
@@ -1764,7 +1822,7 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
         supplier = column_vendor.get(did) or sorted(vendors[did])[0]
         link = conn.execute(
             """SELECT dee.entity_id FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'victim')
+               WHERE dee.deduplicated_event_id = ? AND dee.relationship_type IN ('vendor', 'service_provider', 'victim')
                ORDER BY v.entity_name != ?, v.entity_name LIMIT 1""", (did, supplier)).fetchone()
         changed = 0
         if link is not None:
@@ -1934,7 +1992,7 @@ def convert(conn: sqlite3.Connection, g, registry: Registry, apply: bool, split:
             """SELECT deduplicated_event_id, vendor_organization_name FROM DeduplicatedEvents
                WHERE vendor_organization_name IS NOT NULL AND vendor_organization_name != ''
                UNION SELECT dee.deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee
-               JOIN EntitiesV2 v USING (entity_id) WHERE dee.relationship_type = 'vendor'"""):
+               JOIN EntitiesV2 v USING (entity_id) WHERE dee.relationship_type IN ('vendor', 'service_provider')"""):
         vendor_names[did_].add(vendor)
     converted = 0
     for item in reversed_:

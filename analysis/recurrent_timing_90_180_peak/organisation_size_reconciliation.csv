@@ -1,11 +1,9 @@
 entity_id,entity_name,size_variants,size_variant_bands,representative_size_estimate,org_size,size_source_entity_id,size_rule,size_conflict,changed_from_representative
 391,University of Adelaide,2,University of Adelaide=LARGE|The University of Adelaide=LARGE,LARGE,LARGE,24269,higher size_confidence,False,False
 2184,Latitude Financial,2,Latitude Financial=LARGE|Latitude group of companies=LARGE,LARGE,LARGE,2184,representative variant,False,False
-5289,Bunnings Group Limited,2,Bunnings Group Limited=HUGE|Bunnings customers=UNKNOWN,HUGE,HUGE,5289,known band over UNKNOWN,False,False
 5815,Hexicor,2,Hexicor=MEDIUM|Hexicor Pty Ltd=MEDIUM,MEDIUM,MEDIUM,37786,higher size_confidence,False,False
 5902,TMA Group of Companies,2,TMA Group of Companies=UNKNOWN|TMA=SMALL,UNKNOWN,SMALL,29331,known band over UNKNOWN,False,True
 24390,LVMH Moët Hennessy Louis Vuitton SE,2,LVMH Moët Hennessy Louis Vuitton SE=HUGE|LVMH=HUGE,HUGE,HUGE,33330,higher size_confidence,False,False
 24400,Aussie Fluid Power Pty Ltd,2,Aussie Fluid Power Pty Ltd=MEDIUM|Australia Fluid Power=MEDIUM,MEDIUM,MEDIUM,24400,higher size_confidence,False,False
-25751,Reflections Holidays,2,Reflections Holidays=LARGE|Reflections=LARGE,LARGE,LARGE,25751,higher size_confidence,False,False
-26018,Sharp Office,2,Sharp Office Systems=MEDIUM|Sharp Office=MEDIUM,MEDIUM,MEDIUM,24179,higher size_confidence,False,False
+25276,Icon Oncology Group,2,Icon Oncology Group=LARGE|Icon Group=LARGE,LARGE,LARGE,25782,higher size_confidence,False,False
 42569,Re.Turn-It,2,Re.Turn-It=MEDIUM|Return-It=MEDIUM,MEDIUM,MEDIUM,42569,higher size_confidence,False,False

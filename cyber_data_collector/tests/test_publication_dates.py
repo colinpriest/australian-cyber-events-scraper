@@ -216,6 +216,56 @@ def test_a_report_dated_before_the_verified_incident_is_not_its_first_report(con
     assert report.before_incident == 1
 
 
+def test_a_date_its_members_state_is_not_overwritten_by_the_first_report(conn):
+    """The AI agent that hacked a gym: its members' consensus dated it April 2026, but the event kept the basis of
+    an earlier dating by its 9 August report, so every refresh put it back to August (owner, 2026-11-04)."""
+    _add_record(conn, "g1", "gym", "https://news.example/gym", "2026-08-09", pd.SOURCE_FROM_SOURCE, "2026-08-09")
+    _add_record(conn, "g2", "gym", "https://news.example/gym2", "2026-08-10", pd.SOURCE_FROM_SOURCE)
+    _add_record(conn, "g3", "gym", "https://news.example/gym3", "2026-08-10", pd.SOURCE_FROM_SOURCE)
+    for raw, day in (("g1", "2026-04-01"), ("g2", "2026-08-01"), ("g3", "2026-09-30")):
+        conn.execute("UPDATE EnrichedEvents SET event_date = ?, perplexity_enrichment_data = ? "
+                     "WHERE enriched_event_id = ?", (day, '{"earliest_event_date": "%s"}' % day, f"x{raw}"))
+    conn.execute("CREATE TABLE IF NOT EXISTS EnrichmentFactSupport (enriched_event_id TEXT, fact TEXT, status TEXT, "
+                 "checked_at TEXT)")
+    # April is checked; August is checked too but is its record's own reporting month; September follows the report.
+    conn.executemany("INSERT INTO EnrichmentFactSupport (enriched_event_id, fact, status, checked_at) "
+                     "VALUES (?, 'date', 'supported', '2026-11-04')",
+                     [("xg1",), ("xg2",), ("xg3",)])
+    conn.execute("UPDATE DeduplicatedEvents SET date_basis = ? WHERE deduplicated_event_id = 'gym'",
+                 (pd.BASIS_PUBLICATION,))
+    conn.commit()
+    assert pd.members_incident_date(conn, "gym", "2026-08-09") == "2026-04-01"
+    report = pd.refresh_events(conn)
+    row = conn.execute("SELECT event_date, date_basis, reporting_lag_days FROM DeduplicatedEvents "
+                       "WHERE deduplicated_event_id = 'gym'").fetchone()
+    assert tuple(row) == ("2026-04-01", "Perplexity research", 130)
+    assert report.dated_by_records == ["gym"] and "gym" not in report.redated_by_first_report
+    assert pd.refresh_events(conn).dated_by_records == []                        # idempotent
+    # The flip-flop: a merge re-derives April but leaves the report's basis; April is kept, not put back to August.
+    conn.execute("UPDATE DeduplicatedEvents SET date_basis = ? WHERE deduplicated_event_id = 'gym'",
+                 (pd.BASIS_PUBLICATION,))
+    report = pd.refresh_events(conn)
+    assert report.dated_by_records == ["gym"] and report.redated_by_first_report == []
+    assert conn.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'gym'"
+                        ).fetchone()[0] == "2026-04-01"
+
+
+def test_an_unchecked_research_date_does_not_redate_an_event(conn):
+    # Unchecked research often answers with another incident of the organisation (Meta's 2014 breach on a 2025 report).
+    _add_record(conn, "m1", "meta", "https://news.example/meta", "2025-10-28", pd.SOURCE_FROM_SOURCE, "2025-10-28")
+    conn.execute("UPDATE EnrichedEvents SET event_date = '2014-03-12' WHERE enriched_event_id = 'xm1'")
+    conn.commit()
+    assert pd.members_incident_date(conn, "meta", "2025-10-28") is None
+
+
+def test_a_report_date_no_member_states_is_still_moved_to_the_first_report(conn):
+    _add_record(conn, "h1", "hub", "https://news.example/h", "2026-05-02", pd.SOURCE_FROM_SOURCE, "2026-05-09")
+    conn.execute("UPDATE DeduplicatedEvents SET date_basis = ? WHERE deduplicated_event_id = 'hub'",
+                 (pd.BASIS_PUBLICATION,))
+    conn.commit()
+    assert pd.refresh_events(conn).redated_by_first_report == ["hub"]
+
+
 def test_storage_writes_the_sources_publication_date_to_its_own_column(tmp_path):
     path = tmp_path / "instance" / "s.db"
     initialize_database(str(path))
@@ -228,3 +278,19 @@ def test_storage_writes_the_sources_publication_date_to_its_own_column(tmp_path)
     finally:
         db.close()
     assert tuple(row) == ("2026-05-04", pd.SOURCE_FROM_SOURCE)
+
+
+def test_checked_dates_of_another_incident_do_not_redate_an_event(conn):
+    """Nissan's April 2024 OracleCMS event holds two checked December 2023 dates of Nissan's own breach; its other
+    records, and a merge, date it April (trial on a copy, 2026-11-04)."""
+    conn.execute("CREATE TABLE IF NOT EXISTS EnrichmentFactSupport (enriched_event_id TEXT, fact TEXT, status TEXT, "
+                 "checked_at TEXT)")
+    for i, (day, checked) in enumerate([("2023-12-05", 1), ("2023-12-05", 1), ("2024-04-12", 0), ("2024-04-15", 0),
+                                        ("2024-04-18", 0)]):
+        _add_record(conn, f"n{i}", "nissan", f"https://news.example/n{i}", "2024-05-15", pd.SOURCE_FROM_SOURCE)
+        conn.execute("UPDATE EnrichedEvents SET event_date = ? WHERE enriched_event_id = ?", (day, f"xn{i}"))
+        if checked:
+            conn.execute("INSERT INTO EnrichmentFactSupport (enriched_event_id, fact, status, checked_at) "
+                         "VALUES (?, 'date', 'supported', '2026-11-04')", (f"xn{i}",))
+    conn.commit()
+    assert pd.members_incident_date(conn, "nissan", "2024-05-15") is None

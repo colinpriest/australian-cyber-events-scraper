@@ -119,7 +119,8 @@ def _role_rows(conn: sqlite3.Connection) -> List[Dict[str, object]]:
     victims = _usable_victim_names(conn)
     try:
         vendors = {r[0] for r in conn.execute(
-            "SELECT DISTINCT deduplicated_event_id FROM DeduplicatedEventEntities WHERE relationship_type = 'vendor'")}
+            "SELECT DISTINCT deduplicated_event_id FROM DeduplicatedEventEntities "
+            "WHERE relationship_type IN ('vendor', 'service_provider')")}
     except sqlite3.OperationalError:
         vendors = set()
     # The scalar vendor too: CrowdStrike's lawsuit event kept a vendor field with no vendor role, so it was never
@@ -131,6 +132,7 @@ def _role_rows(conn: sqlite3.Connection) -> List[Dict[str, object]]:
     return [{"id": r[0], "stored": r[1], "version": r[2], "has_version_column": _has_version_column(conn),
              "members": (r[3] or "").split(",") if r[3] else [], "has_victim": r[0] in victims,
              "has_vendor": r[0] in vendors, "victim_departed": r[0] in departed,
+             "victim_count": len(victims.get(r[0], [])),
              "victim_is_supplier": any(n.strip().lower() in suppliers for n in victims.get(r[0], []))}
             for r in rows]
 
@@ -141,7 +143,8 @@ def _supplier_names(conn: sqlite3.Connection) -> set:
     names = set()
     queries = ["""SELECT v.entity_name FROM DeduplicatedEventEntities dee JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
                   JOIN DeduplicatedEvents d ON d.deduplicated_event_id = dee.deduplicated_event_id
-                  WHERE dee.relationship_type = 'vendor' AND COALESCE(d.status, 'Active') = 'Active'""",
+                  WHERE dee.relationship_type IN ('vendor', 'service_provider')
+                    AND COALESCE(d.status, 'Active') = 'Active'""",
                """SELECT vendor_organization_name FROM DeduplicatedEvents
                   WHERE COALESCE(vendor_organization_name, '') <> '' AND COALESCE(status, 'Active') = 'Active'""",
                "SELECT supplier_name FROM SupplierIncidents"]
@@ -179,7 +182,8 @@ def _state(row: Dict[str, object]) -> str:
     ``prompt``: classified under an older role prompt and left without a victim (v2's fix: an incident event
     whose every entity was a bystander), or recording a vendor (v3's fix: a security firm, agency or photo
     credit recorded as the supplier), or recording a known supplier as its victim (v9's fix: Ivanti, the maker
-    of exploited products, recorded as the victim of four advisories). Other events keep the roles they have; ``roles-status --invalidate-all``
+    of exploited products, recorded as the victim of four advisories), or recording more than one victim (v10's
+    fix: "Bunnings customers", the people in the data, beside Bunnings). Other events keep the roles they have; ``roles-status --invalidate-all``
     redoes everything.
     """
     stored = row["stored"]
@@ -189,7 +193,7 @@ def _state(row: Dict[str, object]) -> str:
         return "outdated"
     if row["has_version_column"] and row["version"] != _prompt_version() and (
             not row["has_victim"] or row.get("has_vendor") or row.get("victim_is_supplier")
-            or row["version"] in _reclassify_versions()):
+            or row.get("victim_count", 0) > 1 or row["version"] in _reclassify_versions()):
         return "prompt"
     if row.get("victim_departed"):
         return "departed"

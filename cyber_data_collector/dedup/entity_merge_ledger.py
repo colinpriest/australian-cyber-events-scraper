@@ -50,7 +50,7 @@ LINK_SUBJECTS = {"EnrichedEventEntities": "enriched_event_id", "DeduplicatedEven
 
 #: Strongest first. When one record or event links both spellings, the link
 #: keeps the stronger role and the other is recorded in the ledger.
-ROLE_STRENGTH = ("victim", "vendor", "affected_customer", "primary_target", "affected", "threat_actor",
+ROLE_STRENGTH = ("victim", "vendor", "service_provider", "affected_customer", "primary_target", "affected", "threat_actor",
                  "regulator", "product", "mentioned", "bystander")
 
 SCHEMA = """

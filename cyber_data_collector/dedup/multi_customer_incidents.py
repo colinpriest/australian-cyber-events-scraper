@@ -40,7 +40,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 DESCRIPTION_PURPOSE = "supplier-incident"
 DESCRIPTION_PROMPT_VERSION = "supplier-incident-description-v1"
@@ -83,6 +83,7 @@ class Incident:
     description_current: bool = True                      # False: written from older evidence
     also_vendors: List[str] = field(default_factory=list)   # the attack filed under other suppliers too
     supplier_incident_ids: List[str] = field(default_factory=list)   # every registry incident shown on this card
+    supplier_kind: str = "vendor"                           # or "service provider" (a firm, not software)
 
 
 def _event(conn: sqlite3.Connection, event_id: Optional[str]):
@@ -139,6 +140,32 @@ def event_suppliers(conn: sqlite3.Connection) -> Dict[str, str]:
             "WHERE status = 'Active' AND vendor_organization_name IS NOT NULL AND TRIM(vendor_organization_name) != ''"):
         out[event_id] = vendor
     return out
+
+
+def supplier_kind(conn: sqlite3.Connection, event_ids: Sequence[str], supplier: str) -> str:
+    """``service provider`` when the incident's events record ``supplier`` only as a service provider (a law firm,
+    call centre or records store whose own breach held its clients' data, owner 2026-11-04), else ``vendor``."""
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    ids = [e for e in event_ids if e]
+    if not ids:
+        return "vendor"
+    resolver = EntityResolver()
+    marks = ",".join("?" * len(ids))
+    roles = set()
+    for name, role in conn.execute(
+            f"""SELECT v.entity_name, dee.relationship_type FROM DeduplicatedEventEntities dee
+                JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+                WHERE dee.deduplicated_event_id IN ({marks}) AND dee.relationship_type IN ('vendor', 'service_provider')""",
+            ids):
+        if name and (name.strip().lower() == supplier.strip().lower() or resolver.same_organisation(name, supplier)):
+            roles.add(role)
+    for (column,) in conn.execute(f"SELECT vendor_organization_name FROM DeduplicatedEvents "
+                                  f"WHERE deduplicated_event_id IN ({marks})", ids):
+        if column and (column.strip().lower() == supplier.strip().lower()
+                       or resolver.same_organisation(column, supplier)):
+            roles.add("vendor")
+    return "service provider" if roles == {"service_provider"} else "vendor"
 
 
 def pair_verdicts(conn: sqlite3.Connection) -> Dict[frozenset, str]:
@@ -287,9 +314,10 @@ def find(conn: sqlite3.Connection) -> List[Incident]:
             c.also.sort(key=str.casefold)
         customers.sort(key=lambda c: c.name.casefold())
         text, current = stored_description(conn, sid, description_state(conn, sid))
+        kind = supplier_kind(conn, [own[0] if own else None, *(c.event_id for c in customers)], vendor)
         out.append(Incident(sid, vendor, attack_date, text or "", customers, precision,
                             sorted(outside, key=str.casefold), sorted(unplaced, key=str.casefold), current,
-                            sorted(also_vendors, key=str.casefold), sids))
+                            sorted(also_vendors, key=str.casefold), sids, kind))
     out.sort(key=lambda i: (i.vendor.casefold(), i.attack_date or "9999", i.supplier_incident_id))
     return out
 
