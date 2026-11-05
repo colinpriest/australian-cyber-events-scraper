@@ -3060,6 +3060,7 @@ total notifications).
 python run_full_pipeline.py --dashboard-only          # or the last phase of a full run
 python scripts/publish_outputs.py                     # the same step on its own
 python scripts/publish_outputs.py --snapshot-id <id>  # rebuild from a retained snapshot (reproduce)
+python scripts/publish_outputs.py --with-analyses     # after a correction: analyses on one new snapshot, then publish once
 python scripts/publish_outputs.py --list              # retained snapshots
 ```
 
@@ -3074,6 +3075,14 @@ id, writes `dashboard/publication.json` (hashes of every output and of the input
 the database) and moves them all into place together. A blocked gate, a failing builder or
 a failed move leaves every previous output untouched, and a crash half-way is rolled back
 by the next run. The quality run records the snapshot id (`QualityRuns.snapshot_id`).
+
+**After a correction to the data, run `publish_outputs.py --with-analyses`** and nothing else (owner, 2026-11-06). It
+brings stored judgements up to date, runs the recurrence analyses on one new snapshot and publishes every output from
+it, once: 9 minutes on 2026-11-06 for a one-event merge. Publishing first and analysing afterwards publishes twice.
+Two faults had made the same step take over 2 hours: each name comparison re-read the alias tables
+(`entity_resolution.alias_scope` now reads them once for a block of comparisons), and every validation exception about
+the supplier report rebuilt it (`validation_exceptions.check` now builds it once). `multi_customer_incidents.find` went
+from over 6 minutes to 3.8 seconds and the check of all 122 exceptions from about 36 minutes to 4.5 seconds.
 
 **Stored judgements are brought up to date first** (`publication/judgements.py`, 2026-11-02).
 The AI incident report and the OAIC comparisons show stored per-event judgements (AI
@@ -3537,12 +3546,13 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-05 20:29 snapshot (`snap-20261105202912`, censor date 2026-11-03, events from 2020 on; 157 repeats,
+On the 2026-11-06 08:14 snapshot (`snap-20261106081449`, censor date 2026-11-03, events from 2020 on; 157 repeats,
 follow-up split by calendar month; roles classified under `entity-roles-v10` with the owner's definitions of victim,
 vendor and service provider, owner supplier-role labels applied, report-dated events re-dated from their records'
 checked incident dates, two victims of one event that are one organisation counted once on that event
 (`check-covictims`), and the owner's 2026-11-05 aliases and corrections - Transport for NSW, OPAN, the Victorian and
-WA Departments of Education, NGS Super, Medibank, Nine, Vocus, Live Nation, Icon Oncology Group, SA Health):
+WA Departments of Education, NGS Super, Medibank, Nine, Vocus, Live Nation, Icon Oncology Group, SA Health, and Nissan's
+two December 2023 events merged):
 adequate for a simple model (20 repeats per parameter; the full model 6.0; 52% of incident dates unverified, so no
 split finer than 30 days is tried). Best bands **0-270 / >270 days**, the second at 0.52 times the first band's rate
 (8.1 BIC better than a constant rate; search-adjusted p = 0.006; 0-270 / 271-1095 / >1095 and 0-365 / 366-730 / >730
@@ -3550,7 +3560,7 @@ are within 1.5 BIC of it). The 2026-11-05 14:28 snapshot gave the same bands at 
 2026-11-04 16:25 one 0-365 / 366-1095 / >1095 at 4.8 BIC: a lower rate after the first year or so holds across these
 rounds of repairs, but where it is cut moves. Calendar growth does not explain it (per-organisation rate unchanged
 year on year; yearly effects p = 0.48; the bands hold under every calendar adjustment, p <= 0.0003). **No short-term
-vigilance** at 1-90 days (one-sided p = 0.98; 27 repeats against 18.9 expected). **A delayed peak** at 91-180 days:
+vigilance** at 1-90 days (one-sided p = 0.98; 27 repeats against 19.0 expected). **A delayed peak** at 91-180 days:
 1.59 times the rate at other times (95% CI 0.99-2.44; one-sided p = 0.027; 25 repeats against 16.8 expected) - the
 interval reaches 1 and the window was one of several the earlier reports looked at, so it is weak evidence; 91-120
 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE 3.6 and HUGE 8.8

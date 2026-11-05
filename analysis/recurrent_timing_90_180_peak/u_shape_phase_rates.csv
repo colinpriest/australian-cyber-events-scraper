@@ -1,4 +1,4 @@
 phase_order,u_shape_phase,phase,events,exposure_days,rate_per_100_entity_years
-0,immediate,Immediate period,27,91013,10.835539977805368
-1,response,Response period,59,221966,9.708581494463116
-2,long_term,Long-term period,70,494507,5.170300925972736
+0,immediate,Immediate period,27,90923,10.84626552137523
+1,response,Response period,59,221691,9.720624653233553
+2,long_term,Long-term period,70,493808,5.177619641642096

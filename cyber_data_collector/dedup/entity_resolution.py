@@ -31,7 +31,8 @@ import logging
 import re
 import sqlite3
 import unicodedata
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.utils.timestamps import utc_now_iso
 
@@ -206,6 +207,48 @@ def stored_aliases(conn: sqlite3.Connection, sources: Sequence[str] = TRUSTED_AL
             and (source == "human" or not descriptive_names.joins_name_to_description(descriptions, raw, canonical))}
 
 
+#: Connections inside :func:`alias_scope`: id(conn) -> [conn.total_changes when read, the two lookups].
+_ALIAS_SCOPES: Dict[int, Any] = {}
+
+
+def _read_alias_lookups(conn: sqlite3.Connection) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """The stored aliases by lowered name and by normalised name (the first alias of a normalised name wins)."""
+    aliases = stored_aliases(conn, (*TRUSTED_ALIAS_SOURCES, "rule", "learned"))
+    normalised: Dict[str, str] = {}
+    for raw, canonical in aliases.items():
+        normalised.setdefault(normalize_name(raw), canonical)
+    return {raw.lower(): canonical for raw, canonical in aliases.items()}, normalised
+
+
+def _alias_lookups(conn: sqlite3.Connection) -> Tuple[Dict[str, str], Dict[str, str]]:
+    scoped = _ALIAS_SCOPES.get(id(conn))
+    if scoped is None:
+        return _read_alias_lookups(conn)
+    if scoped[0] != conn.total_changes:
+        scoped[0], scoped[1] = conn.total_changes, _read_alias_lookups(conn)
+    return scoped[1]
+
+
+@contextmanager
+def alias_scope(conn: sqlite3.Connection) -> Iterator[None]:
+    """Read the stored aliases once for a block of many name comparisons on ``conn``.
+
+    Each comparison read ``EntityAliases``, ``EntityAntiAliases`` and ``DescriptiveNames`` again and normalised
+    every alias: 0.3 s a comparison, and the supplier report makes thousands (owner, 2026-11-06). A write on this
+    connection inside the block reads them again; another connection's commit is not seen until the block ends, so
+    keep the block to one read of the data. Blocks nest.
+    """
+    key = id(conn)
+    if key in _ALIAS_SCOPES:
+        yield
+        return
+    _ALIAS_SCOPES[key] = [None, None]
+    try:
+        yield
+    finally:
+        _ALIAS_SCOPES.pop(key, None)
+
+
 def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str],
                           context: Optional[str] = None) -> Optional[str]:
     """The organisation's canonical name when ``name`` is a stored alias of it, else ``name``.
@@ -220,12 +263,10 @@ def canonical_entity_name(conn: sqlite3.Connection, name: Optional[str],
     """
     if not name or not name.strip():
         return name
-    aliases = stored_aliases(conn, (*TRUSTED_ALIAS_SOURCES, "rule", "learned"))
-    lowered = {raw.lower(): canonical for raw, canonical in aliases.items()}
+    lowered, normalised = _alias_lookups(conn)
     hit = lowered.get(name.strip().lower())
-    if hit is None and aliases:
-        wanted = normalize_name(name)
-        hit = next((canonical for raw, canonical in aliases.items() if normalize_name(raw) == wanted), None)
+    if hit is None and normalised:
+        hit = normalised.get(normalize_name(name))
     if hit is None and context:
         from cyber_data_collector.dedup.contextual_aliases import resolve_in_context
 

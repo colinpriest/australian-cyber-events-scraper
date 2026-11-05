@@ -135,3 +135,43 @@ def test_a_failed_question_is_left_undecided(conn):
     report = cc.verify(conn, search=lambda prompt: None)
     assert len(report.failed) == len(cc.proposals(conn))
     assert cc.same_pairs(conn) == {}
+
+
+def test_alias_scope_reads_once_and_again_after_a_write():
+    from cyber_data_collector.dedup import entity_resolution as er
+
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE EntityAliases (raw_name TEXT, canonical_name TEXT, source TEXT)")
+    c.execute("INSERT INTO EntityAliases VALUES ('Medicare', 'Services Australia', 'human')")
+    reads = []
+    original = er.stored_aliases
+    er.stored_aliases = lambda *a, **k: (reads.append(1), original(*a, **k))[1]
+    try:
+        assert er.canonical_entity_name(c, "Medicare") == "Services Australia"
+        assert len(reads) == 1
+        reads.clear()
+        with er.alias_scope(c):
+            for _ in range(5):
+                assert er.canonical_entity_name(c, "medicare") == "Services Australia"
+            assert er.canonical_entity_name(c, "Optus") == "Optus"
+            assert len(reads) == 1
+            c.execute("INSERT INTO EntityAliases VALUES ('Optus', 'Singtel Optus', 'human')")
+            assert er.canonical_entity_name(c, "Optus") == "Singtel Optus"
+            assert len(reads) == 2
+        assert id(c) not in er._ALIAS_SCOPES
+    finally:
+        er.stored_aliases = original
+
+
+def test_a_check_of_many_exceptions_builds_the_supplier_report_once(monkeypatch):
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+    from cyber_data_collector.dedup import validation_exceptions as ve
+
+    calls = []
+    monkeypatch.setattr(mci, "find", lambda conn: (calls.append(1), [])[1])
+    shared = {}
+    c = sqlite3.connect(":memory:")
+    assert ve._incidents(c, shared) == [] and ve._incidents(c, shared) == []
+    assert len(calls) == 1
+    assert ve._incidents(c, None) == []
+    assert len(calls) == 2

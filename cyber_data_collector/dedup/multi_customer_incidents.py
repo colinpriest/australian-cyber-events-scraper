@@ -232,6 +232,14 @@ def attack_groups(conn: sqlite3.Connection) -> List[List[Tuple[str, str, Optiona
 
 
 def find(conn: sqlite3.Connection) -> List[Incident]:
+    """See :func:`_find`; the stored aliases are read once for all its name comparisons."""
+    from cyber_data_collector.dedup.entity_resolution import alias_scope
+
+    with alias_scope(conn):
+        return _find(conn)
+
+
+def _find(conn: sqlite3.Connection) -> List[Incident]:
     """Every supplier incident with two or more distinct Australian customers, ordered by vendor and date; each
     incident's customers in name order, with the named customers left out (outside Australia, or not checked)."""
     from cyber_data_collector.dedup import descriptive_names, name_judgement

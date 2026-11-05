@@ -4,6 +4,7 @@
     python scripts/publish_outputs.py                          # snapshot, gate, build, publish together
     python scripts/publish_outputs.py --snapshot-id <id>       # rebuild from a retained snapshot (reproduce)
     python scripts/publish_outputs.py --snapshot-id latest-published
+    python scripts/publish_outputs.py --with-analyses          # one snapshot: rerun the analyses, publish once
     python scripts/publish_outputs.py --list                   # retained snapshots, newest first
     python scripts/publish_outputs.py --prune                  # apply the retention policy now
 
@@ -22,13 +23,19 @@ information types) are brought up to date
 changed are asked again. If that fails nothing is published (exit 2);
 ``--no-refresh-judgements`` publishes the judgements as stored, stale ones marked.
 
+``--with-analyses`` is the step after a correction to the data: judgements are brought up to date, the three
+recurrence runs (and the extended analyses) read one new snapshot, and everything is published from that snapshot,
+once. Publishing first and analysing afterwards meant publishing twice.
+
 Exit codes: 0 published; 1 blocked by the quality gate; 2 failed (nothing replaced).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -57,6 +64,26 @@ def _list(store: snapshots.SnapshotStore) -> int:
     return 0
 
 
+def run_analyses(db_path: Path, analysis_dir: Path, bootstrap: int = 500, date_draws: int = 100) -> str:
+    """Run every recurrence analysis on one new snapshot; the snapshot's id. Raises on any failure."""
+    script = str(PROJECT_ROOT / "scripts" / "analyze_recurrent_timing.py")
+    base = [sys.executable, script, "--db", str(db_path), "--bootstrap", str(bootstrap)]
+    main_dir = analysis_dir / "recurrent_timing"
+    subprocess.run([*base, "--out-dir", str(main_dir), "--extended", "--date-draws", str(date_draws),
+                    "--extended-out-dir", str(analysis_dir / "recurrent_timing_extended")],
+                   cwd=PROJECT_ROOT, check=True)
+    snapshot_id = json.loads((main_dir / "analysis_inputs.json").read_text(encoding="utf-8"))["snapshot_id"]
+    bandings = {"recurrent_timing_90_180_peak": "0,90,180,365,730,1460,inf",
+                "recurrent_timing_90d": "0,90,365,730,1460,inf"}
+    running = [subprocess.Popen([*base, "--snapshot-id", snapshot_id, "--elapsed-bounds", bounds,
+                                 "--out-dir", str(analysis_dir / name)], cwd=PROJECT_ROOT)
+               for name, bounds in bandings.items()]
+    codes = [p.wait() for p in running]
+    if any(codes):
+        raise subprocess.CalledProcessError(max(codes), "analyze_recurrent_timing.py (a banding run)")
+    return snapshot_id
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db-path", default=None, help="database (default: DATABASE_URL or instance/cyber_events.db)")
@@ -69,6 +96,8 @@ def main(argv=None) -> int:
     parser.add_argument("--no-refresh-judgements", action="store_true",
                         help="do not bring the stored AI-involvement and breach-source judgements up to date first "
                              "(stale ones are published marked stale)")
+    parser.add_argument("--with-analyses", action="store_true",
+                        help="rerun the recurrence analyses on one new snapshot, then publish from it, once")
     parser.add_argument("--list", action="store_true", help="list the retained snapshots and exit")
     parser.add_argument("--prune", action="store_true", help="apply the retention policy and exit")
     args = parser.parse_args(argv)
@@ -92,6 +121,14 @@ def main(argv=None) -> int:
             except JudgementRefreshFailed as exc:
                 print(f"FAILED, nothing replaced: {exc}", file=sys.stderr)
                 return 2
+    if args.with_analyses:
+        if args.snapshot_id:
+            parser.error("--with-analyses takes its own new snapshot; do not pass --snapshot-id")
+        try:
+            args.snapshot_id = run_analyses(db_path, Path(args.analysis_dir).resolve())
+        except subprocess.CalledProcessError as exc:
+            print(f"FAILED, nothing replaced: {exc}", file=sys.stderr)
+            return 2
     try:
         result = publish(db_path, Path(args.out_dir), Path(args.risk_matrix_dir),
                          analysis_dir=Path(args.analysis_dir), skip_gate=args.skip_quality_gate,

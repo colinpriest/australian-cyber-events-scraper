@@ -1,3 +1,3 @@
 event_order,spells,organisations,repeats,censored,exposure_days,rate_per_100_entity_years,poisson_ci_low,poisson_ci_high
-After first observed incident,908,908,105,803,718307.0,5.339116840014089,4.366868612060246,6.463326461748568
+After first observed incident,907,907,105,802,717243.0,5.347037196598642,4.373346679051813,6.472914536299732
 After second or later observed incident,157,105,52,105,89179.0,21.297614909339643,15.906077495787644,27.9289884455464
