@@ -3082,7 +3082,7 @@ it, once: 9 minutes on 2026-11-06 for a one-event merge. Publishing first and an
 Two faults had made the same step take over 2 hours: each name comparison re-read the alias tables
 (`entity_resolution.alias_scope` now reads them once for a block of comparisons), and every validation exception about
 the supplier report rebuilt it (`validation_exceptions.check` now builds it once). `multi_customer_incidents.find` went
-from over 6 minutes to 3.8 seconds and the check of all 122 exceptions from about 36 minutes to 4.5 seconds.
+from over 100 seconds (never finished inside a 100-second timing run) to 3.8 seconds and the check of all 122 exceptions from about 36 minutes to 4.5 seconds.
 
 **Stored judgements are brought up to date first** (`publication/judgements.py`, 2026-11-02).
 The AI incident report and the OAIC comparisons show stored per-event judgements (AI
