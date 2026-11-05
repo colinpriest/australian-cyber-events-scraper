@@ -763,6 +763,9 @@ class UnifiedPipeline:
                  ["classify-entities", "--stale-only"], names, ["check-victims"], attribution, fill,
                  coherence, same_org, duplicates, suppliers, label_contradictions,
                  ["classify-entities", "--stale-only"],
+                 # Two victims of one event that may be one organisation ("UOW" / "University of Wollongong",
+                 # "Perth uni" beside the University of Notre Dame): asked for that event only, after roles settle.
+                 ["check-covictims"],
                  # Titles: the best member headline, and one written from the evidence where every candidate is
                  # a stored LLM paragraph, a placeholder or page furniture (the Optus White Pages event's title was
                  # a 528-character Perplexity answer).

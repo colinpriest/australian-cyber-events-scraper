@@ -1563,6 +1563,26 @@ judgement calls a description joins no other name; and two names scoped to
 different places are two organisations. A list of organisations is none of
 them.
 
+**Two victims of one event that may be one organisation** (`dedup/covictim_coreference.py`, `dedup_admin.py
+check-covictims`, run after the second role refresh). A review of the entity dashboard (2026-11-05) found one
+organisation listed twice on one event ("UOW" / "University of Wollongong", "Sydney University" / "University of
+Sydney", "Service Australia" / "Services Australia", "VRC" / "Victoria Racing Club Limited") and descriptions beside
+the organisation they describe ("Perth uni" beside the University of Notre Dame Australia, "Australia's
+second-largest telecom provider" beside Optus). Alias learning never compares two victim roles of one event: of 237
+such pairs, 41 had been asked about. Every pair of victims of an event with at most 4 victim organisations, and on a
+larger event the pairs that share a distinctive word, abbreviate one another or have the same words in another
+order, is put to Perplexity with that incident's reporting (title, record titles, the sentences naming each name,
+profiles, what a person recorded). `same` joins the two names **on that event only** - victim counting
+(`within_event_duplicates`) and the entity dashboard count the organisation once there - and folds nothing globally:
+"Perth uni" is Notre Dame in one report and not a name of it elsewhere. Every other verdict keeps both; a person's
+alias or alias decision decides without a question. Verdicts are stored in `EventVictimCoreference` against a hash
+of the question as sent and count only while the question is unchanged. Like the alias verification it builds on,
+the verdict is not calibrated on labels; it never changes an event's membership. On 2026-11-05: 108 pairs asked
+(108 Perplexity calls): 22 `same`, 20 `parent_subsidiary`, 4 `related`, 62 `different`, so 22 victim rows now count
+with another victim of their event. Channel 9 / Nine, AHM / Medibank, Dodo / Vocus, Live Nation / Ticketmaster, SA
+Health / SALHN and Rex / its subsidiary came back `parent_subsidiary`, the two Red Crosses `related`, and the two
+federal courts `different`: all are kept as separate organisations.
+
 **Anti-aliases** (`EntityAntiAliases`, `dedup/anti_aliases.py`) are the opposite
 of aliases: names that look alike but are different entities ("Optus" / "Optus
 Stadium"). Every stored verdict that two names are `different`, `related` or
@@ -3512,22 +3532,23 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-05 11:28 snapshot (`snap-20261105112819`, censor date 2026-11-03, events from 2020 on; 157 repeats,
+On the 2026-11-05 14:28 snapshot (`snap-20261105142842`, censor date 2026-11-03, events from 2020 on; 157 repeats,
 follow-up split by calendar month; roles classified under `entity-roles-v10` with the owner's definitions of victim,
-vendor and service provider, owner supplier-role labels applied, and report-dated events re-dated from their records'
-checked incident dates): adequate for a simple model (20 repeats per parameter; the full model 6.0; 51% of incident
-dates unverified, down from 63%, so no split finer than 30 days is tried). Best bands **0-270 / >270 days**, the
-second at 0.55 times the first band's rate (6.5 BIC better than a constant rate; search-adjusted p = 0.008; 0-365 /
-366-730 / >730 and 0-365 / 366-1095 / >1095 are within 0.4 BIC of it). The 2026-11-04 16:25 snapshot gave 0-365 /
-366-1095 / >1095 at 4.8 BIC (p = 0.018): a lower rate after the first year or so holds across these rounds of repairs,
-but where it is cut moves. Calendar growth does not explain it (per-organisation rate +0% a year; yearly effects p =
-0.64; the bands hold under every calendar adjustment, p <= 0.0005). **No short-term vigilance** at 1-90 days
-(one-sided p = 0.98; 27 repeats against 18.8 expected). **A delayed peak** at 91-180 days: 1.60 times the rate at other
-times (95% CI 1.00-2.46; one-sided p = 0.026; 25 repeats against 16.6 expected), where the 2026-11-04 snapshot gave
-one-sided p = 0.089 - the lower bound sits at 1.00 and the window was one of several the earlier reports looked at, so
-it is weak evidence; 91-120 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM
-1.4, LARGE 3.6 and HUGE 8.2 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern"
-(below) came from a model with more parameters than its repeats support.
+vendor and service provider, owner supplier-role labels applied, report-dated events re-dated from their records'
+checked incident dates, and two victims of one event that are one organisation counted once on that event
+(`check-covictims`)): adequate for a simple model (20 repeats per parameter; the full model 6.0; 51% of incident dates
+unverified, so no split finer than 30 days is tried). Best bands **0-270 / >270 days**, the second at 0.54 times the
+first band's rate (6.8 BIC better than a constant rate; search-adjusted p = 0.010; 0-365 / 366-730 / >730 and 0-365 /
+366-1095 / >1095 are within 0.4 BIC of it). The 2026-11-04 16:25 snapshot gave 0-365 / 366-1095 / >1095 at 4.8 BIC
+(p = 0.018): a lower rate after the first year or so holds across these rounds of repairs, but where it is cut moves.
+Calendar growth does not explain it (per-organisation rate +1% a year; yearly effects p = 0.65; the bands hold under
+every calendar adjustment, p <= 0.0005). **No short-term vigilance** at 1-90 days (one-sided p = 0.98; 27 repeats
+against 18.7 expected). **A delayed peak** at 91-180 days: 1.61 times the rate at other times (95% CI 1.00-2.48;
+one-sided p = 0.024; 25 repeats against 16.6 expected), where the 2026-11-04 snapshot gave one-sided p = 0.089 - the
+lower bound sits at 1.00 and the window was one of several the earlier reports looked at, so it is weak evidence;
+91-120 days holds 7 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE 3.6 and HUGE
+8.5 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern" (below) came from a model
+with more parameters than its repeats support.
 
 The censoring date defaults to the last ingest (`MAX(RawEvents.discovered_at)`),
 so a rerun after a refresh uses the new data without editing the script.
