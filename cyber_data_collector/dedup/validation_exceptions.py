@@ -152,8 +152,20 @@ def _supplier_incidents(conn: sqlite3.Connection, event_id: str) -> set:
     return {sid for sid, e in rows if (resolve_event(conn, e) or e) == event_id}
 
 
-def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
-    """Whether the data now satisfies one exception."""
+def _incidents(conn: sqlite3.Connection, shared: Optional[Dict]) -> List:
+    """The supplier report's incidents, built once per :func:`check` (``shared``): every exception about the report
+    reads the same list."""
+    from cyber_data_collector.dedup import multi_customer_incidents as mci
+
+    if shared is None:
+        return mci.find(conn)
+    if "incidents" not in shared:
+        shared["incidents"] = mci.find(conn)
+    return shared["incidents"]
+
+
+def evaluate(conn: sqlite3.Connection, row: Dict, shared: Optional[Dict] = None) -> Result:
+    """Whether the data now satisfies one exception. ``shared`` holds what a run of many exceptions reuses."""
     from cyber_data_collector.dedup.victim_fill import names_match
 
     eid, kind, value_text = row["exception_id"], row["kind"], row["value"]
@@ -203,14 +215,12 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         return Result(eid, kind, "pass" if ok else "fail",
                       f"event {now[:8]} sizes: {', '.join(f'{n}={z}' for n, z in found.items()) or 'victim not found'}")
     if kind == "supplier_customers_once":
-        from cyber_data_collector.dedup import multi_customer_incidents as mci
-
         mine = _supplier_incidents(conn, now)
         if not mine:
             return Result(eid, kind, "unchecked", f"event {now[:8]} is in no supplier incident")
         first, _, second = value_text.partition("|")
         twice = []
-        for inc in mci.find(conn):
+        for inc in _incidents(conn, shared):
             if not set(inc.supplier_incident_ids) & set(mine):
                 continue
             holders = [{i for i, c in enumerate(inc.customers) if any(names_match(conn, n, name)
@@ -240,12 +250,10 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         return Result(eid, kind, "fail" if reason else "pass",
                       f"event {now[:8]} {label}: {reason}" if reason else f"event {now[:8]} {label}: current")
     if kind == "not_supplier_customer":
-        from cyber_data_collector.dedup import multi_customer_incidents as mci
-
         mine = _supplier_incidents(conn, now)
         if not mine:
             return Result(eid, kind, "unchecked", f"event {now[:8]} is in no supplier incident")
-        listed = [(i.vendor, c.name) for i in mci.find(conn) if set(i.supplier_incident_ids) & set(mine)
+        listed = [(i.vendor, c.name) for i in _incidents(conn, shared) if set(i.supplier_incident_ids) & set(mine)
                   for c in i.customers]
         hits = [f"{c} under {v}" for v, c in listed if names_match(conn, row["value"], c)]
         return Result(eid, kind, "fail" if hits else "pass",
@@ -273,7 +281,11 @@ def check(conn: sqlite3.Connection, record: bool = True) -> List[Result]:
         rows = [dict(r) for r in conn.execute("SELECT * FROM ValidationExceptions ORDER BY reported_at")]
     finally:
         conn.row_factory = previous
-    results = [evaluate(conn, r) for r in rows]
+    from cyber_data_collector.dedup.entity_resolution import alias_scope
+
+    shared: Dict = {}
+    with alias_scope(conn):
+        results = [evaluate(conn, r, shared) for r in rows]
     if record and results:
         now = utc_now_iso()
         conn.executemany("UPDATE ValidationExceptions SET last_checked_at = ?, last_result = ?, last_detail = ? "
