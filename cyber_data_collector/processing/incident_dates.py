@@ -49,7 +49,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +142,22 @@ def reconcile_precision(event_day: date, evidence: Iterable[Tuple[str, str, str]
     return narrowest[0], "verified"
 
 
+def discount_reporting_months(evidence: Sequence[Tuple[str, str, str, Optional[str]]]) -> List[Tuple[str, str, str]]:
+    """Verified evidence without the intervals that are only the reporting period, when earlier evidence exists.
+
+    Each item is ``(precision, earliest, latest, publication day of the record that gave it)``. An interval holding
+    its own record's publication date may be that report's date read as the incident's ("August 2026" from an
+    article published 10 August 2026), and an incident cannot follow its report, while it routinely precedes it. So
+    when another verified interval ends before such an interval begins, the reporting-period interval gives way
+    (owner, 2026-11-04: the AI agent that hacked a gym, April 2026 by one record's own text, reported in August).
+    """
+    plain = [(p, start, end) for p, start, end, _ in evidence]
+    dropped = [i for i, (_, start, end, published) in enumerate(evidence)
+               if published and start <= published <= end
+               and any(other_end < start for j, (_, _, other_end, _) in enumerate(evidence) if j != i)]
+    return [item for i, item in enumerate(plain) if i not in dropped]
+
+
 @dataclass
 class PrecisionReport:
     events: int = 0
@@ -150,12 +166,15 @@ class PrecisionReport:
     unverified: int = 0
     #: Events whose sources gave different but compatible precisions, reconciled to the narrower.
     reconciled: int = 0
+    #: Events whose conflict was settled by setting aside the reporting-period evidence.
+    reporting_month_discounted: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
         parts = ", ".join(f"{n} {p}" for p, n in sorted(self.verified.items()))
         return (f"incident-date precision verified for {sum(self.verified.values())} of {self.events} active "
                 f"event(s) ({parts or 'none'}; {self.reconciled} reconciled from compatible month/day evidence); "
-                f"{len(self.conflicting)} conflicting; {self.unverified} unverified")
+                f"{len(self.conflicting)} conflicting ({len(self.reporting_month_discounted)} settled by setting "
+                f"aside a reporting-month date); {self.unverified} unverified")
 
 
 def refresh_event_precision(conn: sqlite3.Connection) -> PrecisionReport:
@@ -167,22 +186,34 @@ def refresh_event_precision(conn: sqlite3.Connection) -> PrecisionReport:
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'EnrichmentFactSupport'").fetchone() else set()
     events = conn.execute("SELECT deduplicated_event_id, event_date, event_date_precision, event_date_earliest, "
                           "event_date_latest FROM DeduplicatedEvents WHERE status = 'Active'").fetchall()
+    published_column = ("r.publication_date" if "publication_date" in
+                        {c[1] for c in conn.execute("PRAGMA table_info(RawEvents)")} else "NULL")
     for dedup_id, event_date, old_precision, old_start, old_end in events:
         report.events += 1
         event_day = _day(event_date)
         evidence: List[Tuple[str, str, str]] = []
+        sourced: List[Tuple[str, str, str, Optional[str]]] = []
         if event_day is not None:
-            for enriched_id, raw_date, raw_precision, enriched_date, blob in conn.execute(
-                    """SELECT e.enriched_event_id, r.event_date, r.event_date_precision, e.event_date,
-                              e.perplexity_enrichment_data
+            for enriched_id, raw_date, raw_precision, enriched_date, blob, published in conn.execute(
+                    f"""SELECT e.enriched_event_id, r.event_date, r.event_date_precision, e.event_date,
+                              e.perplexity_enrichment_data, {published_column}
                        FROM EventDeduplicationMap m
                        JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
                        JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
                        WHERE m.deduplicated_event_id = ? AND COALESCE(e.status, 'Active') = 'Active'""",
                     (dedup_id,)):
-                evidence.extend(_record_evidence(raw_date, raw_precision, enriched_date, blob,
-                                                 enriched_id in supported))
+                found = _record_evidence(raw_date, raw_precision, enriched_date, blob, enriched_id in supported)
+                evidence.extend(found)
+                day = _day(published)
+                sourced.extend((*item, day.isoformat() if day else None) for item in found)
             precision, status = reconcile_precision(event_day, evidence)
+            if status == "conflicting":
+                kept = discount_reporting_months(sourced)
+                if len(kept) < len(evidence):
+                    precision, status = reconcile_precision(event_day, kept)
+                    if status == "verified":
+                        report.reporting_month_discounted.append(dedup_id)
+                        evidence = kept
         else:
             precision, status = None, "unverified"
         if status == "verified":

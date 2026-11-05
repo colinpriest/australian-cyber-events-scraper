@@ -170,8 +170,15 @@ def evaluate(conn: sqlite3.Connection, row: Dict) -> Result:
         ok = bool(date) and (str(date)[:7] == want or bool(lo and hi and str(lo)[:7] <= want <= str(hi)[:7]))
         return Result(eid, kind, "pass" if ok else "fail", f"event {now[:8]} dated {date or 'none'}")
     if kind in ("victim", "not_victim"):
+        from cyber_data_collector.dedup import descriptive_names
+
         victims = _victims(conn, now)
-        hit = any(names_match(conn, row["value"], v) for v in victims)
+        # A description is never one organisation with a name: "Bunnings customers" (the people in the data,
+        # owner 2026-11-04) is not "Bunnings Group Limited", though the two share their first word.
+        descriptions = descriptive_names.described(conn)
+        hit = any(names_match(conn, row["value"], v)
+                  and not descriptive_names.joins_name_to_description(descriptions, row["value"], v)
+                  for v in victims)
         ok = hit if kind == "victim" else not hit
         return Result(eid, kind, "pass" if ok else "fail",
                       f"event {now[:8]} victims: {', '.join(victims) or 'none'}")

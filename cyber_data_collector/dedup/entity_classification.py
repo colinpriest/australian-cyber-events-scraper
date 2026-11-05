@@ -67,6 +67,7 @@ class EntityRole(str, Enum):
 
     VICTIM = "victim"
     VENDOR = "vendor"
+    SERVICE_PROVIDER = "service_provider"
     AFFECTED_CUSTOMER = "affected_customer"
     REGULATOR = "regulator"
     THREAT_ACTOR = "threat_actor"
@@ -118,14 +119,27 @@ class EntityAssignment(BaseModel):
     )
     role: EntityRole = Field(
         description=(
-            "Its part in THIS event. victim = the organisation whose systems "
-            "or data were compromised. vendor = a third-party supplier whose "
-            "own system, product or service was attacked or compromised, which "
-            "caused the victim's exposure in this incident (not one compromised "
-            "in another incident mentioned as background, not one whose product "
-            "failed without an attack, nor a firm or agency that reported, "
-            "investigated or was credited). affected_customer = an "
-            "organisation harmed via the vendor. regulator = investigating or "
+            "Its part in THIS event. victim = an organisation whose systems "
+            "were accessed without authorisation, disrupted, damaged or "
+            "encrypted, or whose data (data it collected, or held on its "
+            "systems) was taken, exposed or destroyed; never the people or "
+            "groups whose information was in the data. vendor = the company "
+            "that makes or runs a software product, platform or device other "
+            "organisations use, when the attack came through it: a flaw in the "
+            "product, or a breach of its hosted platform holding customers' "
+            "data (not one compromised in another incident mentioned as "
+            "background, not one whose product failed without an attack, not "
+            "one whose customer's own stolen credentials were used on a product "
+            "with no flaw, nor a firm or agency that reported, investigated or "
+            "was credited). service_provider = a firm providing services, not "
+            "software (law firm, call centre, records storage, consultancy), "
+            "whose own systems were breached in this incident and held the "
+            "victim's data (not one breached in another incident mentioned as "
+            "background). "
+            "affected_customer = another customer of the vendor or service "
+            "provider named in a report about the vendor, the provider or "
+            "several of their customers; in a report about one customer's own "
+            "exposure that customer is the victim. regulator = investigating or "
             "responding authority. product = the software involved. "
             "threat_actor = the attacker. bystander = commentator, journalist "
             "or anyone else."
@@ -135,9 +149,9 @@ class EntityAssignment(BaseModel):
     evidence: Optional[str] = Field(
         default=None,
         description=(
-            "Only for role vendor: copy, word for word, the sentence of the reporting shown that says this "
-            "entity's own system, product or service was attacked or compromised in this incident. If none "
-            "says that, the entity is not a vendor. Leave empty for every other role."
+            "Only for role vendor or service_provider: copy, word for word, the sentence of the reporting "
+            "shown that says this entity's own system, product or service was attacked or compromised in this "
+            "incident. If none says that, the entity is neither. Leave empty for every other role."
         ),
     )
 
@@ -201,6 +215,23 @@ class EventEntityRoles(BaseModel):
             return None
         return max(candidates, key=lambda a: a.confidence).name
 
+    def service_provider(self) -> Optional[str]:
+        """Highest-confidence service firm (not software) whose breach exposed the victim's data.
+
+        Guarded as :meth:`vendor` is. Owner, 2026-11-04: a law firm, call centre or records store is never a
+        vendor; the client's notice records it as the service provider, and the firm's own report has it as the
+        victim - two related events, linked like a vendor's.
+        """
+        victim = self.victim()
+        candidates = [a for a in self.assignments
+                      if a.role == EntityRole.SERVICE_PROVIDER
+                      and a.kind in (EntityKind.ORGANISATION, EntityKind.GOVERNMENT_BODY)
+                      and not is_threat_actor(a.name) and not is_non_organisation(a.name)
+                      and not (victim and a.name.strip().lower() == victim.strip().lower())]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda a: a.confidence).name
+
     def by_role(self, role: EntityRole) -> List[str]:
         return [a.name for a in self.assignments if a.role == role]
 
@@ -211,7 +242,7 @@ class EventEntityRoles(BaseModel):
 # to prefer bystander over guessing, so a report of the OpenAI agent's access to "a government services
 # website that contained Medicare data" came out with Medicare (and everything else) a bystander.
 # v2 is shown the members' descriptions and states that an incident has a victim.
-ROLES_PROMPT_VERSION = "entity-roles-v9"
+ROLES_PROMPT_VERSION = "entity-roles-v10"
 # v3 (2026-10-31): a vendor is a supplier whose own system was compromised - not a security firm that reported or
 # researched (ESET), an agency (Cyber Security Agency of Singapore), a photo credit (Accenture on the Tasmanian
 # ambulance pager leak) or a provider whose product failed without an attack. Events classified under an older
@@ -243,6 +274,15 @@ ROLES_PROMPT_VERSION = "entity-roles-v9"
 # EPMM) recorded Ivanti as the victim four times, and Ivanti counted as an organisation attacked again and again
 # (owner: "Ivanti as vendor"). Events classified under an older prompt whose victim is a known supplier (a vendor of
 # another event, or a supplier incident's supplier) are classified again (role_maintenance).
+# v10 (2026-11-04): the owner's definitions. A victim is an organisation whose systems were accessed, disrupted,
+# damaged or encrypted, or whose data was taken, exposed or destroyed - never the people or groups in the data
+# ("Bunnings customers" was a co-victim of Bunnings' FlexBooker breach), never an organisation only impersonated,
+# and the organisation that ran the system or owned the data, not its parent. A vendor makes or runs software, a
+# platform or a device others use, and the attack came through it (a flaw, or a breach of its hosted platform);
+# stolen customer credentials on a product with no flaw make no vendor. A service firm (law firm, call centre,
+# records storage, consultancy) is never a vendor: it is the new role service_provider in a client's report, and
+# the victim of its own. Events classified under an older prompt that record a vendor, no victim or more than one
+# victim are classified again (role_maintenance).
 #: Prompt versions whose every classification is redone, not only those with a vendor or no victim.
 RECLASSIFY_VERSIONS = frozenset({"entity-roles-v6"})
 #: Sentences shown per entity, and characters per sentence.
@@ -329,16 +369,29 @@ SYSTEM_PROMPT = (
     "You label the organisations, products and people named in a cyber "
     "security incident report.\n\n"
     "Definitions:\n"
-    "- victim: the organisation whose own systems or data were compromised. "
-    "In a supply-chain breach the victim is the organisation whose data was "
-    "exposed, which may be the supplier itself if the supplier was breached. "
-    "The report may name the target only by the service, website or programme "
-    "it runs (\"a government services website holding Medicare data\"): then "
-    "the listed organisation that runs that service or programme is the "
-    "victim.\n"
-    "- vendor: a third-party supplier, contractor or software provider whose "
-    "own system, product or service was compromised or attacked, and whose "
-    "compromise caused the victim's exposure in THIS incident. NOT a vendor: "
+    "- victim: an organisation whose systems were accessed without "
+    "authorisation, disrupted, damaged or encrypted, or whose data was taken, "
+    "exposed or destroyed. Its data means data it collected, or data held on "
+    "its systems. When one organisation's data sat on another's systems, both "
+    "are victims, each of its own report: in this report the victim is the one "
+    "the report is about. The people or groups whose information was in the "
+    "data (\"customers\", \"Bunnings customers\", students, patients, staff, "
+    "members) are never victims: label them bystander. An organisation whose "
+    "name or brand was only impersonated is never a victim. The victim is the "
+    "organisation that ran the compromised system or owned the data, not its "
+    "parent. The report may name the target only by the service, website or "
+    "programme it runs (\"a government services website holding Medicare "
+    "data\"): then the listed organisation that runs that service or programme "
+    "is the victim.\n"
+    "- vendor: the company that makes or runs a software product, platform or "
+    "device used by other organisations, when the attack came through it in "
+    "THIS incident: a flaw in the product, or a breach of the vendor's hosted "
+    "platform holding its customers' data (usually SaaS). In a report about a "
+    "customer, the customer is the victim and the company is the vendor; a "
+    "breached platform's own report has the company as its victim. NOT a "
+    "vendor: a service firm (see service_provider); a product on which a "
+    "customer's own stolen credentials were used, with no flaw in the product "
+    "or breach of the company (product or bystander); "
     "a supplier compromised in a different, earlier or later incident that the "
     "report mentions only as background (bystander); a security firm, "
     "researcher or agency that reported, researched, investigated, advised or "
@@ -348,8 +401,18 @@ SYSTEM_PROMPT = (
     "a product whose vulnerability was exploited at its customers is the "
     "vendor, not the victim, unless the report says the maker's own systems "
     "or data were breached.\n"
-    "- affected_customer: an organisation harmed because a vendor it uses was "
-    "breached.\n"
+    "- service_provider: a firm that provides services rather than software "
+    "(a law firm, call centre, records storage, consultancy, accountant) whose "
+    "own systems were breached in THIS incident and held this report's "
+    "victim's data. NOT a service provider: a firm breached in a different, "
+    "earlier or later incident that the report mentions only as background "
+    "(bystander). It is never a vendor; in a report about the firm's own "
+    "breach it is the victim.\n"
+    "- affected_customer: a customer of a breached vendor or service provider "
+    "that this report names among others - in a report about the vendor or "
+    "provider itself, or about several of its customers. When the report is "
+    "about one customer's own exposure through a vendor or service provider, "
+    "that customer is the victim, not an affected customer.\n"
     "- regulator: an authority investigating or responding (OAIC, ACSC, "
     "courts, police). Never the victim unless the authority itself was "
     "breached.\n"
@@ -512,16 +575,56 @@ def grounded_vendors(result: EventEntityRoles, mentions: Dict[str, List[str]],
     corpus = " | ".join(_quote_key(t) for t in [*shown, *(s for said in mentions.values() for s in said)] if t)
     demoted: List[str] = []
     for a in result.assignments:
-        if a.role != EntityRole.VENDOR:
+        if a.role not in (EntityRole.VENDOR, EntityRole.SERVICE_PROVIDER):
             continue
         quote = _quote_key(a.evidence or "")
         if said_of.get(a.name.strip().lower()) and len(quote) >= 20 and quote in corpus:
             continue
-        logger.info("Vendor label on %r is not grounded in the reporting shown (%r): labelled bystander",
-                    a.name, (a.evidence or "")[:120])
+        logger.info("%s label on %r is not grounded in the reporting shown (%r): labelled bystander",
+                    a.role.value, a.name, (a.evidence or "")[:120])
         a.role = EntityRole.BYSTANDER
         demoted.append(a.name)
     return demoted
+
+
+def known_suppliers(conn) -> Set[str]:
+    """Lower-cased names of known suppliers (``role_maintenance._supplier_names``)."""
+    from cyber_data_collector.dedup.role_maintenance import _supplier_names
+
+    return _supplier_names(conn)
+
+
+def supplier_victims(result: EventEntityRoles, suppliers: Set[str]) -> List[str]:
+    """A known supplier labelled a victim beside other victim organisations is the report's supplier.
+
+    Under ``entity-roles-v10`` a breached platform's own report has the company as its victim, and the Canvas
+    roundup (Instructure's breach, naming its Australian customers) came back with Instructure and the customers
+    all victims, the event's victim a customer and Instructure no longer its supplier, so the counted-once rule
+    could not make it Instructure's report. The report names the supplier's customers, so it is read the way
+    every supplier report is: the supplier as its vendor (or its service provider, when another of its events
+    records it so), the customers as victims, and ``supplier_links.double_counted_customers`` then gives each
+    customer that has its own event to that event and makes the report the supplier's, with the supplier as its
+    victim, when every customer has one. A supplier that is the only victim is the victim of its own report.
+    Returns the names relabelled.
+    """
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+
+    victims = [a for a in result.assignments if a.role == EntityRole.VICTIM
+               and a.kind in (EntityKind.ORGANISATION, EntityKind.GOVERNMENT_BODY)]
+    if len(victims) < 2:
+        return []
+    resolver = EntityResolver()
+    relabelled: List[str] = []
+    for a in victims:
+        if a.name.strip().lower() not in suppliers:
+            continue
+        others = [b for b in victims if b is not a and not resolver.same_organisation(a.name, b.name)]
+        if not others:
+            continue
+        logger.info("%r is a known supplier labelled a victim beside its customers: recorded as the vendor", a.name)
+        a.role = EntityRole.VENDOR
+        relabelled.append(a.name)
+    return relabelled
 
 
 def own_organisation_vendors(result: EventEntityRoles) -> List[str]:
@@ -537,7 +640,8 @@ def own_organisation_vendors(result: EventEntityRoles) -> List[str]:
     victims = [a.name for a in result.assignments if a.role == EntityRole.VICTIM]
     relabelled: List[str] = []
     for a in result.assignments:
-        if a.role == EntityRole.VENDOR and any(resolver.same_organisation(a.name, v) for v in victims):
+        if (a.role in (EntityRole.VENDOR, EntityRole.SERVICE_PROVIDER)
+                and any(resolver.same_organisation(a.name, v) for v in victims)):
             logger.info("Vendor label on %r names the victim's own organisation: labelled victim", a.name)
             a.role = EntityRole.VICTIM
             relabelled.append(a.name)
@@ -639,7 +743,7 @@ NON_VICTIM_KINDS = ("other", "person", "product", "threat_actor")
 
 # Roles that say, for this event, the entity was something other than the
 # organisation that was attacked.
-NON_VICTIM_ROLES = ("vendor", "regulator", "threat_actor", "product", "bystander")
+NON_VICTIM_ROLES = ("vendor", "service_provider", "regulator", "threat_actor", "product", "bystander")
 
 
 
@@ -901,6 +1005,11 @@ def classify_event(
     result = classifier.classify(event["title"] or "",
                                  classifier_detail(conn, deduplicated_event_id, event["summary"]), names,
                                  mentions=entity_mentions(conn, deduplicated_event_id, names))
+    supplier_victims(result, known_suppliers(conn))
+    from cyber_data_collector.dedup import supplier_role_labels
+
+    supplier_role_labels.apply_to_result(conn, deduplicated_event_id, result,
+                                         supplier_role_labels.not_suppliers(conn))
     if not result.assignments:
         return {"victim": None, "vendor": None, "labelled": 0, "assignments": [], "unresolved_victim": True}
 
@@ -937,7 +1046,7 @@ def classify_event(
 
 
 def _sync_roles(conn, deduplicated_event_id: str,
-                victim: Optional[str], vendor: Optional[str]) -> None:
+                victim: Optional[str], vendor: Optional[str], service_provider: Optional[str] = None) -> None:
     """Make the role table agree with the victim and vendor finally chosen.
 
     The scalar fields and ``relationship_type`` are two records of one fact,
@@ -963,13 +1072,17 @@ def _sync_roles(conn, deduplicated_event_id: str,
             (role, entity_id, deduplicated_event_id))
 
     clear_stale_vendors(conn, deduplicated_event_id, vendor)
+    clear_stale_vendors(conn, deduplicated_event_id, service_provider, role="service_provider")
+    clear_bystander_victims(conn, deduplicated_event_id, victim)
     if vendor:
         retype(vendor, "vendor")
+    if service_provider and not (victim and service_provider.strip().lower() == victim.strip().lower()):
+        retype(service_provider, "service_provider")
     if victim:
         retype(victim, "victim")
 
 
-def clear_stale_vendors(conn, deduplicated_event_id: str, vendor: Optional[str]) -> int:
+def clear_stale_vendors(conn, deduplicated_event_id: str, vendor: Optional[str], role: str = "vendor") -> int:
     """Set back to ``affected`` an event-level vendor link the event's classification no longer supports.
 
     Only the chosen vendor, and an entity some member record still labels vendor, keep the role. Other event-level
@@ -980,20 +1093,60 @@ def clear_stale_vendors(conn, deduplicated_event_id: str, vendor: Optional[str])
     rows = conn.execute(
         """SELECT dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
            JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
-           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'vendor'
+           WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = ?
              AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m
                              JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
                              WHERE m.deduplicated_event_id = dee.deduplicated_event_id
-                               AND ee.entity_id = dee.entity_id AND ee.relationship_type = 'vendor')""",
-        (deduplicated_event_id,)).fetchall()
+                               AND ee.entity_id = dee.entity_id AND ee.relationship_type = ?)""",
+        (deduplicated_event_id, role, role)).fetchall()
     changed = 0
     for entity_id, name in rows:
         if vendor and (name or "").strip().lower() == vendor.strip().lower():
             continue
         conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected' "
-                     "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'vendor'",
+                     "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = ?",
+                     (deduplicated_event_id, entity_id, role))
+        logger.info("Cleared stale %s link %r on %s", role, name, deduplicated_event_id)
+        changed += 1
+    return changed
+
+
+def clear_bystander_victims(conn, deduplicated_event_id: str, victim: Optional[str]) -> int:
+    """Set back to ``affected`` an event-level victim link that every member record linking it labels bystander.
+
+    Event-level rows change only for the chosen victim, so a co-victim the records no longer support outlived its
+    classification: "Bunnings customers" (the people in the data, owner 2026-11-04) stayed a victim of Bunnings'
+    FlexBooker breach beside Bunnings. Only the bystander label clears a link - a co-victim another step attached
+    (a supplier customer, a filled victim) is labelled victim or affected customer on its records, or not linked
+    from them at all, and keeps its role. Returns the links changed.
+    """
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    members = member_condition(conn, "e")
+    rows = conn.execute(
+        f"""SELECT dee.entity_id, v.entity_name FROM DeduplicatedEventEntities dee
+            JOIN EntitiesV2 v ON v.entity_id = dee.entity_id
+            WHERE dee.deduplicated_event_id = ? AND dee.relationship_type = 'victim'
+              AND EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                          JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                          JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                          WHERE m.deduplicated_event_id = dee.deduplicated_event_id AND ee.entity_id = dee.entity_id
+                            {members})
+              AND NOT EXISTS (SELECT 1 FROM EventDeduplicationMap m
+                              JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+                              JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                              WHERE m.deduplicated_event_id = dee.deduplicated_event_id
+                                AND ee.entity_id = dee.entity_id AND ee.relationship_type != 'bystander'
+                                {members})""",
+        (deduplicated_event_id,)).fetchall()
+    changed = 0
+    for entity_id, name in rows:
+        if victim and (name or "").strip().lower() == victim.strip().lower():
+            continue
+        conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'affected' "
+                     "WHERE deduplicated_event_id = ? AND entity_id = ? AND relationship_type = 'victim'",
                      (deduplicated_event_id, entity_id))
-        logger.info("Cleared stale vendor link %r on %s", name, deduplicated_event_id)
+        logger.info("Cleared victim link %r on %s: its records label it a bystander", name, deduplicated_event_id)
         changed += 1
     return changed
 
@@ -1060,6 +1213,38 @@ def promote_customers(conn, deduplicated_event_id: str, vendor: Optional[str]) -
     return real
 
 
+def one_organisation(conn, deduplicated_event_id: str, customers: Sequence[Tuple[int, str]]) -> Optional[str]:
+    """The name of ``customers`` when they are one organisation (``EntityResolver.same_organisation`` with the
+    first, or a person's or model's ``same`` / ``parent_subsidiary`` alias verdict), else None: the name the event's
+    active records link most often, then the shortest. One customer is that customer."""
+    if not customers:
+        return None
+    if len(customers) == 1:
+        return customers[0][1]
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
+    from cyber_data_collector.processing.active_evidence import member_condition
+
+    resolver = EntityResolver()
+    verdicts = pair_verdicts(conn) if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'EntityAliasDecisions'").fetchone() else {}
+    head = customers[0][1]
+
+    def joined(name: str) -> bool:
+        return (resolver.same_organisation(head, name)
+                or verdicts.get(frozenset((head.lower(), name.lower()))) in ("same", "parent_subsidiary"))
+
+    if not all(joined(name) for _, name in customers[1:]):
+        return None
+    counts = dict(conn.execute(
+        f"""SELECT ee.entity_id, COUNT(*) FROM EventDeduplicationMap m
+            JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
+            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+            WHERE m.deduplicated_event_id = ? {member_condition(conn, "e")} GROUP BY ee.entity_id""",
+        (deduplicated_event_id,)).fetchall())
+    return min(customers, key=lambda c: (-counts.get(c[0], 0), len(c[1]), c[1]))[1]
+
+
 def repair_unpromoted_customers(conn) -> int:
     """Classified Active events with a vendor and no victim whose records name the supplier's customers: promote
     them (:func:`promote_customers`), with no model call; run by ``classify-entities``. Returns the events changed.
@@ -1078,9 +1263,10 @@ def repair_unpromoted_customers(conn) -> int:
         if not real:
             continue
         changed += 1
-        if len(real) == 1:
+        organisation = one_organisation(conn, did, real)
+        if organisation:
             conn.execute("UPDATE DeduplicatedEvents SET victim_organization_name = ? WHERE deduplicated_event_id = ? "
-                         "AND victim_organization_name IS NULL", (real[0][1], did))
+                         "AND victim_organization_name IS NULL", (organisation, did))
     return changed
 
 
@@ -1123,6 +1309,7 @@ def resolve_victim(
     Returns the ``(victim, vendor)`` finally stored.
     """
     victim, vendor = result.victim(), result.vendor()
+    service_provider = result.service_provider()
     victim, vendor = localise_victim(conn, victim, vendor, deduplicated_event_id)
 
     # The records' own researched victim outranks the role pass when none of
@@ -1148,9 +1335,13 @@ def resolve_victim(
     if demoted and not dry_run:
         real = promote_customers(conn, deduplicated_event_id, vendor)
         # One customer can name the scalar field; several are co-equal victims
-        # and picking one would repeat the misattribution being corrected.
-        if len(real) == 1:
-            victim = real[0][1]
+        # and picking one would repeat the misattribution being corrected - unless
+        # they are one organisation under several names or arms (Bunnings Group and
+        # Bunnings New Zealand on Bunnings' FlexBooker breach), when the name its
+        # records link most often stands for it.
+        organisation = one_organisation(conn, deduplicated_event_id, real)
+        if organisation:
+            victim = organisation
 
     # A stored victim survives only while it is plausible. Previously the field
     # was overwritten only when the classifier produced a new victim, so a wrong
@@ -1198,5 +1389,5 @@ def resolve_victim(
                 "vendor_organization_industry = ? WHERE deduplicated_event_id = ?",
                 (vendor, industry_for(conn, vendor) if vendor else None,
                  deduplicated_event_id))
-        _sync_roles(conn, deduplicated_event_id, victim, vendor)
+        _sync_roles(conn, deduplicated_event_id, victim, vendor, service_provider)
     return victim, vendor

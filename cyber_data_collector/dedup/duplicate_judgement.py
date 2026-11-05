@@ -292,6 +292,43 @@ def one_customer_pairs(conn: sqlite3.Connection, universe: "PairUniverse", cutof
     return [out[k] for k in sorted(out)]
 
 
+def supplier_report_pairs(conn: sqlite3.Connection, labels: Mapping[str, str]) -> Callable[[str, str], bool]:
+    """True for a pair of a customer's own event and a report of several customers of one supplier.
+
+    The supplier step links those two (a customer of a supplier breach is counted once, through its own event; owner
+    2026-11-02), so they are not put to the duplicate question. Under ``entity-roles-v10`` the University of
+    Adelaide's own Canvas notice and Stake's own DriveWealth report shared a victim with the multi-customer report
+    of their supplier's breach, and the check merged each into it (trial on a copy, 2026-11-04). The report is an
+    event that records a supplier (vendor or service provider) and two or more victim organisations
+    (``supplier_links._victim_organisations``); the customer's event records one. A labelled pair is never skipped.
+    """
+    from cyber_data_collector.dedup import supplier_links
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+    from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if not {"DeduplicatedEventEntities", "EntitiesV2"} <= tables or \
+            "entity_kind" not in {r[1] for r in conn.execute("PRAGMA table_info(EntitiesV2)")}:
+        return lambda a, b: False           # no entity roles recorded: no supplier report can be recognised
+    vendors = supplier_links._vendor_names(conn)
+    verdicts = pair_verdicts(conn) if "EntityAliasDecisions" in tables else {}
+    orgs = supplier_links._victim_organisations(conn, EntityResolver(conn), verdicts, vendors)
+    reports = {did for did, groups in orgs.items() if len(groups) >= 2}
+    names: Dict[str, Set[str]] = defaultdict(set)
+    for did, name in conn.execute(
+            "SELECT deduplicated_event_id, v.entity_name FROM DeduplicatedEventEntities dee "
+            "JOIN EntitiesV2 v ON v.entity_id = dee.entity_id WHERE dee.relationship_type = 'victim'"):
+        names[did].add(" ".join((name or "").split()).lower())
+    single = {did for did, ns in names.items() if len(ns) == 1}
+
+    def skip(a: str, b: str) -> bool:
+        if labels.get(pair_id(a, b)):
+            return False
+        return (a in reports and b in single) or (b in reports and a in single)
+
+    return skip
+
+
 def candidate_pairs(conn: sqlite3.Connection, skip: Skip = None) -> List[Dict[str, Any]]:
     """Every pair of active events sharing a victim, earliest first within each pair (:class:`PairUniverse`).
 
@@ -846,6 +883,8 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
 
     options = {"cap": cap_candidates, "partners_per_event": partners_per_event, "long_gap_budget": long_gap_budget}
     org_options = dict(options)
+    labels = labelled_pairs(labels_path)
+    supplier_report = supplier_report_pairs(conn, labels)
     # A ruling cached between two strays of one event is not a judgement of the pair; it must not veto a merge.
     voided = split_rulings.void_orphaned(conn) if apply else split_rulings.orphaned(conn)
     research_all(conn, search=timeline_search)
@@ -854,7 +893,12 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     ai_universe = ai.AIUniverse(conn, universe) if include_ai else None
     ai_pairs, ai_stats = ai_universe.ranked(corpus, **options) if include_ai else ([], None)
     # Pairs are retrieved and ranked per group (bounded_candidates): the pairs that are not asked are never built.
-    pairs, org_stats = universe.ranked(corpus, skip=ai_universe.owns if include_ai else None, **org_options)
+    owned = ai_universe.owns if include_ai else (lambda a, b: False)
+
+    def org_skip(a: str, b: str) -> bool:
+        return owned(a, b) or supplier_report(a, b)
+
+    pairs, org_stats = universe.ranked(corpus, skip=org_skip, **org_options)
     # One customer's two reports of one supplier breach, recorded under two names of the customer.
     from cyber_data_collector.dedup import supplier_victims as sv
     try:
@@ -862,12 +906,10 @@ def check_duplicates(conn: sqlite3.Connection, apply: bool = False, judge=None,
     except sv.CalibrationError:
         supplier_cutoff = None
     asked = {p["pair_id"] for p in pairs}
-    extra = [p for p in one_customer_pairs(conn, universe, supplier_cutoff,
-                                           skip=ai_universe.owns if include_ai else None)
+    extra = [p for p in one_customer_pairs(conn, universe, supplier_cutoff, skip=org_skip)
              if p["pair_id"] not in asked]
     pairs = pairs + extra
     org_stats = {**(org_stats or {}), "one_customer_pairs": len(extra)}
-    labels = labelled_pairs(labels_path)
     # Labels decide first: a pair labelled same is merged and one labelled different never is, whatever the model
     # says, so neither is (re-)asked about.
     scored = score_pairs(conn, [p for p in pairs if labels.get(p["pair_id"]) not in ("same", "different")],

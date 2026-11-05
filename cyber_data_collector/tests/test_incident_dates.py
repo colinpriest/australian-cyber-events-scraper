@@ -236,3 +236,23 @@ def test_research_dated_after_the_report_was_published_describes_another_inciden
     assert conn.execute("SELECT event_date FROM EnrichedEvents WHERE enriched_event_id = 'eo1'").fetchone()[0] == "2025-06-30"
     assert conn.execute("SELECT COUNT(*) FROM ImpossibleIncidentDates").fetchone()[0] == 1
     assert idt.remove_dates_after_publication(conn).research == 0     # idempotent
+
+
+def test_a_reporting_month_gives_way_to_an_earlier_verified_month():
+    """The gym hacked by an AI agent: one record's text gives April 2026; two read August 2026, the month of the
+    article that reported it, as the incident's (owner, 2026-11-04: April)."""
+    april = ("month", "2026-04-01", "2026-04-30", "2026-08-10")
+    august = [("month", "2026-08-01", "2026-08-31", "2026-08-10"), ("month", "2026-08-01", "2026-08-31", "2026-08-09")]
+    assert idt.reconcile_precision(date(2026, 4, 1), [e[:3] for e in [april, *august]]) == (None, "conflicting")
+    kept = idt.discount_reporting_months([april, *august])
+    assert kept == [april[:3]]
+    assert idt.reconcile_precision(date(2026, 4, 1), kept) == ("month", "verified")
+
+
+def test_a_reporting_month_with_no_earlier_evidence_is_kept():
+    # Reported the month it happened: nothing earlier, so the month stands.
+    same = [("month", "2026-08-01", "2026-08-31", "2026-08-10"), ("day", "2026-08-03", "2026-08-03", None)]
+    assert idt.discount_reporting_months(same) == [s[:3] for s in same]
+    # A later interval is no reason to set the reporting month aside.
+    later = [("month", "2026-08-01", "2026-08-31", "2026-08-10"), ("month", "2026-10-01", "2026-10-31", None)]
+    assert idt.discount_reporting_months(later) == [s[:3] for s in later]

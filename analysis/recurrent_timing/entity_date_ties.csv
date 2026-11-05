@@ -1,3 +1,3 @@
 entity_id,entity_name,event_date,incident_count,event_ids,titles,kind,precisions,shared_interval_days
-64,Westpac,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|unverified,
-24256,Australia and New Zealand Banking Group Limited,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|unverified,
+64,Westpac,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|month,1
+24256,Australia and New Zealand Banking Group Limited,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|month,1

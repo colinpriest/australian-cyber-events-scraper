@@ -117,7 +117,7 @@ def collect(conn: sqlite3.Connection, limit: Optional[int] = None) -> Dict[str, 
         is_threat_actor as _is_actor,
     )
 
-    ROLE_ORDER = {"victim": 0, "vendor": 1, "affected_customer": 2,
+    ROLE_ORDER = {"victim": 0, "vendor": 1, "service_provider": 1, "affected_customer": 2,
                   "regulator": 4, "threat_actor": 5, "product": 6,
                   "bystander": 7}
 

@@ -501,7 +501,8 @@ class CyberEventDataV2:
 
     #: Relationship types whose organisations identify the incident a record
     #: is about (a cited page naming one of them is about the same incident).
-    INCIDENT_ORGANISATION_ROLES = ("victim", "primary_target", "affected", "affected_customer", "vendor")
+    INCIDENT_ORGANISATION_ROLES = ("victim", "primary_target", "affected", "affected_customer", "vendor",
+                                   "service_provider")
 
     def get_record_organisations(self, enriched_event_id: str) -> List[str]:
         """Names of the organisations linked to a record as victim, affected party or vendor."""

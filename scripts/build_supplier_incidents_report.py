@@ -81,6 +81,7 @@ def build_html(incidents: List[mci.Incident], generated: str) -> str:
                 if left_out else "")
         cards.append(
             f'<div class="card"><div class="vendor">{html.escape(inc.vendor)}'
+            + (' <span class="meta">(service provider)</span>' if inc.supplier_kind == "service provider" else "")
             + (f' <span class="meta">(also filed under {html.escape(", ".join(inc.also_vendors))})</span>'
                if inc.also_vendors else "") + "</div>"
             f'<div class="meta">attack dated {html.escape(mci.attack_label(inc))} &middot; '
@@ -89,7 +90,9 @@ def build_html(incidents: List[mci.Incident], generated: str) -> str:
             f"<table><tr><th>Customer</th><th class=\"ev\">Customer's event</th></tr>{rows}"
             f"</table>{note}</div>")
     intro = (f"{len(incidents)} attack(s) on a known vendor that affected more than one of the vendor's Australian "
-             "customers, ordered by vendor name, date of attack and customer name. Each attack has one date: the "
+             "customers, ordered by vendor name, date of attack and customer name. A vendor makes or runs software "
+             "its customers use; a service provider (a law firm, call centre or records store whose own systems "
+             "held its clients' data) is marked as one. Each attack has one date: the "
              "vendor's own event's date, else the earliest of its customers' events. A customer is listed once "
              "whether it has its own event or is only named in the reporting; one only named is listed when its "
              "researched jurisdiction is Australian. Other names of a customer, and parts of it (a directorate of "

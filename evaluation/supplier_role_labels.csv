@@ -1,0 +1,3 @@
+deduplicated_event_id,organisation,label,rationale,labeller
+50cbb6fe-d833-4369-b1fc-de52c0dc4f96,Outabox,not_supplier,"Owner 2026-11-02: Ticketek is wrongly listed under Outabox on the supplier report (validation exception 766e10a3). Outabox's breach of that month is mentioned as background; it is not Ticketek's supplier.","owner (Colin Priest), 2026-11-02"
+e21086fe-a9a2-430c-94f2-a76bb5cd90ba,OracleCMS,not_supplier,"Owner 2026-11-01: two incidents - Nissan's December 2023 attack on its own systems, and the April 2024 OracleCMS breach as one event dated April 2024 under the OracleCMS card (validation exception 97c50682). OracleCMS is not the supplier of the December 2023 attack.","owner (Colin Priest), 2026-11-01"

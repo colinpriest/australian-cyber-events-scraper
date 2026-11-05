@@ -525,6 +525,8 @@ class EventReport:
     first_reported: int = 0
     dated_by_first_report: List[str] = field(default_factory=list)
     redated_by_first_report: List[str] = field(default_factory=list)
+    #: Events dated by a report whose records state a checked incident date: dated by it, basis corrected.
+    dated_by_records: List[str] = field(default_factory=list)
     lags: int = 0
     #: Publication dates ignored because they precede the event's verified
     #: incident interval - a report cannot come before what it reports.
@@ -534,10 +536,67 @@ class EventReport:
     def summary(self) -> str:
         text = (f"{self.first_reported} event(s) with a first-report date; "
                 f"{len(self.dated_by_first_report)} undated event(s) dated by their first report, "
-                f"{len(self.redated_by_first_report)} re-dated to a changed first report; "
+                f"{len(self.redated_by_first_report)} re-dated to a changed first report, "
+                f"{len(self.dated_by_records)} report-dated event(s) dated by the incident date their records state; "
                 f"{self.lags} reporting lag(s) measurable; {self.before_incident} publication date(s) "
                 "ignored as earlier than the verified incident")
         return f"{text}; {self.precision.summary()}" if self.precision is not None else text
+
+
+#: Days an incident date may lie after the event's first report (as :func:`remove_dates_after_publication`).
+AFTER_REPORT_SLACK_DAYS = 7
+
+
+def members_incident_date(conn: sqlite3.Connection, dedup_id: str, first_report: Optional[str] = None) -> Optional[str]:
+    """The checked incident date the event's active records give, by member consensus
+    (:func:`date_selection.derive_event_date`), or None when none gives one.
+
+    Only checked dates count, the evidence :func:`incident_dates.refresh_event_precision` reads: a date whose
+    source states its precision, or a research date the citation check supported. Unchecked research often answers
+    with another incident of the organisation. A date in its own record's publication month gives way when another
+    record gives an earlier one (:func:`incident_dates.discount_reporting_months`, owner 2026-11-04): an incident
+    cannot follow its report, and "August 2026" read from an article of 9 August is that article's date. For the
+    same reason a date more than :data:`AFTER_REPORT_SLACK_DAYS` after ``first_report`` is not counted.
+    """
+    from datetime import timedelta
+
+    from cyber_data_collector.dedup.date_selection import derive_event_date
+    from cyber_data_collector.processing.incident_dates import PRECISIONS
+
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'EnrichmentFactSupport'").fetchone():
+        return None
+    columns = {c[1] for c in conn.execute("PRAGMA table_info(RawEvents)")}
+    if not {"publication_date", "event_date_precision"} <= columns:
+        return None
+    stated: List[Tuple[str, Optional[str]]] = []
+    every: List[Optional[str]] = []
+    for raw_date, raw_precision, enriched_date, supported, published in conn.execute(
+            """SELECT r.event_date, r.event_date_precision, e.event_date,
+                      EXISTS (SELECT 1 FROM EnrichmentFactSupport f WHERE f.enriched_event_id = e.enriched_event_id
+                              AND f.fact = 'date' AND f.status = 'supported'),
+                      r.publication_date
+               FROM EventDeduplicationMap m
+               JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+               JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+               WHERE m.deduplicated_event_id = ? AND COALESCE(e.status, 'Active') = 'Active'""", (dedup_id,)):
+        every.append(enriched_date)
+        days = [normalise(raw_date)] if raw_precision in PRECISIONS else []
+        if supported:
+            days.append(normalise(enriched_date))
+        stated.extend((day, normalise(published)) for day in days if day)
+    if first_report:
+        latest = (date.fromisoformat(first_report) + timedelta(days=AFTER_REPORT_SLACK_DAYS)).isoformat()
+        stated = [(day, published) for day, published in stated if day <= latest]
+    kept = [day for day, published in stated
+            if not (published and day[:7] == published[:7] and any(other[:7] < day[:7] for other, _ in stated))]
+    checked = derive_event_date(kept) if kept else None
+    # The month every member's date gives by consensus - the date a merge or refresh derives - must agree: when
+    # it does not, the checked dates belong to another incident some records mention (Nissan's OracleCMS event of
+    # April 2024 holds two checked December 2023 dates of Nissan's own breach; trial on a copy, 2026-11-04).
+    consensus = derive_event_date(every)
+    if not checked or not consensus or checked[:7] != str(consensus)[:7]:
+        return None
+    return checked
 
 
 def refresh_events(conn: sqlite3.Connection) -> EventReport:
@@ -579,6 +638,24 @@ def refresh_events(conn: sqlite3.Connection) -> EventReport:
             logger.info("Event %s had no date: dated %s by its first report", dedup_id[:8], first)
             report.dated_by_first_report.append(dedup_id)
             event_day, basis = first, BASIS_PUBLICATION
+        elif (first and basis == BASIS_PUBLICATION
+              and (stated := members_incident_date(conn, dedup_id, first)) and not stated == event_day == first):
+            # A report date gives way to the incident date the event's own records state. The gym hacked by an
+            # AI agent was dated by its 9 August report although its records say April 2026; when a merge
+            # re-derived April from the members, the stale basis made this step put it back to August. A checked
+            # date that is the first report's own day changes nothing.
+            from cyber_data_collector.dedup.date_provenance import event_date_provenance
+
+            if stated != event_day:
+                conn.execute("UPDATE DeduplicatedEvents SET event_date = ?, date_precision = ? "
+                             "WHERE deduplicated_event_id = ?", (stated, precision(stated), dedup_id))
+                logger.info("Event %s was dated %s by a report; dated %s, the incident date its records state",
+                            dedup_id[:8], event_day, stated)
+                event_day = stated
+            basis = event_date_provenance(conn, dedup_id)["date_basis"]
+            conn.execute("UPDATE DeduplicatedEvents SET date_basis = ? WHERE deduplicated_event_id = ?",
+                         (basis, dedup_id))
+            report.dated_by_records.append(dedup_id)
         elif first and basis == BASIS_PUBLICATION and event_day != first:
             # Dated by a report date that is no longer its first report (a
             # listing page's date removed, or an earlier report found).
