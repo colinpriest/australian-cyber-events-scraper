@@ -435,9 +435,13 @@ def load_for_dashboard(dataset_path: Path = DEFAULT_DATASET_PATH,
     if dataset is not None:
         origin = "published dataset"
         raw = dataset["records"]
+        # A note from merging the legacy files is about what that merge kept: once a later source has replaced a
+        # period's record, it no longer describes anything on the dashboard.
+        replaced = {period_label(r) for r in raw if (r.get("refresh") or {}).get("source") != "legacy files"}
         notes = [ScreenNote(n.get("period", ""), n.get("reason", ""), n.get("fields", []),
                             n.get("origin", ""))
-                 for n in (dataset.get("bootstrap") or {}).get("withheld", [])]
+                 for n in (dataset.get("bootstrap") or {}).get("withheld", [])
+                 if n.get("period", "") not in replaced]
         records = []
         for r in raw:
             screened, issues = screen_record(r)
