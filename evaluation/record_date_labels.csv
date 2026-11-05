@@ -1,0 +1,2 @@
+enriched_event_id,event_date,precision,rationale,labeller
+08e3e46b-9edd-4c9b-b41f-a498144d9a5e,2024-04-01,month,"Owner decision 2026-11-06: 'Yes, fix the date'. Cyber Daily's report of 23 May 2024: OracleCMS, Nissan's call centre supplier, was breached in April 2024 and Nissan learned of it on 18 April. Its research gave 5 December 2023, Nissan's first attack, which the report mentions as background.","owner (Colin Priest), 2026-11-06"

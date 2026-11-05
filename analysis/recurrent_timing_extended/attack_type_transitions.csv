@@ -1,16 +1,16 @@
 prior_attack_type,next_attack_type,transitions,organisations,share_of_prior_type
-Data Breach,Data Breach,60,46,0.631578947368421
-Data Breach,Denial of Service,4,4,0.042105263157894736
-Data Breach,Financial Fraud,1,1,0.010526315789473684
-Data Breach,Infrastructure Attack,1,1,0.010526315789473684
-Data Breach,Insider Threat,1,1,0.010526315789473684
-Data Breach,Malware,1,1,0.010526315789473684
-Data Breach,Other,12,12,0.12631578947368421
-Data Breach,Phishing,4,4,0.042105263157894736
-Data Breach,Ransomware,6,6,0.06315789473684211
-Data Breach,State-Sponsored Attack,2,1,0.021052631578947368
-Data Breach,Supply Chain Attack,1,1,0.010526315789473684
-Data Breach,Vulnerability Exploit,2,2,0.021052631578947368
+Data Breach,Data Breach,61,47,0.6354166666666666
+Data Breach,Denial of Service,4,4,0.041666666666666664
+Data Breach,Financial Fraud,1,1,0.010416666666666666
+Data Breach,Infrastructure Attack,1,1,0.010416666666666666
+Data Breach,Insider Threat,1,1,0.010416666666666666
+Data Breach,Malware,1,1,0.010416666666666666
+Data Breach,Other,12,12,0.125
+Data Breach,Phishing,4,4,0.041666666666666664
+Data Breach,Ransomware,6,6,0.0625
+Data Breach,State-Sponsored Attack,2,1,0.020833333333333332
+Data Breach,Supply Chain Attack,1,1,0.010416666666666666
+Data Breach,Vulnerability Exploit,2,2,0.020833333333333332
 Denial of Service,Data Breach,1,1,0.3333333333333333
 Denial of Service,Other,1,1,0.3333333333333333
 Denial of Service,Vulnerability Exploit,1,1,0.3333333333333333

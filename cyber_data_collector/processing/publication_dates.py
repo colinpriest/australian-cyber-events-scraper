@@ -691,4 +691,12 @@ def refresh_event_dates(conn: sqlite3.Connection) -> EventReport:
     report.dated_by_first_report = first.dated_by_first_report
     report.redated_by_first_report = first.redated_by_first_report + report.redated_by_first_report
     report.precision = refresh_event_precision(conn)
+    # The date an owner's label gave says so (the provenance reader sees only the record's text and research).
+    conn.execute(
+        """UPDATE DeduplicatedEvents SET date_basis = 'owner label'
+           WHERE status = 'Active' AND deduplicated_event_id IN (
+               SELECT m.deduplicated_event_id FROM EventDeduplicationMap m
+               JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+               JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+               WHERE r.event_date_basis = 'owner label' AND r.event_date = DeduplicatedEvents.event_date)""")
     return report

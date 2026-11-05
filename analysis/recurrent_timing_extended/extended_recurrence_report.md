@@ -26,18 +26,18 @@ Rates are per 100 entity-years. Four band schemes, size-specific rates, and a ke
 
 | Days | Repeat events | Exposure days | Unadjusted rate | Size-standardized rate | Unsupported sizes |
 |---|---:|---:|---:|---:|---|
-| 1-90 | 27 | 90923 | 10.85 | 10.02 | none |
-| 91-180 | 25 | 81335 | 11.23 | 9.83 | none |
+| 1-90 | 28 | 90937 | 11.25 | 10.42 | none |
+| 91-180 | 25 | 81321 | 11.23 | 9.83 | none |
 | 181-270 | 22 | 71077 | 11.31 | 9.13 | none |
 
-Precision evidence among victim-event attributions: {'unknown': 428, 'explicit_day': 395, 'ambiguous_first_of_month': 125, 'explicit_month': 120}. Verified month and year dates are drawn within their stored interval (`event_date_earliest` / `event_date_latest`); a date whose precision is unverified has no interval - it is unknown, not a day, and is kept as stored only in the scenarios that say so. An initial day of a month is ambiguous, not proof that the date was imputed. `timing_date_precision_size_adjusted.csv` compares verified month/year intervals, two separately labelled hypothetical ambiguous-first scenarios, complete histories with explicitly day-precise metadata (325 entities, 6 with observed repeats), and complete histories in which every date has a verified interval (unverified organisations left out, never read as days). Insufficient explicit date precision for a reliable precisely dated subset. Imputation percentiles show sensitivity to date assumptions, not confidence intervals for incidence.
+Precision evidence among victim-event attributions: {'unknown': 428, 'explicit_day': 394, 'ambiguous_first_of_month': 125, 'explicit_month': 121}. Verified month and year dates are drawn within their stored interval (`event_date_earliest` / `event_date_latest`); a date whose precision is unverified has no interval - it is unknown, not a day, and is kept as stored only in the scenarios that say so. An initial day of a month is ambiguous, not proof that the date was imputed. `timing_date_precision_size_adjusted.csv` compares verified month/year intervals, two separately labelled hypothetical ambiguous-first scenarios, complete histories with explicitly day-precise metadata (325 entities, 6 with observed repeats), and complete histories in which every date has a verified interval (unverified organisations left out, never read as days). Insufficient explicit date precision for a reliable precisely dated subset. Imputation percentiles show sensitivity to date assumptions, not confidence intervals for incidence.
 
 | Date scenario | 91–180-day size-standardized median rate | 2.5–97.5% of date draws | Valid draws |
 |---|---:|---:|---:|
 | stored dates | 9.83 | 9.83–9.83 | 1/1 |
-| known intervals | 10.30 | 9.40–11.20 | 100/100 |
-| ambiguous firsts as month | 9.66 | 8.32–10.74 | 100/100 |
-| ambiguous firsts as month or year | 9.67 | 8.65–10.91 | 100/100 |
+| known intervals | 10.30 | 9.61–11.20 | 100/100 |
+| ambiguous firsts as month | 9.65 | 8.76–10.49 | 100/100 |
+| ambiguous firsts as month or year | 9.68 | 8.77–10.89 | 100/100 |
 | explicit day only complete histories | 2.49 | 2.49–2.49 | 1/1 |
 | verified intervals complete histories | 4.45 | 4.42–4.48 | 100/100 |
 
@@ -50,11 +50,11 @@ A same-date tie is far more likely one incident deduplication has not joined tha
 - `interval_spread`: the tied incidents are distinct and evenly spread across the verified interval they share (about interval length / n days apart, the first at the interval's start); a tie with no shared verified interval longer than a day is placed as under zero_gap.
 - `interval_draw`: the tied incidents are distinct, each on a day drawn uniformly and independently within the verified interval they share, over the date draws; a tie with no shared verified interval longer than a day is placed as under zero_gap.
 
-None of these bounds the truth: a tie that is one incident filed twice is represented only by `collapse`, two incidents really weeks apart within a verified month exactly by none, and a tie whose dates are unverified has no interval to place them in. Agreement across the policies shows only that a result does not hinge on these assumptions; `interval_draw` is the median of 100 draws. Ties found: {'ties (organisation-dates with several incidents)': 4, 'incidents in ties': 8, 'organisations with a tie': 4, 'repeats a policy that separates tied incidents adds': 4, 'ties with a shared verified interval longer than a day (spread by interval_spread)': 0, 'ties: month_precision_first_of_month': 0, 'ties: first_of_month_not_month_verified': 2, 'ties: other_day': 2}. Incidents on different stored dates whose verified intervals overlap are no tie, but their dates do not order them either: {'consecutive pairs with overlapping verified intervals': 4, '... of which stored dates differ by under 90 days': 4}; the `known_intervals` scenario varies those dates within their intervals.
+None of these bounds the truth: a tie that is one incident filed twice is represented only by `collapse`, two incidents really weeks apart within a verified month exactly by none, and a tie whose dates are unverified has no interval to place them in. Agreement across the policies shows only that a result does not hinge on these assumptions; `interval_draw` is the median of 100 draws. Ties found: {'ties (organisation-dates with several incidents)': 3, 'incidents in ties': 6, 'organisations with a tie': 3, 'repeats a policy that separates tied incidents adds': 3, 'ties with a shared verified interval longer than a day (spread by interval_spread)': 0, 'ties: month_precision_first_of_month': 0, 'ties: first_of_month_not_month_verified': 2, 'ties: other_day': 1}. Incidents on different stored dates whose verified intervals overlap are no tie, but their dates do not order them either: {'consecutive pairs with overlapping verified intervals': 4, '... of which stored dates differ by under 90 days': 4}; the `known_intervals` scenario varies those dates within their intervals.
 
 | Tie policy | Days | Repeat events | Unadjusted rate | Size-standardized rate |
 |---|---|---:|---:|---:|
-| collapse | 1-90 | 27 | 10.85 | 10.02 |
+| collapse | 1-90 | 28 | 11.25 | 10.42 |
 | collapse | 91-180 | 25 | 11.23 | 9.83 |
 | collapse | 181-270 | 22 | 11.31 | 9.13 |
 | zero_gap | 1-90 | 31 | 12.45 | 11.29 |
@@ -77,10 +77,10 @@ Baseline size weights: {'SMALL': 0.13120176405733186, 'MEDIUM': 0.33847850055126
 
 | Scenario | Evidence status | Decisions applied | Victim attributions | Incidents | 0–90 events / days | 91–180 events / days | Size-standardised ratio | Adjustment status |
 |---|---|---:|---:|---:|---:|---:|---:|---|
-| baseline | observed cohort | 0 | 1068 | 1012 | 27 / 90923 | 25 / 81335 | 0.98 | estimated |
-| active_same_overrides | evaluated | 1 | 1068 | 1011 | 27 / 90923 | 25 / 81335 | 0.98 | estimated |
-| model_same_probability_ge_0.9 | evaluated | 2 | 1067 | 1010 | 26 / 90910 | 25 / 81336 | 1.02 | estimated |
-| model_victim_probability_lt_0.5_excluded | evaluated | 115 | 953 | 904 | 22 / 81752 | 16 / 74272 | 0.79 | estimated |
+| baseline | observed cohort | 0 | 1068 | 1012 | 28 / 90937 | 25 / 81321 | 0.94 | estimated |
+| active_same_overrides | evaluated | 1 | 1068 | 1011 | 28 / 90937 | 25 / 81321 | 0.94 | estimated |
+| model_same_probability_ge_0.9 | evaluated | 2 | 1067 | 1010 | 27 / 90924 | 25 / 81322 | 0.98 | estimated |
+| model_victim_probability_lt_0.5_excluded | evaluated | 115 | 953 | 904 | 23 / 81766 | 16 / 74258 | 0.75 | estimated |
 
 Stored scores cover 388 in-cohort incident pairs and 1064 victim attributions. Active different-incident overrides vetoed 0 override merges and 5 model-candidate merges, including conflicts created transitively. 1 current incident(s) contain an active different-incident override; these cannot be split reliably without per-report victim and date attribution.
 Model scores are uncalibrated stored judgments, not confirmed truth; thresholds 0.9 and 0.5 define sensitivity scenarios, not validation. A merged incident uses the earliest observed date and the union of attributed victims. Evidence can be stale. Missing judgment or override tables are reported as unavailable. These scenarios cannot identify missing judgments or unrecorded victims.
@@ -90,12 +90,12 @@ The size-standardised bootstrap compares resampling organisations with resamplin
 
 | Resampling unit | Metric | Estimate | 95% percentile interval | Valid replicates |
 |---|---|---:|---:|---:|
-| entity | rate_0_90 | 10.02 | 6.22–13.88 | 500 |
+| entity | rate_0_90 | 10.42 | 6.48–14.25 | 500 |
 | entity | rate_91_180 | 9.83 | 5.96–14.56 | 500 |
-| entity | rate_ratio | 0.98 | 0.57–1.67 | 500 |
-| shared_incident_component | rate_0_90 | 10.02 | 6.40–14.08 | 500 |
-| shared_incident_component | rate_91_180 | 9.83 | 5.52–14.55 | 500 |
-| shared_incident_component | rate_ratio | 0.98 | 0.51–1.67 | 500 |
+| entity | rate_ratio | 0.94 | 0.56–1.61 | 500 |
+| shared_incident_component | rate_0_90 | 10.42 | 6.70–14.53 | 500 |
+| shared_incident_component | rate_91_180 | 9.83 | 5.52–14.56 | 500 |
+| shared_incident_component | rate_ratio | 0.94 | 0.49–1.57 | 500 |
 
 Components connect organisations through any recorded shared incident, not only incidents with a named supplier. Bootstrap intervals use fixed baseline weights and retain all sizes within each component; draws lacking exposure in any required stratum are omitted and valid counts are shown. Small cells, zero early events and missing shared incidents limit inference. Stratum-specific rates are in linkage_size_strata.csv; crude results remain separately available for comparison.
 
@@ -108,7 +108,7 @@ These first/later recorded-incident rates are standardized to that common size d
 | dimension | group | organisations | repeats | reference weight covered | standardized rate per 100 entity years | status |
 | --- | --- | --- | --- | --- | --- | --- |
 | Event order | First observed | 907 | 105 | 1.00 | 4.87 | available |
-| Event order | Second or later observed | 105 | 52 | 0.96 |  | unavailable: missing size exposure |
+| Event order | Second or later observed | 105 | 53 | 0.96 |  | unavailable: missing size exposure |
 
 Transition counts and within-size conditional shares appear in `attack_type_transitions_by_size.csv`. These are conditional on a subsequent observed incident. Unknown types remain Unknown; different or unknown types on the same day are labelled Multiple or ambiguous. Cells are sparse and are not causal estimates.
 
@@ -147,14 +147,14 @@ The following source and calendar rates are standardized to the same fixed size 
 
 | dimension | group | organisations | repeats | reference weight covered | standardized rate per 100 entity years | status |
 | --- | --- | --- | --- | --- | --- | --- |
-| Prior incident source | CyberDaily | 163 | 17 | 1.00 | 5.39 | available |
+| Prior incident source | CyberDaily | 164 | 18 | 1.00 | 5.86 | available |
 | Prior incident source | GoogleSearch | 52 | 5 | 1.00 | 3.02 | available |
 | Prior incident source | Multiple sources | 454 | 72 | 1.00 | 6.56 | available |
 | Prior incident source | Perplexity | 246 | 55 | 1.00 | 9.49 | available |
 | Prior incident source | WebberInsurance | 85 | 8 | 1.00 | 1.73 | available |
 | Prior incident calendar cohort | 2019–2021 | 119 | 44 | 1.00 | 4.93 | available |
 | Prior incident calendar cohort | 2022–2023 | 213 | 56 | 1.00 | 6.55 | available |
-| Prior incident calendar cohort | 2024 onward | 642 | 57 | 1.00 | 7.11 | available |
+| Prior incident calendar cohort | 2024 onward | 642 | 58 | 1.00 | 7.22 | available |
 
 The following simulations remove some already recorded follow-ups under stated hypothetical observation probabilities: 75% for all follow-ups, or 50% for small and medium organisations and 100% for other recorded sizes, including Unknown. First observed incidents are retained. They illustrate sensitivity and do not estimate or reconstruct unreported attacks.
 
@@ -162,19 +162,19 @@ The following table uses fixed size standardization for each simulation draw; th
 
 | family | scenario | order group | size | replicates | valid rate draws | median repeats | median rate | p05 rate | p95 rate | reference weight covered |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| reporting | uniform 75% follow-up observation | All observed orders | STANDARDIZED | 100 | 100 | 117.50 | 4.42 | 3.97 | 4.75 | 1.00 |
-| reporting | lower observation for small organisations | All observed orders | STANDARDIZED | 100 | 100 | 148.00 | 5.36 | 5.14 | 5.59 | 1.00 |
+| reporting | uniform 75% follow-up observation | All observed orders | STANDARDIZED | 100 | 100 | 120.00 | 4.45 | 4.08 | 4.79 | 1.00 |
+| reporting | lower observation for small organisations | All observed orders | STANDARDIZED | 100 | 100 | 149.00 | 5.40 | 5.23 | 5.63 | 1.00 |
 
 The prior-history scenarios hypothetically assign an unobserved earlier incident to a fraction of organisations; they relabel existing spells without fabricating dates or exposure. They are not corrections or estimates of the true unobserved history.
 
 | family | scenario | order group | size | replicates | valid rate draws | median repeats | median rate | p05 rate | p95 rate | reference weight covered |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | history | 0% missing prior history | First | STANDARDIZED | 1 | 1 | 105.00 | 4.87 | 4.87 | 4.87 | 1.00 |
-| history | 0% missing prior history | Later | STANDARDIZED | 1 | 0 | 52.00 |  |  |  | 0.96 |
-| history | 25% missing prior history | First | STANDARDIZED | 100 | 100 | 78.50 | 4.93 | 4.39 | 5.35 | 1.00 |
-| history | 25% missing prior history | Later | STANDARDIZED | 100 | 100 | 78.50 | 7.49 | 6.68 | 8.98 | 1.00 |
-| history | 50% missing prior history | First | STANDARDIZED | 100 | 100 | 54.00 | 4.92 | 4.17 | 5.77 | 1.00 |
-| history | 50% missing prior history | Later | STANDARDIZED | 100 | 100 | 103.00 | 6.61 | 6.02 | 7.28 | 1.00 |
+| history | 0% missing prior history | Later | STANDARDIZED | 1 | 0 | 53.00 |  |  |  | 0.96 |
+| history | 25% missing prior history | First | STANDARDIZED | 100 | 100 | 79.00 | 4.87 | 4.39 | 5.36 | 1.00 |
+| history | 25% missing prior history | Later | STANDARDIZED | 100 | 100 | 79.00 | 7.79 | 6.88 | 8.96 | 1.00 |
+| history | 50% missing prior history | First | STANDARDIZED | 100 | 100 | 52.00 | 4.88 | 4.02 | 5.72 | 1.00 |
+| history | 50% missing prior history | Later | STANDARDIZED | 100 | 100 | 106.00 | 6.70 | 6.05 | 7.39 | 1.00 |
 
 The original aggregate CSVs are unadjusted descriptive counts, supplied for continuity; they should not be used as size-adjusted comparisons.
 
@@ -182,8 +182,8 @@ These are associations in a selected, publicly reported dataset, conditional on 
 
 ## Reproducibility
 
-Database snapshot: `snap-20261106081449-0792c47af359` (retained under `instance/snapshots/`; rerun with `--snapshot-id snap-20261106081449-0792c47af359`).
-Database snapshot SHA-256: `0792c47af3591d933bc66daccd70e80ae4fe1d51d6f33d2713e0ee3e91a01299`.
+Database snapshot: `snap-20261106083013-55c88abbcaeb` (retained under `instance/snapshots/`; rerun with `--snapshot-id snap-20261106083013-55c88abbcaeb`).
+Database snapshot SHA-256: `55c88abbcaebcef53874f1e78d937721fed1d92e48e61b83f2b94cdf80e9fcff`.
 Bootstrap replicates: 500; date draws: 100.
 
 The detailed result tables are saved as CSV files alongside this report.

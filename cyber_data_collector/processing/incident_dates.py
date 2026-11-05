@@ -43,12 +43,14 @@ the list heading's month, which is Webber's publication month).
 from __future__ import annotations
 
 import calendar
+import csv
 import json
 import logging
 import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,8 @@ logger = logging.getLogger(__name__)
 PRECISIONS = ("day", "month", "year")
 BASIS_WEBBER_HEADING = "Webber list heading (month)"
 BASIS_STATED_IN_SOURCE = "stated in the source page"
+BASIS_OWNER_LABEL = "owner label"
+RECORD_DATE_LABELS_PATH = Path(__file__).resolve().parents[2] / "evaluation" / "record_date_labels.csv"
 BASIS_WEBBER_PUBLICATION = "none: the Webber list month is when Webber published the item, not the incident date"
 
 
@@ -574,6 +578,56 @@ CREATE TABLE IF NOT EXISTS ImpossibleIncidentDates (
     removed_at        TEXT NOT NULL
 );
 """
+
+
+def apply_record_date_labels(conn: sqlite3.Connection, path: Path = RECORD_DATE_LABELS_PATH) -> List[str]:
+    """Owner labels on a record's incident date: the label replaces the date its research gave. Idempotent.
+
+    Research on a report can answer with an earlier incident the report mentions as background: Cyber Daily's report
+    of Nissan's call centre, breached with OracleCMS in April 2024, was researched as 5 December 2023, Nissan's first
+    attack (owner, 2026-11-06). Such a date is citation-supported, so no rule can tell it from the incident's own.
+    ``evaluation/record_date_labels.csv``: ``enriched_event_id,event_date,precision,rationale,labeller`` (a month is
+    stored as its 1st). The research date stops counting as support, and an event whose only active record is the
+    labelled one takes the date. An event with other records keeps its date from its members. The caller commits.
+    """
+    if not path.exists():
+        return []
+    changed: List[str] = []
+    with open(path, encoding="utf-8", newline="") as fh:
+        labels = list(csv.DictReader(fh))
+    for row in labels:
+        enriched_id, day, precision = row["enriched_event_id"].strip(), row["event_date"].strip(), row["precision"].strip()
+        if precision not in PRECISIONS or _day(day) is None:
+            raise ValueError(f"record date label {enriched_id}: {day!r} / {precision!r} is not a date and a precision")
+        found = conn.execute("SELECT raw_event_id, event_date FROM EnrichedEvents WHERE enriched_event_id = ? "
+                             "AND COALESCE(status, 'Active') = 'Active'", (enriched_id,)).fetchone()
+        if found is None:
+            logger.warning("Record date label %s: no active record", enriched_id)
+            continue
+        raw_id, enriched_date = found
+        raw = conn.execute("SELECT event_date, event_date_precision FROM RawEvents WHERE raw_event_id = ?",
+                           (raw_id,)).fetchone()
+        if enriched_date != day or tuple(raw or ()) != (day, precision):
+            conn.execute("UPDATE RawEvents SET event_date = ?, event_date_precision = ?, event_date_basis = ? "
+                         "WHERE raw_event_id = ?", (day, precision, BASIS_OWNER_LABEL, raw_id))
+            conn.execute("UPDATE EnrichedEvents SET event_date = ? WHERE enriched_event_id = ?", (day, enriched_id))
+            changed.append(enriched_id)
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'EnrichmentFactSupport'").fetchone():
+            conn.execute("UPDATE EnrichmentFactSupport SET status = 'withheld', reason = ? WHERE enriched_event_id = ? "
+                         "AND fact = 'date' AND status = 'supported'",
+                         ("owner label: the research date describes another incident", enriched_id))
+        for (event_id, event_date) in conn.execute(
+                """SELECT d.deduplicated_event_id, d.event_date FROM EventDeduplicationMap m
+                   JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
+                   WHERE m.enriched_event_id = ? AND d.status = 'Active'
+                     AND (SELECT COUNT(*) FROM EventDeduplicationMap m2
+                          JOIN EnrichedEvents e ON e.enriched_event_id = m2.enriched_event_id
+                          WHERE m2.deduplicated_event_id = d.deduplicated_event_id
+                            AND COALESCE(e.status, 'Active') = 'Active') = 1""", (enriched_id,)).fetchall():
+            if event_date != day:
+                conn.execute("UPDATE DeduplicatedEvents SET event_date = ? WHERE deduplicated_event_id = ?",
+                             (day, event_id))
+    return changed
 
 
 @dataclass
