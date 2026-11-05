@@ -256,3 +256,38 @@ def test_a_reporting_month_with_no_earlier_evidence_is_kept():
     # A later interval is no reason to set the reporting month aside.
     later = [("month", "2026-08-01", "2026-08-31", "2026-08-10"), ("month", "2026-10-01", "2026-10-31", None)]
     assert idt.discount_reporting_months(later) == [s[:3] for s in later]
+
+
+def test_an_owner_label_replaces_a_research_date_and_is_idempotent(tmp_path):
+    import sqlite3
+
+    from cyber_data_collector.processing import incident_dates as idates
+
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE RawEvents (raw_event_id TEXT, event_date TEXT, event_date_precision TEXT, event_date_basis TEXT,
+                                publication_date TEXT);
+        CREATE TABLE EnrichedEvents (enriched_event_id TEXT, raw_event_id TEXT, event_date TEXT, status TEXT,
+                                     perplexity_enrichment_data TEXT);
+        CREATE TABLE EnrichmentFactSupport (enriched_event_id TEXT, fact TEXT, status TEXT, reason TEXT);
+        CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT, event_date TEXT, status TEXT,
+                                         event_date_precision TEXT, event_date_earliest TEXT, event_date_latest TEXT);
+        CREATE TABLE EventDeduplicationMap (enriched_event_id TEXT, deduplicated_event_id TEXT);
+        INSERT INTO RawEvents VALUES ('r1', '2024-05-23', NULL, NULL, '2024-05-23'), ('r2', '2023-12-05', NULL, NULL, NULL);
+        INSERT INTO EnrichedEvents VALUES ('e1', 'r1', '2023-12-05', 'Active', '{"date_precision": "day"}'),
+                                          ('e2', 'r2', '2023-12-05', 'Active', NULL);
+        INSERT INTO EnrichmentFactSupport VALUES ('e1', 'date', 'supported', NULL);
+        INSERT INTO DeduplicatedEvents VALUES ('d1', '2023-12-05', 'Active', 'day', '2023-12-05', '2023-12-05'),
+                                              ('d2', '2023-12-05', 'Active', NULL, NULL, NULL);
+        INSERT INTO EventDeduplicationMap VALUES ('e1', 'd1'), ('e2', 'd2');
+    """)
+    labels = tmp_path / "labels.csv"
+    labels.write_text("enriched_event_id,event_date,precision,rationale,labeller\n"
+                      "e1,2024-04-01,month,why,owner\n", encoding="utf-8")
+    assert idates.apply_record_date_labels(c, labels) == ["e1"]
+    assert idates.apply_record_date_labels(c, labels) == []
+    assert c.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd1'").fetchone()[0] == "2024-04-01"
+    assert c.execute("SELECT event_date FROM DeduplicatedEvents WHERE deduplicated_event_id = 'd2'").fetchone()[0] == "2023-12-05"
+    idates.refresh_event_precision(c)
+    assert c.execute("SELECT event_date_precision, event_date_earliest, event_date_latest FROM DeduplicatedEvents "
+                     "WHERE deduplicated_event_id = 'd1'").fetchone() == ("month", "2024-04-01", "2024-04-30")

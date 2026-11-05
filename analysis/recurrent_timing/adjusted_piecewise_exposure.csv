@@ -349,7 +349,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,finance,organisation,10k-100k,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,finance,organisation,unknown,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,government,government_body,unknown,0,58
-0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,other,organisation,100k+,1,105
+0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,other,organisation,100k+,1,91
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,other,organisation,1k-10k,0,5
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,other,organisation,unknown,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,1,LARGE,3.0,0,large,very_large,retail,organisation,100k+,0,180
@@ -586,7 +586,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,large,technology,organisation,100k+,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,medium,government,government_body,unknown,0,89
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,medium,media,organisation,unknown,0,20
-0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,180
+0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,100k+,1,14
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,<1k,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,medium,medium,education,organisation,100k+,0,85
 0,0-180,immediate,not_applicable,2,2024-2026,2,LARGE,3.0,0,very_large,large,education,organisation,100k+,0,180
@@ -633,6 +633,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 0,0-180,immediate,not_applicable,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,telecom_transport,organisation,1k-10k,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,telecom_transport,organisation,unknown,0,243
 0,0-180,immediate,not_applicable,2,2024-2026,3+,LARGE,3.0,0,large,large,technology,organisation,unknown,0,180
+0,0-180,immediate,not_applicable,2,2024-2026,3+,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,3+,LARGE,3.0,0,very_large,large,government,government_body,<1k,0,180
 0,0-180,immediate,not_applicable,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,education,organisation,10k-100k,2,669
 0,0-180,immediate,not_applicable,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,education,organisation,1k-10k,0,180
@@ -1136,7 +1137,6 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,other,organisation,unknown,0,427
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,technology,organisation,100k+,1,21
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,medium,media,organisation,unknown,0,185
-1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,185
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,<1k,0,185
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,education,organisation,unknown,0,185
 1,181-365,response,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,government,government_body,1k-10k,0,93
@@ -1171,6 +1171,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 1,181-365,response,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,telecom_transport,organisation,1k-10k,1,47
 1,181-365,response,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,telecom_transport,organisation,unknown,1,177
 1,181-365,response,post_180,2,2024-2026,3+,LARGE,3.0,0,large,large,technology,organisation,unknown,0,185
+1,181-365,response,post_180,2,2024-2026,3+,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,185
 1,181-365,response,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,large,government,government_body,<1k,0,95
 1,181-365,response,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,education,organisation,10k-100k,1,231
 1,181-365,response,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,education,organisation,1k-10k,1,103
@@ -1638,7 +1639,6 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,industrial,organisation,unknown,0,63
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,other,organisation,unknown,0,365
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,medium,media,organisation,unknown,0,365
-2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,365
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,<1k,0,365
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,education,organisation,unknown,0,267
 2,366-730,response,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,government,government_body,1k-10k,0,365
@@ -1665,6 +1665,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 2,366-730,response,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,health,organisation,1k-10k,0,247
 2,366-730,response,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,telecom_transport,organisation,100k+,1,291
 2,366-730,response,post_180,2,2024-2026,3+,LARGE,3.0,0,large,large,technology,organisation,unknown,0,350
+2,366-730,response,post_180,2,2024-2026,3+,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,365
 2,366-730,response,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,education,organisation,10k-100k,0,137
 2,366-730,response,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,industrial,organisation,<1k,0,365
 2,366-730,response,post_180,2,2024-2026,3+,SMALL,1.0,0,small,small,health,organisation,unknown,0,365
@@ -2011,7 +2012,6 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,government,organisation,<1k,0,205
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,large,large,other,organisation,unknown,0,582
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,large,medium,media,organisation,unknown,0,467
-3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,202
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,large,very_large,other,organisation,<1k,0,158
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,education,organisation,100k+,0,181
 3,731-1460,long_term,post_180,2,2024-2026,2,LARGE,3.0,0,very_large,large,education,organisation,1k-10k,0,424
@@ -2029,6 +2029,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 3,731-1460,long_term,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,government,government_body,10k-100k,0,290
 3,731-1460,long_term,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,government,government_body,unknown,0,682
 3,731-1460,long_term,post_180,2,2024-2026,3+,HUGE,4.0,0,very_large,very_large,other,organisation,10k-100k,0,681
+3,731-1460,long_term,post_180,2,2024-2026,3+,LARGE,3.0,0,large,very_large,other,organisation,100k+,0,202
 3,731-1460,long_term,post_180,2,2024-2026,3+,LARGE,3.0,0,very_large,very_large,industrial,organisation,<1k,0,341
 3,731-1460,long_term,post_180,2,2024-2026,3+,MEDIUM,2.0,0,small,small,finance,organisation,1k-10k,0,474
 3,731-1460,long_term,post_180,2,2024-2026,3+,SMALL,1.0,0,small,small,health,organisation,unknown,0,125

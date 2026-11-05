@@ -4372,6 +4372,7 @@ def cmd_publication_dates(args) -> int:
     """Store every record's publication date and each event's first report; see publication_dates."""
     from cyber_data_collector.processing.incident_dates import (
         BASIS_STATED_IN_SOURCE,
+        apply_record_date_labels,
         rederive_webber_dates,
         remove_dates_after_publication,
         repair_webber_dates,
@@ -4417,6 +4418,9 @@ def cmd_publication_dates(args) -> int:
         if args.dry_run:
             print(f"{report.candidates} record(s) of active events have no publication date and would be fetched.")
             return 0
+        labelled = apply_record_date_labels(conn)
+        if labelled:
+            print(f"Owner date labels: {len(labelled)} record(s) re-dated")
         impossible = remove_dates_after_publication(conn)
         events = refresh_event_dates(conn)
         conn.commit()
