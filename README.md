@@ -3553,24 +3553,24 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-06 08:30 snapshot (`snap-20261106083013`, censor date 2026-11-03, events from 2020 on; 158 repeats,
+On the 2026-11-06 09:00 snapshot (`snap-20261106090013`, censor date 2026-11-03, events from 2020 on; 157 repeats,
 follow-up split by calendar month; roles classified under `entity-roles-v10` with the owner's definitions of victim,
 vendor and service provider, owner supplier-role labels applied, report-dated events re-dated from their records'
 checked incident dates, two victims of one event that are one organisation counted once on that event
 (`check-covictims`), and the owner's 2026-11-05 aliases and corrections - Transport for NSW, OPAN, the Victorian and
 WA Departments of Education, NGS Super, Medibank, Nine, Vocus, Live Nation, Icon Oncology Group, SA Health, and Nissan's
-two December 2023 events merged and its OracleCMS call-centre event re-dated to April 2024, one more repeat):
+two December 2023 events merged, and its two reports of the April 2024 OracleCMS call-centre breach merged):
 adequate for a simple model (20 repeats per parameter; the full model 6.0; 52% of incident dates unverified, so no
 split finer than 30 days is tried). Best bands **0-270 / >270 days**, the second at 0.52 times the first band's rate
-(8.9 BIC better than a constant rate; search-adjusted p = 0.006; 0-270 / 271-1095 / >1095 and 0-365 / 366-730 / >730
-are within 1.6 BIC of it). The 2026-11-05 14:28 snapshot gave the same bands at 6.8 BIC (p = 0.010) and the
+(8.1 BIC better than a constant rate; search-adjusted p = 0.010; 0-270 / 271-1095 / >1095 and 0-365 / 366-730 / >730
+are within 1.5 BIC of it). The 2026-11-05 14:28 snapshot gave the same bands at 6.8 BIC (p = 0.010) and the
 2026-11-04 16:25 one 0-365 / 366-1095 / >1095 at 4.8 BIC: a lower rate after the first year or so holds across these
 rounds of repairs, but where it is cut moves. Calendar growth does not explain it (per-organisation rate unchanged
-year on year; yearly effects p = 0.48; the bands hold under every calendar adjustment, p <= 0.0002). **No short-term
-vigilance** at 1-90 days (one-sided p = 0.99; 28 repeats against 19.0 expected). **A delayed peak** at 91-180 days:
-1.58 times the rate at other times (95% CI 0.98-2.43; one-sided p = 0.029; 25 repeats against 16.8 expected) - the
+year on year; yearly effects p = 0.48; the bands hold under every calendar adjustment, p <= 0.0003). **No short-term
+vigilance** at 1-90 days (one-sided p = 0.98; 27 repeats against 19.0 expected). **A delayed peak** at 91-180 days:
+1.59 times the rate at other times (95% CI 0.99-2.44; one-sided p = 0.027; 25 repeats against 16.8 expected) - the
 interval reaches 1 and the window was one of several the earlier reports looked at, so it is weak evidence; 91-120
-days holds 8 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE 3.6 and HUGE 8.7
+days holds 8 repeats, too few to test. The recurrence rate **rises with size** (MEDIUM 1.4, LARGE 3.6 and HUGE 8.8
 times SMALL; bootstrap p <= 0.002). The full adjusted model's "no elapsed-time pattern" (below) came from a model
 with more parameters than its repeats support.
 
