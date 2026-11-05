@@ -1,3 +1,5 @@
 entity_id,entity_name,event_date,incident_count,event_ids,titles,kind,precisions,shared_interval_days
 64,Westpac,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|month,1
 24256,Australia and New Zealand Banking Group Limited,2021-01-01,2,8e104de0-61c5-4186-9cc8-ee1c59745534|b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,"ANZ, NAB, Westpac, Commonwealth Bank cyber incident | Commonwealth of Australia cyber incident",first_of_month_not_month_verified,day|month,1
+32125,Nissan Australia and New Zealand,2023-12-05,2,e21086fe-a9a2-430c-94f2-a76bb5cd90ba|fde4c017-dbd8-4db3-8b47-6b8d41a07471,Nissan Oceania call centre impacted by OracleCMS data breach | Nissan's Australian and New Zealand operations hit by cyber attack,other_day,day,1
+44397,Western Australian Department of Education,2026-04-29,2,a769713b-49ce-4dcf-bd61-af5faa48b81f|fe1443c6-b957-45b9-b764-2b1724e13d04,Department of Education cyber incident | West Australian government cyber incident,other_day,day,1

@@ -1120,6 +1120,27 @@ def test_a_record_naming_another_organisation_as_harmed_stays_with_the_report(fu
     assert _event_of(full, "enr-m2") == "ded-z1"                 # names Alfred Health too: general coverage
 
 
+def test_a_place_or_description_linked_as_harmed_does_not_keep_a_customers_record(full):
+    """Owner review 2026-11-05 (event 48dc74d0): Tasmania's DECYP notice of the Canvas breach was also linked to
+    "Queensland" and "Tasmania", WA's notice to "WA schools"; read as other organisations, both notices stayed on an
+    event of the University of Newcastle. A place or a description is not another organisation."""
+    _own_event(full, "mh", "Monash Health")
+    full.executemany("INSERT INTO EntitiesV2 (entity_name, entity_kind) VALUES (?, ?)",
+                     [("Victoria", "other"), ("Victorian hospitals", "organisation"), ("Alfred Health", None)])
+    ids = {r[1]: r[0] for r in full.execute("SELECT entity_id, entity_name FROM EntitiesV2")}
+    full.executemany("INSERT INTO EnrichedEventEntities (enriched_event_id, entity_id, relationship_type) "
+                     "VALUES (?, ?, ?)", [("enr-m1", ids["Monash Health"], "victim"),
+                                          ("enr-m1", ids["Victoria"], "affected_customer"),
+                                          ("enr-m1", ids["Victorian hospitals"], "affected_customer"),
+                                          ("enr-m2", ids["Monash Health"], "victim"),
+                                          ("enr-m2", ids["Alfred Health"], "affected_customer")])
+    full.commit()
+    (moved,) = sl.double_counted_customers(full)["split_out"]
+    assert moved["records"] == 1
+    assert _event_of(full, "enr-m1") == moved["new_event"]       # Victoria and Victorian hospitals are no organisation
+    assert _event_of(full, "enr-m2") == "ded-z1"                 # Alfred Health is: general coverage
+
+
 def test_a_report_whose_customers_all_have_their_own_events_is_the_suppliers_event(full):
     _own_event(full, "mh", "Monash Health")
     _own_event(full, "ha", "Department of Home Affairs")
