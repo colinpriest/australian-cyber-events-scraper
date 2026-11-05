@@ -3727,9 +3727,15 @@ eye.
 
 `index.html` now plots each attack type as a percentage of the period's cyber incidents, the one measure OAIC publishes
 for every report, and names the periods with no split (2025 H2). 2023 H1 to 2025 H1 use the percentages of OAIC's Power
-BI dashboard, which differ from the PDFs by up to 3 points where both exist (2023 H1 ransomware 28% against 31%). Only
-the totals, malicious-attack counts, cyber-incident counts and attack shares of 2019 H2 to 2022 H2 were re-read; the
-sector and individuals-affected figures of those periods have not been checked.
+BI dashboard, which differ from the PDFs by up to 3 points where both exist (2023 H1 ransomware 28% against 31%). 
+The same reader fills the rest of those records. `top_sectors` held at most two sectors and now holds each report's
+table. `individuals_affected_distribution` was empty and now holds each report's Chart 3, read once with the vision
+model and rejected unless its counts sum to the period's total (all seven do, and were compared with the pages by eye).
+`individuals_affected_average` is removed for 2019 H2 to 2024 H2, because none of the stored values was an overall
+average: to 2022 H2 and in 2023 they were the average of one sub-category in a table (2021 H1's 523,998 is "unintended
+release or publication"; 2023 H2's 9,080 is "rogue employee"), and 2024's, with their medians, the cyber-incident row.
+OAIC's reports give no overall figure, so the "Individuals Affected Trends" chart estimates both from the bands for
+every period and says so.
 
 ```bash
 python scripts/oaic/oaic_report_figures.py --dry-run

@@ -5,11 +5,15 @@ The HTML and PDF scraper took the first number a loose pattern matched. Owner re
 2019 H2's total was 106 (November's count; the report says 537), 2021 H2's 436 (the previous period's; it says 464),
 2022 H1's 250 and 2022 H2's 350 (the malicious-attack counts; they say 396 and 497). Its attack-type fields mixed
 percentages (2021 H2 ransomware 23 is 23%: 40 of 173 notifications) with counts and misreadings (2022 H2 malware 109;
-the report says 4%), and brute force and compromised credentials were never read.
+the report says 4%), and brute force and compromised credentials were never read. Its individuals_affected_average was
+the first "an average of N" in the text, which is a human-error sub-category's (2021 H1's 523,998 is "unintended release
+or publication"); these reports state no overall average. Its top_sectors held at most two sectors and it read no
+distribution, though every report has both.
 
 This module reads one report per period with a pattern written for that report's own wording; a pattern that does not
 match is an error, never a blank. Shares are read from the report's "Cyber incident breakdown" chart, an image in
-several reports, by the vision model once per page. Each reading is committed in ``report_chart_readings.json``, keyed
+several reports, by the vision model once per page, and so is the "Number of individuals affected" chart, whose counts
+must sum to the period's total. The sector table is read from the text. Each reading is committed in ``report_chart_readings.json``, keyed
 on the PDF's hash and the prompt version, so a rerun asks nothing and anyone can compare it with the page.
 
     python scripts/oaic/oaic_report_figures.py --dry-run   # what would change
@@ -38,6 +42,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 READINGS_PATH = Path(__file__).resolve().parent / "report_chart_readings.json"
 PROMPT_VERSION = "cyber-breakdown-v1"
+DISTRIBUTION_PROMPT_VERSION = "individuals-distribution-v1"
+#: The bands the published dataset uses (and the dashboard counts); a band a report does not show holds no breaches.
+DISTRIBUTION_BANDS = ("1", "2-10", "11-100", "101-1,000", "1,001-5,000", "5,001-10,000", "10,001-25,000",
+                      "25,001-50,000", "50,001-100,000", "100,001-250,000", "250,001-500,000", "500,001-1,000,000",
+                      "1,000,001-10,000,000", "10,000,001+", "Unknown")
+#: A distribution may miss a total by this share: some reports count a few notifications differently.
+DISTRIBUTION_SUM_TOLERANCE = 0.02
 SHARE_FIELDS = ("phishing", "compromised_credentials", "ransomware", "hacking", "brute_force", "malware")
 METHOD_FIELDS = SHARE_FIELDS
 #: The shares of a report are rounded: they sum to about 100, not exactly.
@@ -50,12 +61,21 @@ brute_force, malware, other. "Compromised or stolen credentials (method unknown)
 "Phishing (compromised credentials)" is phishing; "Brute-force attack (compromised credentials)" is brute_force.
 Values are the integers printed on the page; null for a category the page does not show. Do not calculate anything."""
 
+DISTRIBUTION_PROMPT = """This is one page of an Australian privacy regulator's data breach report. It has a chart headed
+"Number of individuals affected by breaches" (bars or a table: the number of breaches in each band of individuals
+affected). Read the number of breaches printed for each band and return JSON whose keys are exactly these band labels:
+""" + ", ".join(f'"{b}"' for b in DISTRIBUTION_BANDS) + """. "10,000,001 or more" is "10,000,001+". Values are the integers
+printed on the page; null for a band the page does not show. Use the chart for the individuals affected worldwide, not
+a table of Australians only. Do not calculate anything."""
+
 
 @dataclass(frozen=True)
 class Report:
     period: str
     pdf: str
     chart_page: int
+    sector_page: int
+    distribution_page: int
     total: str
     malicious: str
     cyber: str
@@ -63,25 +83,25 @@ class Report:
 
 _MALICIOUS_ACCOUNTING = r"accounting\s+for\s+(\d{3})\s+(?:breaches|notifications)"
 REPORTS = (
-    Report("2019 H2", "notifiable-data-breaches-report-july-december-2019.pdf", 14,
+    Report("2019 H2", "notifiable-data-breaches-report-july-december-2019.pdf", 14, 6, 8,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+under\s+this\s+category"),
-    Report("2020 H1", "notifiable-data-breaches-report-jan-jun-2020.pdf", 15,
+    Report("2020 H1", "notifiable-data-breaches-report-jan-jun-2020.pdf", 15, 6, 9,
            r"The\s+(\d{3})\s+notifications\s+received\s+during\s+this\s+reporting", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+under\s+this\s+category"),
-    Report("2020 H2", "notifiable-data-breaches-report-july-dec-2020.pdf", 19,
+    Report("2020 H2", "notifiable-data-breaches-report-july-dec-2020.pdf", 19, 7, 9,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+of\s+cyber\s+incidents"),
-    Report("2021 H1", "oaic-notifiable-data-breaches-report-jan-june-2021.pdf", 18,
+    Report("2021 H1", "oaic-notifiable-data-breaches-report-jan-june-2021.pdf", 18, 8, 10,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"of\s+all\s+data\s+breaches\s+\((\d{3})\s+notifications\)"),
-    Report("2021 H2", "Final-Notifiable-Data-Breaches-Report-Jul-Dec-2021.pdf", 17,
+    Report("2021 H2", "Final-Notifiable-Data-Breaches-Report-Jul-Dec-2021.pdf", 17, 20, 8,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"of\s+all\s+breaches\s+\((\d{3})\s+notifications\)"),
-    Report("2022 H1", "OAIC-Notifiable-Data-Breaches-Report-Jan-Jun-2022.pdf", 19,
+    Report("2022 H1", "OAIC-Notifiable-Data-Breaches-Report-Jan-Jun-2022.pdf", 19, 23, 9,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period", _MALICIOUS_ACCOUNTING,
            r"breaches\s+\((\d{3})\s+notifications\)\s+.\s+resulted\s+from\s+cyber"),
-    Report("2022 H2", "OAIC-Notifiable-data-breaches-report-July-December-2022.pdf", 22,
+    Report("2022 H2", "OAIC-Notifiable-data-breaches-report-July-December-2022.pdf", 22, 28, 10,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period",
            r"accounted\s+for\s+(\d{3})\s+notifications",
            r"were\s+(\d{3})\s+breaches\s+resulting\s+from\s+cyber"),
@@ -117,15 +137,68 @@ def check_shares(period: str, shares: Dict[str, Any]) -> Dict[str, int]:
     return {k: v for k, v in shares.items() if isinstance(v, int)}
 
 
-def apply_figures(record: Dict[str, Any], figures: Dict[str, int], shares: Dict[str, int]) -> Dict[str, Any]:
-    """The record with the report's figures: shares in percent, and the mixed method fields empty."""
+def read_sectors(period: str, page_text: str) -> List[Dict[str, Any]]:
+    """The report's table of top sectors, from its first row (always health) to the last row of name and count."""
+    rows: List[Dict[str, Any]] = []
+    for line in page_text.split("\n"):
+        if re.search(r"(?i)report\s+page", line):
+            break
+        found = re.match(r"^([A-Z][A-Za-z ,&()./-]*?)\d?\s+(\d{1,3})(?:\s+\d+%)?$", line.strip())
+        if found is None:
+            continue
+        name, count = found.group(1).strip(), int(found.group(2))
+        if not rows and not name.startswith("Health"):
+            continue
+        if name == "Total":
+            break
+        rows.append({"sector": name, "notifications": count})
+    if not 5 <= len(rows) <= 7:
+        raise FigureNotFound(f"{period}: sector table read as {rows}")
+    return rows
+
+
+def check_distribution(period: str, reading: Dict[str, Any], total: int) -> List[Dict[str, Any]]:
+    """The bands a reading gives, in order, or an error when their counts do not sum to the period's total."""
+    unknown = sorted(set(reading) - set(DISTRIBUTION_BANDS))
+    if unknown:
+        raise FigureNotFound(f"{period}: distribution reading has unknown bands {unknown}")
+    rows = [{"range": band, "count": reading[band]} for band in DISTRIBUTION_BANDS
+            if isinstance(reading.get(band), int)]
+    found = sum(row["count"] for row in rows)
+    if abs(found - total) > total * DISTRIBUTION_SUM_TOLERANCE:
+        raise FigureNotFound(f"{period}: distribution sums to {found}, the period's total is {total}: {reading}")
+    return rows
+
+
+def apply_figures(record: Dict[str, Any], figures: Dict[str, int], shares: Dict[str, int],
+                  sectors: Optional[List[Dict[str, Any]]] = None,
+                  distribution: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """The record with the report's figures: shares in percent, and the mixed method fields empty.
+
+    The stored average is removed: it is a sub-category's, and these reports state no overall one.
+    """
     out = dict(record)
     out.update(figures)
+    if sectors is not None:
+        out["top_sectors"] = sectors
+    if distribution is not None:
+        out["individuals_affected_distribution"] = distribution
+        out["individuals_affected_average"] = None
     out["cyber_incidents_percentage"] = round(100 * figures["cyber_incidents_total"] / figures["total_notifications"], 1)
     out["cyber_incident_breakdown_pct"] = shares
     for field in METHOD_FIELDS:
         out[field] = None
     return out
+
+
+#: Averages stored for later periods that are not the period's overall average. The first two are the "rogue employee"
+#: row of the report's malicious-attack table; the last two, with their medians, are its cyber-incident row.
+MISATTRIBUTED_AVERAGES = ("2023 H1", "2023 H2", "2024 H1", "2024 H2")
+
+
+def without_misattributed_average(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The record with no average or median, so the dashboard estimates them from the distribution like every other."""
+    return {**record, "individuals_affected_average": None, "individuals_affected_median": None}
 
 
 def _read_text(path: Path) -> str:
@@ -135,7 +208,14 @@ def _read_text(path: Path) -> str:
         return " ".join((page.extract_text() or "") for page in pdf.pages[:32])
 
 
-def _ask_vision(path: Path, page_number: int) -> Dict[str, Any]:
+def _page_text(path: Path, page_number: int) -> str:
+    import pdfplumber
+
+    with pdfplumber.open(path) as pdf:
+        return pdf.pages[page_number - 1].extract_text() or ""
+
+
+def _ask_vision(path: Path, page_number: int, prompt: str = PROMPT) -> Dict[str, Any]:
     import pdfplumber
     from openai import OpenAI
 
@@ -149,7 +229,7 @@ def _ask_vision(path: Path, page_number: int) -> Dict[str, Any]:
     response = OpenAI().chat.completions.create(
         **chat_params(openai_model(), max_tokens=500),
         messages=[{"role": "user", "content": [
-            {"type": "text", "text": PROMPT},
+            {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}]}],
         response_format={"type": "json_object"})
     return json.loads(response.choices[0].message.content)
@@ -171,6 +251,26 @@ def chart_shares(report: Report, path: Path, readings: Dict[str, Any], dry_run: 
                                "prompt_version": PROMPT_VERSION, "model": openai_model(), "shares": checked}
     READINGS_PATH.write_text(json.dumps(readings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return checked
+
+
+def chart_distribution(report: Report, path: Path, readings: Dict[str, Any], total: int,
+                       dry_run: bool) -> Optional[List[Dict[str, Any]]]:
+    """A report's individuals-affected bands: the committed reading of this PDF and prompt, else one vision call."""
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    entry = readings.setdefault(report.period, {})
+    stored = entry.get("distribution")
+    if stored and stored.get("pdf_sha256") == digest and stored.get("prompt_version") == DISTRIBUTION_PROMPT_VERSION:
+        return check_distribution(report.period, stored["bands"], total)
+    if dry_run:
+        return None
+    reading = _ask_vision(path, report.distribution_page, DISTRIBUTION_PROMPT)
+    rows = check_distribution(report.period, reading, total)
+    entry["distribution"] = {"pdf_sha256": digest, "page": report.distribution_page,
+                             "prompt_version": DISTRIBUTION_PROMPT_VERSION, "model": openai_model(), "bands": reading}
+    READINGS_PATH.write_text(json.dumps(readings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return rows
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -197,6 +297,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             figures = report_figures(report, _read_text(path))
             shares = chart_shares(report, path, readings, args.dry_run)
+            sectors = read_sectors(report.period, _page_text(path, report.sector_page))
+            distribution = chart_distribution(report, path, readings, figures["total_notifications"], args.dry_run)
         except FigureNotFound as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
@@ -205,8 +307,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"ERROR: the dataset has no record for {report.period}", file=sys.stderr)
             return 1
         print(report.period, {f: (record.get(f), v) for f, v in figures.items() if record.get(f) != v}, shares or "(not read yet)")
-        if shares is not None:
-            new_records.append(apply_figures(record, figures, shares))
+        print("   sectors", sectors)
+        print("   bands", distribution or "(not read yet)", "| average was", record.get("individuals_affected_average"))
+        if shares is not None and distribution is not None:
+            new_records.append(apply_figures(record, figures, shares, sectors, distribution))
+    new_records += [without_misattributed_average(current[p]) for p in MISATTRIBUTED_AVERAGES]
     if args.dry_run:
         return 0
     result = promote_records(new_records, "OAIC report PDF", legacy_dir=None)

@@ -1782,11 +1782,14 @@ def normalize_sector_name(sector: str) -> str:
         'Finance (incl. superannuation)':      'Finance',
         'Finance (including superannuation)':  'Finance',
         'Insurance':                           'Finance',  # combined for DB-vs-OAIC comparison
+        'Legal, accounting and management services': 'Legal, accounting & management services',
         'Health service providers':            'Health',
         'Health services':                     'Health',
         'Healthcare':                          'Health',
         # OAIC label vs DB label for recruitment agencies
         'Recruitment/Employment Services':     'Recruitment Agencies',
+        'Recruitment agencies':                'Recruitment Agencies',
+        'Personal services':                   'Personal services (incl employment, child care, vets)',
     }
 
     # Check for exact match first
@@ -4174,7 +4177,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
           labels: data.periods,
           datasets: [
             {
-              label: 'OAIC Average Individuals Affected',
+              label: 'OAIC Average Individuals Affected (estimated)',
               data: data.averages,
               borderColor: colors.danger,
               backgroundColor: colors.danger + '20',
@@ -4182,7 +4185,7 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
               tension: 0.3
             },
             {
-              label: 'OAIC Median Individuals Affected',
+              label: 'OAIC Median Individuals Affected (estimated)',
               data: data.medians,
               borderColor: colors.primary,
               backgroundColor: colors.primary + '20',
@@ -4207,6 +4210,10 @@ def build_html(data: Dict[str, Any], start_date: str, end_date: str) -> str:
             intersect: false
           },
           plugins: {
+            subtitle: {
+              display: true,
+              text: 'OAIC states no overall average or median: both are estimated from its bands of individuals affected'
+            },
             legend: {
               position: 'top'
             },
