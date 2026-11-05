@@ -1208,18 +1208,22 @@ def reversed_customers(conn: sqlite3.Connection, dedup_id: str) -> Set[str]:
 
 def _record_orgs(conn: sqlite3.Connection, dedup_id: str) -> List[Dict[str, Any]]:
     """Each member record, the organisation its Perplexity research names (None when it names none), and the
-    organisations the record's own entity links give as harmed (``victim`` / ``affected_customer``)."""
+    organisations the record's own entity links give as harmed (``victim`` / ``affected_customer``), and the
+    kinds recorded for them (``harmed_kinds``)."""
     from cyber_data_collector.dedup.coherence import _formal_name
 
     harmed: Dict[str, List[str]] = defaultdict(list)
-    for rid, name in conn.execute(
-            """SELECT ee.enriched_event_id, v.entity_name FROM EventDeduplicationMap m
+    kinds: Dict[str, Dict[str, Optional[str]]] = defaultdict(dict)
+    for rid, name, kind in conn.execute(
+            """SELECT ee.enriched_event_id, v.entity_name, v.entity_kind FROM EventDeduplicationMap m
                JOIN EnrichedEventEntities ee ON ee.enriched_event_id = m.enriched_event_id
                JOIN EntitiesV2 v ON v.entity_id = ee.entity_id
                WHERE m.deduplicated_event_id = ? AND ee.relationship_type IN ('victim', 'affected_customer')""",
             (dedup_id,)):
         harmed[rid].append(name)
-    return [{"id": rid, "org": _formal_name(pe), "harmed": harmed.get(rid, [])} for rid, pe in conn.execute(
+        kinds[rid][name] = kind
+    return [{"id": rid, "org": _formal_name(pe), "harmed": harmed.get(rid, []), "harmed_kinds": kinds.get(rid, {})}
+            for rid, pe in conn.execute(
         """SELECT m.enriched_event_id, e.perplexity_enrichment_data FROM EventDeduplicationMap m
            JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
            WHERE m.deduplicated_event_id = ? ORDER BY m.enriched_event_id""", (dedup_id,))]
@@ -1676,10 +1680,13 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
     from cyber_data_collector.dedup.multi_customer_incidents import pair_verdicts
     from cyber_data_collector.dedup.victim_fill import names_match
 
+    from cyber_data_collector.dedup import descriptive_names
+
     ensure_schema(conn)
     resolver = resolver or EntityResolver(conn)
     verdicts = pair_verdicts(conn)
     vendors = _vendor_names(conn)
+    descriptions = descriptive_names.described(conn)
     rows = conn.execute("SELECT deduplicated_event_id, event_date, victim_organization_name, vendor_organization_name, "
                         "title FROM DeduplicatedEvents WHERE status = 'Active'").fetchall()
     dates = {r[0]: r[1] for r in rows}
@@ -1720,13 +1727,19 @@ def double_counted_customers(conn: sqlite3.Connection, resolver=None,
         research names it. A record naming any other organisation as harmed is general coverage and stays,
         whether or not that organisation is recorded on the event: the Canvas report's records listing TasTAFE
         beside USyd, UTS and QLearn were taken as TasTAFE's (only TasTAFE was a victim there), and the group
-        then absorbed TasTAFE's own event (trial on a copy, 2026-11-04). Empty unless some record stays."""
+        then absorbed TasTAFE's own event (trial on a copy, 2026-11-04). Only a harmed name that can be a victim
+        organisation counts, by the test that groups the event's victims: Tasmania's DECYP notice of the Canvas
+        breach was linked to "Queensland", "South Australia" and "Tasmania" as well, WA's notice to "WA schools",
+        and both stayed on an event recording only the University of Newcastle (owner review, 2026-11-05).
+        Empty unless some record stays."""
         names = [n for _e, n in members]
         supplier = vendors.get(did, ())
         records = _record_orgs(conn, did)
         mine = []
         for m in records:
-            harmed = [h for h in m["harmed"] if not any(same_supplier(h, v) for v in supplier)]
+            harmed = [h for h in m["harmed"] if not any(same_supplier(h, v) for v in supplier)
+                      and sv.is_candidate_organisation(h, m["harmed_kinds"].get(h))
+                      and not descriptive_names.is_listed(descriptions, h)]
             if harmed:
                 if all(any(names_match(conn, h, n) for n in names) for h in harmed):
                     mine.append(m["id"])
