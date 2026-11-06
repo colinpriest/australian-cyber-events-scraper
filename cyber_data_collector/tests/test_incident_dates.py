@@ -291,3 +291,26 @@ def test_an_owner_label_replaces_a_research_date_and_is_idempotent(tmp_path):
     idates.refresh_event_precision(c)
     assert c.execute("SELECT event_date_precision, event_date_earliest, event_date_latest FROM DeduplicatedEvents "
                      "WHERE deduplicated_event_id = 'd1'").fetchone() == ("month", "2024-04-01", "2024-04-30")
+
+
+def test_an_event_of_many_records_takes_a_date_only_when_all_are_labelled(tmp_path):
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE RawEvents (raw_event_id TEXT, event_date TEXT, event_date_precision TEXT, event_date_basis TEXT);
+        CREATE TABLE EnrichedEvents (enriched_event_id TEXT, raw_event_id TEXT, event_date TEXT, status TEXT);
+        CREATE TABLE DeduplicatedEvents (deduplicated_event_id TEXT, event_date TEXT, status TEXT);
+        CREATE TABLE EventDeduplicationMap (deduplicated_event_id TEXT, enriched_event_id TEXT);
+        INSERT INTO RawEvents VALUES ('r1', '2021-04-20', 'day', 'x'), ('r2', '2021-01-01', 'year', 'x'),
+                                     ('r3', '2021-04-20', 'day', 'x'), ('r4', '2021-04-20', 'day', 'x');
+        INSERT INTO EnrichedEvents VALUES ('e1', 'r1', '2021-04-20', 'Active'), ('e2', 'r2', '2021-01-01', 'Active'),
+                                          ('e3', 'r3', '2021-04-20', 'Active'), ('e4', 'r4', '2021-04-20', 'Active');
+        INSERT INTO DeduplicatedEvents VALUES ('all', '2021-04-20', 'Active'), ('some', '2021-04-20', 'Active');
+        INSERT INTO EventDeduplicationMap VALUES ('all', 'e1'), ('all', 'e2'), ('some', 'e3'), ('some', 'e4');
+    """)
+    labels = tmp_path / "labels.csv"
+    labels.write_text("enriched_event_id,event_date,precision,rationale,labeller\n"
+                      "e1,2022-09-01,month,why,owner\ne2,2022-09-01,month,why,owner\ne3,2022-09-01,month,why,owner\n",
+                      encoding="utf-8")
+    idt.apply_record_date_labels(c, labels)
+    dates = dict(c.execute("SELECT deduplicated_event_id, event_date FROM DeduplicatedEvents"))
+    assert dates == {"all": "2022-09-01", "some": "2021-04-20"}

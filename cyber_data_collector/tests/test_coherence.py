@@ -407,3 +407,18 @@ def test_a_member_naming_no_organisation_is_a_suspect_only_when_the_victim_is_in
     # ... a label does.
     out = co.decide_strays(event, _scores(event, {"r3": 0.02}), {"rogue|r3": "different"}, 0.3, resolver)
     assert [s["id"] for s in out["strays"]] == ["r3"] and out["strays"][0]["basis"] == "label"
+
+
+def test_a_record_of_an_event_the_owner_merged_is_no_stray_of_the_other(tmp_path):
+    path = tmp_path / "labels.csv"
+    path.write_text("deduplicated_event_id,enriched_event_id,label,incident,rationale,evidence,labeller\n"
+                    "A,r2,different,x,y,,blind labeller\nA,r5,different,x,y,,owner (Colin Priest)\n"
+                    "B,r3,different,x,y,,blind labeller\n", encoding="utf-8")
+    labels = co.load_labels(path)
+    out = co.owner_merged_labels(labels, path, pairs={frozenset(("A", "B"))},
+                                 members={"A": {"r1"}, "B": {"r2", "r3", "r5"}})
+    assert out["A|r2"] == "same"            # the blind label on the other side's record gives way
+    assert out["B|r1"] == "same"            # and the other way round
+    assert "A|r3" not in out                # a stray of its own side stays one
+    assert out["A|r5"] == "different"       # the owner's own label stands
+    assert labels["A|r2"] == "different"    # what calibration reads is unchanged

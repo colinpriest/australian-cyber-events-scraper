@@ -599,6 +599,24 @@ def members_incident_date(conn: sqlite3.Connection, dedup_id: str, first_report:
     return checked
 
 
+def owner_dated_events(conn: sqlite3.Connection) -> Set[str]:
+    """Active events all of whose active records carry a date an owner's label gave: a report date never replaces it.
+
+    The merged Big Four banks event had been dated by a report, so a Webber record's January 2025 listing date put it
+    back over the owner's April 2025 (owner, 2026-11-06).
+    """
+    if "event_date_basis" not in {c[1] for c in conn.execute("PRAGMA table_info(RawEvents)")}:
+        return set()
+    labelled: Dict[str, bool] = {}
+    for event_id, basis in conn.execute(
+            """SELECT m.deduplicated_event_id, r.event_date_basis FROM EventDeduplicationMap m
+               JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+               JOIN RawEvents r ON r.raw_event_id = e.raw_event_id
+               WHERE COALESCE(e.status, 'Active') = 'Active'"""):
+        labelled[event_id] = labelled.get(event_id, True) and basis == "owner label"
+    return {event_id for event_id, every in labelled.items() if every}
+
+
 def refresh_events(conn: sqlite3.Connection) -> EventReport:
     """Store ``first_reported_date`` and ``reporting_lag_days`` on every active event,
     and date an undated event by its first report (basis :data:`BASIS_PUBLICATION`).
@@ -609,6 +627,7 @@ def refresh_events(conn: sqlite3.Connection) -> EventReport:
 
     ensure_schema(conn)
     report = EventReport()
+    owner_dated = owner_dated_events(conn)
     columns = {r[1] for r in conn.execute("PRAGMA table_info(DeduplicatedEvents)")}
     earliest_sql = "d.event_date_earliest" if "event_date_earliest" in columns else "NULL"
     published: Dict[str, List[str]] = {}
@@ -632,7 +651,9 @@ def refresh_events(conn: sqlite3.Connection) -> EventReport:
         event_day = normalise(event_date)
         if first:
             report.first_reported += 1
-        if event_day is None and first:
+        if dedup_id in owner_dated:
+            pass
+        elif event_day is None and first:
             conn.execute("UPDATE DeduplicatedEvents SET event_date = ?, date_basis = ?, date_precision = ? "
                          "WHERE deduplicated_event_id = ?", (first, BASIS_PUBLICATION, precision(first), dedup_id))
             logger.info("Event %s had no date: dated %s by its first report", dedup_id[:8], first)

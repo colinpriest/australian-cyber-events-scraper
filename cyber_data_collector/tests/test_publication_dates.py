@@ -294,3 +294,17 @@ def test_checked_dates_of_another_incident_do_not_redate_an_event(conn):
                          "VALUES (?, 'date', 'supported', '2026-11-04')", (f"xn{i}",))
     conn.commit()
     assert pd.members_incident_date(conn, "nissan", "2024-05-15") is None
+
+
+def test_a_report_date_does_not_replace_a_date_the_owner_labelled():
+    c = sqlite3.connect(":memory:")
+    c.executescript("""
+        CREATE TABLE RawEvents (raw_event_id TEXT, event_date_basis TEXT);
+        CREATE TABLE EnrichedEvents (enriched_event_id TEXT, raw_event_id TEXT, status TEXT);
+        CREATE TABLE EventDeduplicationMap (deduplicated_event_id TEXT, enriched_event_id TEXT);
+        INSERT INTO RawEvents VALUES ('r1', 'owner label'), ('r2', 'owner label'), ('r3', 'owner label'), ('r4', NULL);
+        INSERT INTO EnrichedEvents VALUES ('e1', 'r1', 'Active'), ('e2', 'r2', 'Active'), ('e3', 'r3', 'Active'),
+                                          ('e4', 'r4', 'Active');
+        INSERT INTO EventDeduplicationMap VALUES ('all', 'e1'), ('all', 'e2'), ('some', 'e3'), ('some', 'e4');
+    """)
+    assert pd.owner_dated_events(c) == {"all"}

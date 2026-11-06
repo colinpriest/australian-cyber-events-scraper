@@ -73,7 +73,7 @@ import logging
 import sqlite3
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from cyber_data_collector.dedup import calibration_guard, final_decisions
 from cyber_data_collector.dedup.entity_resolution import EntityResolver
@@ -473,6 +473,32 @@ def follow_merged_labels(conn: sqlite3.Connection, labels: Dict[str, str],
     return out, incidents
 
 
+def owner_merged_labels(labels: Dict[str, str], labels_path: Path = LABELS_PATH, pairs=None,
+                        members: Optional[Dict[str, Set[str]]] = None) -> Dict[str, str]:
+    """``labels`` with a record of an event the owner merged into another marked as belonging to that other event.
+
+    The owner's ``same`` label says the two events are one incident, so neither's records are strays of the other. A
+    blind label had called Hudson Rock's staff logins a stray of the Big Four banks' customer-password event; the
+    owner merged the two on 2026-11-06, and without this the next run would split them again. A record its own side
+    labelled a stray is still one, and an owner's label on the record stands. Only the acting step reads this:
+    calibration keeps the blind labels it was measured on.
+    """
+    from cyber_data_collector.dedup import label_contradictions as lc
+
+    pairs = lc.owner_labelled_same_pairs() if pairs is None else pairs
+    members = lc.labelled_members() if members is None else members
+    owners = {sid for sid, row in _label_rows(labels_path).items()
+              if (row.get("labeller") or "").strip().lower().startswith("owner")}
+    out = dict(labels)
+    for pair in pairs:
+        for event, other in (tuple(pair), tuple(pair)[::-1]):
+            for record in members.get(other, set()) - members.get(event, set()):
+                subject = member_subject_id(event, record)
+                if subject not in owners and out.get(member_subject_id(other, record)) != "different":
+                    out[subject] = "same"
+    return out
+
+
 def current_view(conn: sqlite3.Connection, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """``event`` as the database holds it now, or None when it is no longer an Active event of 2+ records.
 
@@ -695,6 +721,8 @@ def check_coherence(conn: sqlite3.Connection, apply: bool = False, judge=None, e
                 raise
             logger.warning("REPORT ONLY (no --apply): %s", exc)
     cutoff = cal["cutoff"] if cal else None
+    if labels:
+        labels = owner_merged_labels(labels, labels_path)
     labels, incidents = follow_merged_labels(conn, labels, incidents)
     labelled_events = {sid.split("|", 1)[0] for sid in labels}
     resolver = EntityResolver(conn)
