@@ -587,14 +587,16 @@ def apply_record_date_labels(conn: sqlite3.Connection, path: Path = RECORD_DATE_
     of Nissan's call centre, breached with OracleCMS in April 2024, was researched as 5 December 2023, Nissan's first
     attack (owner, 2026-11-06). Such a date is citation-supported, so no rule can tell it from the incident's own.
     ``evaluation/record_date_labels.csv``: ``enriched_event_id,event_date,precision,rationale,labeller`` (a month is
-    stored as its 1st). The research date stops counting as support, and an event whose only active record is the
-    labelled one takes the date. An event with other records keeps its date from its members. The caller commits.
+    stored as its 1st). The research date stops counting as support, and an event all of whose active records carry
+    one labelled date takes it (Fortnum's ASIC case had been dated 20 April 2021, the day Fortnum issued its cyber
+    policy; owner, 2026-11-06). An event with other records keeps its date from its members. The caller commits.
     """
     if not path.exists():
         return []
     changed: List[str] = []
     with open(path, encoding="utf-8", newline="") as fh:
         labels = list(csv.DictReader(fh))
+    labelled_day = {row["enriched_event_id"].strip(): row["event_date"].strip() for row in labels}
     for row in labels:
         enriched_id, day, precision = row["enriched_event_id"].strip(), row["event_date"].strip(), row["precision"].strip()
         if precision not in PRECISIONS or _day(day) is None:
@@ -615,16 +617,16 @@ def apply_record_date_labels(conn: sqlite3.Connection, path: Path = RECORD_DATE_
         if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'EnrichmentFactSupport'").fetchone():
             conn.execute("UPDATE EnrichmentFactSupport SET status = 'withheld', reason = ? WHERE enriched_event_id = ? "
                          "AND fact = 'date' AND status = 'supported'",
-                         ("owner label: the research date describes another incident", enriched_id))
+                         ("owner label: the research date is not this incident's", enriched_id))
         for (event_id, event_date) in conn.execute(
                 """SELECT d.deduplicated_event_id, d.event_date FROM EventDeduplicationMap m
                    JOIN DeduplicatedEvents d ON d.deduplicated_event_id = m.deduplicated_event_id
-                   WHERE m.enriched_event_id = ? AND d.status = 'Active'
-                     AND (SELECT COUNT(*) FROM EventDeduplicationMap m2
-                          JOIN EnrichedEvents e ON e.enriched_event_id = m2.enriched_event_id
-                          WHERE m2.deduplicated_event_id = d.deduplicated_event_id
-                            AND COALESCE(e.status, 'Active') = 'Active') = 1""", (enriched_id,)).fetchall():
-            if event_date != day:
+                   WHERE m.enriched_event_id = ? AND d.status = 'Active'""", (enriched_id,)).fetchall():
+            members = [r for (r,) in conn.execute(
+                """SELECT m.enriched_event_id FROM EventDeduplicationMap m
+                   JOIN EnrichedEvents e ON e.enriched_event_id = m.enriched_event_id
+                   WHERE m.deduplicated_event_id = ? AND COALESCE(e.status, 'Active') = 'Active'""", (event_id,))]
+            if event_date != day and all(labelled_day.get(r) == day for r in members):
                 conn.execute("UPDATE DeduplicatedEvents SET event_date = ? WHERE deduplicated_event_id = ?",
                              (day, event_id))
     return changed
@@ -667,7 +669,8 @@ def remove_dates_after_publication(conn: sqlite3.Connection, dry_run: bool = Fal
                   e.records_affected, e.title, r.source_type
            FROM RawEvents r JOIN EnrichedEvents e ON e.raw_event_id = r.raw_event_id AND e.status = 'Active'
            WHERE r.publication_date IS NOT NULL AND r.publication_date_source = 'source'
-             AND r.source_type != 'OAIC'""").fetchall()
+             AND r.source_type != 'OAIC' AND COALESCE(r.event_date_basis, '') != ?""",
+        (BASIS_OWNER_LABEL,)).fetchall()
     for raw_id, raw_date, published, enriched_id, enriched_date, count, title, source_type in rows:
         limit = _day(published)
         if limit is None:

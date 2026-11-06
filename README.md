@@ -756,6 +756,14 @@ needs evidence of a separate attack, system, data set, attacker or date. Its esc
 calibration whose cut-off lies outside its band no longer applies. Recalibrated 2026-10-31 on 155 labelled pairs:
 cut-off 0.80, 16/16 labelled merges correct, held-out lower bound 0.819.
 
+**Owner review of the close pairs (2026-11-06).** Of 9 pairs, 3 were merged (the WA Department of Education's
+Canvas notice, Optimum Health's two Black Basta events, the Big Four banks' infostealer reports) and the rest are
+separate incidents, recorded as labels where a date had made them look close. When the owner merges two events
+(`same` label), the acting coherence checks stop treating either's records as strays of the other
+(`coherence.owner_merged_labels`); calibration keeps the blind labels it was measured on. Optimum's second event was
+not on the list: its Black Basta event was misdated August 2023, which paired it with Rhysida's attack that month and
+hid its real duplicate.
+
 ### Names that are descriptions; a person's alias
 
 `DescriptiveNames` (`dedup/descriptive_names.py`) remembers names that describe organisations instead of naming one
@@ -2670,6 +2678,10 @@ mentions as background. The date passes the citation check, so no rule can tell 
 `evaluation/record_date_labels.csv` holds the owner's date for such a record; `publication-dates` applies it
 (`incident_dates.apply_record_date_labels`), the research date stops counting as support, and an event with no other
 active record takes the date with basis `owner label`.
+
+An event all of whose active records carry one labelled date takes it, so a label can correct an event of many
+records: Fortnum's ASIC case had been dated 20 April 2021, the day Fortnum issued its cyber policy, not its September
+2022 breach (owner, 2026-11-06). A date a label gave is not removed for following a record's publication date.
 
 Before 2026-11-02 the headings were stored as the incident month - they used to become the 15th (all 832 Webber
 records), outranking any day the article stated. A day the
