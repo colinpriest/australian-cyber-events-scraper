@@ -288,7 +288,7 @@ elapsed_band_index,elapsed_band,u_shape_phase,delayed_peak_phase,calendar_band_i
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,other,organisation,100k+,0,360
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,other,organisation,1k-10k,0,360
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,other,organisation,unknown,0,923
-0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,retail,organisation,10k-100k,1,4
+0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,retail,organisation,10k-100k,1,15
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,retail,organisation,1k-10k,0,119
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,retail,organisation,unknown,0,540
 0,0-180,immediate,not_applicable,2,2024-2026,1,HUGE,4.0,0,very_large,very_large,technology,organisation,100k+,0,1094
