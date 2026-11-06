@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 import markdown
+import pandas as pd
 
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,7 @@ from scripts.recurrence_conclusions import (
     describe_contrast,
     describe_joint_test,
 )
+from scripts.recurrence_size_plot import section_html as size_section_html
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +194,15 @@ def executive_summary_html(summary: Dict[str, Any]) -> str:
     return '<div class="exec">' + "".join(cards) + "</div>"
 
 
+def size_section(analysis_dir: Path) -> str:
+    """The size figure from the main run's spells, or a visible note saying why it is not there."""
+    spells_path = analysis_dir / "recurrent_timing" / "recurrent_event_spells.csv"
+    if not spells_path.exists():
+        return ('<h2>Organisation size and recurrence rate</h2>'
+                f'<p class="warn">Not shown: {html.escape(str(spells_path))} does not exist.</p>')
+    return size_section_html(pd.read_csv(spells_path))
+
+
 def build_html(analysis_dir: Path, published_snapshot_id: Optional[str] = None) -> str:
     runs = [(f, label) for f, label in RUNS if (analysis_dir / f / "recurrent_timing_report.md").exists()]
     if not runs:
@@ -276,6 +287,7 @@ statistically significant is reported as no evidence, without a direction.</p>
 {executive_summary_html(main_summary)}
 {notes_block}
 
+{size_section(analysis_dir)}
 <details class="more"><summary>Detailed results</summary>
 <h2>Headline tests across bandings</h2>
 <p class="muted">p-values test constant elapsed-time risk; the adjusted model controls for calendar period, prior event
