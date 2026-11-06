@@ -74,7 +74,7 @@
         270
       ],
       "selected_bands": "0-270, >270",
-      "delta_bic_vs_constant": -6.191965914299999,
+      "delta_bic_vs_constant": -6.188368601046022,
       "search_adjusted_p": 0.003992015968063872,
       "rates_per_100_organisation_years": "1.00, 0.55",
       "top": [
@@ -88,10 +88,10 @@
             84
           ],
           "n_params": 2,
-          "log_likelihood": -1723.8284047372836,
-          "aic": 3451.656809474567,
-          "bic": 3457.7693010852636,
-          "delta_bic_vs_constant": -6.191965914299999
+          "log_likelihood": -1723.8301209696283,
+          "aic": 3451.6602419392566,
+          "bic": 3457.772733549953,
+          "delta_bic_vs_constant": -6.188368601046022
         },
         {
           "cuts": [
@@ -103,10 +103,10 @@
             70
           ],
           "n_params": 2,
-          "log_likelihood": -1724.08090180797,
-          "aic": 3452.16180361594,
-          "bic": 3458.2742952266362,
-          "delta_bic_vs_constant": -5.686971772927336
+          "log_likelihood": -1724.082305203101,
+          "aic": 3452.164610406202,
+          "bic": 3458.2771020168984,
+          "delta_bic_vs_constant": -5.684000134100643
         },
         {
           "cuts": [
@@ -120,10 +120,10 @@
             27
           ],
           "n_params": 3,
-          "log_likelihood": -1722.7057290064913,
-          "aic": 3451.4114580129826,
-          "bic": 3460.5801954290278,
-          "delta_bic_vs_constant": -3.3810715705358234
+          "log_likelihood": -1722.7070369385872,
+          "aic": 3451.4140738771744,
+          "bic": 3460.5828112932195,
+          "delta_bic_vs_constant": -3.378290857779575
         },
         {
           "cuts": [
@@ -137,10 +137,10 @@
             27
           ],
           "n_params": 3,
-          "log_likelihood": -1722.8745347238823,
-          "aic": 3451.7490694477647,
-          "bic": 3460.91780686381,
-          "delta_bic_vs_constant": -3.043460135753776
+          "log_likelihood": -1722.876163523906,
+          "aic": 3451.752327047812,
+          "bic": 3460.921064463857,
+          "delta_bic_vs_constant": -3.040037687142103
         },
         {
           "cuts": [
@@ -154,10 +154,10 @@
             84
           ],
           "n_params": 3,
-          "log_likelihood": -1723.243619886945,
-          "aic": 3452.48723977389,
-          "bic": 3461.655977189935,
-          "delta_bic_vs_constant": -2.305289809628448
+          "log_likelihood": -1723.2441539972165,
+          "aic": 3452.488307994433,
+          "bic": 3461.657045410478,
+          "delta_bic_vs_constant": -2.3040567405209913
         }
       ]
     },
@@ -166,24 +166,24 @@
         "window": "91-180",
         "repeats_in_window": 27,
         "repeats_elsewhere": 130,
-        "rate_ratio": 1.706159164119582,
-        "ci_low": 1.0831934570188413,
-        "ci_high": 2.5978805241200025,
-        "p_one_sided_higher": 0.010790114598002231,
-        "p_one_sided_lower": 0.9941633110344519,
-        "expected_if_no_difference": 17.03773400807421,
+        "rate_ratio": 1.7061770171182278,
+        "ci_low": 1.0832047913959193,
+        "ci_high": 2.5979077079598545,
+        "p_one_sided_higher": 0.0107888670775014,
+        "p_one_sided_lower": 0.994164042217099,
+        "expected_if_no_difference": 17.03757507630273,
         "enough_repeats": true
       },
       {
         "window": "91-120",
         "repeats_in_window": 8,
         "repeats_elsewhere": 149,
-        "rate_ratio": 1.3573357287395287,
-        "ci_low": 0.5753594183328039,
-        "ci_high": 2.7445309628411625,
-        "p_one_sided_higher": 0.24968238656185018,
-        "p_one_sided_lower": 0.8539625118055802,
-        "expected_if_no_difference": 5.9740388936567745,
+        "rate_ratio": 1.357347679204518,
+        "ci_low": 0.5753644840011125,
+        "ci_high": 2.7445551266648134,
+        "p_one_sided_higher": 0.24967536422459302,
+        "p_one_sided_lower": 0.8539676854013207,
+        "expected_if_no_difference": 5.973988297929121,
         "enough_repeats": false
       }
     ],
@@ -191,105 +191,105 @@
       "window": "1-90",
       "repeats_in_window": 24,
       "repeats_elsewhere": 133,
-      "rate_ratio": 1.2891977271353419,
-      "ci_low": 0.7979318321503502,
-      "ci_high": 2.0017123186320873,
-      "p_one_sided_higher": 0.15226780863254466,
-      "p_one_sided_lower": 0.8952418883057682,
-      "expected_if_no_difference": 19.277276318184697,
+      "rate_ratio": 1.2888797417898903,
+      "ci_low": 0.7977350193388222,
+      "ci_high": 2.001218588950645,
+      "p_one_sided_higher": 0.15251468922147848,
+      "p_one_sided_lower": 0.8950503652812126,
+      "expected_if_no_difference": 19.281448211320676,
       "enough_repeats": true
     },
     "timing_models": [
       {
         "model": "bands 0-270, >270",
         "n_params": 8,
-        "log_likelihood": -656.3336024653291,
-        "aic": 1328.6672049306583,
+        "log_likelihood": -656.1444707310526,
+        "aic": 1328.2889414621052,
         "delta_aic": 0.0
       },
       {
         "model": "log elapsed time (Weibull-shaped)",
         "n_params": 8,
-        "log_likelihood": -659.2921705695627,
-        "aic": 1334.5843411391254,
-        "delta_aic": 5.917136208467127
+        "log_likelihood": -659.099589535325,
+        "aic": 1334.19917907065,
+        "delta_aic": 5.910237608544776
       },
       {
         "model": "log elapsed time and its square (rise and fall)",
         "n_params": 9,
-        "log_likelihood": -659.2327681738361,
-        "aic": 1336.4655363476722,
-        "delta_aic": 7.798331417013969
+        "log_likelihood": -659.0418324921944,
+        "aic": 1336.0836649843889,
+        "delta_aic": 7.794723522283675
       },
       {
         "model": "constant rate",
         "n_params": 7,
-        "log_likelihood": -662.5229460999589,
-        "aic": 1339.0458921999177,
-        "delta_aic": 10.378687269259444
+        "log_likelihood": -662.3317002514136,
+        "aic": 1338.6634005028272,
+        "delta_aic": 10.374459040722058
       }
     ],
     "unadjusted_timing_models": [
       {
         "model": "piecewise 0-270, >270",
         "n_params": 2,
-        "log_likelihood": -1488.3251868705256,
-        "aic": 2980.650373741051,
+        "log_likelihood": -1488.328483291877,
+        "aic": 2980.656966583754,
         "delta_aic": 0.0
       },
       {
         "model": "loglogistic",
         "n_params": 2,
-        "log_likelihood": -1492.5093333883374,
-        "aic": 2989.0186667766748,
-        "delta_aic": 8.368293035623537
+        "log_likelihood": -1492.6894026243622,
+        "aic": 2989.3788052487243,
+        "delta_aic": 8.721838664970164
       },
       {
         "model": "weibull",
         "n_params": 2,
-        "log_likelihood": -1492.5635704110723,
-        "aic": 2989.1271408221446,
-        "delta_aic": 8.476767081093385
+        "log_likelihood": -1492.8041068076082,
+        "aic": 2989.6082136152163,
+        "delta_aic": 8.951247031462117
       },
       {
         "model": "lognormal",
         "n_params": 2,
-        "log_likelihood": -1493.244307566676,
-        "aic": 2990.488615133352,
-        "delta_aic": 9.838241392300915
+        "log_likelihood": -1492.9060613056831,
+        "aic": 2989.8121226113662,
+        "delta_aic": 9.155156027612065
       },
       {
         "model": "generalized gamma",
         "n_params": 3,
-        "log_likelihood": -1492.3069641867305,
-        "aic": 2990.613928373461,
-        "delta_aic": 9.963554632409796
+        "log_likelihood": -1492.4821945731444,
+        "aic": 2990.964389146289,
+        "delta_aic": 10.307422562534612
       },
       {
         "model": "constant rate (exponential)",
         "n_params": 1,
-        "log_likelihood": -1497.2002671316222,
-        "aic": 2996.4005342632445,
-        "delta_aic": 15.750160522193255
+        "log_likelihood": -1497.2024254647945,
+        "aic": 2996.404850929589,
+        "delta_aic": 15.747884345834791
       }
     ],
     "calendar": {
       "primary": "linear_trend",
       "coefficients": [
-        -0.002899123180244541
+        -0.0029146991114547293
       ],
       "robustness": [
         {
           "calendar": "linear_trend",
           "calendar_params": 1,
-          "calendar_lr": 0.7776862551468184,
-          "calendar_p": 0.37784970055985656,
-          "bands_lr": 12.378687269259672,
+          "calendar_lr": 0.777826570229081,
+          "calendar_p": 0.37780667713666993,
+          "bands_lr": 12.374459040722058,
           "bands_df": 1,
-          "bands_p": 0.00043426235903291655,
+          "bands_p": 0.0004352468907117396,
           "band_rate_ratio": [
             1.0,
-            0.5498987480088471
+            0.5499598861164986
           ]
         },
         {
@@ -297,38 +297,38 @@
           "calendar_params": 0,
           "calendar_lr": null,
           "calendar_p": null,
-          "bands_lr": 13.15344334098154,
+          "bands_lr": 13.149323880699967,
           "bands_df": 1,
-          "bands_p": 0.0002869913590589583,
+          "bands_p": 0.0002876230113661417,
           "band_rate_ratio": [
             1.0,
-            0.5487376264705129
+            0.548792462768174
           ]
         },
         {
           "calendar": "log_intensity",
           "calendar_params": 1,
-          "calendar_lr": 0.004147894343986991,
-          "calendar_p": 0.9486484268618156,
-          "bands_lr": 13.773845908258863,
+          "calendar_lr": 0.004111345577484826,
+          "calendar_p": 0.9488748558768724,
+          "bands_lr": 13.768809723540926,
           "bands_df": 1,
-          "bands_p": 0.00020618677124874382,
+          "bands_p": 0.00020674027185664347,
           "band_rate_ratio": [
             1.0,
-            0.5343837335694512
+            0.5344864871914061
           ]
         },
         {
           "calendar": "yearly_from_2020",
           "calendar_params": 7,
-          "calendar_lr": 4.369666000146935,
-          "calendar_p": 0.7363494748282406,
-          "bands_lr": 11.560758204487684,
+          "calendar_lr": 4.36963873345826,
+          "calendar_p": 0.7363527310237249,
+          "bands_lr": 11.556541569202182,
           "bands_df": 1,
-          "bands_p": 0.0006735838014367174,
+          "bands_p": 0.0006751131050479911,
           "band_rate_ratio": [
             1.0,
-            0.5572551584698606
+            0.5573164545197009
           ]
         }
       ]
@@ -337,20 +337,20 @@
       "direction": "increasing",
       "bootstrap_p": 0.001996007984031936,
       "bootstrap_replicates": 500,
-      "likelihood_ratio": 66.71597055887855,
+      "likelihood_ratio": 66.7082686541039,
       "n_params": 8,
       "events_per_parameter": 19.625,
       "rate_ratio_vs_small": {
         "SMALL": 1.0,
-        "MEDIUM": 1.437831801182244,
-        "LARGE": 3.5636582173094595,
-        "HUGE": 8.978788942308585
+        "MEDIUM": 1.4378334245086983,
+        "LARGE": 3.563583039812175,
+        "HUGE": 8.977673979565182
       },
       "unconstrained_rate_ratio_vs_small": {
         "SMALL": 1.0,
-        "MEDIUM": 1.438139076149173,
-        "LARGE": 3.564047829017291,
-        "HUGE": 8.979610812344786
+        "MEDIUM": 1.4381320583192831,
+        "LARGE": 3.5639479015783335,
+        "HUGE": 8.978408774189663
       },
       "constraint_binds": false,
       "bands": [
@@ -358,8 +358,8 @@
       ]
     }
   },
-  "snapshot_id": "snap-20261106151709-58e832ca86c2",
-  "snapshot_sha256": "58e832ca86c24b41431c42d3c60671d8f764e61deba205377f6b14491c66cbea",
+  "snapshot_id": "snap-20261106160634-1edbf49c696a",
+  "snapshot_sha256": "1edbf49c696a2e3d579bee878951a011ee865c4b91a31f9e8b572b5c8afa8676",
   "as_known_at": null,
   "history_reconstruction": null,
   "data_quality": {
@@ -383,8 +383,8 @@
     "first-of-month event dates": 245,
     "verified incident-date precision": {
       "unverified": 553,
-      "day": 389,
-      "month": 121
+      "day": 390,
+      "month": 120
     },
     "tie policy (several incidents of one organisation on one date)": "collapse",
     "same-date ties": {
@@ -399,8 +399,8 @@
       "repeats between tied incidents in this run": 0
     },
     "incidents not ordered by their dates (different stored dates, overlapping verified intervals)": {
-      "consecutive pairs with overlapping verified intervals": 3,
-      "... of which stored dates differ by under 90 days": 3
+      "consecutive pairs with overlapping verified intervals": 2,
+      "... of which stored dates differ by under 90 days": 2
     },
     "covariate coverage": {
       "size_estimate levels": {
@@ -483,18 +483,18 @@
     "inf"
   ],
   "unadjusted_piecewise_lrt": {
-    "constant_hazard_log_likelihood": -25.319083267640654,
+    "constant_hazard_log_likelihood": -25.318341856184315,
     "banded_hazard_log_likelihood": -15.164155261043351,
-    "likelihood_ratio": 20.309856013194604,
+    "likelihood_ratio": 20.308373190281927,
     "df": 5,
-    "p_value": 0.0010929681979247776
+    "p_value": 0.0010936702129215093
   },
   "adjusted_piecewise_lrt": {
-    "full_log_likelihood": -585.0805282504791,
-    "reduced_log_likelihood": -591.1337012440306,
-    "likelihood_ratio": 12.10634598710294,
+    "full_log_likelihood": -583.7610147801407,
+    "reduced_log_likelihood": -589.8137179727009,
+    "likelihood_ratio": 12.105406385120432,
     "df": 5,
-    "p_value": 0.03335929613717328,
+    "p_value": 0.033371668979150074,
     "full_converged": true,
     "full_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
     "reduced_converged": true,
@@ -511,21 +511,21 @@
   "target_rate_ratio": {
     "early_events": 24.0,
     "early_bands": "0-90",
-    "early_exposure_days": 91037.0,
+    "early_exposure_days": 91048.0,
     "later_events": 63.0,
     "later_bands": "91-180, 181-365",
     "later_exposure_days": 221784.0,
-    "later_vs_early_rate_ratio": 1.0774993912996427,
-    "ci_low": 0.6733361048736947,
-    "ci_high": 1.7242576624773203,
-    "p_two_sided": 0.7556672989670713
+    "later_vs_early_rate_ratio": 1.07762958554269,
+    "ci_low": 0.6734174640699953,
+    "ci_high": 1.72446600451723,
+    "p_two_sided": 0.7552844350871534
   },
   "u_shape_phase_lrt": {
-    "full_log_likelihood": -586.3072646828736,
-    "reduced_log_likelihood": -591.1337012440306,
-    "likelihood_ratio": 9.652873122314077,
+    "full_log_likelihood": -584.9878563183386,
+    "reduced_log_likelihood": -589.8137179727009,
+    "likelihood_ratio": 9.65172330872474,
     "df": 2,
-    "p_value": 0.008015031513147064,
+    "p_value": 0.008019640734032704,
     "full_converged": true,
     "full_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
     "reduced_converged": true,
@@ -538,45 +538,45 @@
       "prior_records_band (reference=unknown)"
     ],
     "covariates_skipped": {},
-    "u_shape_intersection_p_value": 0.9988930971120548
+    "u_shape_intersection_p_value": 0.9988936480233644
   },
   "u_shape_adjusted_contrasts": [
     {
       "comparison": "response vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": 0.1252625032,
-      "std_error": 0.2412079794,
-      "rate_ratio": 1.1334459472,
-      "ci_low": 0.7064483853,
-      "ci_high": 1.8185330194,
-      "z": 0.5193132644,
-      "p_two_sided": 0.603542305,
+      "log_rate_ratio": 0.1254919531,
+      "std_error": 0.2412280311,
+      "rate_ratio": 1.1337060461,
+      "ci_low": 0.7065827281,
+      "ci_high": 1.8190218183,
+      "z": 0.5202212715,
+      "p_two_sided": 0.6029093611,
       "directional_alternative": "less",
-      "p_directional": 0.6982288475
+      "p_directional": 0.6985453195
     },
     {
       "comparison": "long-term vs response",
       "missing_terms": "",
-      "log_rate_ratio": -0.55958693,
-      "std_error": 0.1828750701,
-      "rate_ratio": 0.5714450619,
-      "ci_low": 0.3993080649,
-      "ci_high": 0.817788288,
-      "z": -3.0599410276,
-      "p_two_sided": 0.0022138058,
+      "log_rate_ratio": -0.5596546176,
+      "std_error": 0.1828882793,
+      "rate_ratio": 0.5714063835,
+      "ci_low": 0.3992707004,
+      "ci_high": 0.8177541071,
+      "z": -3.0600901257,
+      "p_two_sided": 0.002212704,
       "directional_alternative": "greater",
-      "p_directional": 0.9988930971
+      "p_directional": 0.998893648
     },
     {
       "comparison": "long-term vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": -0.4343244268,
-      "std_error": 0.2461667379,
-      "rate_ratio": 0.6477020895,
-      "ci_low": 0.3997918537,
-      "ci_high": 1.0493410329,
-      "z": -1.7643505803,
-      "p_two_sided": 0.0776729731,
+      "log_rate_ratio": -0.4341626646,
+      "std_error": 0.2461882167,
+      "rate_ratio": 0.6478068717,
+      "ci_low": 0.3998396971,
+      "ci_high": 1.0495549742,
+      "z": -1.7635395808,
+      "p_two_sided": 0.0778095277,
       "directional_alternative": "",
       "p_directional": null
     }
@@ -587,83 +587,83 @@
       "variant_label": "All covariates",
       "excluded_covariates": "",
       "phase_terms": 2,
-      "likelihood_ratio": 9.6528731223,
+      "likelihood_ratio": 9.6517233087,
       "df": 2,
-      "p_value": 0.0080150315,
-      "u_shape_intersection_p_value": 0.9988930971
+      "p_value": 0.0080196407,
+      "u_shape_intersection_p_value": 0.998893648
     },
     {
       "variant": "drop_size",
       "variant_label": "Drop organisation size",
       "excluded_covariates": "org_size_score, org_size_unknown",
       "phase_terms": 2,
-      "likelihood_ratio": 7.2881098928,
+      "likelihood_ratio": 7.2878054721,
       "df": 2,
-      "p_value": 0.0261461077,
-      "u_shape_intersection_p_value": 0.996313883
+      "p_value": 0.0261500877,
+      "u_shape_intersection_p_value": 0.9963139545
     },
     {
       "variant": "drop_industry",
       "variant_label": "Drop industry/sector",
       "excluded_covariates": "sector_proxy",
       "phase_terms": 2,
-      "likelihood_ratio": 12.1702201632,
+      "likelihood_ratio": 12.16651266,
       "df": 2,
-      "p_value": 0.0022765137,
-      "u_shape_intersection_p_value": 0.9996394391
+      "p_value": 0.0022807377,
+      "u_shape_intersection_p_value": 0.9996385298
     },
     {
       "variant": "drop_size_and_industry",
       "variant_label": "Drop size and industry/sector",
       "excluded_covariates": "org_size_score, org_size_unknown, sector_proxy",
       "phase_terms": 2,
-      "likelihood_ratio": 8.3876779468,
+      "likelihood_ratio": 8.3868196015,
       "df": 2,
-      "p_value": 0.0150882502,
-      "u_shape_intersection_p_value": 0.9977236388
+      "p_value": 0.015094727,
+      "u_shape_intersection_p_value": 0.997723344
     }
   ],
   "u_shape_covariate_variant_contrasts": [
     {
       "comparison": "response vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": 0.1252625032,
-      "std_error": 0.2412079794,
-      "rate_ratio": 1.1334459472,
-      "ci_low": 0.7064483853,
-      "ci_high": 1.8185330194,
-      "z": 0.5193132644,
-      "p_two_sided": 0.603542305,
+      "log_rate_ratio": 0.1254919531,
+      "std_error": 0.2412280311,
+      "rate_ratio": 1.1337060461,
+      "ci_low": 0.7065827281,
+      "ci_high": 1.8190218183,
+      "z": 0.5202212715,
+      "p_two_sided": 0.6029093611,
       "directional_alternative": "less",
-      "p_directional": 0.6982288475,
+      "p_directional": 0.6985453195,
       "variant": "all_covariates",
       "variant_label": "All covariates"
     },
     {
       "comparison": "long-term vs response",
       "missing_terms": "",
-      "log_rate_ratio": -0.55958693,
-      "std_error": 0.1828750701,
-      "rate_ratio": 0.5714450619,
-      "ci_low": 0.3993080649,
-      "ci_high": 0.817788288,
-      "z": -3.0599410276,
-      "p_two_sided": 0.0022138058,
+      "log_rate_ratio": -0.5596546176,
+      "std_error": 0.1828882793,
+      "rate_ratio": 0.5714063835,
+      "ci_low": 0.3992707004,
+      "ci_high": 0.8177541071,
+      "z": -3.0600901257,
+      "p_two_sided": 0.002212704,
       "directional_alternative": "greater",
-      "p_directional": 0.9988930971,
+      "p_directional": 0.998893648,
       "variant": "all_covariates",
       "variant_label": "All covariates"
     },
     {
       "comparison": "long-term vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": -0.4343244268,
-      "std_error": 0.2461667379,
-      "rate_ratio": 0.6477020895,
-      "ci_low": 0.3997918537,
-      "ci_high": 1.0493410329,
-      "z": -1.7643505803,
-      "p_two_sided": 0.0776729731,
+      "log_rate_ratio": -0.4341626646,
+      "std_error": 0.2461882167,
+      "rate_ratio": 0.6478068717,
+      "ci_low": 0.3998396971,
+      "ci_high": 1.0495549742,
+      "z": -1.7635395808,
+      "p_two_sided": 0.0778095277,
       "directional_alternative": "",
       "p_directional": null,
       "variant": "all_covariates",
@@ -672,43 +672,43 @@
     {
       "comparison": "response vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": 0.1432142228,
-      "std_error": 0.2410876252,
-      "rate_ratio": 1.1539769834,
-      "ci_low": 0.7194145501,
-      "ci_high": 1.8510368995,
-      "z": 0.5940339023,
-      "p_two_sided": 0.5524894379,
+      "log_rate_ratio": 0.1432505239,
+      "std_error": 0.2410853761,
+      "rate_ratio": 1.1540188748,
+      "ci_low": 0.7194438377,
+      "ci_high": 1.851095935,
+      "z": 0.5941900179,
+      "p_two_sided": 0.5523850284,
       "directional_alternative": "less",
-      "p_directional": 0.723755281,
+      "p_directional": 0.7238074858,
       "variant": "drop_size",
       "variant_label": "Drop organisation size"
     },
     {
       "comparison": "long-term vs response",
       "missing_terms": "",
-      "log_rate_ratio": -0.4854254924,
-      "std_error": 0.1811596862,
-      "rate_ratio": 0.615435278,
-      "ci_low": 0.4314953791,
-      "ci_high": 0.8777859502,
-      "z": -2.6795447853,
-      "p_two_sided": 0.0073722341,
+      "log_rate_ratio": -0.4854252483,
+      "std_error": 0.1811591558,
+      "rate_ratio": 0.6154354282,
+      "ci_low": 0.431495933,
+      "ci_high": 0.8777852521,
+      "z": -2.6795512819,
+      "p_two_sided": 0.007372091,
       "directional_alternative": "greater",
-      "p_directional": 0.996313883,
+      "p_directional": 0.9963139545,
       "variant": "drop_size",
       "variant_label": "Drop organisation size"
     },
     {
       "comparison": "long-term vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": -0.3422112696,
-      "std_error": 0.24416195,
-      "rate_ratio": 0.7101981456,
-      "ci_low": 0.4400932285,
-      "ci_high": 1.1460785428,
-      "z": -1.4015749365,
-      "p_two_sided": 0.1610422157,
+      "log_rate_ratio": -0.3421747244,
+      "std_error": 0.2441592423,
+      "rate_ratio": 0.7102241004,
+      "ci_low": 0.4401116478,
+      "ci_high": 1.1461143446,
+      "z": -1.4014408023,
+      "p_two_sided": 0.1610822981,
       "directional_alternative": "",
       "p_directional": null,
       "variant": "drop_size",
@@ -717,43 +717,43 @@
     {
       "comparison": "response vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": 0.0927536832,
-      "std_error": 0.2408084755,
-      "rate_ratio": 1.0971914453,
-      "ci_low": 0.6843875496,
-      "ci_high": 1.758987387,
-      "z": 0.3851761571,
-      "p_two_sided": 0.700106907,
+      "log_rate_ratio": 0.0929810133,
+      "std_error": 0.2408078385,
+      "rate_ratio": 1.0974408983,
+      "ci_low": 0.6845440039,
+      "ci_high": 1.7593851067,
+      "z": 0.3861212073,
+      "p_two_sided": 0.6994069043,
       "directional_alternative": "less",
-      "p_directional": 0.6499465465,
+      "p_directional": 0.6502965478,
       "variant": "drop_industry",
       "variant_label": "Drop industry/sector"
     },
     {
       "comparison": "long-term vs response",
       "missing_terms": "",
-      "log_rate_ratio": -0.6126963623,
-      "std_error": 0.1811949782,
-      "rate_ratio": 0.5418877717,
-      "ci_low": 0.3799033048,
-      "ci_high": 0.772939728,
-      "z": -3.3814202157,
-      "p_two_sided": 0.0007211217,
+      "log_rate_ratio": -0.612573361,
+      "std_error": 0.1811956893,
+      "rate_ratio": 0.5419544287,
+      "ci_low": 0.3799495067,
+      "ci_high": 0.7730358839,
+      "z": -3.3807281138,
+      "p_two_sided": 0.0007229404,
       "directional_alternative": "greater",
-      "p_directional": 0.9996394391,
+      "p_directional": 0.9996385298,
       "variant": "drop_industry",
       "variant_label": "Drop industry/sector"
     },
     {
       "comparison": "long-term vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": -0.5199426791,
-      "std_error": 0.2442822875,
-      "rate_ratio": 0.5945546274,
-      "ci_low": 0.3683447485,
-      "ci_high": 0.9596857465,
-      "z": -2.128450181,
-      "p_two_sided": 0.0332997763,
+      "log_rate_ratio": -0.5195923477,
+      "std_error": 0.2442717498,
+      "rate_ratio": 0.5947629551,
+      "ci_low": 0.3684814244,
+      "ci_high": 0.9600021854,
+      "z": -2.1271078136,
+      "p_two_sided": 0.0334111262,
       "directional_alternative": "",
       "p_directional": null,
       "variant": "drop_industry",
@@ -762,43 +762,43 @@
     {
       "comparison": "response vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": 0.1136309717,
-      "std_error": 0.2407132134,
-      "rate_ratio": 1.1203386119,
-      "ci_low": 0.6989563909,
-      "ci_high": 1.7957609684,
-      "z": 0.4720595521,
-      "p_two_sided": 0.6368842822,
+      "log_rate_ratio": 0.1137368974,
+      "std_error": 0.2407135633,
+      "rate_ratio": 1.1204572909,
+      "ci_low": 0.6990299528,
+      "ci_high": 1.7959524274,
+      "z": 0.4724989146,
+      "p_two_sided": 0.6365707163,
       "directional_alternative": "less",
-      "p_directional": 0.6815578589,
+      "p_directional": 0.6817146418,
       "variant": "drop_size_and_industry",
       "variant_label": "Drop size and industry/sector"
     },
     {
       "comparison": "long-term vs response",
       "missing_terms": "",
-      "log_rate_ratio": -0.5105516621,
-      "std_error": 0.1799563023,
-      "rate_ratio": 0.6001643995,
-      "ci_low": 0.4217822832,
-      "ci_high": 0.8539887064,
-      "z": -2.8370868681,
-      "p_two_sided": 0.0045527223,
+      "log_rate_ratio": -0.5105437611,
+      "std_error": 0.1799561399,
+      "rate_ratio": 0.6001691414,
+      "ci_low": 0.42178575,
+      "ci_high": 0.853995182,
+      "z": -2.837045523,
+      "p_two_sided": 0.0045533119,
       "directional_alternative": "greater",
-      "p_directional": 0.9977236388,
+      "p_directional": 0.997723344,
       "variant": "drop_size_and_industry",
       "variant_label": "Drop size and industry/sector"
     },
     {
       "comparison": "long-term vs immediate",
       "missing_terms": "",
-      "log_rate_ratio": -0.3969206904,
-      "std_error": 0.2426519313,
-      "rate_ratio": 0.6723873503,
-      "ci_low": 0.4178977574,
-      "ci_high": 1.0818549292,
-      "z": -1.6357615137,
-      "p_two_sided": 0.1018895097,
+      "log_rate_ratio": -0.3968068637,
+      "std_error": 0.2426506652,
+      "rate_ratio": 0.6724638903,
+      "ci_low": 0.4179463653,
+      "ci_high": 1.0819753952,
+      "z": -1.6353009518,
+      "p_two_sided": 0.1019859742,
       "directional_alternative": "",
       "p_directional": null,
       "variant": "drop_size_and_industry",
@@ -807,11 +807,11 @@
   ],
   "delayed_peak_lrt": {
     "available": true,
-    "full_log_likelihood": -588.8747434540062,
-    "reduced_log_likelihood": -591.1337012440306,
-    "likelihood_ratio": 4.517915580048793,
+    "full_log_likelihood": -587.5551935585095,
+    "reduced_log_likelihood": -589.8137179727009,
+    "likelihood_ratio": 4.51704882838294,
     "df": 2,
-    "p_value": 0.1044592965634624,
+    "p_value": 0.10450457650902593,
     "full_converged": true,
     "full_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
     "reduced_converged": true,
@@ -824,55 +824,55 @@
       "prior_records_band (reference=unknown)"
     ],
     "covariates_skipped": {},
-    "delayed_peak_intersection_p_value": 0.23121629431630808
+    "delayed_peak_intersection_p_value": 0.23112861477862923
   },
   "delayed_peak_adjusted_contrasts": [
     {
       "comparison": "91-180 vs 0-90",
       "missing_terms": "",
-      "log_rate_ratio": 0.2081303778,
-      "std_error": 0.2832294826,
-      "rate_ratio": 1.2313737029,
-      "ci_low": 0.7068057467,
-      "ci_high": 2.1452587268,
-      "z": 0.7348471491,
-      "p_two_sided": 0.4624325886,
+      "log_rate_ratio": 0.2082120759,
+      "std_error": 0.2832296819,
+      "rate_ratio": 1.2314743079,
+      "ci_low": 0.7068632175,
+      "ci_high": 2.1454348357,
+      "z": 0.7351350836,
+      "p_two_sided": 0.4622572296,
       "directional_alternative": "greater",
-      "p_directional": 0.2312162943
+      "p_directional": 0.2311286148
     },
     {
       "comparison": "91-180 vs post-180",
       "missing_terms": "",
-      "log_rate_ratio": 0.4703376399,
-      "std_error": 0.2244684511,
-      "rate_ratio": 1.6005345063,
-      "ci_low": 1.0308456406,
-      "ci_high": 2.4850575149,
-      "z": 2.0953396234,
-      "p_two_sided": 0.0361408125,
+      "log_rate_ratio": 0.4704862007,
+      "std_error": 0.2244726498,
+      "rate_ratio": 1.6007723007,
+      "ci_low": 1.0309903108,
+      "ci_high": 2.4854471781,
+      "z": 2.0959622528,
+      "p_two_sided": 0.0360855396,
       "directional_alternative": "greater",
-      "p_directional": 0.0180704063
+      "p_directional": 0.0180427698
     },
     {
       "comparison": "post-180 vs 0-90",
       "missing_terms": "",
-      "log_rate_ratio": -0.2622072621,
-      "std_error": 0.2331641098,
-      "rate_ratio": 0.7693515498,
-      "ci_low": 0.4871374696,
-      "ci_high": 1.215061136,
-      "z": -1.1245609895,
-      "p_two_sided": 0.2607751124,
+      "log_rate_ratio": -0.2622741248,
+      "std_error": 0.2331642733,
+      "rate_ratio": 0.7693001105,
+      "ci_low": 0.4871047432,
+      "ci_high": 1.2149802857,
+      "z": -1.1248469634,
+      "p_two_sided": 0.2606538896,
       "directional_alternative": "",
       "p_directional": null
     }
   ],
   "delayed_peak_sensitivity_elapsed_lrt": {
-    "full_log_likelihood": -585.0805282504791,
-    "reduced_log_likelihood": -591.1337012440306,
-    "likelihood_ratio": 12.10634598710294,
+    "full_log_likelihood": -583.7610147801407,
+    "reduced_log_likelihood": -589.8137179727009,
+    "likelihood_ratio": 12.105406385120432,
     "df": 5,
-    "p_value": 0.03335929613717328,
+    "p_value": 0.033371668979150074,
     "full_converged": true,
     "full_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
     "reduced_converged": true,
@@ -888,11 +888,11 @@
   },
   "delayed_peak_sensitivity_lrt": {
     "available": true,
-    "full_log_likelihood": -588.8747434540062,
-    "reduced_log_likelihood": -591.1337012440306,
-    "likelihood_ratio": 4.517915580048793,
+    "full_log_likelihood": -587.5551935585095,
+    "reduced_log_likelihood": -589.8137179727009,
+    "likelihood_ratio": 4.51704882838294,
     "df": 2,
-    "p_value": 0.1044592965634624,
+    "p_value": 0.10450457650902593,
     "full_converged": true,
     "full_message": "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH",
     "reduced_converged": true,
@@ -905,45 +905,45 @@
       "prior_records_band (reference=unknown)"
     ],
     "covariates_skipped": {},
-    "delayed_peak_intersection_p_value": 0.23121629431630808
+    "delayed_peak_intersection_p_value": 0.23112861477862923
   },
   "delayed_peak_sensitivity_adjusted_contrasts": [
     {
       "comparison": "91-180 vs 0-90",
       "missing_terms": "",
-      "log_rate_ratio": 0.2081303778,
-      "std_error": 0.2832294826,
-      "rate_ratio": 1.2313737029,
-      "ci_low": 0.7068057467,
-      "ci_high": 2.1452587268,
-      "z": 0.7348471491,
-      "p_two_sided": 0.4624325886,
+      "log_rate_ratio": 0.2082120759,
+      "std_error": 0.2832296819,
+      "rate_ratio": 1.2314743079,
+      "ci_low": 0.7068632175,
+      "ci_high": 2.1454348357,
+      "z": 0.7351350836,
+      "p_two_sided": 0.4622572296,
       "directional_alternative": "greater",
-      "p_directional": 0.2312162943
+      "p_directional": 0.2311286148
     },
     {
       "comparison": "91-180 vs post-180",
       "missing_terms": "",
-      "log_rate_ratio": 0.4703376399,
-      "std_error": 0.2244684511,
-      "rate_ratio": 1.6005345063,
-      "ci_low": 1.0308456406,
-      "ci_high": 2.4850575149,
-      "z": 2.0953396234,
-      "p_two_sided": 0.0361408125,
+      "log_rate_ratio": 0.4704862007,
+      "std_error": 0.2244726498,
+      "rate_ratio": 1.6007723007,
+      "ci_low": 1.0309903108,
+      "ci_high": 2.4854471781,
+      "z": 2.0959622528,
+      "p_two_sided": 0.0360855396,
       "directional_alternative": "greater",
-      "p_directional": 0.0180704063
+      "p_directional": 0.0180427698
     },
     {
       "comparison": "post-180 vs 0-90",
       "missing_terms": "",
-      "log_rate_ratio": -0.2622072621,
-      "std_error": 0.2331641098,
-      "rate_ratio": 0.7693515498,
-      "ci_low": 0.4871374696,
-      "ci_high": 1.215061136,
-      "z": -1.1245609895,
-      "p_two_sided": 0.2607751124,
+      "log_rate_ratio": -0.2622741248,
+      "std_error": 0.2331642733,
+      "rate_ratio": 0.7693001105,
+      "ci_low": 0.4871047432,
+      "ci_high": 1.2149802857,
+      "z": -1.1248469634,
+      "p_two_sided": 0.2606538896,
       "directional_alternative": "",
       "p_directional": null
     }
@@ -954,8 +954,8 @@
       "u_shape_phase": "immediate",
       "phase": "Immediate period",
       "events": 24,
-      "exposure_days": 91037,
-      "rate_per_100_entity_years": 9.6290519239
+      "exposure_days": 91048,
+      "rate_per_100_entity_years": 9.6278885862
     },
     {
       "phase_order": 1,
@@ -980,8 +980,8 @@
       "delayed_peak_phase": "immediate_0_90",
       "phase": "Immediate 0-90 days",
       "events": 24,
-      "exposure_days": 91037,
-      "rate_per_100_entity_years": 9.6290519239
+      "exposure_days": 91048,
+      "rate_per_100_entity_years": 9.6278885862
     },
     {
       "phase_order": 1,
@@ -1006,8 +1006,8 @@
       "delayed_peak_phase": "immediate_0_90",
       "phase": "Immediate 0-90 days",
       "events": 24,
-      "exposure_days": 91037,
-      "rate_per_100_entity_years": 9.6290519239
+      "exposure_days": 91048,
+      "rate_per_100_entity_years": 9.6278885862
     },
     {
       "phase_order": 1,
@@ -1027,9 +1027,9 @@
     }
   ],
   "weibull_vs_exponential_lrt": {
-    "likelihood_ratio": 9.27339344109987,
+    "likelihood_ratio": 8.796637314372674,
     "df": 1,
-    "p_value": 0.0023250653397664947
+    "p_value": 0.0030178627775055765
   },
   "tie_policy": "collapse",
   "tie_policy_sensitivity": [
@@ -1044,9 +1044,9 @@
       "repeats_366-730": 25,
       "repeats_731-1460": 33,
       "repeats_>1460": 12,
-      "adjusted_constant_hazard_p": 0.0333592961,
-      "adjusted_0_90_91_180_banding_p": 0.0333592961,
-      "delayed_peak_directional_p": 0.2312162943,
+      "adjusted_constant_hazard_p": 0.033371669,
+      "adjusted_0_90_91_180_banding_p": 0.033371669,
+      "delayed_peak_directional_p": 0.2311286148,
       "assumption": "the tied incidents are one occurrence: one time point, never a repeat between them (their ids and count are kept)"
     },
     {
@@ -1060,9 +1060,9 @@
       "repeats_366-730": 25,
       "repeats_731-1460": 33,
       "repeats_>1460": 12,
-      "adjusted_constant_hazard_p": 0.0333592961,
-      "adjusted_0_90_91_180_banding_p": 0.0333592961,
-      "delayed_peak_directional_p": 0.2312162943,
+      "adjusted_constant_hazard_p": 0.033371669,
+      "adjusted_0_90_91_180_banding_p": 0.033371669,
+      "delayed_peak_directional_p": 0.2311286148,
       "assumption": "the tied incidents are distinct and one day apart, in id order: each after the first is a repeat after 1 day"
     },
     {
@@ -1076,9 +1076,9 @@
       "repeats_366-730": 25,
       "repeats_731-1460": 33,
       "repeats_>1460": 12,
-      "adjusted_constant_hazard_p": 0.0333592961,
-      "adjusted_0_90_91_180_banding_p": 0.0333592961,
-      "delayed_peak_directional_p": 0.2312162943,
+      "adjusted_constant_hazard_p": 0.033371669,
+      "adjusted_0_90_91_180_banding_p": 0.033371669,
+      "delayed_peak_directional_p": 0.2311286148,
       "assumption": "the tied incidents are distinct and evenly spread across the verified interval they share (about interval length / n days apart, the first at the interval's start); a tie with no shared verified interval longer than a day is placed as under zero_gap"
     }
   ],
@@ -1088,16 +1088,16 @@
       "elapsed_bands": "0-90, 91-180, 181-365, 366-730, 731-1460, >1460",
       "size_spec": "score",
       "size_terms": "org_size_score; org_size_unknown",
-      "log_likelihood": -585.0805282505,
+      "log_likelihood": -583.7610147801,
       "parameters": 27,
-      "aic": 1224.161056501,
+      "aic": 1221.5220295603,
       "compared_with": "",
       "nested": null,
       "likelihood_ratio": null,
       "df": null,
       "p_value": null,
-      "elapsed_constant_hazard_p": 0.0333592961,
-      "delayed_peak_directional_p": 0.2312162943,
+      "elapsed_constant_hazard_p": 0.033371669,
+      "delayed_peak_directional_p": 0.2311286148,
       "converged": true,
       "note": "",
       "delta_aic_vs_score": 0.0
@@ -1107,38 +1107,38 @@
       "elapsed_bands": "0-90, 91-180, 181-365, 366-730, 731-1460, >1460",
       "size_spec": "categorical",
       "size_terms": "org_size:LARGE; org_size:MEDIUM; org_size:SMALL; org_size:sparse_or_no_repeat",
-      "log_likelihood": -583.4898911536,
+      "log_likelihood": -582.1704480781,
       "parameters": 29,
-      "aic": 1224.9797823073,
+      "aic": 1222.3408961562,
       "compared_with": "score",
       "nested": true,
-      "likelihood_ratio": 3.1812741937,
+      "likelihood_ratio": 3.1811334041,
       "df": 2.0,
-      "p_value": 0.2037957327,
-      "elapsed_constant_hazard_p": 0.0365700802,
-      "delayed_peak_directional_p": 0.2305228064,
+      "p_value": 0.2038100794,
+      "elapsed_constant_hazard_p": 0.0365820116,
+      "delayed_peak_directional_p": 0.2300955787,
       "converged": true,
       "note": "org_size (reference=HUGE; pooled sparse levels=1)",
-      "delta_aic_vs_score": 0.8187258063
+      "delta_aic_vs_score": 0.8188665959
     },
     {
       "banding": "run",
       "elapsed_bands": "0-90, 91-180, 181-365, 366-730, 731-1460, >1460",
       "size_spec": "score_x_phase",
       "size_terms": "org_size_score; org_size_unknown; org_size_score:delayed_peak_phase:peak_91_180; org_size_score:delayed_peak_phase:post_180",
-      "log_likelihood": -581.6879934656,
+      "log_likelihood": -580.3679311161,
       "parameters": 29,
-      "aic": 1221.3759869313,
+      "aic": 1218.7358622321,
       "compared_with": "score",
       "nested": true,
-      "likelihood_ratio": 6.7850695697,
+      "likelihood_ratio": 6.7861673282,
       "df": 2.0,
-      "p_value": 0.0336233409,
+      "p_value": 0.0336048908,
       "elapsed_constant_hazard_p": null,
       "delayed_peak_directional_p": null,
       "converged": true,
       "note": "fitted: every delayed-peak phase has at least 10 repeats, at two or more known size bands",
-      "delta_aic_vs_score": -2.7850695697
+      "delta_aic_vs_score": -2.7861673282
     }
   ],
   "size_interaction_support": {
@@ -1189,15 +1189,15 @@
       "Under `interval_spread`, the adjusted piecewise model rejects a constant elapsed-time hazard at the 5% level (LRT p = 0.033). It rests on 157 observed repeats."
     ],
     "size_specification": [
-      "Size specification (bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1225.0 (categorical) against 1224.2 (score), lower for the score model.",
+      "Size specification (bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1222.3 (categorical) against 1221.5 (score), lower for the score model.",
       "With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the adjusted constant-hazard test gives p = 0.033 with the size score and p = 0.037 with categorical size: the same verdict at the 5% level.",
-      "With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the directional delayed-peak test gives p = 0.231 with the size score and p = 0.231 with categorical size: the same verdict at the 5% level.",
+      "With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the directional delayed-peak test gives p = 0.231 with the size score and p = 0.230 with categorical size: the same verdict at the 5% level.",
       "Size by elapsed-time phase (the size score's slope in 91-180 and post-180 days against 0-90): LRT p = 0.034 on 2 df; at the 5% level the data reject a size effect that is the same in every phase."
     ],
-    "low_then_rising": "91-180, 181-365 days vs 0-90 days (unadjusted): rate ratio 1.08 (95% CI 0.67-1.72), no direction can be read from it; two-sided p = 0.756. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.67 to 1.72, which includes 1. Repeat events: 63 in 91-180, 181-365 days and 24 in 0-90 days.",
+    "low_then_rising": "91-180, 181-365 days vs 0-90 days (unadjusted): rate ratio 1.08 (95% CI 0.67-1.72), no direction can be read from it; two-sided p = 0.755. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.67 to 1.72, which includes 1. Repeat events: 63 in 91-180, 181-365 days and 24 in 0-90 days.",
     "u_shape": [
       "Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.999. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates do not have the hypothesised shape: response vs immediate, long-term vs response go the other way.",
-      "- response vs immediate: rate ratio 1.13 (95% CI 0.71-1.82), no direction can be read from it; one-sided p = 0.698 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.71 to 1.82, which includes 1. Repeat events: 62 in the response period and 24 in the immediate period.",
+      "- response vs immediate: rate ratio 1.13 (95% CI 0.71-1.82), no direction can be read from it; one-sided p = 0.699 (alternative: lower). Not statistically significant at the 5% level: the data do not reject the null of no decrease (rate ratio at least 1); the 95% CI runs from 0.71 to 1.82, which includes 1. Repeat events: 62 in the response period and 24 in the immediate period.",
       "- long-term vs response: rate ratio 0.57 (95% CI 0.40-0.82), no direction can be read from it; one-sided p = 0.999 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.40 to 0.82. The estimate is in the opposite direction to the hypothesis (lower, not higher). Repeat events: 70 in the long-term period and 62 in the response period.",
       "- long-term vs immediate: rate ratio 0.65 (95% CI 0.40-1.05), no direction can be read from it; two-sided p = 0.078. Not statistically significant at the 5% level (borderline): the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.40 to 1.05, which includes 1. Repeat events: 70 in the long-term period and 24 in the immediate period."
     ],
@@ -1205,7 +1205,7 @@
       "Directional delayed peak test (all of: 91-180 vs 0-90 higher; 91-180 vs post-180 higher), intersection p = 0.231. Not statistically significant at the 5% level: the data do not reject the null of no delayed peak. The point estimates have the hypothesised shape. The weakest part is 91-180 vs 0-90 (p = 0.231).",
       "- 91-180 vs 0-90: rate ratio 1.23 (95% CI 0.71-2.15), no direction can be read from it; one-sided p = 0.231 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.71 to 2.15, which includes 1. Repeat events: 26 in 91-180 days and 24 in 0-90 days.",
       "- 91-180 vs post-180: rate ratio 1.60 (95% CI 1.03-2.49), about 60% higher; one-sided p = 0.018 (alternative: higher). Statistically significant at the 5% level: the data reject the null of no increase (rate ratio at most 1). Repeat events: 26 in 91-180 days and 106 in post-180 days.",
-      "- post-180 vs 0-90: rate ratio 0.77 (95% CI 0.49-1.22), no direction can be read from it; two-sided p = 0.261. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.22, which includes 1. Repeat events: 106 in post-180 days and 24 in 0-90 days."
+      "- post-180 vs 0-90: rate ratio 0.77 (95% CI 0.49-1.21), no direction can be read from it; two-sided p = 0.261. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.21, which includes 1. Repeat events: 106 in post-180 days and 24 in 0-90 days."
     ]
   }
 }

@@ -3576,7 +3576,7 @@ A result that is not significant is reported as "no evidence", never with a dire
 conclusion sentence (`recurrence_conclusions.describe_contrast`: "no direction can be read from it"; "the estimate
 is in the opposite direction" only when its 95% interval excludes 1).
 
-On the 2026-11-06 15:17 snapshot (`snap-20261106151709`, censor date 2026-11-03, events from 2020 on; 157 repeats,
+On the 2026-11-06 16:06 snapshot (`snap-20261106160634`, censor date 2026-11-03, events from 2020 on; 157 repeats,
 follow-up split by calendar month; roles classified under `entity-roles-v10` with the owner's definitions of victim,
 vendor and service provider, owner supplier-role labels applied, report-dated events re-dated from their records'
 checked incident dates, two victims of one event that are one organisation counted once on that event

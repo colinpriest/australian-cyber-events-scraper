@@ -35,10 +35,10 @@ The primary model includes recorded organisation size. Size is a proxy for diffe
 - minimum event date: 2020-01-01
 - maximum event date: 2026-11-01
 - first-of-month event dates: 245
-- verified incident-date precision: {'unverified': 553, 'day': 389, 'month': 121}
+- verified incident-date precision: {'unverified': 553, 'day': 390, 'month': 120}
 - tie policy (several incidents of one organisation on one date): collapse
 - same-date ties: {'ties (organisation-dates with several incidents)': 0, 'incidents in ties': 0, 'organisations with a tie': 0, 'repeats a policy that separates tied incidents adds': 0, 'ties with a shared verified interval longer than a day (spread by interval_spread)': 0, 'ties: month_precision_first_of_month': 0, 'ties: first_of_month_not_month_verified': 0, 'ties: other_day': 0, 'repeats between tied incidents in this run': 0}
-- incidents not ordered by their dates (different stored dates, overlapping verified intervals): {'consecutive pairs with overlapping verified intervals': 3, '... of which stored dates differ by under 90 days': 3}
+- incidents not ordered by their dates (different stored dates, overlapping verified intervals): {'consecutive pairs with overlapping verified intervals': 2, '... of which stored dates differ by under 90 days': 2}
 - covariate coverage: {'size_estimate levels': {'HUGE': 237, 'LARGE': 348, 'MEDIUM': 320, 'SMALL': 123, 'UNKNOWN': 35}, 'size_confidence populated': 1057, 'employee_count populated': 994, 'turnover populated': 0, 'industry populated': 925, 'entity_kind populated': 1063, 'sector_proxy levels': {'education': 87, 'finance': 55, 'government': 201, 'health': 89, 'industrial': 31, 'media': 10, 'other': 398, 'retail': 49, 'technology': 105, 'telecom_transport': 38}, 'prior records populated': 425}
 - organisation size across name variants: {'organisations stored under several name variants': 6, 'organisations whose size changed against the representative-only rule': 1, 'organisations whose variants give conflicting known size bands': 0, 'deciding rule': {'higher size_confidence': 5, 'known band over UNKNOWN': 1}}
 - unresolved victim attributions: {'policy': 'include', 'victim-event attributions unresolved': 39, 'events with an unresolved attribution': 38, 'organisations with an unresolved attribution': 38, 'victim-event attributions analysed': 1063, 'repeats': {'included': {'observed repeats': 157, 'entities with a repeat': 105, 'repeats by elapsed band': {'0-180': 51, '181-365': 36, '366-730': 25, '731-1460': 33, '>1460': 12}}, 'excluded': {'observed repeats': 142, 'entities with a repeat': 98, 'repeats by elapsed band': {'0-180': 44, '181-365': 33, '366-730': 23, '731-1460': 29, '>1460': 13}}, 'repeats involving an unresolved attribution': 18}}
@@ -59,37 +59,37 @@ None of these bounds the truth: a tie that is one incident filed twice is repres
 
 | tie_policy      |   observed_repeats |   repeats_from_ties |   post_event_spells |   repeats_0-180 |   repeats_181-365 |   repeats_366-730 |   repeats_731-1460 |   repeats_>1460 |   adjusted_constant_hazard_p |   adjusted_0_90_91_180_banding_p |   delayed_peak_directional_p |
 |:----------------|-------------------:|--------------------:|--------------------:|----------------:|------------------:|------------------:|-------------------:|----------------:|-----------------------------:|---------------------------------:|-----------------------------:|
-| collapse        |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                       0.0208 |                          0.03336 |                       0.2312 |
-| zero_gap        |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                       0.0208 |                          0.03336 |                       0.2312 |
-| interval_spread |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                       0.0208 |                          0.03336 |                       0.2312 |
+| collapse        |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                      0.02082 |                          0.03337 |                       0.2311 |
+| zero_gap        |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                      0.02082 |                          0.03337 |                       0.2311 |
+| interval_spread |                157 |                   0 |                1063 |              51 |                36 |                25 |                 33 |              12 |                      0.02082 |                          0.03337 |                       0.2311 |
 
 
 ## Organisation Size Specification
 
 The primary model enters size as a numeric score (SMALL=1 to HUGE=4, UNKNOWN mean-imputed, plus an UNKNOWN indicator), which assumes equal log-rate steps between bands. It is compared here with size as a categorical factor (reference: the band with the most repeats; bands with fewer than 3 repeats pooled) and, where every delayed-peak phase has at least 10 repeats at two or more known size bands, with the score's interaction with the delayed-peak phases. The score stays primary; the headline tests are re-run under categorical size. Full table: `size_specification_comparison.csv`.
 
-- Size specification (bands 0-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1153.5 (categorical) against 1152.7 (score), lower for the score model.
+- Size specification (bands 0-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1150.9 (categorical) against 1150.0 (score), lower for the score model.
 - With bands 0-180, 181-365, 366-730, 731-1460, >1460, the adjusted constant-hazard test gives p = 0.021 with the size score and p = 0.023 with categorical size: the same verdict at the 5% level.
-- Size specification (bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1225.0 (categorical) against 1224.2 (score), lower for the score model.
+- Size specification (bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460): categorical size against the numeric size score, LRT p = 0.204 on 2 df; at the 5% level the data do not reject equal log-rate steps between size bands; AIC 1222.3 (categorical) against 1221.5 (score), lower for the score model.
 - With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the adjusted constant-hazard test gives p = 0.033 with the size score and p = 0.037 with categorical size: the same verdict at the 5% level.
-- With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the directional delayed-peak test gives p = 0.231 with the size score and p = 0.231 with categorical size: the same verdict at the 5% level.
+- With bands 0-90, 91-180, 181-365, 366-730, 731-1460, >1460, the directional delayed-peak test gives p = 0.231 with the size score and p = 0.230 with categorical size: the same verdict at the 5% level.
 - Size by elapsed-time phase (the size score's slope in 91-180 and post-180 days against 0-90): LRT p = 0.034 on 2 df; at the 5% level the data reject a size effect that is the same in every phase.
 
 | banding       | size_spec     |   log_likelihood |   parameters |   aic |   delta_aic_vs_score | nested   |   likelihood_ratio |   df |   p_value |   elapsed_constant_hazard_p |   delayed_peak_directional_p |
 |:--------------|:--------------|-----------------:|-------------:|------:|---------------------:|:---------|-------------------:|-----:|----------:|----------------------------:|-----------------------------:|
-| run           | score         |           -550.3 |           26 |  1153 |               0      |          |            nan     |  nan | nan       |                     0.0208  |                     nan      |
-| run           | categorical   |           -548.8 |           28 |  1154 |               0.823  | True     |              3.177 |    2 |   0.2042  |                     0.02302 |                     nan      |
-| 0-90 / 91-180 | score         |           -585.1 |           27 |  1224 |               0      |          |            nan     |  nan | nan       |                     0.03336 |                       0.2312 |
-| 0-90 / 91-180 | categorical   |           -583.5 |           29 |  1225 |               0.8187 | True     |              3.181 |    2 |   0.2038  |                     0.03657 |                       0.2305 |
-| 0-90 / 91-180 | score_x_phase |           -581.7 |           29 |  1221 |              -2.785  | True     |              6.785 |    2 |   0.03362 |                   nan       |                     nan      |
+| run           | score         |           -549   |           26 |  1150 |               0      |          |            nan     |  nan |  nan      |                     0.02082 |                     nan      |
+| run           | categorical   |           -547.4 |           28 |  1151 |               0.8233 | True     |              3.177 |    2 |    0.2043 |                     0.02303 |                     nan      |
+| 0-90 / 91-180 | score         |           -583.8 |           27 |  1222 |               0      |          |            nan     |  nan |  nan      |                     0.03337 |                       0.2311 |
+| 0-90 / 91-180 | categorical   |           -582.2 |           29 |  1222 |               0.8189 | True     |              3.181 |    2 |    0.2038 |                     0.03658 |                       0.2301 |
+| 0-90 / 91-180 | score_x_phase |           -580.4 |           29 |  1219 |              -2.786  | True     |              6.786 |    2 |    0.0336 |                   nan       |                     nan      |
 
 
 ## Primary Piecewise Exponential Test
 
 The adjusted piecewise model rejects a constant elapsed-time hazard at the 5% level (LRT p = 0.021). It rests on 157 observed repeats.
 
-- unadjusted LRT p-value: 0.0005871
-- adjusted LRT p-value: 0.0208
+- unadjusted LRT p-value: 0.0005877
+- adjusted LRT p-value: 0.02082
 - adjusted model controls for calendar period, prior event number category, and available organisation/exposure covariates.
 - covariates used: org_size_score (SMALL=1, MEDIUM=2, LARGE=3, HUGE=4; UNKNOWN mean-imputed), org_size_unknown, sector_proxy (reference=government), entity_kind_group (reference=organisation; pooled sparse levels=1), prior_records_band (reference=unknown)
 - covariates skipped: {}
@@ -98,7 +98,7 @@ Unadjusted descriptive piecewise recurrence rates are per 100 entity-years:
 
 | elapsed_band   |   events |   exposure_days |   rate_per_100_entity_years |   bootstrap_ci_low |   bootstrap_ci_high |
 |:---------------|---------:|----------------:|----------------------------:|-------------------:|--------------------:|
-| 0-180          |       51 |      172515.000 |                      10.798 |              7.545 |              14.157 |
+| 0-180          |       51 |      172526.000 |                      10.797 |              7.545 |              14.155 |
 | 181-365        |       36 |      140306.000 |                       9.372 |              6.011 |              12.675 |
 | 366-730        |       25 |      214701.000 |                       4.253 |              2.474 |               6.026 |
 | 731-1460       |       33 |      207209.000 |                       5.817 |              3.811 |               7.887 |
@@ -113,47 +113,47 @@ Scaled size comparisons:
 
 | comparison      |   rate_ratio |   ci_low |   ci_high | plain_language                       |
 |:----------------|-------------:|---------:|----------:|:-------------------------------------|
-| SMALL -> MEDIUM |        2.339 |    1.826 |     2.996 | about 134% higher repeat-event rate  |
-| SMALL -> LARGE  |        5.470 |    3.333 |     8.977 | about 447% higher repeat-event rate  |
-| SMALL -> HUGE   |       12.792 |    6.084 |    26.895 | about 1179% higher repeat-event rate |
-| MEDIUM -> HUGE  |        5.470 |    3.333 |     8.977 | about 447% higher repeat-event rate  |
-| LARGE -> HUGE   |        2.339 |    1.826 |     2.996 | about 134% higher repeat-event rate  |
+| SMALL -> MEDIUM |        2.339 |    1.826 |     2.997 | about 134% higher repeat-event rate  |
+| SMALL -> LARGE  |        5.472 |    3.334 |     8.981 | about 447% higher repeat-event rate  |
+| SMALL -> HUGE   |       12.800 |    6.088 |    26.915 | about 1180% higher repeat-event rate |
+| MEDIUM -> HUGE  |        5.472 |    3.334 |     8.981 | about 447% higher repeat-event rate  |
+| LARGE -> HUGE   |        2.339 |    1.826 |     2.997 | about 134% higher repeat-event rate  |
 
 Sector effects, relative to government entities after adjusting for size and the other model controls:
 
 | sector            |   rate_ratio |   ci_low |   ci_high | plain_language                    |
 |:------------------|-------------:|---------:|----------:|:----------------------------------|
-| education         |        2.351 |    1.080 |     5.121 | about 135% higher than government |
+| education         |        2.351 |    1.079 |     5.121 | about 135% higher than government |
 | telecom_transport |        1.616 |    0.660 |     3.954 | about 62% higher than government  |
-| finance           |        1.520 |    0.621 |     3.722 | about 52% higher than government  |
-| media             |        1.514 |    0.406 |     5.647 | about 51% higher than government  |
-| health            |        1.299 |    0.535 |     3.155 | about 30% higher than government  |
+| finance           |        1.520 |    0.621 |     3.724 | about 52% higher than government  |
+| media             |        1.516 |    0.407 |     5.652 | about 52% higher than government  |
+| health            |        1.299 |    0.535 |     3.154 | about 30% higher than government  |
 | industrial        |        1.252 |    0.436 |     3.598 | about 25% higher than government  |
 | technology        |        0.684 |    0.280 |     1.673 | about 32% lower than government   |
-| other             |        0.526 |    0.240 |     1.155 | about 47% lower than government   |
-| retail            |        0.421 |    0.113 |     1.567 | about 58% lower than government   |
+| other             |        0.526 |    0.240 |     1.154 | about 47% lower than government   |
+| retail            |        0.421 |    0.113 |     1.565 | about 58% lower than government   |
 
 Full adjusted covariate table:
 
-| effect                           |   rate_ratio |   ci_low |                                                                                                                                                                                                                                           ci_high |
-|:---------------------------------|-------------:|---------:|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
-| Entity kind: government_body     |        1.144 |    0.549 |                                                                                                                                                                                                                                             2.384 |
-| Entity kind: sparse_or_no_repeat |        0.823 |    0.109 |                                                                                                                                                                                                                                             6.233 |
-| Organisation size                |        2.339 |    1.826 |                                                                                                                                                                                                                                             2.996 |
-| Prior records: 100k+             |        1.341 |    0.837 |                                                                                                                                                                                                                                             2.148 |
-| Prior records: 10k-100k          |        1.134 |    0.700 |                                                                                                                                                                                                                                             1.836 |
-| Prior records: 1k-10k            |        0.790 |    0.433 |                                                                                                                                                                                                                                             1.441 |
-| Prior records: <1k               |        1.301 |    0.756 |                                                                                                                                                                                                                                             2.240 |
-| Sector: education                |        2.351 |    1.080 |                                                                                                                                                                                                                                             5.121 |
-| Sector: finance                  |        1.520 |    0.621 |                                                                                                                                                                                                                                             3.722 |
-| Sector: health                   |        1.299 |    0.535 |                                                                                                                                                                                                                                             3.155 |
-| Sector: industrial               |        1.252 |    0.436 |                                                                                                                                                                                                                                             3.598 |
-| Sector: media                    |        1.514 |    0.406 |                                                                                                                                                                                                                                             5.647 |
-| Sector: other                    |        0.526 |    0.240 |                                                                                                                                                                                                                                             1.155 |
-| Sector: retail                   |        0.421 |    0.113 |                                                                                                                                                                                                                                             1.567 |
-| Sector: technology               |        0.684 |    0.280 |                                                                                                                                                                                                                                             1.673 |
-| Sector: telecom_transport        |        1.616 |    0.660 |                                                                                                                                                                                                                                             3.954 |
-| Unknown size                     |        0.000 |    0.000 | 669004791743968490905132052596821702490622010231396764578492141778458242283500720057868541787382781830193864906334652561715654828805142133557842675833795644913247964727122672466593515662229054666249543142133948147746524830228022271410176.000 |
+| effect                           |   rate_ratio |   ci_low |                                                                                                                             ci_high |
+|:---------------------------------|-------------:|---------:|------------------------------------------------------------------------------------------------------------------------------------:|
+| Entity kind: government_body     |        1.144 |    0.549 |                                                                                                                               2.385 |
+| Entity kind: sparse_or_no_repeat |        0.824 |    0.109 |                                                                                                                               6.233 |
+| Organisation size                |        2.339 |    1.826 |                                                                                                                               2.997 |
+| Prior records: 100k+             |        1.341 |    0.837 |                                                                                                                               2.147 |
+| Prior records: 10k-100k          |        1.134 |    0.700 |                                                                                                                               1.836 |
+| Prior records: 1k-10k            |        0.790 |    0.433 |                                                                                                                               1.441 |
+| Prior records: <1k               |        1.301 |    0.756 |                                                                                                                               2.240 |
+| Sector: education                |        2.351 |    1.079 |                                                                                                                               5.121 |
+| Sector: finance                  |        1.520 |    0.621 |                                                                                                                               3.724 |
+| Sector: health                   |        1.299 |    0.535 |                                                                                                                               3.154 |
+| Sector: industrial               |        1.252 |    0.436 |                                                                                                                               3.598 |
+| Sector: media                    |        1.516 |    0.407 |                                                                                                                               5.652 |
+| Sector: other                    |        0.526 |    0.240 |                                                                                                                               1.154 |
+| Sector: retail                   |        0.421 |    0.113 |                                                                                                                               1.565 |
+| Sector: technology               |        0.684 |    0.280 |                                                                                                                               1.673 |
+| Sector: telecom_transport        |        1.616 |    0.660 |                                                                                                                               3.954 |
+| Unknown size                     |        0.000 |    0.000 | 3018076659097703660465859148259872711066670692178687743449727018028010651454209000620803882545615666059874461634155495064338432.000 |
 
 Targeted contrast for the proposed low-then-rising pattern (hypothesis: the later bands are higher):
 
@@ -164,20 +164,20 @@ Targeted contrast for the proposed low-then-rising pattern (hypothesis: the late
 Definition used here: immediate risk is the first elapsed-time band; the response period combines the next two bands; the long-term period combines the remaining later bands.
 The adjusted phase model controls for the same size, sector, calendar-period, prior-event-number, entity-kind, and records-affected terms as the main elapsed-time model.
 
-Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.493. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates have the hypothesised shape. The weakest part is long-term vs response (p = 0.493).
+Directional U-shape test (all of: response vs immediate lower; long-term vs response higher), intersection p = 0.492. Not statistically significant at the 5% level: the data do not reject the null of no U-shape. The point estimates have the hypothesised shape. The weakest part is long-term vs response (p = 0.492).
 
 - response vs immediate: rate ratio 0.69 (95% CI 0.47-1.01), about 31% lower; one-sided p = 0.029 (alternative: lower). Statistically significant at the 5% level: the data reject the null of no decrease (rate ratio at least 1). The two-sided 95% CI still includes 1, so the evidence is one-sided only. Repeat events: 61 in the response period and 50 in the immediate period.
-- long-term vs response: rate ratio 1.00 (95% CI 0.67-1.50), no direction can be read from it; one-sided p = 0.493 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.67 to 1.50, which includes 1. Repeat events: 45 in the long-term period and 61 in the response period.
-- long-term vs immediate: rate ratio 0.70 (95% CI 0.45-1.07), no direction can be read from it; two-sided p = 0.101. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.45 to 1.07, which includes 1. Repeat events: 45 in the long-term period and 50 in the immediate period.
+- long-term vs response: rate ratio 1.00 (95% CI 0.67-1.50), no direction can be read from it; one-sided p = 0.492 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.67 to 1.50, which includes 1. Repeat events: 45 in the long-term period and 61 in the response period.
+- long-term vs immediate: rate ratio 0.70 (95% CI 0.45-1.07), no direction can be read from it; two-sided p = 0.102. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.45 to 1.07, which includes 1. Repeat events: 45 in the long-term period and 50 in the immediate period.
 
-- phase-model LRT p-value versus constant elapsed-time risk: 0.1368
-- directional U-shape p-value: 0.4929
+- phase-model LRT p-value versus constant elapsed-time risk: 0.1369
+- directional U-shape p-value: 0.4923
 
 Unadjusted phase rates per 100 entity-years:
 
 | phase            |   events |   exposure_days |   rate_per_100_entity_years |
 |:-----------------|---------:|----------------:|----------------------------:|
-| Immediate period |       50 |          172515 |                      10.586 |
+| Immediate period |       50 |          172526 |                      10.585 |
 | Response period  |       61 |          355007 |                       6.276 |
 | Long-term period |       45 |          272627 |                       6.029 |
 
@@ -186,8 +186,8 @@ Adjusted scaled phase comparisons:
 | comparison             |   rate_ratio |   ci_low |   ci_high | plain_language   |   p_two_sided | directional_alternative   | p_directional   |
 |:-----------------------|-------------:|---------:|----------:|:-----------------|--------------:|:--------------------------|:----------------|
 | response vs immediate  |        0.693 |    0.473 |     1.013 | about 31% lower  |         0.059 | less                      | 0.029           |
-| long-term vs response  |        1.004 |    0.673 |     1.497 | about 0% higher  |         0.986 | greater                   | 0.493           |
-| long-term vs immediate |        0.695 |    0.450 |     1.074 | about 30% lower  |         0.101 |                           |                 |
+| long-term vs response  |        1.004 |    0.673 |     1.498 | about 0% higher  |         0.985 | greater                   | 0.492           |
+| long-term vs immediate |        0.695 |    0.450 |     1.075 | about 30% lower  |         0.102 |                           |                 |
 
 The directional U-shape p-value is an intersection test: it only becomes small if the model supports both a fall after the immediate period and a later rise from the response period.
 
@@ -200,11 +200,11 @@ Phase comparisons by covariate set:
 | variant_label                 | comparison            |   rate_ratio |   ci_low |   ci_high |   ci_width | plain_language   |   p_directional |
 |:------------------------------|:----------------------|-------------:|---------:|----------:|-----------:|:-----------------|----------------:|
 | All covariates                | response vs immediate |        0.693 |    0.473 |     1.013 |      0.540 | about 31% lower  |           0.029 |
-| All covariates                | long-term vs response |        1.004 |    0.673 |     1.497 |      0.824 | about 0% higher  |           0.493 |
+| All covariates                | long-term vs response |        1.004 |    0.673 |     1.498 |      0.825 | about 0% higher  |           0.492 |
 | Drop organisation size        | response vs immediate |        0.707 |    0.483 |     1.034 |      0.550 | about 29% lower  |           0.037 |
 | Drop organisation size        | long-term vs response |        1.124 |    0.756 |     1.671 |      0.915 | about 12% higher |           0.282 |
 | Drop industry/sector          | response vs immediate |        0.657 |    0.450 |     0.960 |      0.510 | about 34% lower  |           0.015 |
-| Drop industry/sector          | long-term vs response |        0.942 |    0.634 |     1.402 |      0.768 | about 6% lower   |           0.615 |
+| Drop industry/sector          | long-term vs response |        0.943 |    0.634 |     1.402 |      0.768 | about 6% lower   |           0.615 |
 | Drop size and industry/sector | response vs immediate |        0.678 |    0.464 |     0.989 |      0.525 | about 32% lower  |           0.022 |
 | Drop size and industry/sector | long-term vs response |        1.100 |    0.742 |     1.632 |      0.890 | about 10% higher |           0.317 |
 
@@ -212,10 +212,10 @@ Phase-model test by covariate set:
 
 | variant_label                 |   p_value |   u_shape_intersection_p_value |
 |:------------------------------|----------:|-------------------------------:|
-| All covariates                |    0.1368 |                         0.4929 |
-| Drop organisation size        |    0.2068 |                         0.2823 |
-| Drop industry/sector          |    0.0516 |                         0.6150 |
-| Drop size and industry/sector |    0.1310 |                         0.3172 |
+| All covariates                |    0.1369 |                         0.4923 |
+| Drop organisation size        |    0.2068 |                         0.2822 |
+| Drop industry/sector          |    0.0518 |                         0.6150 |
+| Drop size and industry/sector |    0.1311 |                         0.3172 |
 
 If dropping a covariate group materially narrowed an interval, its CI width would shrink in this table. For response vs immediate, no variant narrows the 95% CI by 5% or more on the log scale ('All covariates' model: 0.47-1.01). For long-term vs response, no variant narrows the 95% CI by 5% or more on the log scale ('All covariates' model: 0.67-1.50).
 
@@ -224,15 +224,15 @@ If dropping a covariate group materially narrowed an interval, its CI width woul
 This sensitivity reruns the elapsed-time model with bands `0-90`, `91-180`, `181-365`, `366-730`, `731-1460`, and `>1460` to test whether the apparent early elevation is concentrated in days 91-180.
 A formal delayed peak requires the 91-180 day period to be higher than both 0-90 days and the pooled post-180 period after adjustment.
 
-- adjusted elapsed-time LRT p-value for the 90/180 split: 0.03336
+- adjusted elapsed-time LRT p-value for the 90/180 split: 0.03337
 - phase-model LRT p-value versus constant elapsed-time risk: 0.1045
-- directional delayed-peak p-value: 0.2312
+- directional delayed-peak p-value: 0.2311
 
 Unadjusted phase rates per 100 entity-years:
 
 | phase                    |   events |   exposure_days |   rate_per_100_entity_years |
 |:-------------------------|---------:|----------------:|----------------------------:|
-| Immediate 0-90 days      |       24 |           91037 |                       9.629 |
+| Immediate 0-90 days      |       24 |           91048 |                       9.628 |
 | Delayed peak 91-180 days |       26 |           81478 |                      11.655 |
 | Post-180 days            |      106 |          627634 |                       6.169 |
 
@@ -250,7 +250,7 @@ Directional delayed peak test (all of: 91-180 vs 0-90 higher; 91-180 vs post-180
 
 - 91-180 vs 0-90: rate ratio 1.23 (95% CI 0.71-2.15), no direction can be read from it; one-sided p = 0.231 (alternative: higher). Not statistically significant at the 5% level: the data do not reject the null of no increase (rate ratio at most 1); the 95% CI runs from 0.71 to 2.15, which includes 1. Repeat events: 26 in 91-180 days and 24 in 0-90 days.
 - 91-180 vs post-180: rate ratio 1.60 (95% CI 1.03-2.49), about 60% higher; one-sided p = 0.018 (alternative: higher). Statistically significant at the 5% level: the data reject the null of no increase (rate ratio at most 1). Repeat events: 26 in 91-180 days and 106 in post-180 days.
-- post-180 vs 0-90: rate ratio 0.77 (95% CI 0.49-1.22), no direction can be read from it; two-sided p = 0.261. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.22, which includes 1. Repeat events: 106 in post-180 days and 24 in 0-90 days.
+- post-180 vs 0-90: rate ratio 0.77 (95% CI 0.49-1.21), no direction can be read from it; two-sided p = 0.261. Not statistically significant at the 5% level: the data do not reject equal rates (rate ratio 1); the 95% CI runs from 0.49 to 1.21, which includes 1. Repeat events: 106 in post-180 days and 24 in 0-90 days.
 
 ## Unadjusted Parametric Survival Model Comparison (Descriptive)
 
@@ -258,13 +258,13 @@ Best AIC model: loglogistic. Lower AIC/BIC means better censored likelihood fit 
 
 | model             |   log_likelihood |   parameters |      aic |      bic | converged   |
 |:------------------|-----------------:|-------------:|---------:|---------:|:------------|
-| loglogistic       |        -1492.509 |            2 | 2989.019 | 2998.956 | True        |
-| weibull           |        -1492.564 |            2 | 2989.127 | 2999.065 | True        |
-| lognormal         |        -1493.244 |            2 | 2990.489 | 3000.426 | True        |
-| generalized_gamma |        -1492.307 |            3 | 2990.614 | 3005.520 | True        |
-| exponential       |        -1497.200 |            1 | 2996.401 | 3001.369 | True        |
+| loglogistic       |        -1492.689 |            2 | 2989.379 | 2999.317 | True        |
+| weibull           |        -1492.804 |            2 | 2989.608 | 2999.546 | True        |
+| lognormal         |        -1492.906 |            2 | 2989.812 | 2999.750 | True        |
+| generalized_gamma |        -1492.482 |            3 | 2990.964 | 3005.871 | True        |
+| exponential       |        -1497.202 |            1 | 2996.405 | 3001.374 | True        |
 
-Exponential vs Weibull LRT p-value: 0.002325
+Exponential vs Weibull LRT p-value: 0.003018
 
 ## Plots
 
