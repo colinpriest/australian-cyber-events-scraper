@@ -1,19 +1,18 @@
 size,prior_attack_type,next_attack_type,transitions,organisations,share_of_prior_type_within_size
-HUGE,Data Breach,Data Breach,32,23,0.5714285714285714
-HUGE,Data Breach,Denial of Service,2,2,0.03571428571428571
-HUGE,Data Breach,Infrastructure Attack,1,1,0.017857142857142856
-HUGE,Data Breach,Insider Threat,1,1,0.017857142857142856
-HUGE,Data Breach,Malware,1,1,0.017857142857142856
-HUGE,Data Breach,Other,7,7,0.125
-HUGE,Data Breach,Phishing,3,3,0.05357142857142857
-HUGE,Data Breach,Ransomware,4,4,0.07142857142857142
-HUGE,Data Breach,State-Sponsored Attack,2,1,0.03571428571428571
-HUGE,Data Breach,Supply Chain Attack,1,1,0.017857142857142856
-HUGE,Data Breach,Vulnerability Exploit,2,2,0.03571428571428571
+HUGE,Data Breach,Data Breach,32,23,0.5818181818181818
+HUGE,Data Breach,Denial of Service,2,2,0.03636363636363636
+HUGE,Data Breach,Insider Threat,1,1,0.01818181818181818
+HUGE,Data Breach,Malware,1,1,0.01818181818181818
+HUGE,Data Breach,Other,7,7,0.12727272727272726
+HUGE,Data Breach,Phishing,3,3,0.05454545454545454
+HUGE,Data Breach,Ransomware,4,4,0.07272727272727272
+HUGE,Data Breach,State-Sponsored Attack,2,1,0.03636363636363636
+HUGE,Data Breach,Supply Chain Attack,1,1,0.01818181818181818
+HUGE,Data Breach,Vulnerability Exploit,2,2,0.03636363636363636
 HUGE,Denial of Service,Other,1,1,1.0
 HUGE,Financial Fraud,Identity Theft,1,1,0.5
 HUGE,Financial Fraud,Ransomware,1,1,0.5
-HUGE,Infrastructure Attack,Data Breach,1,1,1.0
+HUGE,Infrastructure Attack,Data Breach,2,2,1.0
 HUGE,Other,Data Breach,3,3,0.25
 HUGE,Other,Financial Fraud,1,1,0.08333333333333333
 HUGE,Other,Insider Threat,1,1,0.08333333333333333
@@ -43,11 +42,11 @@ LARGE,Ransomware,Data Breach,1,1,0.3333333333333333
 LARGE,Ransomware,Other,1,1,0.3333333333333333
 LARGE,Ransomware,Ransomware,1,1,0.3333333333333333
 LARGE,State-Sponsored Attack,Data Breach,1,1,1.0
-MEDIUM,Data Breach,Data Breach,2,2,0.5
-MEDIUM,Data Breach,Financial Fraud,1,1,0.25
-MEDIUM,Data Breach,Ransomware,1,1,0.25
+MEDIUM,Data Breach,Data Breach,2,2,0.6666666666666666
+MEDIUM,Data Breach,Ransomware,1,1,0.3333333333333333
 MEDIUM,Denial of Service,Vulnerability Exploit,1,1,1.0
-MEDIUM,Financial Fraud,Financial Fraud,1,1,1.0
+MEDIUM,Financial Fraud,Data Breach,1,1,0.5
+MEDIUM,Financial Fraud,Financial Fraud,1,1,0.5
 MEDIUM,Malware,Other,1,1,1.0
 MEDIUM,Other,Data Breach,1,1,0.5
 MEDIUM,Other,Other,1,1,0.5
