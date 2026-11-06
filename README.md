@@ -3524,6 +3524,15 @@ runs used different snapshots or not the published one. The analysis scripts no
 longer write the page themselves (`--dashboard-out PATH` still does, for a one-off
 look; `python scripts/build_recurrence_dashboard.py` builds it alone).
 
+**Organisation size and recurrence rate** (`scripts/recurrence_size_plot.py`, owner 2026-11-06). The page shows boxplots
+by size band, drawn from the main run's `recurrent_event_spells.csv` when the page is built, so no analysis is rerun.
+There are two panels, because a boxplot needs a distribution and two exist. The left is each organisation's own rate;
+in most bands at least three quarters of organisations have no repeat, so the box is flat on zero, and those with a
+repeat are drawn as dots. The right is each band's overall rate, with its box and whiskers the middle 50% and 95% of
+that rate when the band's organisations are resampled, so it shows uncertainty rather than differences between
+organisations. Both are unadjusted; the adjusted effect and its test stay in the executive summary. Organisations of
+unknown size are counted, not plotted.
+
 **Executive summary, from parsimonious models** (`scripts/recurrence_summary.py`, owner review 2026-11-02). The
 page opens with five questions and one generated answer each, from the main run's `executive_summary` in
 `analysis_summary.json`; the headline tests and the per-banding reports are folded under "Detailed results". The
