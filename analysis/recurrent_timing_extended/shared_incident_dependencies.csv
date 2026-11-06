@@ -11,10 +11,9 @@ deduplicated_event_id,victim_entities,victim_entity_pairs,supplier_recorded
 55f96bee-4ed5-43cb-bcb3-2a715866ddaa,2,1,False
 5f077fd9-773d-4bb5-9239-d412c0c25208,5,10,False
 84cfeed7-b11b-4396-9a61-8528fc6b4a4c,2,1,False
-8e104de0-61c5-4186-9cc8-ee1c59745534,4,6,False
 8eb89166-3960-4e92-8b77-3ab54a64dc2e,2,1,False
 ad025b3e-887d-4e1c-935e-7fadff47420f,2,1,True
-b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,2,1,False
+b35d8a76-8e0e-403f-96dd-a0bfb1d9dd54,4,6,False
 b5698d4f-528b-4133-8090-b5f55c0589c3,6,15,False
 bcbb5f29-9be0-4705-b6ad-39c2842adad3,3,3,False
 c5356fc1-b790-46e5-9880-20b4d497203e,2,1,False
