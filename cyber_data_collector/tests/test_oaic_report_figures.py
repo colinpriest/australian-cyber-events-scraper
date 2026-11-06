@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
-from scripts.build_static_dashboard import prepare_oaic_attack_types_data
+from scripts.build_static_dashboard import prepare_oaic_attack_types_data, prepare_oaic_monthly_comparison
 from scripts.oaic import oaic_report_figures as orf
 
 SHARES = {"phishing": 32, "compromised_credentials": 28, "ransomware": 23, "hacking": 8, "brute_force": 5,
@@ -78,6 +80,31 @@ def test_the_sub_category_average_is_removed_when_the_distribution_arrives():
     out = orf.apply_figures(record, figures, SHARES, [{"sector": "Health", "notifications": 85}],
                             [{"range": "1", "count": 116}])
     assert out["individuals_affected_average"] is None and out["top_sectors"][0]["notifications"] == 85
+
+
+def test_the_six_months_of_a_period_must_sum_to_its_total():
+    reading = {"2020-06": 99, "2021-01": 45, "2021-02": 83, "2021-03": 102, "2021-04": 64, "2021-05": 78, "2021-06": 74}
+    rows = orf.check_monthly("2021 H1", reading, 446)
+    assert rows[0] == {"month": "Jan", "count": 45} and len(rows) == 6
+    with pytest.raises(orf.FigureNotFound):
+        orf.check_monthly("2021 H1", reading, 436)
+    with pytest.raises(orf.FigureNotFound):
+        orf.check_monthly("2021 H2", reading, 446)
+    assert orf.apply_figures({}, {"total_notifications": 446, "malicious_attacks": 289, "cyber_incidents_total": 192},
+                             SHARES, monthly=rows)["monthly_notifications"] == rows
+
+
+def test_the_monthly_comparison_starts_when_the_database_does(tmp_path):
+    db = tmp_path / "e.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE DeduplicatedEvents (event_date TEXT, status TEXT)")
+    conn.executemany("INSERT INTO DeduplicatedEvents VALUES (?, 'Active')", [("2019-12-05",), ("2020-01-09",)])
+    conn.commit()
+    conn.close()
+    data = prepare_oaic_monthly_comparison([
+        {"year": 2019, "period": "H2", "monthly_notifications": [{"month": "Dec", "count": 84}]},
+        {"year": 2020, "period": "H1", "monthly_notifications": [{"month": "Jan", "count": 63}]}], db_path=str(db))
+    assert data == {"months": ["2020-01"], "oaic_counts": [63], "db_counts": [1]}
 
 
 def test_the_chart_plots_percentages_and_names_periods_with_no_split():

@@ -13,7 +13,8 @@ distribution, though every report has both.
 This module reads one report per period with a pattern written for that report's own wording; a pattern that does not
 match is an error, never a blank. Shares are read from the report's "Cyber incident breakdown" chart, an image in
 several reports, by the vision model once per page, and so is the "Number of individuals affected" chart, whose counts
-must sum to the period's total. The sector table is read from the text. Each reading is committed in ``report_chart_readings.json``, keyed
+must sum to the period's total, and the "Notifications received by month" chart, whose six months must sum to it too.
+The sector table is read from the text. Each reading is committed in ``report_chart_readings.json``, keyed
 on the PDF's hash and the prompt version, so a rerun asks nothing and anyone can compare it with the page.
 
     python scripts/oaic/oaic_report_figures.py --dry-run   # what would change
@@ -43,12 +44,14 @@ if str(PROJECT_ROOT) not in sys.path:
 READINGS_PATH = Path(__file__).resolve().parent / "report_chart_readings.json"
 PROMPT_VERSION = "cyber-breakdown-v1"
 DISTRIBUTION_PROMPT_VERSION = "individuals-distribution-v1"
+MONTHLY_PROMPT_VERSION = "monthly-notifications-v1"
 #: The bands the published dataset uses (and the dashboard counts); a band a report does not show holds no breaches.
 DISTRIBUTION_BANDS = ("1", "2-10", "11-100", "101-1,000", "1,001-5,000", "5,001-10,000", "10,001-25,000",
                       "25,001-50,000", "50,001-100,000", "100,001-250,000", "250,001-500,000", "500,001-1,000,000",
                       "1,000,001-10,000,000", "10,000,001+", "Unknown")
 #: A distribution may miss a total by this share: some reports count a few notifications differently.
 DISTRIBUTION_SUM_TOLERANCE = 0.02
+MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 SHARE_FIELDS = ("phishing", "compromised_credentials", "ransomware", "hacking", "brute_force", "malware")
 METHOD_FIELDS = SHARE_FIELDS
 #: The shares of a report are rounded: they sum to about 100, not exactly.
@@ -68,6 +71,11 @@ affected). Read the number of breaches printed for each band and return JSON who
 printed on the page; null for a band the page does not show. Use the chart for the individuals affected worldwide, not
 a table of Australians only. Do not calculate anything."""
 
+MONTHLY_PROMPT = """This is one page of an Australian privacy regulator's data breach report. It has a chart headed
+"Chart 1" of the data breach notifications received each month. Its last month is {last_month}, and each earlier point
+is the month before. Read the number printed for each month shown and return JSON whose keys are the months in the form
+YYYY-MM and whose values are the integers printed on the page. Do not calculate anything."""
+
 
 @dataclass(frozen=True)
 class Report:
@@ -76,6 +84,7 @@ class Report:
     chart_page: int
     sector_page: int
     distribution_page: int
+    monthly_page: int
     total: str
     malicious: str
     cyber: str
@@ -83,25 +92,25 @@ class Report:
 
 _MALICIOUS_ACCOUNTING = r"accounting\s+for\s+(\d{3})\s+(?:breaches|notifications)"
 REPORTS = (
-    Report("2019 H2", "notifiable-data-breaches-report-july-december-2019.pdf", 14, 6, 8,
+    Report("2019 H2", "notifiable-data-breaches-report-july-december-2019.pdf", 14, 6, 8, 5,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+under\s+this\s+category"),
-    Report("2020 H1", "notifiable-data-breaches-report-jan-jun-2020.pdf", 15, 6, 9,
+    Report("2020 H1", "notifiable-data-breaches-report-jan-jun-2020.pdf", 15, 6, 9, 5,
            r"The\s+(\d{3})\s+notifications\s+received\s+during\s+this\s+reporting", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+under\s+this\s+category"),
-    Report("2020 H2", "notifiable-data-breaches-report-july-dec-2020.pdf", 19, 7, 9,
+    Report("2020 H2", "notifiable-data-breaches-report-july-dec-2020.pdf", 19, 7, 9, 5,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period", _MALICIOUS_ACCOUNTING,
            r"received\s+(\d{3})\s+notifications\s+of\s+cyber\s+incidents"),
-    Report("2021 H1", "oaic-notifiable-data-breaches-report-jan-june-2021.pdf", 18, 8, 10,
+    Report("2021 H1", "oaic-notifiable-data-breaches-report-jan-june-2021.pdf", 18, 8, 10, 7,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"of\s+all\s+data\s+breaches\s+\((\d{3})\s+notifications\)"),
-    Report("2021 H2", "Final-Notifiable-Data-Breaches-Report-Jul-Dec-2021.pdf", 17, 20, 8,
+    Report("2021 H2", "Final-Notifiable-Data-Breaches-Report-Jul-Dec-2021.pdf", 17, 20, 8, 7,
            r"(\d{3})\s+breaches\s+were\s+notified\s+under\s+the\s+scheme", _MALICIOUS_ACCOUNTING,
            r"of\s+all\s+breaches\s+\((\d{3})\s+notifications\)"),
-    Report("2022 H1", "OAIC-Notifiable-Data-Breaches-Report-Jan-Jun-2022.pdf", 19, 23, 9,
+    Report("2022 H1", "OAIC-Notifiable-Data-Breaches-Report-Jan-Jun-2022.pdf", 19, 23, 9, 7,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period", _MALICIOUS_ACCOUNTING,
            r"breaches\s+\((\d{3})\s+notifications\)\s+.\s+resulted\s+from\s+cyber"),
-    Report("2022 H2", "OAIC-Notifiable-data-breaches-report-July-December-2022.pdf", 22, 28, 10,
+    Report("2022 H2", "OAIC-Notifiable-data-breaches-report-July-December-2022.pdf", 22, 28, 10, 7,
            r"received\s+(\d{3})\s+notifications\s+this\s+reporting\s+period",
            r"accounted\s+for\s+(\d{3})\s+notifications",
            r"were\s+(\d{3})\s+breaches\s+resulting\s+from\s+cyber"),
@@ -170,9 +179,30 @@ def check_distribution(period: str, reading: Dict[str, Any], total: int) -> List
     return rows
 
 
+def period_months(period: str) -> List[str]:
+    """The six YYYY-MM months of a period such as "2021 H2"."""
+    year, half = period.split()
+    first = 1 if half == "H1" else 7
+    return [f"{year}-{month:02d}" for month in range(first, first + 6)]
+
+
+def check_monthly(period: str, reading: Dict[str, Any], total: int) -> List[Dict[str, Any]]:
+    """The period's six months from a chart reading, or an error when one is missing or they do not sum to the total."""
+    months = period_months(period)
+    missing = [m for m in months if not isinstance(reading.get(m), int)]
+    if missing:
+        raise FigureNotFound(f"{period}: monthly reading lacks {missing}: {reading}")
+    found = sum(reading[m] for m in months)
+    if found != total:
+        raise FigureNotFound(f"{period}: months sum to {found}, the period's total is {total}: "
+                             f"{[reading[m] for m in months]}")
+    return [{"month": MONTH_NAMES[int(m[5:]) - 1], "count": reading[m]} for m in months]
+
+
 def apply_figures(record: Dict[str, Any], figures: Dict[str, int], shares: Dict[str, int],
                   sectors: Optional[List[Dict[str, Any]]] = None,
-                  distribution: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                  distribution: Optional[List[Dict[str, Any]]] = None,
+                  monthly: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The record with the report's figures: shares in percent, and the mixed method fields empty.
 
     The stored average is removed: it is a sub-category's, and these reports state no overall one.
@@ -184,6 +214,8 @@ def apply_figures(record: Dict[str, Any], figures: Dict[str, int], shares: Dict[
     if distribution is not None:
         out["individuals_affected_distribution"] = distribution
         out["individuals_affected_average"] = None
+    if monthly is not None:
+        out["monthly_notifications"] = monthly
     out["cyber_incidents_percentage"] = round(100 * figures["cyber_incidents_total"] / figures["total_notifications"], 1)
     out["cyber_incident_breakdown_pct"] = shares
     for field in METHOD_FIELDS:
@@ -215,19 +247,20 @@ def _page_text(path: Path, page_number: int) -> str:
         return pdf.pages[page_number - 1].extract_text() or ""
 
 
-def _ask_vision(path: Path, page_number: int, prompt: str = PROMPT) -> Dict[str, Any]:
+def _ask_vision(path: Path, page_number: int, prompt: str = PROMPT, resolution: int = 150,
+                max_tokens: int = 500) -> Dict[str, Any]:
     import pdfplumber
     from openai import OpenAI
 
     from cyber_data_collector.utils.llm_models import chat_params, openai_model
 
     with pdfplumber.open(path) as pdf:
-        image = pdf.pages[page_number - 1].to_image(resolution=150).original
+        image = pdf.pages[page_number - 1].to_image(resolution=resolution).original
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     response = OpenAI().chat.completions.create(
-        **chat_params(openai_model(), max_tokens=500),
+        **chat_params(openai_model(), max_tokens=max_tokens),
         messages=[{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}]}],
@@ -273,6 +306,29 @@ def chart_distribution(report: Report, path: Path, readings: Dict[str, Any], tot
     return rows
 
 
+def chart_monthly(report: Report, path: Path, readings: Dict[str, Any], total: int,
+                  dry_run: bool) -> Optional[List[Dict[str, Any]]]:
+    """A report's six months: the committed reading of this PDF and prompt, else one vision call.
+
+    The reading is stored before it is checked: a month that fails the check is looked at, not paid for twice.
+    """
+    from cyber_data_collector.utils.llm_models import openai_model
+
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    entry = readings.setdefault(report.period, {})
+    stored = entry.get("monthly")
+    if not (stored and stored.get("pdf_sha256") == digest and stored.get("prompt_version") == MONTHLY_PROMPT_VERSION):
+        if dry_run:
+            return None
+        prompt = MONTHLY_PROMPT.format(last_month=period_months(report.period)[-1])
+        stored = {"pdf_sha256": digest, "page": report.monthly_page, "prompt_version": MONTHLY_PROMPT_VERSION,
+                  "model": openai_model(),
+                  "months": _ask_vision(path, report.monthly_page, prompt, resolution=220, max_tokens=900)}
+        entry["monthly"] = stored
+        READINGS_PATH.write_text(json.dumps(readings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return check_monthly(report.period, stored["months"], total)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     from scripts.oaic.oaic_consistency import period_label
     from scripts.oaic.oaic_dataset import load_dataset, promote_records
@@ -299,6 +355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             shares = chart_shares(report, path, readings, args.dry_run)
             sectors = read_sectors(report.period, _page_text(path, report.sector_page))
             distribution = chart_distribution(report, path, readings, figures["total_notifications"], args.dry_run)
+            monthly = chart_monthly(report, path, readings, figures["total_notifications"], args.dry_run)
         except FigureNotFound as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
@@ -309,8 +366,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(report.period, {f: (record.get(f), v) for f, v in figures.items() if record.get(f) != v}, shares or "(not read yet)")
         print("   sectors", sectors)
         print("   bands", distribution or "(not read yet)", "| average was", record.get("individuals_affected_average"))
-        if shares is not None and distribution is not None:
-            new_records.append(apply_figures(record, figures, shares, sectors, distribution))
+        print("   months", monthly or "(not read yet)")
+        if shares is not None and distribution is not None and monthly is not None:
+            new_records.append(apply_figures(record, figures, shares, sectors, distribution, monthly))
     new_records += [without_misattributed_average(current[p]) for p in MISATTRIBUTED_AVERAGES]
     if args.dry_run:
         return 0
