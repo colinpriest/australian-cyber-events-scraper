@@ -350,3 +350,28 @@ def test_a_split_made_from_a_label_that_has_changed_no_longer_blocks(world, tmp_
     assert conn.execute("SELECT COUNT(*) FROM DedupOverrides WHERE active = 1 AND reason LIKE "
                         "'split: [label-contradiction]%'").fetchone()[0] == 0
     assert lc.find_same(conn) == []
+
+
+def test_a_victim_of_an_event_the_owner_merged_away_stays_a_victim(world, monkeypatch):
+    conn, _, _ = world
+    conn.execute("INSERT INTO EntitiesV2 (entity_id, entity_name, entity_kind) VALUES "
+                 "(901, 'Westpac', 'organisation'), (902, 'Commonwealth Bank of Australia', 'organisation'), "
+                 "(903, 'National Australia Bank', 'organisation')")
+    conn.executemany("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, relationship_type) "
+                     "VALUES (?, ?, ?)",
+                     [("ded-b", 901, "victim"), ("ded-b", 902, "victim"), ("ded-b", 903, "victim"),
+                      ("ded-a", 901, "victim"), ("ded-a", 902, "affected_customer")])
+    DedupLedger(conn).merge_events("ded-a", "ded-b", reason="owner", respect_overrides=False)
+    # Every record labels Westpac and the Commonwealth Bank victims; none labels NAB one any more.
+    members = [r[0] for r in conn.execute(
+        "SELECT enriched_event_id FROM EventDeduplicationMap WHERE deduplicated_event_id = 'ded-a'")]
+    conn.execute("DELETE FROM EnrichedEventEntities WHERE entity_id IN (901, 902, 903)")
+    conn.executemany("INSERT INTO EnrichedEventEntities (enriched_event_id, entity_id, relationship_type) "
+                     "VALUES (?, ?, 'victim')", [(members[0], 901), (members[0], 902)])
+    monkeypatch.setattr(lc, "owner_labelled_same_pairs", lambda path=None: {frozenset(("ded-a", "ded-b"))})
+    carried = lc.carry_owner_merged_victims(conn)
+    assert [c[2] for c in carried] == ["Commonwealth Bank of Australia"]
+    role = conn.execute("SELECT relationship_type FROM DeduplicatedEventEntities "
+                        "WHERE deduplicated_event_id = 'ded-a' AND entity_id = 902").fetchone()[0]
+    assert role == "victim"
+    assert lc.carry_owner_merged_victims(conn) == []

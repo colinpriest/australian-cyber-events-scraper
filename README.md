@@ -762,7 +762,9 @@ separate incidents, recorded as labels where a date had made them look close. Wh
 (`same` label), the acting coherence checks stop treating either's records as strays of the other
 (`coherence.owner_merged_labels`); calibration keeps the blind labels it was measured on. Optimum's second event was
 not on the list: its Black Basta event was misdated August 2023, which paired it with Rhysida's attack that month and
-hid its real duplicate.
+hid its real duplicate. A victim of an event the owner merged away stays a victim of the event that now holds it, while
+a record of that event still labels it one (`label_contradictions.carry_owner_merged_victims`): the banks' merge had
+left the Commonwealth Bank and NAB as uncounted affected customers.
 
 ### Names that are descriptions; a person's alias
 
