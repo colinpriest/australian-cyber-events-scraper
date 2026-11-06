@@ -2134,7 +2134,9 @@ def prepare_oaic_monthly_comparison(
     OAIC publishes per-month bar charts for each semester on page 2. We unfold
     each semester record into 6 (or fewer) {month, oaic_count} entries indexed
     by absolute YYYY-MM, then join with DB-event-count-per-month. The database
-    is counted over exactly the months OAIC reported.
+    is counted over exactly the months OAIC reported, from the month its collection
+    starts: an earlier incident is recorded only when later reporting mentions it, so a
+    count before then says nothing about how many there were.
     """
     import sqlite3
 
@@ -2154,7 +2156,8 @@ def prepare_oaic_monthly_comparison(
             count = entry.get('count')
             if mnum is None or not isinstance(count, (int, float)):
                 continue
-            oaic_by_ym[f"{year:04d}-{mnum:02d}"] = int(count)
+            if date(year, mnum, 1) >= DASHBOARD_START:
+                oaic_by_ym[f"{year:04d}-{mnum:02d}"] = int(count)
 
     if not oaic_by_ym:
         return {'months': [], 'oaic_counts': [], 'db_counts': []}

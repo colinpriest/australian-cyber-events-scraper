@@ -3737,6 +3737,14 @@ release or publication"; 2023 H2's 9,080 is "rogue employee"), and 2024's, with 
 OAIC's reports give no overall figure, so the "Individuals Affected Trends" chart estimates both from the bands for
 every period and says so.
 
+`monthly_notifications` was empty for those seven periods, so "Monthly Notifications - OAIC vs Database" began in January
+2023. Each period's months are now read from Chart 1 of its own report and rejected unless the six sum exactly to that
+report's total (all seven did on the first reading, and 2022 H2 matches the numbers placed by position in the PDF's
+text). The chart starts in January 2020, when the database's collection does; 2019 H2's months stay in the dataset.
+OAIC revises earlier months in later reports (May 2020 is 124 in its own report and 119 by 2021), so a month here is as
+its period's report gave it. From 2023 the months are the Power BI dashboard's, which match the May 2025 report's Chart 1
+for 2023 and 2024 except July 2024 (104 against 105, the whole of the 594 and 595 totals' difference).
+
 ```bash
 python scripts/oaic/oaic_report_figures.py --dry-run
 python scripts/oaic/oaic_report_figures.py
