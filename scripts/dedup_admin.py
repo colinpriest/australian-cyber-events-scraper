@@ -1753,6 +1753,11 @@ def cmd_resolve_label_contradictions(args) -> int:
     conn = _connect(args.db)
     refresher = _make_refresher(args)
     try:
+        for target, source, name in label_contradictions.carry_owner_merged_victims(conn, apply=not args.dry_run):
+            print(f"{name}: {'would be' if args.dry_run else 'made'} a victim of {target[:8]}, as of {source[:8]} "
+                  "which the owner merged into it")
+        if not args.dry_run:
+            conn.commit()
         if not label_contradictions.find(conn) and not label_contradictions.find_same(conn):
             print("No labelled-different pair is one event and no labelled-same pair is two.")
             return 0

@@ -487,6 +487,69 @@ def resolve(conn: sqlite3.Connection, snapshot: Optional[Path], apply: bool = Fa
     return contradictions + same
 
 
+def carry_owner_merged_victims(conn: sqlite3.Connection, path: Optional[Path] = None,
+                               apply: bool = True) -> List[Tuple[str, str, str]]:
+    """``(event, merged-away event, name)``: victims of an event the owner merged away, made victims of what holds it.
+
+    A merge moves the records and leaves the event-level roles behind. The Big Four banks' two events named all four
+    banks as victims on one and two of them on the other, and every record names all four, so merging the first into
+    the second left the Commonwealth Bank and NAB as affected customers, uncounted (owner, 2026-11-06). A victim is
+    carried only while a record of the event still labels it one, so a later classification that demotes it is not
+    undone, and not when it is another name for a victim the event has, not an organisation, or the event's supplier.
+    These roles are not ``SupplierVictimAttachments``: that table's rows are reversed into supplier links, and this is
+    no supplier incident. Idempotent. Snapshotted. The caller commits.
+    """
+    from cyber_data_collector.dedup.entity_resolution import EntityResolver
+    from cyber_data_collector.dedup.ledger import DedupLedger
+    from cyber_data_collector.dedup.supplier_victims import event_victims, is_candidate_organisation, same_org, \
+        variant_of_victim
+    from cyber_data_collector.dedup.victim_counting import with_acronym_policy
+    from cyber_data_collector.quality.regression import EventResolver
+
+    previous = conn.row_factory
+    conn.row_factory = None
+    carried: List[Tuple[str, str, str]] = []
+    try:
+        pairs = owner_labelled_same_pairs(path)
+        if not pairs:
+            return carried
+        status = {did: s for did, s in conn.execute("SELECT deduplicated_event_id, status FROM DeduplicatedEvents")}
+        events, resolver = EventResolver(conn), None
+        for source in sorted({did for pair in pairs for did in pair if status.get(did) == "Merged"}):
+            target, target_status = events.resolve(source)
+            if target_status != "Active" or target == source:
+                continue
+            resolver = resolver or with_acronym_policy(conn, EntityResolver(conn))
+            vendors = [v for (v,) in conn.execute(
+                "SELECT vendor_organization_name FROM DeduplicatedEvents WHERE deduplicated_event_id IN (?, ?) "
+                "AND vendor_organization_name IS NOT NULL", (source, target))]
+            for entity_id, name, kind in event_victims(conn, source):
+                row = conn.execute("SELECT relationship_type FROM DeduplicatedEventEntities "
+                                   "WHERE deduplicated_event_id = ? AND entity_id = ?", (target, entity_id)).fetchone()
+                labelled = conn.execute(
+                    """SELECT 1 FROM EventDeduplicationMap m JOIN EnrichedEventEntities e
+                       ON e.enriched_event_id = m.enriched_event_id
+                       WHERE m.deduplicated_event_id = ? AND e.entity_id = ? AND e.relationship_type = 'victim'""",
+                    (target, entity_id)).fetchone()
+                if (row and row[0] == "victim") or not labelled or not is_candidate_organisation(name, kind) \
+                        or any(same_org(resolver, name, v) for v in vendors) \
+                        or variant_of_victim(conn, target, entity_id, name, resolver):
+                    continue
+                carried.append((target, source, name))
+                if not apply:
+                    continue
+                DedupLedger(conn).snapshot_event(f"owner-merge-victims-{source[:8]}", target)
+                if row:
+                    conn.execute("UPDATE DeduplicatedEventEntities SET relationship_type = 'victim' "
+                                 "WHERE deduplicated_event_id = ? AND entity_id = ?", (target, entity_id))
+                else:
+                    conn.execute("INSERT INTO DeduplicatedEventEntities (deduplicated_event_id, entity_id, "
+                                 "relationship_type) VALUES (?, ?, 'victim')", (target, entity_id))
+    finally:
+        conn.row_factory = previous
+    return carried
+
+
 def find_still(conn: sqlite3.Connection, c: Contradiction) -> List[Contradiction]:
     """``[c]`` while its pair still resolves to one Active event, else ``[]``."""
     resolver = _resolver(conn)
