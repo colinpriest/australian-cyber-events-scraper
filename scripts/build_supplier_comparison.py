@@ -23,7 +23,10 @@ counted per group. p-values are Holm-adjusted across the tests that ran. Events 
 are not independent of each other, so every test is repeated with one event per supplier incident.
 
 Every sentence of the page's conclusions is generated from the numbers; a result that is not significant
-after adjustment is reported as "no evidence of a difference", with no direction.
+after adjustment is reported as "no evidence of a difference", with no direction. A significant one is
+never a bare "difference": it carries the size of its effect ("negligible difference", "small difference",
+"medium difference", "large difference"), because with this many events a difference too small to matter
+is still statistically significant.
 
 The page is self-contained (no scripts, no external files): charts are HTML and CSS, in light and dark
 mode, readable at phone width.
@@ -71,7 +74,8 @@ MAX_SPARSE_SHARE = 0.20
 MIN_ANY_EXPECTED = 1.0
 #: A category is named in a conclusion when its adjusted standardised residual is beyond this.
 RESIDUAL_CUT = 1.96
-#: Cramér's V (two groups, so V equals Cohen's w) and the words used for it.
+#: The words for the size of an effect, at Cohen's cut-offs: for Cramér's V (two groups, so V equals Cohen's w)
+#: and for the absolute rank-biserial correlation of the Mann-Whitney test (Cohen's cut-offs for r).
 EFFECT_WORDS = ((0.5, "large"), (0.3, "medium"), (0.1, "small"), (0.0, "negligible"))
 POOLED_LABEL = "Sparse categories (pooled)"
 
@@ -88,7 +92,13 @@ BASES: Tuple[Tuple[str, str], ...] = (
 
 SIZE_ORDER = ("SMALL", "MEDIUM", "LARGE", "HUGE")
 SEVERITY_ORDER = ("Critical", "High", "Medium", "Low")
-ASD_ORDER = ("C1", "C2", "C3", "C4", "C5", "C6")
+ASD_CODES = ("C1", "C2", "C3", "C4", "C5", "C6")
+#: The words the classifier's own prompt gives each category (scripts/asd_risk_classifier.py,
+#: docs/07-ASD-risk-classification.md), so a chart row is not a bare code.
+ASD_WORDS = {"C1": "most severe", "C2": "very severe", "C3": "severe", "C4": "moderate", "C5": "low",
+             "C6": "least severe"}
+ASD_LABELS = {code: f"{code} ({ASD_WORDS[code]})" for code in ASD_CODES}
+ASD_ORDER = tuple(ASD_LABELS[code] for code in ASD_CODES)
 AI_ORDER = ("No-AI", "AI-attacker", "AI-vulnerability", "AI-misuse", "AI-uncertain")
 #: Entity types that name no sector.
 GENERIC_TYPES = {"organization", "organisation"}
@@ -120,7 +130,8 @@ ATTRIBUTES: Tuple[Attribute, ...] = (
     Attribute("severity", "Severity", True, SEVERITY_ORDER, "DeduplicatedEvents.severity"),
     Attribute("attack_type", "Attack type", False, None, "DeduplicatedEvents.event_type"),
     Attribute("asd_severity", "ASD severity category", True, ASD_ORDER,
-              "ASDRiskClassifications.severity_category (the event's latest classification)"),
+              "ASDRiskClassifications.severity_category (the event's latest classification); the words beside "
+              "each code are the classifier's own definitions, C1 the most severe and C6 the least"),
     Attribute("asd_impact", "ASD impact type", False, None,
               "ASDRiskClassifications.impact_type (the event's latest classification)"),
     Attribute("ai", "AI involvement", False, AI_ORDER, "DeduplicatedEvents.ai_involvement"),
@@ -251,6 +262,11 @@ class TestResult:
     def significant(self) -> bool:
         return bool(self.ran and self.holm_p is not None and self.holm_p < ALPHA)
 
+    @property
+    def size_word(self) -> str:
+        """negligible / small / medium / large, from the effect size (only meaningful when the test ran)."""
+        return effect_word(self.effect) if self.ran and self.effect is not None else ""
+
 
 def categorical_test(key: str, label: str, labels: Sequence[str], supplier: Sequence[int],
                      other: Sequence[int], ordered: bool) -> TestResult:
@@ -365,9 +381,25 @@ def fmt_statistic(r: TestResult) -> str:
 def fmt_effect(r: TestResult) -> str:
     if not r.ran or r.effect is None:
         return "-"
-    if r.kind == "categorical":
-        return f"{r.effect_name} = {r.effect:.3f} ({effect_word(r.effect)})"
-    return f"{r.effect_name} = {r.effect:.3f}"
+    return f"{r.effect_name} = {r.effect:.3f} ({r.size_word})"
+
+
+def verdict(r: TestResult) -> str:
+    """The conclusion label of a test.
+
+    A significant difference always carries the size of its effect ("small difference"): statistical
+    significance says a difference exists, not that it matters, so a bare "difference" would mislead.
+    """
+    if not r.ran:
+        return "not tested: " + r.reason
+    if not r.significant:
+        return "no evidence of a difference"
+    return f"{r.size_word} difference"
+
+
+def verdict_phrase(r: TestResult) -> str:
+    """The verdict inside a sentence: ``a small difference`` / ``no evidence of a difference``."""
+    return f"a {verdict(r)}" if r.significant else verdict(r)
 
 
 def plural(n: int, noun: str) -> str:
@@ -394,7 +426,8 @@ def conclusion(r: TestResult, family: int) -> str:
     """The one-sentence conclusion of a test, generated from its numbers.
 
     A result that is not significant after Holm adjustment says "no evidence of a difference" and gives
-    no direction, whatever the raw p-value.
+    no direction, whatever the raw p-value. A significant one opens with the size of the difference
+    (:func:`verdict`), then says where it lies.
     """
     if not r.ran:
         return f"{r.label}: not tested ({r.reason})."
@@ -407,9 +440,10 @@ def conclusion(r: TestResult, family: int) -> str:
         return text
     if r.kind == "ranks":
         direction = "more" if r.superiority > 0.5 else "fewer"
-        return (f"{r.label}: supplier events tend to have {direction} records affected than non-supplier events "
-                f"({_evidence(r)}; a supplier event has the larger count in {100 * r.superiority:.0f}% of "
-                f"supplier / non-supplier pairs, ties counted half).")
+        return (f"{r.label}: {verdict_phrase(r)} between supplier and non-supplier events ({_evidence(r)}; "
+                f"{r.effect_name} = {r.effect:.3f}). Supplier events tend to have {direction} records affected: "
+                f"a supplier event has the larger count in {100 * r.superiority:.0f}% of supplier / non-supplier "
+                "pairs, ties counted half.")
     n_s, n_o = sum(r.tested_supplier), sum(r.tested_other)
 
     def describe(index: int) -> str:
@@ -419,8 +453,8 @@ def conclusion(r: TestResult, family: int) -> str:
     ranked = sorted(range(len(r.tested_labels)), key=lambda i: -abs(r.residuals[r.tested_labels[i]]))
     more = [describe(i) for i in ranked if r.residuals[r.tested_labels[i]] > RESIDUAL_CUT]
     less = [describe(i) for i in ranked if r.residuals[r.tested_labels[i]] < -RESIDUAL_CUT]
-    text = (f"{r.label}: the two groups are distributed differently ({_evidence(r)}; {r.effect_name} = "
-            f"{r.effect:.3f}, a {effect_word(r.effect)} effect).")
+    text = (f"{r.label}: {verdict_phrase(r)} between supplier and non-supplier events ({_evidence(r)}; "
+            f"{r.effect_name} = {r.effect:.3f}).")
     if more:
         text += f" More common among supplier events: {join_words(more)}."
     if less:
@@ -615,6 +649,12 @@ def _listed(value: Optional[str], allowed: Sequence[str], missing: str) -> Tuple
     return None, value if value == INSUFFICIENT else f"Unrecognised value ({value})"
 
 
+def asd_category(value: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """(``C3 (severe)``, None) for a stored ``C3``; (None, why) for anything that is not C1-C6."""
+    code, why = _listed(value, ASD_CODES, "Not classified")
+    return (ASD_LABELS[code], None) if code else (None, why)
+
+
 def load_events(conn: sqlite3.Connection, period: ReportingPeriod) -> List[Dict[str, Any]]:
     """One row per Active event dated in ``period``, with its group and every compared attribute.
 
@@ -644,8 +684,7 @@ def load_events(conn: sqlite3.Connection, period: ReportingPeriod) -> List[Dict[
             "industry": industry_value(victims.get(event_id, [])),
             "severity": _listed(_clean(severity), SEVERITY_ORDER, "Unknown or not recorded"),
             "attack_type": (_clean(event_type), None) if _clean(event_type) else (None, "Not recorded"),
-            "asd_severity": (_listed(asd_severity, ASD_ORDER, "Not classified") if event_id in asd
-                             else (None, "Not classified")),
+            "asd_severity": (asd_category(asd_severity) if event_id in asd else (None, "Not classified")),
             "asd_impact": ((None, "Not classified") if event_id not in asd or asd_impact is None
                            else (None, INSUFFICIENT) if asd_impact == INSUFFICIENT else (asd_impact, None)),
             "ai": _listed(_clean(ai), AI_ORDER, "Not judged"),
@@ -809,14 +848,20 @@ def headline_sentences(c: Comparison) -> List[str]:
     """The summary's opening sentences: the groups, then which attributes differ and which do not."""
     out = [group_sentence(c)]
     ran = [r for r in c.results if r.ran]
-    differ = [r.label for r in ran if r.significant]
+    differ = [r for r in ran if r.significant]
     same = [r.label for r in ran if not r.significant]
     skipped = [r.label for r in c.results if not r.ran]
     if ran:
         if differ:
+            sizes = []
+            for _, word in EFFECT_WORDS:
+                names = [r.label for r in differ if r.size_word == word]
+                if names:
+                    sizes.append(f"{word} for {join_words(names)}")
             out.append(f"After Holm adjustment across the {len(ran)} tests, {len(differ)} of "
-                       f"{plural(len(ran), 'attribute')} {'differs' if len(differ) == 1 else 'differ'} between "
-                       f"the groups at the {ALPHA} level: {join_words(differ)}.")
+                       f"{plural(len(ran), 'attribute')} {'shows' if len(differ) == 1 else 'show'} a statistically "
+                       f"significant difference between the groups at the {ALPHA} level. Size of the difference: "
+                       f"{'; '.join(sizes)}.")
         else:
             out.append(f"After Holm adjustment across the {len(ran)} tests, no attribute differs between the "
                        f"groups at the {ALPHA} level.")
@@ -859,7 +904,7 @@ def sensitivity_sentence(c: Comparison) -> str:
         again = by_key[r.key]
         if not (r.ran and again.ran):
             continue
-        if r.significant == again.significant:
+        if verdict(r) == verdict(again):
             unchanged += 1
         else:
             changed.append(f"{r.label} ({sensitivity_change(r, again)})")
@@ -868,19 +913,20 @@ def sensitivity_sentence(c: Comparison) -> str:
     if not compared:
         return f"{lead}, no test could be compared."
     if changed:
-        return (f"{lead}, {unchanged} of {plural(compared, 'conclusion')} "
-                f"{'is' if unchanged == 1 else 'are'} unchanged. Changed: {'; '.join(changed)}.")
+        return (f"{lead}, {len(changed)} of {plural(compared, 'conclusion')} "
+                f"{'changes' if len(changed) == 1 else 'change'}: {'; '.join(changed)}.")
     return (f"{lead}, {'the one conclusion is' if compared == 1 else f'all {compared} conclusions are'} "
             "unchanged.")
 
 
 def sensitivity_change(r: TestResult, again: TestResult) -> str:
     """How a conclusion differs between all events (``r``) and one event per supplier incident (``again``)."""
-    if r.significant:
-        return (f"a difference on all events, Holm-adjusted p = {fmt_p(r.holm_p)}; no evidence of a difference "
-                f"with one event per incident, Holm-adjusted p = {fmt_p(again.holm_p)}")
-    return (f"no evidence of a difference on all events, Holm-adjusted p = {fmt_p(r.holm_p)}; a difference with "
-            f"one event per incident, Holm-adjusted p = {fmt_p(again.holm_p)}")
+    def numbers(x: TestResult) -> str:
+        effect = f", {x.effect_name} = {x.effect:.3f}" if x.significant else ""
+        return f"Holm-adjusted p = {fmt_p(x.holm_p)}{effect}"
+
+    return (f"{verdict_phrase(r)} on all events, {numbers(r)}; {verdict_phrase(again)} with one event per "
+            f"incident, {numbers(again)}")
 
 
 # --- HTML ------------------------------------------------------------------------------------------------
@@ -1041,7 +1087,7 @@ def _finding(r: TestResult, c: Comparison) -> str:
     css = "diff" if r.significant else "same"
     again = next(x for x in c.sensitivity if x.key == r.key)
     note = ""
-    if r.ran and again.ran and r.significant != again.significant:
+    if r.ran and again.ran and verdict(r) != verdict(again):
         note = (f'<div class="find check">Check, one event per supplier incident: '
                 f"{_E(sensitivity_change(r, again))}.</div>")
     return f'<div class="find {css}">{_E(conclusion(r, c.family))}</div>{note}'
@@ -1170,9 +1216,7 @@ def tests_table(results: Sequence[TestResult], family: int, with_conclusion: boo
                  f"<td class=n>{fmt_p(r.holm_p)}</td><td class=n>{_E(fmt_effect(r))}</td>"
                  f"<td class=n>{r.n_supplier:,} / {r.n_other:,}</td>")
         if with_conclusion:
-            verdict = ("not tested: " + r.reason if not r.ran else
-                       "difference" if r.significant else "no evidence of a difference")
-            cells += f"<td>{_E(verdict)}</td>"
+            cells += f"<td>{_E(verdict(r))}</td>"
         rows.append(f"<tr>{cells}</tr>")
     head = ("<tr><th>Attribute</th><th>Test</th><th class=n>Statistic</th><th class=n>df</th><th class=n>p</th>"
             "<th class=n>Holm p</th><th class=n>Effect size</th><th class=n>n supplier / non-supplier</th>"
@@ -1196,7 +1240,11 @@ def methods_text(c: Comparison) -> List[str]:
         f"Records affected: a two-sided Mann-Whitney U test on the events with a count. Its effect size is the "
         "absolute rank-biserial correlation |2P - 1|, where P is the probability that a supplier event has more "
         "records affected than a non-supplier event (ties counted half): 0 when neither group tends to be "
-        "larger, 1 when one always is. Which group is larger is said only for a significant result.",
+        "larger, 1 when one always is (the same words at the same cut-offs: 0.1, 0.3, 0.5). Which group is "
+        "larger is said only for a significant result.",
+        "A significant result is labelled with the size of its effect - negligible, small, medium or large "
+        "difference - never as a bare \"difference\": with this many events a difference too small to matter "
+        "can still be statistically significant.",
         f"Multiple tests: p-values are Holm-adjusted across the {c.family} tests that ran. A difference is "
         f"reported when the adjusted p-value is under {ALPHA}; otherwise the result is \"no evidence of a "
         "difference\" and no direction is given.",
@@ -1216,7 +1264,7 @@ def tests_card(c: Comparison) -> str:
         f"{tests_table(c.results, c.family)}"
         f'<ul class="sum">{sentences}</ul>'
         "<h3>Check: one event per supplier incident</h3>"
-        f"{cluster}{tests_table(c.sensitivity, c.family, with_conclusion=False)}"
+        f"{cluster}{tests_table(c.sensitivity, c.family)}"
         f'<details><summary>Methods</summary><ul class="sum">{methods}</ul></details></div>')
 
 

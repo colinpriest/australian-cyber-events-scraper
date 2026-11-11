@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -160,7 +161,8 @@ def test_the_unit_is_the_event_and_victim_attributes_need_agreement(conn):
     assert events["customer"]["values"]["size"] == ("HUGE", None)
     assert events["customer"]["values"]["industry"] == ("Financial Institution", None)
     assert events["own"]["values"]["asd_severity"] == (None, "Insufficient information")
-    assert events["holder"]["values"]["asd_severity"] == ("C2", None)    # the latest classification
+    assert events["holder"]["values"]["asd_severity"] == ("C2 (very severe)", None)   # the latest classification
+    assert events["customer"]["values"]["asd_severity"] == ("C3 (severe)", None)
     assert events["vendor_column"]["values"]["asd_severity"] == (None, "Not classified")
     assert events["provider_role"]["values"]["severity"] == (None, "Unknown or not recorded")
     assert events["vendor_role"]["values"]["ai"] == (None, "Not judged")
@@ -334,11 +336,67 @@ def test_a_raw_p_that_does_not_survive_adjustment_is_still_no_evidence(kind):
 
 def test_a_significant_result_names_the_categories_that_differ():
     text = sc.conclusion(_result(1e-9, 1e-8), family=9)
-    assert "distributed differently" in text and "no evidence" not in text
+    assert text.startswith("Severity: a medium difference between supplier and non-supplier events (")
+    assert "no evidence" not in text
     assert "More common among supplier events: High (60.0% of supplier events against 25.0%)" in text
     assert "Less common among supplier events: Low (10.0% of supplier events against 37.5%)" in text
     ranks = sc.conclusion(_result(1e-4, 1e-3, "ranks"), family=9)
-    assert "supplier events tend to have more records affected" in ranks
+    assert ranks.startswith("Records affected: a large difference between supplier and non-supplier events (")
+    assert "Supplier events tend to have more records affected" in ranks
+
+
+@pytest.mark.parametrize("effect,word", [(0.05, "negligible"), (0.099, "negligible"), (0.1, "small"),
+                                         (0.17, "small"), (0.3, "medium"), (0.359, "medium"), (0.5, "large")])
+def test_a_significant_difference_is_labelled_with_its_size_never_as_a_bare_difference(effect, word):
+    for kind in ("categorical", "ranks"):
+        r = _result(1e-6, 1e-5, kind)
+        r.effect = effect
+        assert sc.verdict(r) == f"{word} difference"
+        assert sc.verdict_phrase(r) == f"a {word} difference"
+        assert f": a {word} difference between supplier and non-supplier events" in sc.conclusion(r, family=9)
+        assert sc.fmt_effect(r).endswith(f"({word})")
+        table = sc.tests_table([r], family=9)
+        assert f"<td>{word} difference</td>" in table and "<td>difference</td>" not in table
+
+
+def test_verdicts_of_results_that_are_not_significant_or_not_run():
+    assert sc.verdict(_result(0.2, 0.4)) == "no evidence of a difference"
+    assert sc.verdict_phrase(_result(0.2, 0.4)) == "no evidence of a difference"
+    skipped = sc.categorical_test("k", "A", ["a"], [3], [4], ordered=False)
+    assert sc.verdict(skipped) == "not tested: fewer than two categories are observed"
+
+
+def test_the_summary_gives_the_size_of_each_significant_difference():
+    # Attack type differs strongly; severity, size, industry and AI are the same in both groups.
+    events = _events({"Data Breach": 55, "Ransomware": 5}, {"Data Breach": 40, "Ransomware": 200})
+    comparison = sc.analyse(events, PERIOD)
+    attack = next(r for r in comparison.results if r.key == "attack_type")
+    assert attack.significant and attack.size_word == "large"
+    summary = " ".join(sc.headline_sentences(comparison))
+    assert "a statistically significant difference between the groups at the 0.05 level" in summary
+    # (records affected differ too in this fixture, so the size sentence can name both)
+    assert re.search(r"Size of the difference: (?:[^.]*; )?large for [^;.]*Attack type", summary), summary
+    assert "differ between the groups" not in summary             # never a bare "differ"
+    page = sc.build_html(comparison, "test")
+    assert "<td>large difference</td>" in page and "<td>difference</td>" not in page
+
+
+def test_asd_categories_carry_words_not_just_codes():
+    assert sc.ASD_ORDER == ("C1 (most severe)", "C2 (very severe)", "C3 (severe)", "C4 (moderate)", "C5 (low)",
+                            "C6 (least severe)")
+    assert sc.asd_category("C4") == ("C4 (moderate)", None)
+    assert sc.asd_category("c1") == ("C1 (most severe)", None)
+    assert sc.asd_category("Insufficient information") == (None, "Insufficient information")
+    assert sc.asd_category(None) == (None, "Not classified")
+    assert sc.asd_category("C9") == (None, "Unrecognised value (C9)")
+    # A pooled range of an ordered attribute names both ends in words.
+    assert sc.group_label(list(sc.ASD_ORDER[:2]), ordered=True) == "C1 (most severe) to C2 (very severe)"
+    events = [_event(f"e{i}", i % 2 == 0) for i in range(40)]
+    for i, e in enumerate(events):
+        e["values"]["asd_severity"] = (sc.ASD_ORDER[2 if i % 4 < 2 else 3], None)
+    page = sc.build_html(sc.analyse(events, PERIOD), "test")
+    assert '<div class="cat">C3 (severe)</div>' in page and "<td>C4 (moderate)</td>" in page
+    assert '<div class="cat">C3</div>' not in page
 
 
 def test_an_untested_attribute_says_so():
@@ -377,7 +435,8 @@ def test_a_changed_conclusion_under_one_event_per_incident_is_reported():
     again = next(r for r in comparison.sensitivity if r.key == "attack_type")
     assert attack.significant and not again.significant
     sentence = sc.sensitivity_sentence(comparison)
-    assert "Changed: Attack type (a difference on all events" in sentence
+    assert "1 of 1 conclusion changes: Attack type (a medium difference on all events" in sentence
+    assert "Cramér's V = " in sentence
     assert "no evidence of a difference with one event per incident" in sentence
     assert "Check, one event per supplier incident" in sc.build_html(comparison, "test")
 

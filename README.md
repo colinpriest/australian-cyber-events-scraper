@@ -3188,18 +3188,24 @@ supplier events with non-supplier events attribute by attribute and tests each d
   pooled group otherwise. A 2 x 2 table that still fails takes its p-value from Fisher's exact test. The pooled
   categories are named under the chart. p-values are Holm-adjusted across the tests that ran.
 * **Wording:** every sentence of the conclusions is generated from the numbers. A result that is not significant after
-  Holm adjustment is "no evidence of a difference", with no direction, whatever its raw p-value.
+  Holm adjustment is "no evidence of a difference", with no direction, whatever its raw p-value. A significant one is
+  never a bare "difference" (owner, 2026-11-11): the label carries the size of the effect - "negligible difference",
+  "small difference", "medium difference" or "large difference", at Cohen's cut-offs 0.1, 0.3 and 0.5 for Cramér's V
+  and for the absolute rank-biserial correlation - because with over a thousand events a difference too small to
+  matter is still statistically significant. ASD severity categories are shown with the classifier's own words
+  ("C1 (most severe)" to "C6 (least severe)"), not as bare codes.
 * **Check, one event per supplier incident.** Events of one supplier incident share an attack, so they are not
   independent. Every test is repeated keeping the earliest event of each incident (incidents sharing an event count as
   one), and the page says which conclusions change.
 
 On snapshot `snap-20261106160634-1edbf49c696a`: 256 supplier events (21.9%) and 912 non-supplier events. After Holm
-adjustment 7 of 9 attributes differ: size band (V = 0.17; supplier events more often HUGE, less often SMALL or
-MEDIUM), entity type (V = 0.18), records affected (medians 50,000 and 10,000), attack type (V = 0.36; more often data
-breach and vulnerability exploit, less often ransomware), ASD severity category (V = 0.22), ASD impact type
-(V = 0.23) and half-year (V = 0.29). There is no evidence of a difference in severity or AI involvement. With one
-event per supplier incident (129 supplier events), entity type and half-year no longer differ; the other conclusions
-hold.
+adjustment 7 of 9 attributes show a statistically significant difference, one of them medium and six small. Medium:
+attack type (V = 0.36; supplier events more often data breach and vulnerability exploit, less often ransomware).
+Small: size band (V = 0.17; more often HUGE, less often SMALL or MEDIUM), entity type (V = 0.18), records affected
+(rank-biserial 0.22; medians 50,000 and 10,000), ASD severity category (V = 0.22), ASD impact type (V = 0.23) and
+half-year (V = 0.29). There is no evidence of a difference in severity or AI involvement. With one event per supplier
+incident (129 supplier events), 3 of 9 conclusions change: entity type and half-year show no evidence of a
+difference, and the difference in records affected becomes medium (rank-biserial 0.33).
 
 ### Data dictionary page
 
