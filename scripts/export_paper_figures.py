@@ -1838,7 +1838,7 @@ def recurrence_size_figure(spells: "pd.DataFrame", summary: Dict[str, Any], inpu
                             for row in rows], fontsize=8)
         ax.set_ylabel("Repeats per 100 organisation-years", fontsize=9)
         style_axes(ax)
-        return finish(fig, top=0.84, footer=footer)
+        return finish(fig, footer=footer, rect=(0, 0.1, 1, 0.84))   # the footer wraps to two lines
 
     data_rows = [[row["band"], row["organisations"], row["with_repeat"], row["repeats"], round(row["years"], 4),
                   round(row["rate"], 4), round(row["low"], 4), round(row["high"], 4),
