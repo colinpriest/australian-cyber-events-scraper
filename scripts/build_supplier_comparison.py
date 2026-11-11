@@ -996,6 +996,15 @@ PAGE = """<!doctype html>
   .median {{ position: absolute; top: 4px; height: 26px; width: 3px; margin-left: -1px; background: var(--ink); }}
   .dot {{ position: absolute; top: 14px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%;
           border: 1px solid var(--muted); background: var(--card); }}
+  .hist {{ display: flex; align-items: flex-end; height: 132px; border-bottom: 1px solid var(--muted);
+           border-right: 1px solid var(--line); }}
+  .hbin {{ flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center;
+           gap: 2px; border-left: 1px solid var(--line); }}
+  .hbar {{ position: relative; width: 36%; max-width: 30px; border-radius: 4px 4px 0 0; }}
+  .hbar.s {{ background: var(--supplier); }}
+  .hbar.o {{ background: var(--other); }}
+  .hbar span {{ position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font-size: 10.5px;
+                color: var(--muted); white-space: nowrap; padding-bottom: 1px; }}
   .axis {{ position: relative; height: 20px; }}
   .tick {{ position: absolute; top: 2px; transform: translateX(-50%); font-size: 11px; color: var(--muted);
            white-space: nowrap; }}
@@ -1010,6 +1019,7 @@ PAGE = """<!doctype html>
     .bars .cat {{ margin-top: 8px; font-weight: 600; }}
     .boxes {{ grid-template-columns: 1fr; gap: 2px 0; }}
     .tick.alt {{ display: none; }}
+    .hbar span {{ display: none; }}
   }}
 </style>
 </head>
@@ -1106,10 +1116,78 @@ def _log_position(value: float, decades: int) -> float:
     return 100.0 * math.log10(max(value, 1.0)) / decades
 
 
-def box_plot(supplier: RecordsSummary, other: RecordsSummary) -> str:
-    """Horizontal box plots of records affected on a log scale (Tukey whiskers computed on log10)."""
+def log_decades(supplier: RecordsSummary, other: RecordsSummary) -> int:
+    """How many powers of ten the log axis spans: from 1 to the first power of ten at or above the largest count."""
     top = max([v for s in (supplier, other) for v in s.values], default=1.0)
-    decades = max(1, math.ceil(math.log10(top))) if top > 1 else 1
+    return max(1, math.ceil(math.log10(top))) if top > 1 else 1
+
+
+def records_bins(values: Sequence[float], decades: int) -> List[int]:
+    """Counts per power of ten: bin ``k`` holds counts from 10^k up to, not including, 10^(k+1).
+
+    The last bin also takes a count equal to the top of the axis (10^decades), so every count is in a bin.
+    """
+    counts = [0] * decades
+    for value in values:
+        counts[sum(1 for k in range(1, decades) if value >= 10 ** k)] += 1
+    return counts
+
+
+def bin_label(k: int, decades: int, top: float) -> str:
+    """``1,000 to 9,999`` (records are whole numbers); the last bin ends on the axis top when a count reaches it."""
+    upper = 10 ** (k + 1) - (0 if k == decades - 1 and top >= 10 ** decades else 1)
+    return f"{fmt_count(10 ** k)} to {fmt_count(upper)}"
+
+
+def _histogram_parts(supplier: RecordsSummary, other: RecordsSummary) -> Tuple[int, List[str], List[int], List[int]]:
+    decades = log_decades(supplier, other)
+    top = max([v for s in (supplier, other) for v in s.values], default=1.0)
+    labels = [bin_label(k, decades, top) for k in range(decades)]
+    return decades, labels, records_bins(supplier.values, decades), records_bins(other.values, decades)
+
+
+def records_histogram(supplier: RecordsSummary, other: RecordsSummary) -> str:
+    """Side-by-side histogram of records affected, one bin per power of ten, as a share of each group.
+
+    The bins are the intervals between the grid lines of the box plots' log axis, so the two line up. A bar's
+    height is the share of the group's events with a count that fall in the bin (the bars of one group sum to
+    100%); the count is in the tooltip and in :func:`histogram_table`.
+    """
+    decades, labels, a, b = _histogram_parts(supplier, other)
+    shares = [n / supplier.known for n in a if supplier.known] + [n / other.known for n in b if other.known]
+    scale = max(shares, default=0.0)
+    bins = []
+    for label, n_s, n_o in zip(labels, a, b):
+        bars = []
+        for css, summary, n in (("s", supplier, n_s), ("o", other, n_o)):
+            share = n / summary.known if summary.known else 0.0
+            tip = f"{summary.group}: {label} records - {n:,} of {summary.known:,} ({fmt_pct(n, summary.known)})"
+            value = f"<span>{100 * share:.0f}%</span>" if n else ""
+            # The tallest bar takes 84% of the height, leaving room for its label.
+            bars.append(f'<div class="hbar {css}" style="height:{(84.0 * share / scale if scale else 0):.2f}%" '
+                        f'title="{_E(tip)}">{value}</div>')
+        bins.append(f'<div class="hbin">{"".join(bars)}</div>')
+    return f'<div class="hist">{"".join(bins)}</div>'
+
+
+def histogram_table(supplier: RecordsSummary, other: RecordsSummary) -> str:
+    """The histogram's numbers: events and share of the group's events with a count, per power of ten."""
+    _, labels, a, b = _histogram_parts(supplier, other)
+    rows = [f"<tr><td>{_E(label)}</td><td class=n>{n_s:,}</td><td class=n>{fmt_pct(n_s, supplier.known)}</td>"
+            f"<td class=n>{n_o:,}</td><td class=n>{fmt_pct(n_o, other.known)}</td></tr>"
+            for label, n_s, n_o in zip(labels, a, b)]
+    rows.append(f"<tr><td><b>With a count</b></td><td class=n><b>{supplier.known:,}</b></td>"
+                f"<td class=n>{fmt_pct(supplier.known, supplier.known)}</td><td class=n><b>{other.known:,}</b></td>"
+                f"<td class=n>{fmt_pct(other.known, other.known)}</td></tr>")
+    head = ("<tr><th>Records affected</th><th class=n>Supplier</th><th class=n>%</th>"
+            "<th class=n>Non-supplier</th><th class=n>%</th></tr>")
+    return f'<div class="scroll"><table>{head}{"".join(rows)}</table></div>'
+
+
+def box_plot(supplier: RecordsSummary, other: RecordsSummary) -> str:
+    """Box plots of records affected on a log scale (Tukey whiskers computed on log10), with the histogram of
+    the same counts under them on the same axis."""
+    decades = log_decades(supplier, other)
     grid = "".join(f'<div class="grid" style="left:{100.0 * k / decades:.3f}%"></div>' for k in range(decades + 1))
     rows = []
     for css, summary in (("s", supplier), ("o", other)):
@@ -1144,6 +1222,8 @@ def box_plot(supplier: RecordsSummary, other: RecordsSummary) -> str:
         if decades > 6 and (decades - k) % 2 == 1:      # hidden at phone width: every second tick, the last kept
             classes += " alt"
         ticks.append(f'<span class="{classes}" style="left:{100.0 * k / decades:.3f}%">{fmt_short(10 ** k)}</span>')
+    rows.append('<div class="cat">Histogram<div class="m">share of the group\'s events with a count, per power '
+                f'of ten</div></div>{records_histogram(supplier, other)}')
     rows.append(f'<div class="cat m">Records affected (log scale)</div><div class="axis">{"".join(ticks)}</div>')
     return f'<div class="boxes">{"".join(rows)}</div>'
 
@@ -1170,12 +1250,16 @@ def records_card(c: Comparison, r: TestResult) -> str:
     return (f'<div class="card" id="{RECORDS_KEY}"><h2>{_E(RECORDS_LABEL)}</h2>'
             '<div class="m">Source: DeduplicatedEvents.records_affected. A count under 1 is no count. Each box '
             "spans the quartiles with a line at the median; whiskers reach the furthest count within 1.5 "
-            "interquartile ranges of the box on the log scale; circles are counts beyond them.</div>"
+            "interquartile ranges of the box on the log scale; circles are counts beyond them. The histogram "
+            "under the boxes, on the same axis, gives the share of each group's events with a count in each power "
+            "of ten (the bars of one group sum to 100%; counts are in the tooltips and the second table).</div>"
             f"{_finding(r, c)}"
             + _legend(supplier.known, other.known, "events with a count")
             + box_plot(supplier, other) + records_table(supplier, other) +
             '<p class="m">Events with no count are left out of the test; the Missing column gives their number '
-            "and share in each group.</p></div>")
+            "and share in each group.</p>" + histogram_table(supplier, other) +
+            '<p class="m">The histogram and this table describe the distributions; the test is the Mann-Whitney '
+            "U test above, on the counts themselves.</p></div>")
 
 
 def groups_card(c: Comparison) -> str:

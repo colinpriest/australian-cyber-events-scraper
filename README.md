@@ -3179,7 +3179,8 @@ supplier events with non-supplier events attribute by attribute and tests each d
 * **Attributes:** victim size band (reconciled across name variants as the recurrence analysis does), victim entity
   type, records affected, severity, attack type, ASD severity category, ASD impact type, AI involvement and half-year
   of the event. Each has side-by-side bars of the two groups' percentage distributions (counts in the tooltips and in
-  the table under the chart); records affected has box plots on a log scale with the median, IQR and share missing.
+  the table under the chart); records affected has box plots on a log scale with the median, IQR and share missing,
+  and under them, on the same axis, a histogram of the share of each group's counts in each power of ten.
   The charts are HTML and CSS: no script, no external file, light and dark mode, readable at phone width.
 * **Tests:** Pearson's chi-squared test of homogeneity with Cramér's V for each categorical attribute; a two-sided
   Mann-Whitney U test for records affected. UNKNOWN and missing values are left out of the test and counted per group.

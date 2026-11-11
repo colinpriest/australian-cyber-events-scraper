@@ -492,6 +492,46 @@ def test_records_table_reports_median_iqr_and_share_missing():
     assert "<td class=n>20</td><td class=n>15 to 25</td>" in table
 
 
+def test_histogram_bins_are_powers_of_ten():
+    # 10^k up to, not including, 10^(k+1); a count on the axis top goes in the last bin.
+    assert sc.records_bins([1, 9, 9.5, 10, 99, 100, 999, 1000], 4) == [3, 2, 2, 1]
+    assert sc.records_bins([10_000], 4) == [0, 0, 0, 1]
+    assert sc.records_bins([], 3) == [0, 0, 0]
+    assert sc.bin_label(0, 4, 5000) == "1 to 9" and sc.bin_label(3, 4, 5000) == "1,000 to 9,999"
+    assert sc.bin_label(3, 4, 10_000) == "1,000 to 10,000"          # a count reaches the axis top
+    summaries = (sc.RecordsSummary(sc.SUPPLIER, 5, 3, [20.0, 300.0, 5000.0]),
+                 sc.RecordsSummary(sc.OTHER, 9, 4, [1.0, 2.0, 30.0, 400.0]))
+    assert sc.log_decades(*summaries) == 4
+
+
+def test_histogram_compares_the_shares_of_each_group_with_counts_in_tooltips():
+    events = _events({"Data Breach": 4}, {"Data Breach": 8})
+    for e, records in zip(events, [50, 500, 5000, None, 1, 2, 3, 40, 50, 600, None, None]):
+        e["records"] = records
+    supplier, other = sc.records_summaries(events)
+    chart = sc.records_histogram(supplier, other)
+    assert chart.count('class="hbin"') == 4 and chart.count('class="hbar s"') == 4
+    assert 'title="Supplier events: 10 to 99 records - 1 of 3 (33.3%)"' in chart
+    assert 'title="Non-supplier events: 1 to 9 records - 3 of 6 (50.0%)"' in chart
+    # Heights are shares within the group on one scale: the largest share (50%) is the tallest bar.
+    assert 'style="height:84.00%" title="Non-supplier events: 1 to 9 records' in chart
+    assert 'style="height:56.00%" title="Supplier events: 10 to 99 records' in chart
+    assert 'style="height:0.00%" title="Supplier events: 1 to 9 records - 0 of 3 (0.0%)"></div>' in chart
+    table = sc.histogram_table(supplier, other)
+    assert "<td>10 to 99</td><td class=n>1</td><td class=n>33.3%</td><td class=n>2</td><td class=n>33.3%</td>" in table
+    assert "<td class=n><b>3</b></td>" in table and "<td class=n><b>6</b></td>" in table
+    page = sc.build_html(sc.analyse(events, PERIOD), "test")
+    assert 'class="hist"' in page and "Histogram" in page and 'class="box s"' in page   # both visualisations
+
+
+def test_histogram_with_an_empty_group_draws_no_bar_for_it():
+    supplier = sc.RecordsSummary(sc.SUPPLIER, 2, 0, [])
+    other = sc.RecordsSummary(sc.OTHER, 3, 2, [5.0, 50.0])
+    chart = sc.records_histogram(supplier, other)
+    assert chart.count('style="height:0.00%" title="Supplier events') == 2
+    assert "0 of 0 (-)" in chart
+
+
 def test_the_page_is_published_with_the_other_outputs(conn, tmp_path):
     from cyber_data_collector.publication import outputs as pub
     from cyber_data_collector.publication import snapshot as snapshots
