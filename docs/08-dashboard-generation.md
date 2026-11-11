@@ -191,7 +191,8 @@ The dashboard phase (`run_full_pipeline.py`, `run_full_pipeline.py --dashboard-o
 3. **Build** from the snapshot, into a staging folder beside the output folder:
    `dashboard/index.html` and `ai_incidents.html`, `entities.html`, `entity_events_detail.html`
    and `.xlsx`, `timelines.html`, `dedup.html` and `dedup.xlsx`, `close_pairs.html`,
-   `supplier_incidents.html`, `data_dictionary.html`, `recurrence.html`, and the `risk_matrix/` workbooks. (The risk matrices
+   `supplier_incidents.html`, `supplier_comparison.html`, `data_dictionary.html`, `recurrence.html`, and the
+   `risk_matrix/` workbooks. (The risk matrices
    used to be written by the classification phase, before any gate.)
 4. **Stamp.** Every HTML output carries `<meta name="data-snapshot">` and a visible
    footer; every workbook carries the id in its document properties. `dashboard/publication.json`

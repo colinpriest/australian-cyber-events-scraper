@@ -441,7 +441,8 @@ def test_a_lock_whose_process_has_ended_is_taken_over_at_once(harness):
 def test_default_builders_cover_every_published_output():
     assert set(pub.DEFAULT_BUILDERS) == {"dashboard", "entities", "entity_events_detail", "timelines", "dedup",
                                        "close_pairs",
-                                       "supplier_incidents", "data_dictionary", "recurrence", "risk_matrix"}
+                                       "supplier_incidents", "supplier_comparison", "data_dictionary",
+                                       "recurrence", "risk_matrix"}
 
 
 # --- quality runs name their snapshot ---------------------------------------------------------------------

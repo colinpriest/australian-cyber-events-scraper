@@ -380,6 +380,7 @@ australian-cyber-events-scraper/
 │   ├── repair_confidence_defaults.py # Clear provably-defaulted confidence values (--dry-run)
 │   ├── analyze_recurrent_timing.py # Repeat-event survival/recurrent timing analysis
 │   ├── build_recurrence_dashboard.py # All recurrence runs on one HTML page
+│   ├── build_supplier_comparison.py # Supplier vs non-supplier events, with significance tests
 │   ├── recurrence_conclusions.py  # Conclusion sentences generated from the estimates
 │   ├── quality_report.py          # Quality metrics, history and the publication gate
 │   ├── measure_neighbourhoods.py  # Neighbourhoods vs disjoint slices on a copy (no model)
@@ -3120,8 +3121,8 @@ separately, and the risk matrices to be written before any gate. Now the step ta
 consistent snapshot** (SQLite backup API), keeps a compressed copy under
 `instance/snapshots/`, runs the gate on it, builds `dashboard/index.html`,
 `ai_incidents.html`, `entities.html`, `entity_events_detail.html` and `.xlsx`, `timelines.html`, `dedup.html` and
-`dedup.xlsx`, `close_pairs.html`, `supplier_incidents.html`, `data_dictionary.html`, `recurrence.html` and
-the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
+`dedup.xlsx`, `close_pairs.html`, `supplier_incidents.html`, `supplier_comparison.html`, `data_dictionary.html`,
+`recurrence.html` and the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
 id, writes `dashboard/publication.json` (hashes of every output and of the inputs outside
 the database) and moves them all into place together. A blocked gate, a failing builder or
 a failed move leaves every previous output untouched, and a crash half-way is rolled back
@@ -3154,6 +3155,51 @@ and any snapshot an analysis result names; about 100 MB each, 0.8 to 1.2 GB in a
 Expired copies keep their manifest (id and hash). One publication runs at a time (`.publish.lock`, holding the
 process id); a lock whose process has ended is taken over at once, not after it goes stale. Details:
 [docs/08-dashboard-generation.md](docs/08-dashboard-generation.md).
+
+### Supplier vs non-supplier comparison
+
+```bash
+python scripts/build_supplier_comparison.py                      # the latest published snapshot -> dashboard/supplier_comparison.html
+python scripts/build_supplier_comparison.py --snapshot-id <id>   # a retained snapshot
+python scripts/build_supplier_comparison.py --db PATH            # this database, opened read-only
+```
+
+`dashboard/supplier_comparison.html` is published with the other dashboards, from the same snapshot. It compares
+supplier events with non-supplier events attribute by attribute and tests each difference at the bottom of the page.
+
+* **Supplier event:** an Active event of the reporting window (2020 onward) that is linked to a supplier incident, as a
+  customer's event (`SupplierIncidentLinks.customer_event_id`) or the supplier's own event
+  (`SupplierIncidents.supplier_event_id`), or that records a vendor (a `vendor` role or `vendor_organization_name`) or
+  a service provider (a `service_provider` role). Every other Active event is a non-supplier event. A link to a merged
+  event counts for the Active event that holds its records now. The page gives the count for each reason.
+* **Unit: the event**, not the victim organisation-event pair. The tests assume independent observations, and an event
+  with several victims would enter once per victim with the same severity, attack type, records count, ASD
+  classification, AI category and date. A victim attribute is taken for an event when all its victim organisations
+  share it; an event whose victims differ, or with no victim, is left out of that attribute's test and counted.
+* **Attributes:** victim size band (reconciled across name variants as the recurrence analysis does), victim entity
+  type, records affected, severity, attack type, ASD severity category, ASD impact type, AI involvement and half-year
+  of the event. Each has side-by-side bars of the two groups' percentage distributions (counts in the tooltips and in
+  the table under the chart); records affected has box plots on a log scale with the median, IQR and share missing.
+  The charts are HTML and CSS: no script, no external file, light and dark mode, readable at phone width.
+* **Tests:** Pearson's chi-squared test of homogeneity with Cramér's V for each categorical attribute; a two-sided
+  Mann-Whitney U test for records affected. UNKNOWN and missing values are left out of the test and counted per group.
+  When more than 20% of expected counts are under 5 (or one is under 1), the category with the smallest total is
+  pooled until the rule holds or two categories remain: with its smaller neighbour for ordered categories, into one
+  pooled group otherwise. A 2 x 2 table that still fails takes its p-value from Fisher's exact test. The pooled
+  categories are named under the chart. p-values are Holm-adjusted across the tests that ran.
+* **Wording:** every sentence of the conclusions is generated from the numbers. A result that is not significant after
+  Holm adjustment is "no evidence of a difference", with no direction, whatever its raw p-value.
+* **Check, one event per supplier incident.** Events of one supplier incident share an attack, so they are not
+  independent. Every test is repeated keeping the earliest event of each incident (incidents sharing an event count as
+  one), and the page says which conclusions change.
+
+On snapshot `snap-20261106160634-1edbf49c696a`: 256 supplier events (21.9%) and 912 non-supplier events. After Holm
+adjustment 7 of 9 attributes differ: size band (V = 0.17; supplier events more often HUGE, less often SMALL or
+MEDIUM), entity type (V = 0.18), records affected (medians 50,000 and 10,000), attack type (V = 0.36; more often data
+breach and vulnerability exploit, less often ransomware), ASD severity category (V = 0.22), ASD impact type
+(V = 0.23) and half-year (V = 0.29). There is no evidence of a difference in severity or AI involvement. With one
+event per supplier incident (129 supplier events), entity type and half-year no longer differ; the other conclusions
+hold.
 
 ### Data dictionary page
 

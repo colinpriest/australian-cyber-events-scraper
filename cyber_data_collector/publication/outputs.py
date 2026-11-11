@@ -15,7 +15,8 @@ disagree, and a blocked run could still have replaced the matrices.
 3. build every output from the snapshot into a staging folder:
    ``index.html``, ``ai_incidents.html``, ``entities.html``, ``entity_events_detail.html`` (and ``.xlsx``),
    ``timelines.html``, ``dedup.html`` (and ``dedup.xlsx``), ``close_pairs.html``, ``supplier_incidents.html``,
-   ``data_dictionary.html``, ``recurrence.html`` and the ``risk_matrix/`` workbooks;
+   ``supplier_comparison.html``, ``data_dictionary.html``, ``recurrence.html`` and the ``risk_matrix/``
+   workbooks;
 4. stamp each one with the snapshot id and write ``publication.json`` (hashes
    of every output, the snapshot, the quality run, the inputs outside the
    database, the snapshots the recurrence analyses used);
@@ -413,6 +414,26 @@ def build_supplier_incidents(ctx: BuildContext) -> List[Path]:
     return [path]
 
 
+def build_supplier_comparison(ctx: BuildContext) -> List[Path]:
+    """``supplier_comparison.html``: supplier events against non-supplier events, attribute by attribute, tested."""
+    from datetime import datetime, timezone
+
+    from cyber_data_collector.reporting.population import dashboard_period
+    from scripts import build_supplier_comparison as module
+
+    conn = module.connect_read_only(Path(ctx.db))
+    try:
+        # The window ends on the day the snapshot was taken, so a rebuild from it gives the same page.
+        comparison = module.collect(conn, dashboard_period(str(ctx.snapshot.taken_at)[:10]))
+    finally:
+        conn.close()
+    path = ctx.dashboard_dir / "supplier_comparison.html"
+    path.write_text(module.build_html(comparison, f"from snapshot {ctx.snapshot.snapshot_id}, "
+                                                  f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"),
+                    encoding="utf-8")
+    return [path]
+
+
 def build_data_dictionary(ctx: BuildContext) -> List[Path]:
     """``data_dictionary.html``: every table and column of the snapshot, with descriptions and a relationship diagram."""
     from datetime import datetime, timezone
@@ -462,6 +483,7 @@ DEFAULT_BUILDERS: Dict[str, Callable[[BuildContext], List[Path]]] = {
     "dedup": build_dedup,
     "close_pairs": build_close_pairs,
     "supplier_incidents": build_supplier_incidents,
+    "supplier_comparison": build_supplier_comparison,
     "data_dictionary": build_data_dictionary,
     "recurrence": build_recurrence,
     "risk_matrix": build_risk_matrices,
