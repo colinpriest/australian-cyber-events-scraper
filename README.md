@@ -3000,7 +3000,18 @@ runs the command first of all.
 ```bash
 python scripts/build_static_dashboard.py               # Generate dashboard/index.html
 python scripts/enrich_pii_and_source_category.py       # OAIC breach source + PII types (Jev)
+python scripts/export_paper_figures.py                 # dashboard/Figures: the charts as paper figures
 ```
+
+**Figures for the paper.** `scripts/export_paper_figures.py` redraws each unique chart of the published
+`index.html` with matplotlib, in page order, as `dashboard/Figures/figureNN.png` (300 dpi) and `.pdf`
+(vector), with `figureNN-description.txt`, `figureNN-data-dictionary.txt` and `figureNN-data.xlsx` (the
+plotted data, and a `notes` sheet with the chart's exclusions and the snapshot it came from). The page has
+31 visualisations and gives 30 figures, because the sector ratio chart plots the sector chart's two series.
+The data is recomputed from the snapshot named in `dashboard/publication.json` over the publication's
+period. The run stops (exit 1) unless that data equals the data embedded in the published page and the OAIC
+dataset matches the publication's hash. Every chart's totals are read back from its xlsx. Reruns give
+identical PNG, PDF and text files; no paid API is called.
 
 The OAIC comparisons (source of breach; personal information types) need
 `DeduplicatedEvents.breach_source_category` and `personal_info_types_json`.
