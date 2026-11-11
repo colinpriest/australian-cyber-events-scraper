@@ -1,0 +1,214 @@
+{
+  "_comment": "Diagram configuration for scripts/build_data_dictionary.py. Descriptions live in docs/data-dictionary.md; 'tables' may only fill a gap there ({table: {purpose, columns: {column: text}}}). 'groups' places each table in an area of the diagram (the first group is the core, drawn in detail). 'key_owners' names the table a key column belongs to when several tables use it as their key; 'extra_links' adds links no column name reveals; 'not_links' drops a link a column name suggests wrongly; 'mirrors' lets a history or backup table's column take the description of the same column of the table it copies.",
+  "groups": [
+    {
+      "name": "Core pipeline",
+      "description": "Records, their enrichment, the incidents they form, entities and ASD classifications.",
+      "tables": [
+        "RawEvents",
+        "EnrichedEvents",
+        "DeduplicatedEvents",
+        "EventDeduplicationMap",
+        "EntitiesV2",
+        "EnrichedEventEntities",
+        "DeduplicatedEventEntities",
+        "DeduplicatedEventSources",
+        "ASDRiskClassifications"
+      ]
+    },
+    {
+      "name": "Discovery and retrieval",
+      "description": "Search queues, page fetches and the pages cited as evidence.",
+      "tables": [
+        "DiscoveryRecordState",
+        "SourceMonthDiscovery",
+        "SourceProbes",
+        "SourceMonthCompletion",
+        "MonthProcessed",
+        "CyberDailyRefetches",
+        "PageRescrapes",
+        "PublicationDateFetches",
+        "CitedDocuments",
+        "CitedDocumentVersions",
+        "SourceReplacements",
+        "ProcessingLog"
+      ]
+    },
+    {
+      "name": "Enrichment and evidence",
+      "description": "Enrichment audit, fact support, record identity and event-level facts.",
+      "tables": [
+        "EnrichmentAuditTrail",
+        "EnrichmentFactSupport",
+        "RecordIdentityChecks",
+        "RecordFingerprints",
+        "PageClassifications",
+        "ImpossibleIncidentDates",
+        "EventCorroborations",
+        "EventDescriptions",
+        "EventFactOverrides",
+        "ConfidenceRepairs"
+      ]
+    },
+    {
+      "name": "Deduplication audit and ledger",
+      "description": "Merge and split decisions, overrides, snapshots and adjudication caches.",
+      "tables": [
+        "DedupDecisions",
+        "DedupOverrides",
+        "DedupSnapshots",
+        "DedupCalibration",
+        "DeduplicationClusters",
+        "AdjudicationCache",
+        "EmbeddingCache",
+        "AuditLog"
+      ]
+    },
+    {
+      "name": "Judgements and calibration",
+      "description": "Stored model answers, final decisions, victim actions and organisation timelines.",
+      "tables": [
+        "ModelJudgements",
+        "FinalDecisions",
+        "VictimAttributionActions",
+        "VictimFillActions",
+        "DescriptiveVictimDemotions",
+        "EventVictimCoreference",
+        "OrganisationTimelines",
+        "OrganisationTimelineFailures",
+        "ReconciliationGaps"
+      ]
+    },
+    {
+      "name": "Entity resolution and aliases",
+      "description": "Names that are one organisation, names that are not, folds and profiles.",
+      "tables": [
+        "EntityAliases",
+        "EntityAliasDecisions",
+        "EntityAliasDecisionHistory",
+        "EntityAntiAliases",
+        "ContextualEntityAliases",
+        "EntityMentionResolutions",
+        "EntityMerges",
+        "EntityMappings",
+        "EntityProfiles",
+        "EntityProfileResearch",
+        "DescriptiveNames"
+      ]
+    },
+    {
+      "name": "Supplier incidents",
+      "description": "Breaches of a supplier and the customers' events linked to them.",
+      "tables": [
+        "SupplierIncidents",
+        "SupplierIncidentLinks",
+        "SupplierIncidentSearches",
+        "SupplierLinkActions",
+        "SupplierVictimAttachments",
+        "SupplierVictimReversals"
+      ]
+    },
+    {
+      "name": "Quality and validation",
+      "description": "Quality runs and metrics, owner-reported validation cases and enrichment reports.",
+      "tables": [
+        "QualityRuns",
+        "QualityMetrics",
+        "ValidationExceptions",
+        "EnrichmentMetrics",
+        "EnrichmentQualityReport"
+      ]
+    },
+    {
+      "name": "History",
+      "description": "What was known when: append-only history of events, membership, links and entities.",
+      "tables": [
+        "EventStateHistory",
+        "EventMembershipHistory",
+        "EventEntityLinkHistory",
+        "EntityStateHistory",
+        "InputHistoryStatus",
+        "SchemaMigrations"
+      ]
+    },
+    {
+      "name": "Configuration and legacy",
+      "description": "Source and industry configuration, and tables kept from earlier schemas.",
+      "tables": [
+        "DataSourcesV2",
+        "IndustryGroupings",
+        "UniqueEvents_v1_backup",
+        "Entities_v1_backup",
+        "EventEntities_v1_backup",
+        "DataSources_v1_backup",
+        "EventSources_v1_backup",
+        "EventAttributeHistory_v1_backup",
+        "EnrichedEvents_backup_20250927_211831"
+      ]
+    }
+  ],
+  "key_owners": {
+    "raw_event_id": "RawEvents",
+    "enriched_event_id": "EnrichedEvents",
+    "deduplicated_event_id": "DeduplicatedEvents",
+    "entity_id": "EntitiesV2",
+    "audit_id": "EnrichmentAuditTrail",
+    "attachment_id": "SupplierVictimAttachments"
+  },
+  "extra_links": [
+    [
+      "SupplierIncidents",
+      "supplier_event_id",
+      "DeduplicatedEvents"
+    ],
+    [
+      "SupplierIncidentLinks",
+      "customer_event_id",
+      "DeduplicatedEvents"
+    ],
+    [
+      "SupplierLinkActions",
+      "new_event_id",
+      "DeduplicatedEvents"
+    ]
+  ],
+  "not_links": [
+    "QualityRuns.snapshot_id",
+    "AuditLog.audit_id"
+  ],
+  "mirrors": {
+    "EventStateHistory": {
+      "of": "DeduplicatedEvents",
+      "note": "The value, after the change, of"
+    },
+    "EventMembershipHistory": {
+      "of": "EventDeduplicationMap",
+      "note": "The value, after the change, of"
+    },
+    "EventEntityLinkHistory": {
+      "of": "DeduplicatedEventEntities",
+      "note": "The value, after the change, of"
+    },
+    "EntityStateHistory": {
+      "of": "EntitiesV2",
+      "note": "The value, after the change, of"
+    },
+    "EntityAliasDecisionHistory": {
+      "of": "EntityAliasDecisions",
+      "note": "As in the replaced decision,"
+    },
+    "EnrichedEvents_backup_20250927_211831": {
+      "of": "EnrichedEvents",
+      "note": "Copy, as of 2025-09-27, of"
+    },
+    "CitedDocumentVersions": {
+      "of": "CitedDocuments",
+      "note": "For this superseded version, as"
+    },
+    "SupplierVictimReversals": {
+      "of": "SupplierVictimAttachments",
+      "note": "Copied from the reversed attachment:"
+    }
+  },
+  "tables": {}
+}

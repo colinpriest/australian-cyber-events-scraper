@@ -14,7 +14,8 @@ disagree, and a blocked run could still have replaced the matrices.
    if it blocks (the snapshot is kept, marked ``blocked``);
 3. build every output from the snapshot into a staging folder:
    ``index.html``, ``ai_incidents.html``, ``entities.html``, ``timelines.html``,
-   ``dedup.html``, ``recurrence.html`` and the ``risk_matrix/`` workbooks;
+   ``dedup.html``, ``close_pairs.html``, ``supplier_incidents.html``, ``data_dictionary.html``,
+   ``recurrence.html`` and the ``risk_matrix/`` workbooks;
 4. stamp each one with the snapshot id and write ``publication.json`` (hashes
    of every output, the snapshot, the quality run, the inputs outside the
    database, the snapshots the recurrence analyses used);
@@ -165,12 +166,15 @@ def external_inputs(live_db: Path, repo_root: Path) -> Dict[str, str]:
         if (repo_root / "evaluation").is_dir() else []
     # What decides whether each calibration may act (cyber_data_collector/dedup/deployment.py).
     candidates += [repo_root / "evaluation" / "deployment_policy.json"]
+    # The descriptions on data_dictionary.html (scripts/build_data_dictionary.py).
+    candidates += [repo_root / "docs" / "data-dictionary.md", repo_root / "docs" / "data_dictionary_descriptions.json"]
     candidates += sorted((repo_root / "evaluation").glob("*_heldout.json")) \
         if (repo_root / "evaluation").is_dir() else []
     out = {}
     for path in candidates:
         if path.is_file():
-            out[path.name if path.parent.name != "evaluation" else f"evaluation/{path.name}"] = file_sha256(path)
+            out[path.name if path.parent.name not in ("evaluation", "docs")
+                else f"{path.parent.name}/{path.name}"] = file_sha256(path)
     return out
 
 
@@ -386,6 +390,25 @@ def build_supplier_incidents(ctx: BuildContext) -> List[Path]:
     return [path]
 
 
+def build_data_dictionary(ctx: BuildContext) -> List[Path]:
+    """``data_dictionary.html``: every table and column of the snapshot, with descriptions and a relationship diagram."""
+    from datetime import datetime, timezone
+
+    from scripts import build_data_dictionary as module
+
+    conn = module.connect_read_only(Path(ctx.db))
+    try:
+        dictionary = module.collect(conn)
+    finally:
+        conn.close()
+    if dictionary.undescribed:
+        logger.warning("data dictionary: %d column(s) have no description", len(dictionary.undescribed))
+    path = ctx.dashboard_dir / "data_dictionary.html"
+    path.write_text(module.build_html(dictionary, f"from snapshot {ctx.snapshot.snapshot_id}, "
+                                                  f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"), encoding="utf-8")
+    return [path]
+
+
 def build_recurrence(ctx: BuildContext) -> List[Path]:
     """``recurrence.html`` from the analysis folders, naming the snapshot each was computed on."""
     from scripts import build_recurrence_dashboard as module
@@ -415,6 +438,7 @@ DEFAULT_BUILDERS: Dict[str, Callable[[BuildContext], List[Path]]] = {
     "dedup": build_dedup,
     "close_pairs": build_close_pairs,
     "supplier_incidents": build_supplier_incidents,
+    "data_dictionary": build_data_dictionary,
     "recurrence": build_recurrence,
     "risk_matrix": build_risk_matrices,
 }

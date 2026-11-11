@@ -3090,7 +3090,7 @@ separately, and the risk matrices to be written before any gate. Now the step ta
 consistent snapshot** (SQLite backup API), keeps a compressed copy under
 `instance/snapshots/`, runs the gate on it, builds `dashboard/index.html`,
 `ai_incidents.html`, `entities.html`, `timelines.html`, `dedup.html`, `close_pairs.html`, `supplier_incidents.html`,
-`recurrence.html` and
+`data_dictionary.html`, `recurrence.html` and
 the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
 id, writes `dashboard/publication.json` (hashes of every output and of the inputs outside
 the database) and moves them all into place together. A blocked gate, a failing builder or
@@ -3124,6 +3124,22 @@ and any snapshot an analysis result names; about 100 MB each, 0.8 to 1.2 GB in a
 Expired copies keep their manifest (id and hash). One publication runs at a time (`.publish.lock`, holding the
 process id); a lock whose process has ended is taken over at once, not after it goes stale. Details:
 [docs/08-dashboard-generation.md](docs/08-dashboard-generation.md).
+
+### Data dictionary page
+
+```bash
+python scripts/build_data_dictionary.py [--db PATH] [--list-undescribed]   # -> dashboard/data_dictionary.html
+```
+
+`dashboard/data_dictionary.html` is published with the other dashboards, from the same snapshot. It opens with a
+diagram of how the tables relate: the core pipeline tables in detail (keys and links), then every table grouped by
+area. Then it gives one section per table with its purpose and, for each column, the declared type, primary-key /
+not-null flags and a description. The schema is read from the database (opened read-only), so the page always
+matches the snapshot. Descriptions come from `docs/data-dictionary.md` (describe a new table or column there);
+`docs/data_dictionary_descriptions.json` holds the diagram's areas, the owners of shared key columns and the links no
+column name reveals. Links SQLite does not declare are inferred from column names (`raw_event_id`,
+`master_enriched_event_id`, `customer_entity_id`) and drawn dashed. A column with no description is shown as such and
+counted; the script prints the count. The file is self-contained (inline SVG and CSS, no scripts) and opens from disk.
 
 ### Database
 
@@ -3930,6 +3946,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 | [10-supplier-incidents.md](docs/10-supplier-incidents.md) | Supplier incidents: co-victims, same-incident merges, calibration, counting once per organisation |
 | [11-evidence-recovery.md](docs/11-evidence-recovery.md) | Incidents with no usable evidence: diagnosis, retrieval through existing queues, `evidence_status` |
 | [data-dictionary.md](docs/data-dictionary.md) | Complete database schema, table definitions, and field descriptions |
+| `dashboard/data_dictionary.html` | Every table and column of the published snapshot, with a relationship diagram (built by `scripts/build_data_dictionary.py`) |
 
 These documents contain sufficient detail for independent review and replication of each pipeline stage.
 

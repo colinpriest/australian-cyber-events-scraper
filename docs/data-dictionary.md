@@ -14,6 +14,7 @@ Comprehensive reference for all data structures in the Australian Cyber Events D
    - [Configuration Tables](#configuration-tables)
    - [Views](#views)
    - [Legacy Tables](#legacy-tables)
+   - [Further tables](#further-tables)
 3. [Database Relationships (ERD)](#database-relationships-erd)
 4. [JSON Columns (Embedded JSON)](#json-columns-embedded-json)
 5. [Data Files](#data-files)
@@ -187,6 +188,10 @@ LLM-processed events with extracted metadata, entity names, and confidence score
 | `perplexity_status` | TEXT | Yes | NULL | `retrying`, `validated`, or `quarantined` (3 failed attempts; no longer retried) |
 | `confidence_model` | TEXT | Yes | NULL | The model that adjusted `confidence_score` (the fast OpenAI model); NULL for a data source's fixed prior and whenever the score is NULL |
 | `confidence_version` | TEXT | Yes | NULL | The rule that produced the score: `source-prior-v1` (the source's own prior) or `classifier-adjusted-v1`; NULL when the score is NULL |
+| `records_affected_unit` | TEXT | Yes | — | What `records_affected` counts, read from the supporting source's words after the number: `records`, `accounts`, `customers` or `people`; NULL when unclear. Written by `processing/enrichment_gate.py`. |
+| `records_affected_basis` | TEXT | Yes | — | How the source states the count: `stated`, `estimate` or `at_least`; NULL when unclear. Written by `processing/enrichment_gate.py`. |
+| `records_affected_scope` | TEXT | Yes | — | Whether the count is `australian` or `global`; NULL when the source does not say. Written by `processing/enrichment_gate.py`. |
+| `records_affected_source` | TEXT | Yes | — | Where the accepted count was found: the cited page's URL, or `record` for the record's own text. Written by `processing/enrichment_gate.py`. |
 
 `data_source_reliability` is computed from the accepted Perplexity facts and is `NULL` when none carries a confidence.
 
@@ -309,6 +314,20 @@ Final unique events after entity-based deduplication. The primary table used for
 | `evidence_status_reason` | TEXT | Yes | NULL | What the evidence lacks, record by record, and where retrieval stands (re-fetch queued / given up, research retrying / quarantined, labelled report or replacement queued) |
 | `evidence_uncertain_fields` | TEXT (JSON) | Yes | NULL | For an `unsupported` event, the set fields nothing supports (`title`, `event_date`, `event_type`, `severity`, `victim_organization_name`, `attacking_entity_name`, `attack_method`, `records_affected`); `[]` otherwise |
 | `evidence_status_at` | TEXT | Yes | NULL | When `evidence_status` last changed |
+| `personal_info_types_json` | TEXT | Yes | — | JSON object mapping eight OAIC personal-information types (`contact_information`, `identity_information`, `financial_details`, `health_information`, `tax_file_numbers`, `consumer_data_right`, `digital_id`, `other_sensitive_information`) to `true`/`false`, from Jev judgements; written by `processing/breach_source.py` (`scripts/enrich_pii_and_source_category.py`). |
+| `breach_source_category` | VARCHAR(40) | Yes | — | OAIC source of breach from a Jev Choice: `Malicious or Criminal Attack`, `Human Error`, `System Fault` or `Unknown` (cannot tell); written by `processing/breach_source.py` (`scripts/enrich_pii_and_source_category.py`). |
+| `dedup_certainty` | REAL | Yes | — | Certainty (0-1) of the decision that formed the event; read by `scripts/build_dedup_dashboard.py` (not written by current code). |
+| `dedup_method` | TEXT | Yes | — | How the dedup ledger created the event row: `manual-split` for an event split out by `dedup/ledger.py`; NULL for events made by the deduplication run. |
+| `dedup_batch_id` | TEXT | Yes | — | Ledger batch that created the event (a split's batch, e.g. `revert-<timestamp>`), matching `DedupDecisions` and `DedupSnapshots`; written by `dedup/ledger.py`. |
+| `has_human_override` | INTEGER | NOT NULL | `0` | `1` when the event was the target of a ledger merge or was created by a split, `0` otherwise; `dedup/ledger.py` sets it for automated passes too, so it does not mean a person decided. |
+| `vendor_organization_name` | TEXT | Yes | — | The supplier through which the victim was compromised (the event's chosen `vendor` role); NULL when none. Written by `dedup/entity_classification.py` (`dedup_admin.py classify-entities`) and cleared by `dedup/supplier_role_labels.py`. |
+| `vendor_organization_industry` | TEXT | Yes | — | Industry of the vendor in `vendor_organization_name`; written and cleared with it by `dedup/entity_classification.py` and `dedup/supplier_role_labels.py`. |
+| `roles_member_signature` | TEXT | Yes | — | Hash of the event's member records when its entity roles were last classified; roles are stale when it differs from the current membership, is NULL, or is `record-content-changed` (set by `dedup/record_fingerprints.py` when a member's research changed). Written by `dedup/role_maintenance.py`. |
+| `roles_classified_at` | TIMESTAMP | Yes | — | When the event's entity roles were last classified (ISO timestamp, local time); written by `dedup/role_maintenance.py`. |
+| `facts_member_signature` | TEXT | Yes | — | SHA-256 of the sorted member record ids the event's facts (`records_affected`, `event_type`, `severity`, `attack_method`, `attacking_entity_name`) were last computed from; written by `dedup/event_facts.py` (`dedup_admin.py refresh-facts`). |
+| `date_basis` | TEXT | Yes | — | How the event's stored date was determined, e.g. `Perplexity research`, `stated in the record`, `publication date (may lag the incident)`, `date the record was found (may lag the incident)`, `set by a repair pass (no record carries it)`, `owner label`, `unknown (...)` or `no date`; written by `dedup/date_provenance.py` and `processing/publication_dates.py`. |
+| `date_precision` | TEXT | Yes | — | Displayed precision of the stored date: `day`, `month only, or the 1st (stored as the 1st)`, `year only (stored as 1 January)` or `unknown`; written by `dedup/date_provenance.py` (the verified precision is `event_date_precision`). |
+| `ai_involvement_escalated` | INTEGER | Yes | — | `1` when the Jev AI-involvement answer was unsettled and the reasoning model re-judged it, `0` when Jev decided, NULL when not judged; written by `processing/ai_involvement.py` (`scripts/classify_ai_involvement.py`). |
 
 Evidence retrieval state ([11-evidence-recovery.md](11-evidence-recovery.md))
 lives in the tables of the mechanisms it reuses:
@@ -367,6 +386,7 @@ ASD (Australian Signals Directorate) C1–C6 risk matrix assignments for dedupli
 | `model_used` | VARCHAR(50) | NOT NULL | — | — | LLM model used (e.g., `gpt-4o`) |
 | `created_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | — | Row creation timestamp |
 | `updated_at` | TIMESTAMP | No | `CURRENT_TIMESTAMP` | — | Last update timestamp |
+| `input_fingerprint` | TEXT | Yes | — | — | SHA-256 of the ASD prompt version and the prompt built from the event's current fields and the model; a stored classification is reused only while this matches, and NULL (pre-fingerprint rows) counts as stale. Written by `scripts/asd_risk_classifier.py`. |
 
 **Indexes:**
 - `idx_asd_risk_dedup_event_id` on `(deduplicated_event_id)`
@@ -503,6 +523,8 @@ Written by `processing/retry_queue.py` (`ensure_schema` is idempotent and adds t
 | DiscoveryRecordState | `unknown_failures` | INTEGER | Failures nothing recognised as the provider's or the record's fault; retried with a 6 h to 7 day back-off, never quarantined |
 | DiscoveryRecordState | `last_stage`, `last_error`, `last_error_kind`, `last_error_type` | TEXT | The latest failure; kind is `temporary` / `permanent` / `unknown`, type is a `fetch_errors` type |
 | DiscoveryRecordState | `next_attempt_at`, `quarantined_at`, `completed_at`, `updated_at` | TEXT | Back-off and outcome |
+| DiscoveryRecordState | `first_failed_at` | TEXT | When the record first failed processing (ISO timestamp, local time, to the second), kept across later failures; written by `RetryQueue.record_failure` in `processing/retry_queue.py`. |
+| DiscoveryRecordState | `last_attempt_at` | TEXT | When the record last failed processing (ISO timestamp, local time, to the second); written by `RetryQueue.record_failure`. |
 | SourceMonthDiscovery | `source_type`, `year`, `month` | **PK** | One source's search of one month |
 | SourceMonthDiscovery | `status` | TEXT | `complete` or `failed` |
 | SourceMonthDiscovery | `error_type`, `error_types_json` | TEXT | The deciding type and the type of each failure (`throttled`, `missing`, `network`, `parse`, `incomplete`, `other`, `unknown`) |
@@ -512,6 +534,10 @@ Written by `processing/retry_queue.py` (`ensure_schema` is idempotent and adds t
 | SourceMonthDiscovery | `give_up_config` | TEXT | JSON of the source configuration it failed under: hashed secrets (`secret:<ENV>`), `query` version, `client:<package>` versions (`processing/source_config.py`). A parked month reopens when this differs from the current configuration |
 | SourceMonthDiscovery | `reopened_at`, `reopen_reason` | TEXT | Last automatic reopening: `probe succeeded` or `configuration changed: <components>` |
 | SourceMonthDiscovery | `items_seen` | INTEGER | Items the source listed for the month (Cyber Daily: feed articles) |
+| SourceMonthDiscovery | `events_found` | INTEGER | Records the source's last search of the month returned. |
+| SourceMonthDiscovery | `failures_json` | TEXT | JSON list (at most 50) of the failures the data source noted on the last search; NULL when it was complete. |
+| SourceMonthDiscovery | `attempted_at` | TEXT | When the month was last searched (ISO timestamp, local time, to the second); written by `RetryQueue.record_discovery` in `processing/retry_queue.py`. |
+| SourceMonthDiscovery | `completed_at` | TEXT | Last time a search of the month finished without failure (ISO timestamp, local time); kept through later failed searches. |
 | SourceProbes | `source_type` | TEXT **PK** | A source with parked months |
 | SourceProbes | `last_probe_at`, `next_probe_at` | TEXT | One parked month is searched when `next_probe_at` passes (a week after the first month was parked; then 14 and 28 days while probes fail) |
 | SourceProbes | `consecutive_failures`, `last_error_type`, `last_success_at` | | Probe history; a successful probe reopens every parked month of the source |
@@ -945,6 +971,819 @@ These tables exist in the database from the V1 schema. They are renamed with `_v
 | `EventSources_v1_backup` | V1 event-source mapping |
 | `EventAttributeHistory_v1_backup` | V1 attribute change history |
 | `EnrichedEvents_backup_20250927_211831` | Point-in-time backup of EnrichedEvents |
+
+---
+
+### Further tables
+
+Tables and columns not described above, written from the code that creates and fills them. `scripts/build_data_dictionary.py` reads this file for the published `dashboard/data_dictionary.html`.
+
+#### ConfidenceRepairs
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `table_name` | TEXT | **PK** | — | Table whose confidence value was cleared: `EnrichedEvents`, `EnrichedEventEntities` or `DeduplicatedEvents`. |
+| `row_key` | TEXT | **PK** | — | Id of the cleared row in that table: the `enriched_event_id` or `deduplicated_event_id`, or `<enriched_event_id>\|<entity_id>` for an entity link. |
+| `column_name` | TEXT | **PK** | — | Column that was set to NULL (`confidence_score`). |
+| `old_value` | REAL | NOT NULL | — | The defaulted value that was cleared (`0.7`, `0.8` or `0.6`, or a cleared master's value copied to its event). |
+| `rule` | TEXT | NOT NULL | — | The proof that the value was a code default, one of the fixed rule texts in `processing/confidence_defaults.py` (event, entity-link or deduplicated-event rule). |
+| `repaired_at` | TEXT | NOT NULL | — | When the value was cleared (ISO timestamp, local time, to the second); written by `scripts/repair_confidence_defaults.py`. |
+
+#### ContextualEntityAliases
+
+One row per acronym and one organisation it can stand for: an alias that holds only where a record's own text supports it, so one acronym can list several organisations. Written by `dedup/contextual_aliases.py` (from `canonicalise-entities`, `dedup_admin.py alias add --contextual` and `EntityResolver.learn_alias`) and read when links are placed record by record (`resolve_links`) and at ingest.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_name` | TEXT | **PK** | — | The acronym or initialism as written (every token upper case, at most 8 letters and digits). |
+| `canonical_name` | TEXT | **PK** | — | Full name of one organisation the acronym can mean; a link moves to it only when the record's text names it or a model resolves the mention to it (`EntityMentionResolutions`). |
+| `source` | TEXT | NOT NULL | — | Who made the alias: `human` (`dedup_admin.py alias add --contextual`), `llm` (a Perplexity-confirmed fold), or `rule` / `learned` when carried over from the `EntityAliases` row it replaced; written by `add_contextual_alias`. |
+| `created_at` | TEXT | NOT NULL | — | When the row was written, ISO 8601: UTC with offset (`utc_now_iso`); older rows have no offset and are local time. |
+
+#### CyberDailyRefetches
+
+One row per stored Cyber Daily story re-fetched by `processing/cyberdaily_refetch.py` (`discovery_queue.py refetch-cyberdaily`, and every run with CyberDaily among the sources): the outcome of its last fetch and its retry state. Read by the same module to choose stories and back off, and by `discovery_queue.py status` and the quality report.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_event_id` | TEXT | **PK** | — | The re-fetched record (`RawEvents.raw_event_id`). |
+| `url` | TEXT | NOT NULL | — | Article URL fetched, with its query string and fragment removed (no tracking or subscriber token). |
+| `status` | TEXT | NOT NULL | — | Outcome of the last fetch: `unchanged`, `updated` (new text stored), `kept_stored` (fetched page cut off by the free-article meter, stored article kept), `failed` or `missing` (HTTP 404/410). |
+| `content_hash` | TEXT | Yes | — | SHA-256 of the fetched text with the free-article banner removed and whitespace collapsed; NULL when nothing was fetched. |
+| `chars` | INTEGER | Yes | — | Length of the fetched text in characters; NULL when nothing was fetched. |
+| `last_error` | TEXT | Yes | — | Message of the last failed or still-incomplete fetch; NULL after a clean fetch. |
+| `failures` | INTEGER | NOT NULL | `0` | Consecutive failed or still-incomplete fetches; a throttled answer does not count, and the story is given up at 5. |
+| `fetched_at` | TEXT | NOT NULL | — | When the story was last fetched (ISO timestamp, local time). |
+| `error_type` | TEXT | Yes | — | Failure type of the last fetch from `processing/fetch_errors.py` (`throttled`, `missing`, `network`, `parse`, `incomplete`, `other`, `unknown`); NULL once complete. |
+| `next_attempt_at` | TEXT | Yes | — | The story is not fetched again before this (ISO timestamp, local time): back-off of 1 day doubling to 30 days, or 2 hours after a throttled answer. |
+| `gave_up_at` | TEXT | Yes | — | When the story was given up (ISO timestamp, local time): on a 404/410 or after 5 consecutive failures; `discovery_queue.py release` returns it to the queue. |
+
+#### DataSources_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `source_id` | INTEGER | **PK** | — | Integer key of a V1 data source, referenced by `EventSources_v1_backup.source_id` (V1 schema, not used by current code). |
+| `source_name` | VARCHAR(100) | NOT NULL | — | Name of the data source, unique; read by the V1 summary statistics, written by no V1 code in git history (V1 schema, not used by current code). |
+| `source_type` | VARCHAR(50) | Yes | — | Category of the data source; its current counterpart is `RawEvents.source_type` (V1 schema, not used by current code). |
+
+#### DedupCalibration
+
+One row per run of `dedup_admin.py learn` over at least 5 active overrides: the auto-merge threshold nudged towards the error people corrected more often. Written by `DedupLedger.learn_from_overrides` (`dedup/ledger.py`), which reads the newest row as the current threshold (0.85 when the table is empty).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `calibration_id` | TEXT | **PK** | — | Row identifier (UUID); written by `DedupLedger.learn_from_overrides`. |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the calibration was recorded (SQLite `CURRENT_TIMESTAMP`, UTC); the newest row is the current threshold. |
+| `sample_size` | INTEGER | NOT NULL | — | Number of active rows in `DedupOverrides` the calibration was computed from (written only when at least 5). |
+| `false_merges` | INTEGER | NOT NULL | — | Active overrides with verdict `different`: pairs a person said the pipeline should not have joined. |
+| `missed_merges` | INTEGER | NOT NULL | — | Active overrides with verdict `same`: pairs a person said the pipeline should have joined. |
+| `merge_threshold` | REAL | NOT NULL | — | The resulting auto-merge certainty threshold (0-1): the previous one plus 0.02 when false merges outnumber missed ones (at most 0.97), minus 0.02 when fewer (at least 0.60). |
+| `notes` | TEXT | Yes | — | Free-text note; currently always `auto-calibrated from human overrides`. |
+
+#### DedupDecisions
+
+Append-only ledger of deduplication decisions: one row per record per merge, split or pair verdict, with who decided, how certain and why. Written by `DedupLedger.record_decision` (`dedup/ledger.py`) for `dedup_admin.py` merges, splits and adjudications; read by `DedupLedger.ancestry`, `scripts/build_dedup_dashboard.py` and the supplier steps.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `decision_id` | TEXT | **PK** | — | Row identifier (UUID). |
+| `batch_id` | TEXT | NOT NULL | — | Identifier of the run or command that made the decision, e.g. `merge-YYYYMMDDHHMMSS` or `revert-YYYYMMDDHHMMSS`; rows of one operation share it. |
+| `enriched_event_id` | TEXT | NOT NULL | — | The record (`EnrichedEvents`) the decision is about: the record that joined or left an event, or the right-hand record of a pair verdict. |
+| `deduplicated_event_id` | TEXT | Yes | — | The event (`DeduplicatedEvents`) the record was placed in or left; NULL for a pair verdict recorded without one. |
+| `cluster_key` | TEXT | Yes | — | For a pair verdict, the two enriched event ids sorted and joined by `\|` (`ledger.pair_key`); NULL for merges and splits. |
+| `action` | TEXT | NOT NULL | — | What was decided: `merge`, `keep_separate` or `revert` (a split that undid an earlier merge). |
+| `decided_by` | TEXT | NOT NULL | — | Who decided: `rule`, `embedding`, `llm` or `human`. |
+| `certainty` | REAL | Yes | — | The decider's certainty (0-1), e.g. the adjudicator's probability; NULL when the decider gave none. |
+| `method` | TEXT | Yes | — | The procedure that produced the decision, e.g. `manual-merge`, `manual-split`, `manual-split-reattach`, `legacy-review`, `band-resolve (...)` or `<decided_by>-adjudication`. |
+| `reasoning` | TEXT | Yes | — | The decider's written reason (the adjudicator's rationale or the command's `--reason`). |
+| `evidence_json` | TEXT | Yes | — | The `MatchEvidence` the decision rested on, as JSON (`dedup/models.py`): entity names and canonical keys, dates and gap in days, titles, embedding and title similarity, shared URLs, distinguishing facts. |
+| `superseded_by` | TEXT | Yes | — | NULL while the decision applies; set to a fresh marker UUID by `DedupLedger._supersede_decisions` when a later merge or split replaces it (it does not point to another row). |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the decision was recorded (ISO 8601 local time from `datetime.now()`, no offset). |
+
+#### DedupOverrides
+
+One row per ruling that two records are, or are not, the same incident, keyed on the stable enriched event ids so it survives rebuilds. Written by `DedupLedger.add_override` (`dedup_admin.py override`, and every split, which rules the departing records `different` from those left); read by `merge_events`, which refuses to join events across an active `different` ruling, and by the duplicate, supplier and label-repair steps.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `override_id` | TEXT | **PK** | — | Row identifier (UUID). |
+| `pair_key` | TEXT | NOT NULL | — | The two enriched event ids sorted and joined by `\|` (`ledger.pair_key`); unique, so a new ruling on a pair replaces the old one. |
+| `left_enriched_event_id` | TEXT | NOT NULL | — | One record of the pair (`EnrichedEvents.enriched_event_id`). |
+| `right_enriched_event_id` | TEXT | NOT NULL | — | The other record of the pair (`EnrichedEvents.enriched_event_id`). |
+| `verdict` | TEXT | NOT NULL | — | The ruling: `same` (one incident) or `different` (separate incidents). |
+| `reason` | TEXT | Yes | — | Why the ruling was made (the command's `--reason`, prefixed `split:` for a split); a deactivation appends a `[void: ...]` note saying why. |
+| `created_by` | TEXT | Yes | `'human'` | Who made it: `human` (a person's command) or `rule` (an automated split, e.g. by the coherence or supplier steps). |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the ruling was made or last replaced (UTC; `utils/timestamps.utc_now_iso` with offset, older rows SQLite `CURRENT_TIMESTAMP`). |
+| `active` | INTEGER | NOT NULL | `1` | 1 while the ruling applies, 0 once deactivated by `dedup/split_rulings.py` or `dedup/label_contradictions.py` because its basis no longer holds; inactive rows are kept for audit. |
+
+#### DedupSnapshots
+
+One row per event captured just before a ledger operation changed it (merge, split, rejection, victim change), so the change can be undone without a rebuild. Written by `DedupLedger.snapshot_event` (`dedup/ledger.py`) and read by `DedupLedger.restore_snapshot`, the victim-fill reversal and the quality regression checks.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `snapshot_id` | TEXT | **PK** | — | Row identifier (UUID). |
+| `batch_id` | TEXT | NOT NULL | — | The operation the snapshot was taken for, e.g. `merge-...`, `revert-...`, `victim-attribution-...`, `victim-fill-...`, `reject-event-reality-...`; shared by every event that operation changed. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event (`DeduplicatedEvents`) that was captured. |
+| `payload_json` | TEXT | NOT NULL | — | JSON `{"event": <the DeduplicatedEvents row>, "members": [<its EventDeduplicationMap rows>]}` as they were before the change. |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the snapshot was taken (SQLite `CURRENT_TIMESTAMP`, UTC). |
+
+#### DescriptiveNames
+
+One row per name that describes an organisation instead of naming one; a listed name is never a victim, a fold target or a victim candidate. Written by `dedup/descriptive_names.py` (`dedup_admin.py descriptive-name add` and `descriptive-name sync`) and read through `name_judgement.is_descriptive_name` by role classification, victim fill, alias learning and victim counting.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `name_key` | TEXT | **PK** | — | The name in lower case with single spaces (`descriptive_names.name_key`); names are matched on it. |
+| `name` | TEXT | NOT NULL | — | The name as written. |
+| `source` | TEXT | NOT NULL | — | Where the entry came from: `human` (`dedup_admin.py descriptive-name add`; never replaced or removed by a model), `label` (labelled `descriptive` in `evaluation/name_labels.csv`) or `llm` (scored below the calibrated proper-name cut-off); `sync` removes `label` and `llm` rows no longer supported. |
+| `reason` | TEXT | Yes | — | Why the name is listed: the person's reason, the label's rationale, or for `llm` the probability against the calibrated cut-off. |
+| `probability` | REAL | Yes | — | For `llm` rows, Jev's P(the name identifies one specific organisation) from the proper-name judgement (`dedup/name_judgement.py`); NULL otherwise. |
+| `model` | TEXT | Yes | — | For `llm` rows, the TypeSafe model that judged the name (e.g. `jev-1.14.0`); NULL otherwise. |
+| `created_at` | TEXT | NOT NULL | — | When the entry was added, ISO 8601, UTC with offset. |
+
+#### DescriptiveVictimDemotions
+
+Audit of victims taken off Active events because the name describes an organisation instead of naming one (listed in `DescriptiveNames`). Written by `descriptive_names.demote_victims`, run by `dedup_admin.py fill-victims` before it fills the event with the organisation its evidence names.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `demotion_id` | INTEGER | **PK** | — | Row identifier (auto-increment integer). |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event the description was a victim of. |
+| `entity_id` | INTEGER | Yes | — | The `EntitiesV2` entity whose `victim` role on the event was changed to `affected`; NULL when only the scalar victim column held the description. |
+| `name` | TEXT | NOT NULL | — | The descriptive name that was demoted, as stored. |
+| `scalar_cleared` | INTEGER | NOT NULL | `0` | 1 when `DeduplicatedEvents.victim_organization_name` was the description and was set to NULL, else 0. |
+| `reason` | TEXT | Yes | — | Why it was demoted; currently always `describes an organisation instead of naming it (DescriptiveNames)`. |
+| `created_at` | TEXT | NOT NULL | — | When the demotion was made (UTC, ISO 8601 with offset, `utils/timestamps.utc_now_iso`). |
+
+#### EnrichmentFactSupport
+
+One row per record and Perplexity enrichment fact: whether the acceptance gate stored the fact because a source supports it, or withheld it, with the source and the reason. Written by `processing/enrichment_gate.py` through `storage/enrichment_support.py` on enrichment, and by `perplexity_backfill_events.py --recompute-reliability` and `refresh-cited-documents`; read by those re-checks and the retry queue.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `enriched_event_id` | TEXT | **PK** | — | The enriched record the fact belongs to (`EnrichedEvents.enriched_event_id`). |
+| `fact` | TEXT | **PK** | — | Fact group: `date`, `entity`, `threat_actor`, `attack_method`, `victim_count` or `industry`. |
+| `status` | TEXT | NOT NULL | — | `supported` (stored in the typed columns and enrichment JSON) or `withheld` (no source supports it; kept only here). |
+| `value_json` | TEXT | Yes | — | The value Perplexity claimed, as JSON (dates as ISO text). |
+| `confidence` | REAL | Yes | — | Perplexity's confidence for the fact (0-1), e.g. `date_confidence`; NULL for `industry`, which has none. |
+| `source_kind` | TEXT | Yes | — | Where a supported fact was found: `record` (the record's own text), `cited_document` (a cited page) or `entity` (industry, supported through the supported victim); NULL when withheld with no source. |
+| `source_url` | TEXT | Yes | — | URL of the cited page that supports the fact; NULL for record support or when withheld. |
+| `reason` | TEXT | Yes | — | Why the fact was withheld (e.g. no source states it); NULL when supported. |
+| `details_json` | TEXT | Yes | — | How the source states the fact, as JSON: a date's `precision` and `basis`, a count's `unit`, `basis` and `scope`; NULL for other facts. |
+| `checked_at` | TEXT | NOT NULL | — | When the fact was last judged (ISO timestamp, local time). |
+
+#### Entities_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `entity_id` | INTEGER | **PK** | — | Integer key of a V1 entity, referenced by `EventEntities_v1_backup.entity_id` (V1 schema, not used by current code). |
+| `entity_name` | VARCHAR(255) | NOT NULL | — | Organisation name extracted by V1 enrichment, unique; inserted by the V1 `cyber_event_data/library.py` (V1 schema, not used by current code). |
+| `entity_type` | VARCHAR(50) | Yes | — | Kind of entity; written by no V1 code in git history, its current counterpart is `EntitiesV2.entity_type` (V1 schema, not used by current code). |
+| `industry` | VARCHAR(100) | Yes | — | Industry of the entity, read by the V1 summary statistics; written by no V1 code in git history (V1 schema, not used by current code). |
+| `turnover` | VARCHAR(50) | Yes | — | Annual turnover as text; written by no V1 code in git history (V1 schema, not used by current code). |
+| `employee_count` | INT | Yes | — | Number of employees; written by no V1 code in git history (V1 schema, not used by current code). |
+
+#### EntityAliasDecisionHistory
+
+Alias decisions that a re-ask on changed evidence replaced: one row per superseded `EntityAliasDecisions` row, with `superseded_at` and `superseded_by` (the new verdict). Written by `dedup/entity_alias_verification.py`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `name` | TEXT | NOT NULL | — | Alphabetically first name of the pair, as in `EntityAliasDecisions.name`. |
+| `other_name` | TEXT | NOT NULL | — | The other name of the pair. |
+| `verdict` | TEXT | NOT NULL | — | The replaced verdict: `same`, `parent_subsidiary`, `related`, `different` or `unsure`. |
+| `canonical_name` | TEXT | Yes | — | The organisation's usual name given by the replaced decision, when its verdict was `same`; NULL otherwise. |
+| `reason` | TEXT | Yes | — | The reason given for the replaced verdict. |
+| `citations_json` | TEXT | Yes | — | JSON list of the URLs cited for the replaced verdict. |
+| `model` | TEXT | NOT NULL | — | Who made the replaced decision: a Perplexity model (e.g. `sonar-pro`) or `rule`; a person's (`human`) decision is never replaced. |
+| `prompt_version` | TEXT | NOT NULL | — | Question version of the replaced decision (e.g. `entity-alias-v1`). |
+| `decided_at` | TEXT | NOT NULL | — | When the replaced decision was made, ISO 8601 local time. |
+| `superseded_at` | TEXT | NOT NULL | — | When `entity_alias_verification.verify_pair` asked the pair again on changed evidence and replaced the decision, ISO 8601 local time. |
+| `superseded_by` | TEXT | Yes | — | The new verdict that replaced it. |
+
+#### EntityAliasDecisions
+
+One row per pair of entity names and question version: the current verdict on whether the two names are one organisation, from Perplexity, a person or the unmerge rule. Written by `dedup/entity_alias_verification.py` (`canonicalise-entities`, alias learning, anti-alias learning, supplier customer pairs), `dedup_admin.py alias add` and `entity_merge_ledger.unmerge_entity`; read before every fold, by `anti_aliases.sync_from_verdicts` and by victim counting.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `name` | TEXT | **PK** | — | One name of the pair, the alphabetically first, so each pair is stored once. |
+| `other_name` | TEXT | **PK** | — | The other name of the pair. |
+| `verdict` | TEXT | NOT NULL | — | Whether the names are one organisation: `same` (one legal entity, or its trading name, abbreviation, acronym or former name; only this folds), `parent_subsidiary`, `related`, `different` or `unsure`. |
+| `canonical_name` | TEXT | Yes | — | The organisation's usual name when the verdict is `same`; NULL otherwise. |
+| `reason` | TEXT | Yes | — | Why: Perplexity's explanation, the reason a person entered, or `verdict changed to ...` from an unmerge. |
+| `citations_json` | TEXT | Yes | — | JSON list of the URLs Perplexity cited; `[]` for an unmerge's verdict, NULL for a person's alias. |
+| `model` | TEXT | NOT NULL | — | Who decided: the Perplexity model (e.g. `sonar-pro`), `human` (`dedup_admin.py alias add` or `unmerge-entity`; never re-asked, outranks any model) or `rule` (the `different` recorded when a fold is reversed automatically, which a later verification may overturn). |
+| `prompt_version` | TEXT | **PK** | — | Version of the verification question (`entity-alias-v1`), or `human` for a person's alias. |
+| `decided_at` | TEXT | NOT NULL | — | When the decision was made, ISO 8601 (local time for model and rule decisions, UTC with offset for `alias add`). |
+
+#### EntityAliases
+
+One row per name variant that resolves to an organisation's canonical name everywhere (a global alias). Written by `EntityResolver.learn_alias` (`dedup/entity_resolution.py`, from `canonicalise-entities`, `dedup_admin.py alias add` and `dedup_admin.py learn`) and `entity_alias_verification.py`; read by entity resolution at ingest, victim counting and fold proposals.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `alias_id` | INTEGER | **PK** | — | Integer key. |
+| `raw_name` | TEXT | NOT NULL | — | The variant name as written, unique. |
+| `canonical_name` | TEXT | NOT NULL | — | The organisation's canonical name the variant resolves to. |
+| `canonical_key` | TEXT | NOT NULL | — | `entity_resolution.canonical_key(canonical_name)`: normalised (lower case, no punctuation or accents) with trailing legal suffixes removed. |
+| `source` | TEXT | NOT NULL | `'rule'` | Who decided: `human` (`dedup_admin.py alias add` or a pair in `EXPLICIT_ALIASES`), `llm` (confirmed `same` by Perplexity), `learned` (a person's `same` ruling between two records, `dedup_admin.py learn`) or `rule` (from name structure alone; `canonicalise-entities` puts each to Perplexity, making it `llm` or deleting it, and keeps pairs that differ only in spelling). |
+| `confidence` | REAL | Yes | — | Confidence in the alias, 0 to 1; written as `1.0` by every current path. |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the alias was added or last changed target or source, ISO 8601: UTC with offset; older rows are `CURRENT_TIMESTAMP` (UTC, no offset). |
+
+#### EntityAntiAliases
+
+One row per pair of names that look alike but are different entities; every path that joins two names (victim counting, fold verification, alias lookup, fold reversal) checks it first. Written by `dedup/anti_aliases.py` (`sync_from_verdicts` and `learn_from_counting` in `canonicalise-entities`, and `dedup_admin.py anti-alias add`).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `name_key_a` | TEXT | **PK** | — | `normalize_name` of the first name; the pair is stored sorted on these keys. |
+| `name_key_b` | TEXT | **PK** | — | `normalize_name` of the second name. |
+| `name_a` | TEXT | NOT NULL | — | The first name as written. |
+| `name_b` | TEXT | NOT NULL | — | The second name as written. |
+| `relation` | TEXT | NOT NULL | — | How the two differ: `different`, `related` or `parent_subsidiary`. |
+| `source` | TEXT | NOT NULL | — | Who listed the pair: `human` (`dedup_admin.py anti-alias add`; never replaced or removed by a model) or `llm` (a stored Perplexity verdict in `EntityAliasDecisions`; removed if a later verdict is `same`). |
+| `reason` | TEXT | Yes | — | The person's reason, or the reason of the verdict listed. |
+| `citations_json` | TEXT | Yes | — | JSON list of cited URLs; `[]` for entries listed from stored verdicts, whose citations stay in `EntityAliasDecisions`. |
+| `model` | TEXT | Yes | — | For `llm` rows, the model whose verdict is listed (e.g. `sonar-pro`); NULL for a person's entry. |
+| `created_at` | TEXT | NOT NULL | — | When the entry was written, ISO 8601, UTC with offset. |
+
+#### EntityMentionResolutions
+
+One row per entity link and acronym: which organisation a contextual acronym on one record or event resolves to, and how. Written by `contextual_aliases.resolve_links` (run by `canonicalise-entities`) and read by later runs, victim counting and `EntityMerges` (which copies the rows naming a dropped entity).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `link_table` | TEXT | **PK** | — | The link table the mention belongs to: `EnrichedEventEntities` or `DeduplicatedEventEntities`. |
+| `subject_id` | TEXT | **PK** | — | The record or event the link belongs to: an `enriched_event_id` or a `deduplicated_event_id`, according to `link_table`. |
+| `raw_name` | TEXT | **PK** | — | The acronym as written (a `ContextualEntityAliases.raw_name`). |
+| `canonical_name` | TEXT | Yes | — | The organisation the mention resolved to; NULL when unresolved or when a model was confident it means none of the candidates. |
+| `method` | TEXT | NOT NULL | — | How it was decided: `named in the text` (the record names one candidate in full, no model), `jev` (Jev chose at 0.9 or above), `escalated` (the reasoning OpenAI model chose at 0.9 or above) or `unresolved`. |
+| `probability` | REAL | Yes | — | Probability of the leading answer (1.0 for `named in the text`); for `unresolved`, the escalation's best probability, below 0.9. |
+| `moved_from` | TEXT | Yes | — | Name of the entity the link was on before it moved; NULL when the link did not move. |
+| `decided_at` | TEXT | NOT NULL | — | When the decision was recorded, ISO 8601: UTC with offset; older rows have no offset and are local time. |
+
+#### EntityMerges
+
+One row per fold of one `EntitiesV2` entity into another, holding everything needed to undo it. Written by `entity_merge_ledger.merge_pair` (from `merge_entities` in `canonicalise-entities`) and read by `dedup_admin.py entity-merges` and `unmerge-entity` and by `reverse_overturned_merges`, which undoes model-made folds whose verdict has changed.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `merge_id` | TEXT | **PK** | — | Key: `em-` followed by 12 hex characters. |
+| `kept_entity_id` | INTEGER | NOT NULL | — | `EntitiesV2.entity_id` of the entity that remains. |
+| `kept_name` | TEXT | NOT NULL | — | Name of the kept entity. |
+| `dropped_entity_id` | INTEGER | NOT NULL | — | `EntitiesV2.entity_id` of the entity folded away; `unmerge-entity` restores it with this id. |
+| `dropped_name` | TEXT | NOT NULL | — | Name of the dropped entity. |
+| `source` | TEXT | NOT NULL | — | Who decided the alias the fold applied: `human` (a reviewed alias), `llm` (Perplexity-confirmed) or `rule` (a stored structural alias); `human` folds are never reversed by a model. |
+| `decision_json` | TEXT | Yes | — | The `EntityAliasDecisions` verdict the fold rested on, as JSON. |
+| `entity_row_json` | TEXT | NOT NULL | — | The dropped `EntitiesV2` row, every column, as JSON. |
+| `kept_before_json` | TEXT | NOT NULL | — | The kept `EntitiesV2` row before the fold, as JSON. |
+| `inherited_json` | TEXT | Yes | — | Attributes the kept row took from the dropped row (its blanks only): `{column: {"before": ..., "after": ...}}`. |
+| `links_json` | TEXT | NOT NULL | — | Every link the dropped entity held in `EnrichedEventEntities` and `DeduplicatedEventEntities`, with what became of it: `moved`, or `collided` with a link the kept entity already held (both original rows kept). |
+| `scalar_json` | TEXT | Yes | — | Events whose `victim_organization_name` or `vendor_organization_name` was renamed to the kept name. |
+| `mentions_json` | TEXT | Yes | — | The `EntityMentionResolutions` rows naming the dropped entity. |
+| `roles_json` | TEXT | Yes | — | Roles the dropped entity held: `{table: {role: count}}`. |
+| `source_ids_json` | TEXT | Yes | — | The enriched, raw and deduplicated event ids of the dropped entity's links. |
+| `references_json` | TEXT | Yes | — | Other tables still keyed by the dropped id, left in place: `{table: row count}`. |
+| `alias_json` | TEXT | Yes | — | The `EntityAliases` row for `dropped_name` at fold time. |
+| `status` | TEXT | NOT NULL | `'applied'` | `applied`, or `reversed` once `unmerge-entity` or an automatic reversal has undone it. |
+| `merged_at` | TEXT | NOT NULL | — | When the fold was made, ISO 8601 local time. |
+| `reversed_at` | TEXT | Yes | — | When the fold was undone, ISO 8601 local time; NULL while applied. |
+| `reversed_reason` | TEXT | Yes | — | Why it was undone: the reason given to `unmerge-entity`, or `verdict changed to ...` for an automatic reversal. |
+
+#### EntityProfileResearch
+
+One row per entity: when its profile was last looked up and on what evidence, so a lookup is repeated only when that evidence changes. Written by `entity_profiles.research_profile` (`dedup_admin.py entity-profile research`, `find-supplier-victims --research`) and read by `entity_profiles.pending`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `entity_id` | INTEGER | **PK** | — | `EntitiesV2.entity_id` of the organisation looked up. |
+| `evidence_hash` | TEXT | NOT NULL | — | First 16 hex characters of a SHA-256 of up to three incident titles the organisation is linked to, the prompt version and the model (`entity_profiles.evidence_hash`). |
+| `prompt_version` | TEXT | NOT NULL | — | Version of the lookup question (`entity-profile-v1`). |
+| `model` | TEXT | NOT NULL | — | The Perplexity model that answered (e.g. `sonar-pro`). |
+| `status` | TEXT | NOT NULL | — | `researched` (attributes stored in `EntityProfiles`) or `unavailable` (no readable answer; looked up again next run). |
+| `citations_json` | TEXT | Yes | — | JSON list of the URLs Perplexity cited; NULL when `unavailable`. |
+| `researched_at` | TEXT | NOT NULL | — | When the lookup ran, ISO 8601 local time. |
+
+#### EntityProfiles
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `profile_id` | INTEGER | **PK** | — | Integer key. |
+| `entity_id` | INTEGER | NOT NULL | — | `EntitiesV2.entity_id` the attribute describes. |
+| `kind` | TEXT | NOT NULL | — | The attribute: `jurisdiction`, `sector`, `type`, `administered_by`, `runs`, `holds_data`, `known_as` or `website`; `jurisdiction`, `type`, `administered_by` and `website` hold one value per entity when set by a person. |
+| `value` | TEXT | NOT NULL | — | The attribute's value as text, e.g. a country and state, an industry, or a service the organisation runs. |
+| `source` | TEXT | NOT NULL | — | `llm` (from a Perplexity lookup, `entity_profiles.research_profile`) or `human` (`dedup_admin.py entity-profile set`; never replaced or removed by a lookup). |
+| `evidence` | TEXT | Yes | — | For `llm`, the JSON list of URLs the lookup cited; for `human`, the reason entered. |
+| `created_at` | TEXT | NOT NULL | — | When the attribute was stored, ISO 8601 local time. |
+
+#### EntityStateHistory
+
+Append-only history of `EntitiesV2`: one row per change to a tracked column, written by SQLite triggers (`dedup/input_history.py`) so every writer is covered. Read by the analyses' `--as-known-at` reconstruction.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `history_id` | INTEGER | **PK** | — | Order of the changes (INTEGER, autoincrement); the row with the highest id at or before a time is the state then. |
+| `change` | TEXT | NOT NULL | — | `baseline` (the state when tracking began, its start unknown), `insert`, `update` or `delete` (the key did not exist from then on). |
+| `known_at` | TEXT | NOT NULL | — | When the change was recorded, UTC `YYYY-MM-DD HH:MM:SS` from the database clock; written by the trigger. |
+| `backfilled` | INTEGER | NOT NULL | `0` | 1 for `baseline` rows: the state already held when tracking began, so when it began to hold is unknown; 0 otherwise. |
+
+#### EventAttributeHistory_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `history_id` | TEXT | **PK** | — | Text key of one recorded change to a V1 event's attribute; no code in git history writes the table (V1 schema, not used by current code). |
+| `event_id` | TEXT | Yes | — | The V1 event changed (`UniqueEvents_v1_backup.event_id`) (V1 schema, not used by current code). |
+| `event_source_id` | TEXT | Yes | — | The V1 source behind the change (`EventSources_v1_backup.event_source_id`); NULL when none (V1 schema, not used by current code). |
+| `attribute_name` | VARCHAR(50) | NOT NULL | — | Name of the event column that changed (V1 schema, not used by current code). |
+| `old_value` | TEXT | Yes | — | Value before the change, as text (V1 schema, not used by current code). |
+| `new_value` | TEXT | Yes | — | Value after the change, as text (V1 schema, not used by current code). |
+| `change_date` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the change was recorded; defaults to `CURRENT_TIMESTAMP` (UTC) (V1 schema, not used by current code). |
+
+#### EventCorroborations
+
+One row per event and Perplexity corroboration search asking whether credible public reporting of the incident exists, stored because a search cannot be replayed. Written by `dedup/corroboration.py` during `dedup_admin.py check-events` for events the screen scores below 0.5; read by the event-reality judgement.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `deduplicated_event_id` | TEXT | **PK** | — | The event searched for (`DeduplicatedEvents.deduplicated_event_id`). |
+| `query_hash` | TEXT | **PK** | — | SHA-256 of the model and the query; a new hash means a new search. |
+| `query` | TEXT | NOT NULL | — | The prompt sent to Perplexity, built from the event's title, victim, date and records. |
+| `model` | TEXT | NOT NULL | — | Perplexity model that answered (`PERPLEXITY_MODEL`, default `sonar-pro`). |
+| `answer` | TEXT | Yes | — | Perplexity's answer in the `FOUND` / `INCIDENT` / `SOURCES` format. |
+| `citations_json` | TEXT | Yes | — | JSON list of the citation URLs Perplexity returned. |
+| `created_at` | TEXT | NOT NULL | — | When the search was made (ISO timestamp, local time). |
+
+#### EventDescriptions
+
+One row per generated description of an incident and the evidence it was written from: AI incidents for the AI incident report, and supplier incidents for the supplier report. Written by `processing/ai_involvement.py` (`scripts/classify_ai_involvement.py`) and `dedup/multi_customer_incidents.py`; read by `build_ai_incident_report.py`, `build_supplier_incidents_report.py` and the main dashboard.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `deduplicated_event_id` | TEXT | **PK** | — | The described event (`DeduplicatedEvents.deduplicated_event_id`), or the supplier incident id (`si-...`, `SupplierIncidents`) for purpose `supplier-incident`. |
+| `purpose` | TEXT | **PK** | — | What the description is for: `ai_incident_report` or `supplier-incident`. |
+| `prompt_version` | TEXT | NOT NULL | — | Version of the description prompt, e.g. `ai-description-v1` or `supplier-incident-description-v1`. |
+| `input_hash` | TEXT | **PK** | — | SHA-256 of the evidence, prompt and model; a description is current only while its evidence gives the same hash. |
+| `model` | TEXT | NOT NULL | — | OpenAI model that wrote it (the fast model, `OPENAI_FAST_MODEL`). |
+| `description` | TEXT | NOT NULL | — | The 2-4 sentence description. |
+| `created_at` | TEXT | NOT NULL | — | When it was written (ISO timestamp, local time). |
+
+#### EventEntities_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `event_id` | TEXT | **PK** | — | V1 event the entity was named in (`UniqueEvents_v1_backup.event_id`); written by the V1 `update_event_with_enriched_data` (V1 schema, not used by current code). |
+| `entity_id` | INTEGER | **PK** | — | The V1 entity (`Entities_v1_backup.entity_id`) (V1 schema, not used by current code). |
+
+#### EventEntityLinkHistory
+
+Append-only history of `DeduplicatedEventEntities`: one row per change to a tracked column, written by SQLite triggers (`dedup/input_history.py`) so every writer is covered. Read by the analyses' `--as-known-at` reconstruction.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `history_id` | INTEGER | **PK** | — | Order of the changes (INTEGER, autoincrement); the row with the highest id at or before a time is the state then. |
+| `change` | TEXT | NOT NULL | — | `baseline` (the state when tracking began, its start unknown), `insert`, `update` or `delete` (the key did not exist from then on). |
+| `known_at` | TEXT | NOT NULL | — | When the change was recorded, UTC `YYYY-MM-DD HH:MM:SS` from the database clock; written by the trigger. |
+| `backfilled` | INTEGER | NOT NULL | `0` | 1 for `baseline` rows: the state already held when tracking began, so when it began to hold is unknown; 0 otherwise. |
+
+#### EventFactOverrides
+
+One row per explicit correction of an event fact, applied instead of the value computed from the event's members. Written by `set_fact` in `dedup/event_facts.py` (`dedup_admin.py set-fact`); read by `refresh_facts` whenever facts are recomputed.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `deduplicated_event_id` | TEXT | **PK** | — | The corrected event (`DeduplicatedEvents.deduplicated_event_id`). |
+| `field` | TEXT | **PK** | — | Corrected fact: `records_affected`, `event_type`, `severity`, `attack_method` or `attacking_entity_name`. |
+| `value` | TEXT | Yes | — | The value to use, as text; NULL clears the fact. |
+| `reason` | TEXT | NOT NULL | — | Why the correction was made. |
+| `created_by` | TEXT | NOT NULL | `'human'` | Who made it (default `human`). |
+| `created_at` | TEXT | NOT NULL | — | When it was recorded (ISO timestamp, local time). |
+
+#### EventMembershipHistory
+
+Append-only history of `EventDeduplicationMap`: one row per change to a tracked column, written by SQLite triggers (`dedup/input_history.py`) so every writer is covered. Read by the analyses' `--as-known-at` reconstruction.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `history_id` | INTEGER | **PK** | — | Order of the changes (INTEGER, autoincrement); the row with the highest id at or before a time is the state then. |
+| `change` | TEXT | NOT NULL | — | `baseline` (the state when tracking began, its start unknown), `insert`, `update` or `delete` (the key did not exist from then on). |
+| `known_at` | TEXT | NOT NULL | — | When the change was recorded, UTC `YYYY-MM-DD HH:MM:SS` from the database clock; written by the trigger. |
+| `backfilled` | INTEGER | NOT NULL | `0` | 1 for `baseline` rows: the state already held when tracking began, so when it began to hold is unknown; 0 otherwise. |
+
+#### EventSources_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `event_source_id` | TEXT | **PK** | — | UUID key of one source URL of a V1 event (V1 schema, not used by current code). |
+| `event_id` | TEXT | Yes | — | The V1 event the URL reports (`UniqueEvents_v1_backup.event_id`) (V1 schema, not used by current code). |
+| `source_id` | INTEGER | Yes | — | The V1 data source (`DataSources_v1_backup.source_id`); never set by the V1 library (V1 schema, not used by current code). |
+| `url` | VARCHAR(2048) | Yes | — | Article URL, unique; written by the V1 `add_event` (V1 schema, not used by current code). |
+| `published_date` | TIMESTAMP | Yes | — | Publication date of the article; not written by the V1 library (V1 schema, not used by current code). |
+| `retrieved_date` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the URL was stored; defaults to `CURRENT_TIMESTAMP` (UTC) (V1 schema, not used by current code). |
+| `raw_title` | TEXT | Yes | — | Article title as scraped; carried into `RawEvents.raw_title` by the V1-to-V2 migration (`database_migration_v2.py`) (V1 schema, not used by current code). |
+| `raw_content` | TEXT | Yes | — | Scraped article text (V1 schema, not used by current code). |
+| `is_enriched` | BOOLEAN | Yes | `FALSE` | 1 once V1 enrichment had processed the URL (`mark_url_as_processed`); migrated to `RawEvents.is_processed` (V1 schema, not used by current code). |
+
+#### EventStateHistory
+
+Append-only history of `DeduplicatedEvents`: one row per change to a tracked column, written by SQLite triggers (`dedup/input_history.py`) so every writer is covered. Read by the analyses' `--as-known-at` reconstruction.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `history_id` | INTEGER | **PK** | — | Order of the changes (INTEGER, autoincrement); the row with the highest id at or before a time is the state then. |
+| `change` | TEXT | NOT NULL | — | `baseline` (the state when tracking began, its start unknown), `insert`, `update` or `delete` (the key did not exist from then on). |
+| `known_at` | TEXT | NOT NULL | — | When the change was recorded, UTC `YYYY-MM-DD HH:MM:SS` from the database clock; written by the trigger. |
+| `backfilled` | INTEGER | NOT NULL | `0` | 1 for `baseline` rows: the state already held when tracking began, so when it began to hold is unknown; 0 otherwise. |
+
+#### EventVictimCoreference
+
+One row per pair of victim names on one event, with the verdict on whether they are the same organisation in that incident's reporting. Written by `dedup/covictim_coreference.py` (`dedup_admin.py check-covictims`) from a Perplexity question or a person's alias record; a `same` verdict makes victim counting and the entity dashboard count the two names once on that event only.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `deduplicated_event_id` | TEXT | **PK** | — | The event both names are recorded victims of. |
+| `name` | TEXT | **PK** | — | The first of the two victim names (the pair is stored in sorted order). |
+| `other_name` | TEXT | **PK** | — | The second of the two victim names. |
+| `verdict` | TEXT | NOT NULL | — | The answer: `same`, `parent_subsidiary`, `related`, `different` or `unsure`; only `same` joins the names, and only on this event. |
+| `canonical_name` | TEXT | Yes | — | The organisation's usual full name when the verdict is `same`, as the model gave it; NULL otherwise and for a person's record. |
+| `reason` | TEXT | Yes | — | The model's one-line reason, or `a person's alias or alias decision` when a person's record decided. |
+| `citations_json` | TEXT | Yes | — | JSON list of URLs the Perplexity answer cited; `[]` for a person's record. |
+| `model` | TEXT | NOT NULL | — | The Perplexity model that answered, or `human` when a person's alias or alias decision decided without a question. |
+| `prompt_version` | TEXT | **PK** | — | Version of the question (`covictim_coreference.PROMPT_VERSION`, e.g. `covictim-coreference-v1`); part of the primary key. |
+| `evidence_hash` | TEXT | NOT NULL | — | SHA-256 of the question exactly as sent (`human` for a person's record); a verdict counts only while the event's question still hashes to it. |
+| `decided_at` | TEXT | NOT NULL | — | When the verdict was stored (UTC, ISO 8601 with offset). |
+
+#### ImpossibleIncidentDates
+
+One row per incident date removed because it fell more than 7 days after the date the source gave for the item itself. Written by `remove_dates_after_publication` in `processing/incident_dates.py` (`dedup_admin.py publication-dates`) as an audit record.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_event_id` | TEXT | NOT NULL | — | The record whose date was removed (`RawEvents.raw_event_id`). |
+| `enriched_event_id` | TEXT | Yes | — | The record's enrichment, whose research date was removed when `field` is the research date. |
+| `field` | TEXT | NOT NULL | — | What was removed: `raw incident date` (`RawEvents.event_date`) or `research date and count` (the Perplexity date with its records count, withheld and the record re-queued for research). |
+| `removed_value` | TEXT | Yes | — | The removed value: the date, or `<date> / <count>` for research. |
+| `publication_date` | TEXT | NOT NULL | — | The source's own date for the item, which the incident date followed (a Webber date counts to the end of its month). |
+| `removed_at` | TEXT | NOT NULL | — | When it was removed (ISO timestamp, local time). |
+
+#### InputHistoryStatus
+
+One row per watched table of the input history (`dedup/input_history.py`): when tracking began and which columns are tracked.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `source` | TEXT | **PK** | — | The history source: `events`, `membership`, `links` or `entities`. |
+| `table_name` | TEXT | NOT NULL | — | The watched table (`DeduplicatedEvents`, `EventDeduplicationMap`, `DeduplicatedEventEntities` or `EntitiesV2`). |
+| `tracking_since` | TEXT | NOT NULL | — | When the triggers were first installed (UTC); a cutoff before it is reconstructed from the baseline rows. |
+| `baselined_at` | TEXT | NOT NULL | — | When the baseline rows (the state at that moment) were written (UTC). |
+| `columns_json` | TEXT | NOT NULL | — | JSON object mapping each tracked column to when it began to be tracked; a column added later has no value for earlier rows. |
+
+#### ModelJudgements
+
+One row per stored model answer: every Jev judgement (`utils/jev.py`), every reasoning-model escalation (`utils/escalation.py`) and the fast model's organisation extractions (`dedup/event_organisations.py`), each keyed by a hash of its input so a re-run reuses it. Read by every calibrated step (event reality, scope, coherence, duplicates, victim attribution and fill, names, pages, AI involvement, breach source) and by the calibration scripts.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `judgement_id` | TEXT | **PK** | — | Row identifier (UUID). |
+| `subject_type` | TEXT | NOT NULL | — | What was judged, e.g. `deduplicated_event`, `event_pair`, `event_victim`, `event_victim_fill`, `event_member`, `event_member_same_org`, `event_organisation`, `organisation_name`, `entity_mention`, `raw_event`, `enriched_event`. |
+| `subject_id` | TEXT | NOT NULL | — | Id of the subject; for a pair, the two ids sorted and joined by `\|`. |
+| `question_id` | TEXT | NOT NULL | — | Stable name of the question, e.g. `page_kind`; with `input_hash` it is the reuse key. |
+| `question_version` | TEXT | NOT NULL | — | Version of the question's wording and evidence, bumped whenever either changes. |
+| `primitive` | TEXT | NOT NULL | — | Kind of answer: `choice`, `noul` or `score` (Jev), `escalation` or `escalation_choice` (reasoning model), `extraction` (fast-model organisation list). |
+| `answer` | TEXT | Yes | — | The chosen option for a choice; `yes`/`no` at 0.5 for a noul or escalation; NULL for a score; the extracted names as JSON for an extraction. |
+| `value` | REAL | Yes | — | Noul or escalation probability, score value, or the chosen option's probability (0-1); NULL for an extraction. |
+| `confidence` | REAL | Yes | — | Jev's concentration of the distribution for a choice or score; NULL for a noul, escalation or extraction. |
+| `probabilities_json` | TEXT | Yes | — | The full distribution as returned, as JSON (option to probability); escalations add the model's `rationale`; `{}` for an extraction. |
+| `question_json` | TEXT | NOT NULL | — | The question exactly as sent, as JSON (escalations also record the reasoning effort). |
+| `input_hash` | TEXT | NOT NULL | — | SHA-256 of the evidence state, the question and the requested model (`jev.input_hash`; escalations also hash the reasoning effort); an answer is reused only for the same `question_id` and hash. |
+| `model_requested` | TEXT | NOT NULL | — | The model asked, e.g. `jev-1.14.0` (`TYPESAFE_MODEL`), `gpt-5.5-2026-04-23` (`OPENAI_MODEL`) or `gpt-5.4-mini-2026-03-17` (`OPENAI_FAST_MODEL`). |
+| `model` | TEXT | Yes | — | The model version the response reported as having answered. |
+| `input_tokens` | INTEGER | Yes | — | Input tokens of the whole request, repeated on each answer of a multi-question Jev request; NULL when not reported. |
+| `output_tokens` | INTEGER | Yes | — | Output tokens of the whole request, repeated on each answer; NULL when not reported. |
+| `created_at` | TEXT | NOT NULL | — | When the answer was stored (UTC, ISO 8601 with offset; rows before 2026-10-30 are naive local time). |
+
+#### OrganisationTimelineFailures
+
+One row per failed Perplexity search for an organisation's incident history. Written by `org_timeline._search_once` (`dedup/org_timeline.py`) before it raises; read by `org_timeline.limitations`, which warns the judgements that a timeline older than the failure may be incomplete.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `entity_id` | INTEGER | NOT NULL | — | The organisation researched (`EntitiesV2.entity_id`). |
+| `entity_name` | TEXT | NOT NULL | — | The organisation's name as researched. |
+| `query` | TEXT | NOT NULL | — | The question sent to Perplexity. |
+| `model` | TEXT | NOT NULL | — | The Perplexity model asked (`PERPLEXITY_MODEL`, e.g. `sonar-pro`). |
+| `error` | TEXT | NOT NULL | — | The exception type and message, cut to 500 characters. |
+| `failed_at` | TEXT | NOT NULL | — | When the search failed (ISO 8601 local time from `datetime.now()`, no offset). |
+
+#### OrganisationTimelines
+
+One row per Perplexity search for an organisation's full incident history (every version kept; the latest is used). Written by `org_timeline._search_once` (`dedup_admin.py research-timelines` and the hygiene steps); read as evidence by event reality, duplicates, coherence and victim judgements, by `reconcile-timelines` and by `scripts/build_timeline_dashboard.py`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `entity_id` | INTEGER | **PK** | — | The organisation researched (`EntitiesV2.entity_id`). |
+| `entity_name` | TEXT | NOT NULL | — | The organisation's name as researched. |
+| `query_hash` | TEXT | **PK** | — | SHA-256 of the model, the query and the discovery time of the newest record about the organisation (`org_timeline.latest_evidence`), so a new record leads to a new search. |
+| `query` | TEXT | NOT NULL | — | The question sent to Perplexity (prompt `timeline-v2`). |
+| `model` | TEXT | NOT NULL | — | The Perplexity model that answered (`PERPLEXITY_MODEL`, e.g. `sonar-pro`). |
+| `answer` | TEXT | Yes | — | Perplexity's answer text: the dated list of incidents, or the answer as given when it lists none. |
+| `citations_json` | TEXT | Yes | — | JSON list of URLs the answer cited. |
+| `created_at` | TEXT | NOT NULL | — | When the search was made (ISO 8601 local time from `datetime.now()`, no offset). |
+
+#### PageClassifications
+
+One row per enriched record: what kind of page its scraped source is, so roundups, guidance, profiles and index pages can be treated as non-incidents. Written by `dedup/page_classifier.py` (`dedup_admin.py classify-pages`); read by `reject-non-incidents` and the dedup adjudicators.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `enriched_event_id` | TEXT | **PK** | — | The classified record (`EnrichedEvents.enriched_event_id`). |
+| `kind` | TEXT | NOT NULL | — | Page kind: `specific_incident`, `roundup_or_list`, `guidance_or_marketing`, `profile_or_personal` or `index_or_homepage`. |
+| `confidence` | REAL | NOT NULL | — | Probability (0-1) of the chosen side, incident or non-incident, summed over the Jev distribution; on older OpenAI rows, the model's own confidence. |
+| `reasoning` | TEXT | Yes | — | For Jev, `jev: ` followed by each kind's probability as JSON; for OpenAI, one sentence naming the decisive evidence. |
+| `model` | TEXT | Yes | — | Model that classified the page: the Jev version (e.g. `jev-1.14.0`) or the OpenAI fast model. |
+| `created_at` | TEXT | NOT NULL | — | When the page was classified (ISO timestamp, local time). |
+| `question_version` | TEXT | Yes | — | Version of the page-kind question (e.g. `page-kind-v2-source-text`); a verdict under another version is asked again. NULL on rows from before versions were stored. |
+
+#### PageRescrapes
+
+One row per record whose page is queued for, or has had, a Playwright re-fetch because its stored text is too short or is not the record's article. Written by `processing/page_rescrape.py` (`dedup_admin.py rescrape-short-pages`) and queued also by `processing/record_identity.py` and `processing/evidence_recovery.py`; read by those and the quality report.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_event_id` | TEXT | **PK** | — | The record whose page is re-fetched (`RawEvents.raw_event_id`). |
+| `url` | TEXT | Yes | — | The page URL fetched. |
+| `attempts` | INTEGER | NOT NULL | `0` | Failed fetch attempts; the page is given up at 3. |
+| `status` | TEXT | NOT NULL | — | `queued` (asked for, not tried yet), `stored` (new text stored), `retry` or `gave_up`. |
+| `last_error` | TEXT | Yes | — | Why the last attempt failed (e.g. too short, or not longer than the stored text); NULL after success. |
+| `last_chars` | INTEGER | Yes | — | Length in characters of the text fetched last time. |
+| `last_attempt_at` | TEXT | NOT NULL | — | When the page was last tried, or queued (ISO timestamp, local time). |
+
+#### PublicationDateFetches
+
+One row per record whose page was fetched (or skipped) to read its publication date from page metadata or the URL. Written by `processing/publication_dates.py` (`dedup_admin.py publication-dates`), which reads it to skip settled pages and retry failures.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `raw_event_id` | TEXT | **PK** | — | The record (`RawEvents.raw_event_id`). |
+| `attempts` | INTEGER | NOT NULL | `0` | Fetch attempts made; given up at 3, and `0` for listing pages, which are not fetched. |
+| `status` | TEXT | NOT NULL | — | `stored` (date found), `no date on page`, `retry`, `gave up` or `listing page` (a page cited by records of more than 3 events, whose date is nobody's publication date). |
+| `last_error` | TEXT | Yes | — | Error of the last failed fetch (e.g. `HTTP 404`); NULL otherwise. |
+| `last_attempt_at` | TEXT | NOT NULL | — | When the page was last tried (ISO timestamp, local time, to the second). |
+
+#### ReconciliationGaps
+
+One row per incident in an organisation's researched timeline that no event covered, with the search made for proper reporting of it. Written by `timeline_reconciliation.queue_gap` (`dedup_admin.py reconcile-timelines --queue-gaps`), which also queues a new `RawEvents` record when the search finds reporting; a gap already stored is not searched again.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `entity_id` | INTEGER | **PK** | — | The organisation whose timeline lists the incident (`EntitiesV2.entity_id`). |
+| `incident_key` | TEXT | **PK** | — | The incident's date plus the first eight words of its description, cut to 200 characters; with `entity_id` the primary key. |
+| `incident_text` | TEXT | NOT NULL | — | The timeline incident as JSON (`date`, `what`, `source` and the other fields the timeline gave). |
+| `query` | TEXT | Yes | — | The question sent to Perplexity for reporting of the incident. |
+| `model` | TEXT | Yes | — | The Perplexity model asked (`PERPLEXITY_MODEL`, e.g. `sonar-pro`). |
+| `answer` | TEXT | Yes | — | Perplexity's answer; one beginning `FOUND: YES` with citations queues a record. |
+| `citations_json` | TEXT | Yes | — | JSON list of URLs the answer cited, or the timeline's own source when it cited none. |
+| `raw_event_id` | TEXT | Yes | — | The `RawEvents` record queued for normal ingestion when reporting was found; NULL when none was. |
+| `created_at` | TEXT | NOT NULL | — | When the gap was searched (ISO 8601 local time from `datetime.now()`, no offset). |
+
+#### RecordFingerprints
+
+One row per enriched record placed in an event: the values of the fields events are built from, as last seen, so a re-enriched record refreshes its events with their ids kept. Written and read by `refresh_changed_events` in `dedup/record_fingerprints.py` (run by `run_global_deduplication.py` and `refresh-cited-documents`).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `enriched_event_id` | TEXT | **PK** | — | The record (`EnrichedEvents.enriched_event_id`). |
+| `fingerprint` | TEXT | NOT NULL | — | SHA-256 of `values_json`. |
+| `values_json` | TEXT | NOT NULL | — | JSON of the tracked `EnrichedEvents` fields (`title`, `description`, `summary`, `event_type`, `severity`, `event_date`, `records_affected`, `attacking_entity_name`, `attack_method`, `is_australian_event`, `is_specific_event`, `perplexity_enrichment_data`). |
+| `recorded_at` | TEXT | NOT NULL | — | When the fingerprint was stored (ISO timestamp, local time). |
+
+#### SchemaMigrations
+
+One row per numbered SQL migration in `cyber_data_collector/storage/migrations/` applied to the database. Written and read by `storage/schema_init.initialize_database` (`pipeline.py init`), which skips applied versions and reports any whose file has changed since.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `version` | TEXT | **PK** | — | File name of the migration without `.sql`, e.g. `0001_base_schema`. |
+| `checksum` | TEXT | NOT NULL | — | SHA-256 (hex) of the migration file with CRLF line endings read as LF, at the time it was applied. |
+| `applied_at` | TEXT | NOT NULL | — | When the migration was applied, ISO 8601 local time to the second. |
+
+#### SourceMonthCompletion
+
+View with one row per source and discovery month: how many of the records discovery stored are processed, rejected, pending, failing or quarantined. Recreated by `processing/retry_queue.py` from `DiscoveryRecordState` joined to `RawEvents`; read by `RetryQueue.completion` (`discovery_queue.py status`).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `source_type` | TEXT | Yes | — | Data source (`Perplexity`, `OAIC`, `GoogleSearch`, `WebberInsurance`, `CyberDaily`, `GDELT`). |
+| `discovery_year` | INTEGER | Yes | — | Year of the source-month the records were first found under. |
+| `discovery_month` | INTEGER | Yes | — | Month (1-12) of that source-month. |
+| `stored` | — | Yes | — | Records stored for the source-month. |
+| `processed` | — | Yes | — | Records processed and not rejected. |
+| `rejected` | — | Yes | — | Records rejected at a filter stage (`Rejected at ...`), quarantines excluded. |
+| `pending` | — | Yes | — | Records not yet processed. |
+| `failing` | — | Yes | — | Pending records with at least one failed attempt (permanent, temporary or unknown). |
+| `quarantined` | — | Yes | — | Records quarantined after repeated permanent failures (`Rejected at retry_quarantine`). |
+
+#### SourceReplacements
+
+One row per Perplexity search for replacement reporting whose best citation is queued as a new record with its own URL: for a removed junk record (source gate), an incident with no usable evidence, or a supplier's customer with no event of its own. Written by `search_and_queue` in `dedup/source_gate.py`, called from `check-sources`, `check-record-identity`, `recover-evidence` and `find-supplier-victims --search-customers`, which read it to skip or retry searches.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `enriched_event_id` | TEXT | **PK** | — | Search key: the removed or evidence-less record's `enriched_event_id`, or `customer:<supplier_incident_id>:<customer name>` for purpose `supplier_customer`. |
+| `query` | TEXT | NOT NULL | — | The prompt sent to Perplexity. |
+| `model` | TEXT | NOT NULL | — | Perplexity model used. |
+| `answer` | TEXT | Yes | — | Perplexity's answer; NULL when the search failed. |
+| `citations_json` | TEXT | Yes | — | JSON list of the citation URLs returned. |
+| `raw_event_id` | TEXT | Yes | — | The new record queued from the best citation (`RawEvents.raw_event_id`); NULL when none was queued or it was pruned as already covered. |
+| `created_at` | TEXT | NOT NULL | — | When the key was first searched (ISO timestamp, local time). |
+| `status` | TEXT | Yes | — | `searched` (whatever it found) or `pending` (the search failed and is retried); NULL on older rows means `searched`. |
+| `attempts` | INTEGER | NOT NULL | `0` | Searches made for the key. |
+| `last_error` | TEXT | Yes | — | Error of the last failed search; NULL otherwise. |
+| `updated_at` | TEXT | Yes | — | When the row last changed (ISO timestamp, local time). |
+| `purpose` | TEXT | Yes | — | Who asked: NULL or `source_gate` (a removed junk record), `evidence_recovery` (`processing/evidence_recovery.py`) or `supplier_customer` (`dedup/multi_customer_incidents.py`). |
+| `deduplicated_event_id` | TEXT | Yes | — | The event the search was for, set for `evidence_recovery`; NULL otherwise. |
+
+#### SupplierIncidentLinks
+
+One row per affected customer of a supplier incident: the customer, its own event when it has one, and the basis and judgement that linked it. Written by `supplier_links.Registry.write`, `supplier_links.convert` and `repair_registry` (`dedup_admin.py find-supplier-victims --apply`); read by `multi_customer_incidents` and the supplier incidents report.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `supplier_incident_id` | TEXT | **PK** | — | The `SupplierIncidents` row the customer belongs to; part of the primary key. |
+| `customer_entity_id` | INTEGER | **PK** | — | `EntitiesV2.entity_id` of the customer; part of the primary key, so a customer is linked once per incident. |
+| `customer_name` | TEXT | NOT NULL | — | The customer's name as the link was made (the event's recorded victim, or the name the reporting gives). |
+| `customer_event_id` | TEXT | Yes | — | `DeduplicatedEvents` id of the customer's own event of the breach; NULL for a customer the reporting names that has no event of its own. A known event is never overwritten with NULL; readers resolve a Merged id with `resolve_event`. |
+| `basis` | TEXT | NOT NULL | — | Why the customer is linked: `vendor-recorded` (its event records the supplier as vendor), `label` (a `same` pair label), `judged-same-incident` (the calibrated same-incident judgement), `customer-named` (named in the reporting and accepted by the victim judgement), `split-customer` (its records were split out of a multi-customer event) or `converted-attachment` (a co-victim attachment of the earlier convention). |
+| `probability` | REAL | Yes | — | Final probability of the judgement behind the link: the same-incident pair score for `judged-same-incident`, the victim score for `customer-named`, the attachment's probability for `converted-attachment`; NULL for rule-based links. |
+| `decided_by` | TEXT | NOT NULL | — | Who decided the link: `rule`, `label`, `jev` or `escalation`; for `converted-attachment`, the attachment's own decider (`jev`, `escalation`, `label`, `merge`) or `attachment`. |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp when the link was first written. |
+| `updated_at` | TEXT | NOT NULL | — | Local ISO timestamp of the last change to the link (stronger basis, event found, or moved by an incident merge). |
+
+#### SupplierIncidents
+
+One row per supplier incident: one attack on a supplier, with the supplier's own event when one exists and the date span of the events linked to it. Written by `supplier_links.Registry.write` and repaired by `supplier_links.repair_registry` (both run by `dedup_admin.py find-supplier-victims`); read by `multi_customer_incidents` for `dashboard/supplier_incidents.html` and `dedup_admin.py supplier-incidents`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `supplier_incident_id` | TEXT | **PK** | — | Primary key, `si-` plus the first 16 hex digits of a SHA-1 of the supplier key and the anchoring event id (`supplier_links.Registry.incident`). |
+| `supplier_key` | TEXT | NOT NULL | — | Canonical key of the supplier's name (`EntityResolver.key_for`); spellings of one supplier share one key, so their incidents can be merged by `repair_registry`. |
+| `supplier_entity_id` | INTEGER | Yes | — | `EntitiesV2.entity_id` of the supplier; NULL when no entity row holds its name. |
+| `supplier_name` | TEXT | NOT NULL | — | The supplier's name as first recorded for the incident. |
+| `supplier_event_id` | TEXT | Yes | — | `DeduplicatedEvents` id of the supplier's own event (its report, or an event recording it as vendor) that anchors the incident; NULL when none exists. Stored as written; readers resolve a Merged id with `supplier_links.resolve_event`. |
+| `first_date` | TEXT | Yes | — | Earliest `event_date` (YYYY-MM-DD) among the events linked to the incident; recomputed from the current links by `repair_registry`. |
+| `last_date` | TEXT | Yes | — | Latest `event_date` (YYYY-MM-DD) among the events linked to the incident. |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp when the incident row was first written. |
+| `updated_at` | TEXT | NOT NULL | — | Local ISO timestamp of the last change to the row (anchor, key or date span). |
+
+#### SupplierIncidentSearches
+
+One row per Perplexity search for the organisations affected by a supplier incident event, stored so the search is asked once and can be replayed in calibration. Written by `supplier_victims.research_incident` (`dedup_admin.py find-supplier-victims --research`); read by `supplier_victims.stored_search` and carried into recalibration copies by `recalibration` and `scripts/prepare_calibration_snapshot.py`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `deduplicated_event_id` | TEXT | **PK** | — | The supplier incident event searched about; part of the primary key. |
+| `query_hash` | TEXT | **PK** | — | SHA-256 of the model name and the query text (`supplier_victims._query_hash`); part of the primary key, so a changed query or model is asked again. |
+| `query` | TEXT | NOT NULL | — | The full prompt sent (`supplier_victims.build_search_query`: the event's title, date and recorded vendors). |
+| `model` | TEXT | NOT NULL | — | Perplexity model that answered (`llm_models.perplexity_model`, e.g. `sonar-pro`). |
+| `answer` | TEXT | Yes | — | Perplexity's answer text listing the affected organisations. |
+| `citations_json` | TEXT | Yes | — | JSON list of the URLs Perplexity cited. |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp of the search. |
+
+#### SupplierLinkActions
+
+Audit row for each change the supplier-incident rules made to events: a split of a customer's records, a customer demoted on another event, or an event made (or unmade) a supplier's report. Written by `supplier_links.convert`, `double_counted_customers`, `reverse_name_counted_reports` and the customer-records split (`dedup_admin.py find-supplier-victims --apply`, and after role classification); read by `departed_customers`, `demote_split_customers` and the `split-customer` link repairs.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `action_id` | TEXT | **PK** | — | Primary key, a random UUID. |
+| `action` | TEXT | NOT NULL | — | What was done: `split` (records left the event as a new event), `own-event-customer` (a customer with its own event was demoted to `affected_customer` here), `supplier-report` (the event became the supplier's report, the supplier its victim) or `supplier-report-reversed` (a name-counted `supplier-report` conversion undone). |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event acted on: the event split, the event the customer was demoted on, or the event converted or reverted. |
+| `new_event_id` | TEXT | Yes | — | For `split`, the new event the records left as; for `own-event-customer`, the customer's own event; for `supplier-report-reversed`, the event split back out of a later merge; NULL otherwise. |
+| `entity_id` | INTEGER | Yes | — | `EntitiesV2.entity_id` of the organisation concerned: the demoted customer for `own-event-customer`, the supplier for `supplier-report` and `supplier-report-reversed`; NULL for `split`. |
+| `detail_json` | TEXT | Yes | — | JSON details of the action, e.g. the customer, record ids, own event and part that stays for `split`; supplier and customers for the report actions; the undone entry for `supplier-report-reversed`. |
+| `reason` | TEXT | NOT NULL | — | The owner decision the rule applies, as a fixed text constant (`OWNER_DECISION`, `OWN_EVENT_DECISION`, `SUPPLIER_REPORT_DECISION`, `REPORT_REVERSAL_DECISION`). |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp of the action. |
+
+#### SupplierVictimAttachments
+
+One row per organisation made a `victim` of an event by the supplier-victim step: a customer attached as a co-victim of a supplier incident, or a victim carried across a merge. Written by `supplier_victims.attach_victim` (now only through `carry_victims`, called by supplier merges and `dedup_admin.py` neighbourhood merges; the `jev` / `escalation` / `label` rows come from `find-supplier-victims --apply` before the 2026-10-31 owner decision); read by `reverse_attachments` and `supplier_links.convert`.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `attachment_id` | TEXT | **PK** | — | Primary key, a random UUID. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event the organisation was made a victim of. |
+| `entity_id` | INTEGER | NOT NULL | — | `EntitiesV2.entity_id` of the organisation attached. |
+| `entity_name` | TEXT | NOT NULL | — | The organisation's `EntitiesV2.entity_name` at attachment time. |
+| `previous_role` | TEXT | Yes | — | The organisation's `DeduplicatedEventEntities.relationship_type` on the event before the attachment (e.g. `affected_customer`, `bystander`); NULL when the event had no link to it. |
+| `decided_by` | TEXT | NOT NULL | — | What decided the attachment: `jev`, `escalation` or `label` (victim judgement of the earlier convention), or `merge` (carried from a merged-away event). |
+| `subject_id` | TEXT | Yes | — | The judgement subject: `event_id\|entity_id` (or `event_id\|name:key`) for a victim judgement, or the two event ids joined by `\|` for a merge. |
+| `probability` | REAL | Yes | — | Final probability of the judgement or merge certainty behind the attachment; NULL when none was given. |
+| `cutoff` | REAL | Yes | — | The calibrated cut-off in force when the attachment was made. |
+| `question_version` | TEXT | Yes | — | Question version of the judgement: `supplier-victim-v1` for victim judgements, `same-supplier-incident-v1` (or the merge path's version) for carried victims. |
+| `merged_from` | TEXT | Yes | — | For `merge` rows, the event merged away that the victim was carried from; NULL otherwise. |
+| `snapshot_batch` | TEXT | Yes | — | `DedupSnapshots` batch id (`supplier-victims-YYYYMMDDHHMMSS-<event prefix>`) of the event's snapshot taken before the change. |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp of the attachment. |
+
+#### SupplierVictimReversals
+
+One row per `SupplierVictimAttachments` row undone after the owner decision of 2026-10-31 (one event per customer, no co-victims). Written by `supplier_victims.reverse_attachments` and updated by `restore_own_victims` (both run by `supplier_links.convert`, `dedup_admin.py find-supplier-victims --apply`); read by them and by `supplier_links` to find customers that were reversed.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `attachment_id` | TEXT | **PK** | — | Primary key; the `SupplierVictimAttachments` row undone. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event the victim role was taken from. |
+| `entity_id` | INTEGER | NOT NULL | — | `EntitiesV2.entity_id` of the organisation whose victim role was reversed. |
+| `entity_name` | TEXT | NOT NULL | — | The organisation's name, as in the attachment. |
+| `action` | TEXT | NOT NULL | — | `reversed` (the role was undone) or `restored` (the event's own victim, given its role back by `restore_own_victims`; set back to `reversed` when the event's victim later becomes another organisation). |
+| `restored_role` | TEXT | Yes | — | The event-level role the organisation was given back (the attachment's `previous_role`, e.g. `affected_customer`); NULL when the event link was removed. |
+| `own_events_json` | TEXT | NOT NULL | — | JSON list of the organisation's other Active events where it is the victim, at reversal time. |
+| `reason` | TEXT | NOT NULL | — | The owner decision applied (`supplier_victims.OWNER_DECISION`). |
+| `snapshot_batch` | TEXT | Yes | — | `DedupSnapshots` batch id (`supplier-victims-reverse-YYYYMMDDHHMMSS-<event prefix>`) of the event's snapshot taken before the reversal. |
+| `created_at` | TEXT | NOT NULL | — | Local ISO timestamp of the reversal. |
+
+#### UniqueEvents_v1_backup
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `event_id` | TEXT | **PK** | — | UUID key of a V1 event (V1 schema, not used by current code). |
+| `unique_hash` | VARCHAR(64) | NOT NULL | — | SHA-256 of the title (letters and digits only, lower case) followed by the event date `YYYY-MM-DD`; the V1 `add_event` deduplicated on it (V1 schema, not used by current code). |
+| `title` | VARCHAR(255) | NOT NULL | — | Event title (V1 schema, not used by current code). |
+| `description` | TEXT | Yes | — | Event description, replaced by the V1 enrichment summary (V1 schema, not used by current code). |
+| `event_date` | DATE | NOT NULL | — | Event date, `YYYY-MM-DD` (V1 schema, not used by current code). |
+| `event_type` | VARCHAR(50) | Yes | — | Event category; counted by the V1 summary statistics, written by no V1 code in git history (V1 schema, not used by current code). |
+| `severity` | VARCHAR(20) | Yes | — | Severity of the event (V1 schema, not used by current code). |
+| `records_affected` | BIGINT | Yes | — | Number of records affected (V1 schema, not used by current code). |
+| `status` | VARCHAR(20) | Yes | `'Active'` | Event status, default `Active` (V1 schema, not used by current code). |
+| `created_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the row was created; defaults to `CURRENT_TIMESTAMP` (UTC) (V1 schema, not used by current code). |
+| `updated_at` | TIMESTAMP | Yes | `CURRENT_TIMESTAMP` | When the row was last updated; defaults to `CURRENT_TIMESTAMP` (UTC) (V1 schema, not used by current code). |
+| `is_australian_event` | BOOLEAN | Yes | `FALSE` | 1 when V1 enrichment judged the event Australian (V1 schema, not used by current code). |
+| `is_specific_event` | BOOLEAN | Yes | `FALSE` | 1 when V1 enrichment judged it a specific incident rather than general news (V1 schema, not used by current code). |
+| `is_reviewed` | BOOLEAN | Yes | `FALSE` | 1 once a person had reviewed the event in the V1 review flow (`mark_event_as_reviewed`) (V1 schema, not used by current code). |
+
+#### ValidationExceptions
+
+One row per wrong result the owner reported, kept as an acceptance test the data must pass from then on. Written by `dedup/validation_exceptions.py` (`dedup_admin.py validation-exception add`, `check`, `root-cause`); `check` re-evaluates every row and the quality report counts the failures, and no pipeline step reads it to decide anything.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `exception_id` | TEXT | **PK** | — | Random UUID of the exception. |
+| `reported_at` | TEXT | NOT NULL | — | When it was recorded (ISO timestamp, UTC). |
+| `reported_by` | TEXT | NOT NULL | — | Who reported it (`owner`). |
+| `kind` | TEXT | NOT NULL | — | What must hold: `victim`, `not_victim`, `same_incident_as`, `different_incident_from`, `incident_month`, `same_supplier_incident_as`, `not_supplier_customer`, `supplier_customers_once`, `not_vendor`, `victim_size`, `not_supplier_incident` or `ai_label_current`. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event as reported; at check time the event is the Active one holding most of `record_ids_json`. |
+| `record_ids_json` | TEXT | NOT NULL | — | JSON list of the event's Active record ids when reported, which anchor the exception across merges and splits. |
+| `value` | TEXT | NOT NULL | — | What the kind is checked against: an organisation name, the other event's id, a month `YYYY-MM`, `A\|B` for two names of one customer, `NAME=BAND` for `victim_size`, or `current`. |
+| `value_record_ids_json` | TEXT | Yes | — | JSON list of the other event's record ids for the pair kinds; NULL otherwise. |
+| `observed` | TEXT | Yes | — | What was wrong when it was reported. |
+| `note` | TEXT | NOT NULL | — | The owner's words. |
+| `root_cause` | TEXT | Yes | — | What was found and fixed; set by `validation-exception root-cause`. |
+| `last_checked_at` | TEXT | Yes | — | When `check` last evaluated it (ISO timestamp, UTC). |
+| `last_result` | TEXT | Yes | — | Result of the last check: `pass`, `fail` or `unchecked` (no single Active event holds the records, or the case cannot be evaluated yet). |
+| `last_detail` | TEXT | Yes | — | What the last check found, e.g. which event holds the records or which victims it records. |
+
+#### VictimAttributionActions
+
+Audit of `dedup_admin.py check-victim-attribution --apply`: one row per recorded event-victim pair acted on or reviewed (demoted, re-attributed, flagged or confirmed), with the scores, cut-offs and calibration behind it. Written by `victim_judgement.apply_actions` (`dedup/victim_judgement.py`); the latest row per pair decides whether the attribution is unresolved for victim counting, the by-entity dashboard and the recurrence analysis.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `action_id` | INTEGER | **PK** | — | Row identifier (auto-increment integer); the highest per event and entity is the pair's current state. |
+| `batch_id` | TEXT | NOT NULL | — | The run that wrote the row, `victim-attribution-YYYYMMDDHHMMSS`; also the `DedupSnapshots` batch for the events it changed. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event whose recorded victim was judged. |
+| `entity_id` | INTEGER | NOT NULL | — | The recorded victim judged (`EntitiesV2.entity_id`). |
+| `old_victim` | TEXT | NOT NULL | — | The recorded victim's name at the time. |
+| `action` | TEXT | NOT NULL | — | What was done: `demoted` (victim role removed, another victim kept), `reattributed` (replaced by `new_victim`), `flagged` (left unchanged, unresolved) or `confirmed` (judged at or above the cut-off, or labelled correct; clears a flag). |
+| `new_victim` | TEXT | Yes | — | The organisation that became the victim when `reattributed`; NULL otherwise. |
+| `p_recorded_victim` | REAL | NOT NULL | — | Probability (0-1) that the recorded victim is the affected organisation, from Jev or the escalation; a fixed score when a label decided. |
+| `replacement_probability` | REAL | Yes | — | Probability (0-1) of the chosen replacement candidate; NULL when no replacement was chosen or a label decided. |
+| `cutoff` | REAL | Yes | — | The calibrated cut-off `p_recorded_victim` was compared against (act below it). |
+| `replacement_threshold` | REAL | Yes | — | The calibrated threshold a replacement's probability had to reach; NULL when the calibration has none. |
+| `calibration_json` | TEXT | Yes | — | The calibration used, as JSON: `question_version`, `model`, `cutoff`, `replacement_threshold`, `calibrated_on_database`, `generated`. |
+| `reason` | TEXT | Yes | — | Why this action was taken or the pair was flagged, e.g. other victims kept, replacement below threshold, replacement not named in the records' text. |
+| `roles_before_json` | TEXT | Yes | — | The event's entity roles before the change, as JSON `[[entity_id, relationship_type], ...]`, so it can be reversed. |
+| `created_at` | TEXT | NOT NULL | — | When the row was written (UTC, ISO 8601 with offset; older rows naive local time). |
+| `input_hash` | TEXT | Yes | — | Hash of the judged input (evidence, timeline, membership and other victims); a flag is written again only when this, the score or the reason changes. |
+| `member_signature` | TEXT | Yes | — | Signature of the event's member records when judged (`role_maintenance.member_signature`). |
+
+#### VictimFillActions
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `action_id` | INTEGER | **PK** | — | Row identifier (auto-increment integer). |
+| `batch_id` | TEXT | NOT NULL | — | The run that wrote the row, `victim-fill-YYYYMMDDHHMMSS`; also the `DedupSnapshots` batch for the events it filled. |
+| `deduplicated_event_id` | TEXT | NOT NULL | — | The event that had no victim and was filled (or whose fill was reversed). |
+| `action` | TEXT | NOT NULL | — | `filled` (a victim was given to the event) or `reversed` (an earlier fill undone because its victim is now judged a description). |
+| `new_victim` | TEXT | NOT NULL | — | The victim stored on the event; several co-equal victims are joined by `; `. For `reversed`, the victim that was removed. |
+| `choice_probability` | REAL | Yes | — | Probability (0-1) of the chosen candidate from the Jev `fill_victim` choice or its escalation; NULL when a label decided or for `reversed`. |
+| `cutoff` | REAL | Yes | — | The calibrated cut-off the choice was compared against; NULL without a calibration (label-only fills) and for `reversed`. |
+| `candidates_json` | TEXT | Yes | — | The candidates offered, as JSON `[{"name", "support", "sources"}, ...]`. |
+| `replaced_json` | TEXT | Yes | — | Unusable victims demoted before the fill (placeholders or descriptions), as JSON `[[entity_id, name], ...]`. |
+| `calibration_json` | TEXT | Yes | — | The calibration used, as JSON: `question_version`, `model`, `cutoff`, `calibrated_on_database`, `generated`. |
+| `reason` | TEXT | Yes | — | Why the event was filled, or why a fill was reversed. |
+| `roles_before_json` | TEXT | Yes | — | The event's entity roles before the fill, as JSON `[[entity_id, relationship_type], ...]`; read to reverse it. |
+| `member_signature` | TEXT | Yes | — | Signature of the event's member records when filled (`role_maintenance.member_signature`). |
+| `created_at` | TEXT | NOT NULL | — | When the row was written (UTC, ISO 8601 with offset). |
 
 ---
 
