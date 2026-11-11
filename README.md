@@ -3979,6 +3979,7 @@ Detailed specifications for each pipeline stage are in the `docs/` directory:
 
 | Document | Description |
 |----------|-------------|
+| [data-collection-methodology.md](docs/data-collection-methodology.md) | Methods-section description for a research paper: sources and their biases, extraction, disambiguation, merging, categorisation, validation (blind labels, calibration, deployment rule, quality gate) and limitations, with figures from a named snapshot |
 | [01-data-sources.md](docs/01-data-sources.md) | Data source descriptions, API configurations, and justifications |
 | [02-discovery-collection.md](docs/02-discovery-collection.md) | Discovery pipeline, search queries, and LLM prompts |
 | [03-content-scraping.md](docs/03-content-scraping.md) | Playwright scraping, content extraction, and fallback strategies |
