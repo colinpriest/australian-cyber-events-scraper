@@ -17,7 +17,8 @@ records no victim, is left out of that attribute's test and counted.
 
 **Tests.** Categorical attributes: Pearson's chi-squared test of homogeneity with Cramér's V. Where more
 than 20% of expected counts are under 5 (or one is under 1) sparse categories are pooled by a fixed rule
-(:func:`pool_sparse`); a 2 x 2 table that is still sparse is tested with Fisher's exact test. Records
+(:func:`pool_sparse`); a 2 x 2 table that is still sparse is tested with Fisher's exact test, whose effect
+size is the phi coefficient computed from the counts (no chi-squared appears in its row). Records
 affected: a two-sided Mann-Whitney U test. Unknown and missing values are left out of each test and
 counted per group. p-values are Holm-adjusted across the tests that ran. Events of one supplier incident
 are not independent of each other, so every test is repeated with one event per supplier incident.
@@ -74,6 +75,8 @@ MAX_SPARSE_SHARE = 0.20
 MIN_ANY_EXPECTED = 1.0
 #: A category is named in a conclusion when its adjusted standardised residual is beyond this.
 RESIDUAL_CUT = 1.96
+#: The effect size reported beside Fisher's exact test: the phi coefficient of the 2 x 2 table.
+PHI_NAME = "phi coefficient |φ|"
 #: The words for the size of an effect, at Cohen's cut-offs: for Cramér's V (two groups, so V equals Cohen's w)
 #: and for the absolute rank-biserial correlation of the Mann-Whitney test (Cohen's cut-offs for r).
 EFFECT_WORDS = ((0.5, "large"), (0.3, "medium"), (0.1, "small"), (0.0, "negligible"))
@@ -304,11 +307,13 @@ def categorical_test(key: str, label: str, labels: Sequence[str], supplier: Sequ
     adjusted = (observed - expected) / np.sqrt(expected * np.outer(1 - row_share, 1 - col_share))
     result.residuals = {name: float(z) for name, z in zip(result.tested_labels, adjusted[0])}
     if len(groups) == 2 and is_sparse(expected):
-        # An exact test has no test statistic and no degrees of freedom: the row reports neither (a
-        # chi-squared statistic beside "Fisher's exact test" would name one test and report another). The
-        # effect size is still Cramér's V, the phi coefficient of the 2 x 2 table.
+        # An exact test has no test statistic and no degrees of freedom: the row reports neither, and its
+        # effect size is the phi coefficient computed from the four counts, not Cramér's V defined through
+        # Pearson's chi-squared (owner, 2026-11-11: the row named Fisher's test beside a chi-squared-based
+        # number). |phi| equals sqrt(chi-squared / n) for a 2 x 2 table, so the size words are unchanged.
         result.method, result.exact = "Fisher's exact test (2 x 2)", True
         result.p = float(stats.fisher_exact(observed, alternative="two-sided")[1])
+        result.effect_name, result.effect = PHI_NAME, phi_coefficient(observed)
     else:
         result.method = "Chi-squared test of homogeneity"
         result.statistic_name, result.statistic, result.dof = "chi-squared", chi2, len(groups) - 1
@@ -370,6 +375,13 @@ def fmt_short(value: float) -> str:
             scaled = value / cut
             return f"{scaled:.0f}{suffix}" if scaled >= 10 or scaled == int(scaled) else f"{scaled:.1f}{suffix}"
     return f"{value:.0f}"
+
+
+def phi_coefficient(table: "np.ndarray") -> float:
+    """|phi| of a 2 x 2 table from its counts: |ad - bc| / sqrt of the product of the four margins."""
+    (a, b), (c, d) = table
+    margins = (a + b) * (c + d) * (a + c) * (b + d)
+    return float(abs(a * d - b * c) / math.sqrt(margins)) if margins else 0.0
 
 
 def fmt_statistic(r: TestResult) -> str:
@@ -1324,8 +1336,8 @@ def methods_text(c: Comparison) -> List[str]:
         "until the rule holds or two categories remain - with its smaller neighbour for ordered categories "
         f"(size band, severity, ASD category, half-year), into one \"{POOLED_LABEL}\" group otherwise. A 2 x 2 "
         "table that still fails the rule is tested with Fisher's exact test (two-sided), which gives an exact "
-        "p-value and has no test statistic or degrees of freedom; its effect size is still Cramér's V (the phi "
-        "coefficient of the 2 x 2 table). The pooled categories "
+        "p-value and has no test statistic or degrees of freedom; its effect size is the phi coefficient "
+        "|ad - bc| / sqrt((a+b)(c+d)(a+c)(b+d)) of the 2 x 2 counts, read on the same scale. The pooled categories "
         "are named under each chart; the charts and tables show every category unpooled.",
         "Unknown and missing values are left out of each test and reported per group under each chart.",
         f"Records affected: a two-sided Mann-Whitney U test on the events with a count. Its effect size is the "

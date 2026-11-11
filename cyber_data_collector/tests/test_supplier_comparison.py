@@ -258,12 +258,15 @@ def test_a_sparse_two_by_two_table_uses_fishers_exact_test():
     # An exact test has no statistic and no df: the row must not report another test's chi-squared.
     assert r.statistic is None and r.dof is None and r.statistic_name == ""
     assert sc.fmt_statistic(r) == "none (exact test)"
-    assert r.effect_name == "Cramér's V" and 0 <= r.effect <= 1
+    # Its effect size is the phi coefficient of the counts, not a chi-squared-based Cramér's V.
+    assert r.effect_name == sc.PHI_NAME
+    assert r.effect == pytest.approx(abs(50 * 9 - 1 * 200) / math.sqrt(51 * 209 * 250 * 10))
     r.holm_p = r.p
     sentence = sc.conclusion(r, family=9)
     assert "Fisher's exact test (2 x 2): exact p = " in sentence and "chi-squared" not in sentence
     row = sc.tests_table([r], family=9)
     assert "<td class=n>none (exact test)</td><td class=n>-</td>" in row and "chi-squared" not in row
+    assert "Cramér" not in row and "phi coefficient" in row
     assert "Fisher's exact test" in sc.pooling_note(r) and "no test statistic" in sc.pooling_note(r)
 
 
