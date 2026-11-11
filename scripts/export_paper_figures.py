@@ -1811,7 +1811,12 @@ def recurrence_size_figure(spells: "pd.DataFrame", summary: Dict[str, Any], inpu
     answer = next((q.get("answer") for q in executive.get("questions", []) if q.get("key") == "size"), None)
     if not ratios or answer is None:
         raise ExportError("the recurrence run's analysis_summary.json has no size model in its executive summary")
-    title = "Recurrence Rate by Organisation Size Band"
+    # A stand-alone figure: the title says what is counted, of whom, where and over which period.
+    censor = inputs.get("censor_date")
+    if not censor:
+        raise ExportError("the recurrence run's analysis_inputs.json records no censor date")
+    title = (f"Repeat Cyber Incidents by Victim Organisation Size, Australia, Jan 2020 - "
+             f"{date.fromisoformat(str(censor)[:10]).strftime('%b %Y')}")
     subtitle = ("Repeats per 100 organisation-years of follow-up (unadjusted); box and whiskers: middle 50% and "
                 "95% of the rate when each band's organisations are resampled")
     steps = ", ".join(f"{band} {ratios[band]:.1f}" for band in bands if band != "SMALL" and band in ratios)

@@ -3033,7 +3033,8 @@ records affected for supplier against non-supplier events (one bin per power of 
 groups' attack-type distributions. Their xlsx also lists the events behind the chart (sheet `events`) and
 carries the test, its Holm-adjusted p-value, the effect size and the generated conclusion in `notes`; the
 export stops unless the recomputed charts are found, bar for bar and tooltip for tooltip, in the published
-page. Figure 33 is the right panel of `recurrence.html`'s size chart: each organisation size band's recurrence
+page. Figure 33 (titled to stand alone: what is counted, of whom and over which period) is the right panel of
+`recurrence.html`'s size chart: each organisation size band's recurrence
 rate per 100 organisation-years (unadjusted), with the box and whiskers of that rate when the band's
 organisations are resampled, drawn from the main recurrence run (`analysis/recurrent_timing`) by the page's own
 code (`recurrence_size_plot.py`). Its xlsx lists the organisations (sheet `organisations`) and carries the

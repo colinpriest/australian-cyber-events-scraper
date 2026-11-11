@@ -39,6 +39,7 @@ def _spells() -> pd.DataFrame:
 def test_the_figure_holds_the_page_rates_and_its_files_add_up(tmp_path):
     fig = epf.recurrence_size_figure(_spells(), SUMMARY, INPUTS)
     assert fig.page_id == "recurrenceSizeBandRates" and fig.source_page == "recurrence.html"
+    assert fig.title == "Repeat Cyber Incidents by Victim Organisation Size, Australia, Jan 2020 - Nov 2026"
     _, _, rows = rsp.band_table, None, rsp.band_table(rsp.organisation_rates(_spells()),
                                                       rsp.bootstrap_rates(rsp.organisation_rates(_spells())))
     assert [r[0] for r in fig.rows] == ["SMALL", "MEDIUM", "LARGE", "HUGE"]
