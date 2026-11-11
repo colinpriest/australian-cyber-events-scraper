@@ -175,6 +175,9 @@ def load_rows(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         if len(description) > DESCRIPTION_CHARS:
             description = description[:DESCRIPTION_CHARS].rsplit(" ", 1)[0] + "…"
         out.append({
+            # The organisation's representative entity row (one of its name variants); the detail page
+            # (build_entity_events_detail.py) reads the organisation's attributes from it.
+            "entity_id": rep["entity_id"],
             "entity": rep["entity"],
             # An entity that has never been researched reads as UNKNOWN, which
             # is what it is - not a blank cell that looks like a rendering bug.

@@ -2367,13 +2367,18 @@ error and ends degraded.
 ### Deduplication Review Dashboard
 
 ```bash
-python scripts/build_dedup_dashboard.py                # -> dashboard/dedup.html
+python scripts/build_dedup_dashboard.py [--xlsx dashboard/dedup.xlsx]   # -> dashboard/dedup.html (+ workbook)
 ```
 
 Per event: full ancestry (every source record, its role and outbound link), the
 decisions behind it with certainty and reasoning, and copy-paste commands to
 correct it. Filter by *merged but unexplained*, *certainty below 0.85*, *no
 lineage*, or *human-corrected*.
+
+`dashboard/dedup.xlsx`, published beside it, holds the same data as tables: sheet `Events` (one row per event
+with its fields) and sheet `Records and decisions` (one row per source record folded into an event and per decision
+on its ledger, `Kind` = `record` / `decision`, each naming its event), since the page's nested ancestry does not fit
+one table.
 
 ### By-entity event dashboard
 
@@ -2398,6 +2403,20 @@ the toolbar and the supporting evidence on hover — "what happens to small
 businesses" is a different question from "what happens to the ASX-100", and the
 page could not previously tell them apart. See
 [Entity size](#entity-size-small-medium-large-huge-unknown).
+
+**Every attribute, one table** (`scripts/build_entity_events_detail.py` -> `dashboard/entity_events_detail.html`
+and `entity_events_detail.xlsx`, published with the other outputs). The same rows as `entities.html` (built by its
+`load_rows`, so they cannot differ), with 61 columns: the organisation (entity type, kind, size band and estimates,
+researched jurisdiction, sector and type, the attribution-unresolved flag), the event (attack type, severity, records
+affected, AI category, attacker, method, victims on the event), its dates (stored date, verified precision and
+interval, basis, first report, reporting lag), the supply chain (vendor, service provider, supplier incident), the
+ASD classification (severity category C1-C6, organisation type, impact type; Active events only) and the evidence
+(status, OAIC breach source, personal-information types, source records). The page sorts by any column, filters per
+column (numbers take `>`, `<`, `=`; `(empty)` finds blanks), hides column groups, and scrolls sideways inside its
+frame on a phone. Hovering a heading gives its source and how many rows it leaves empty; the columns at least half
+empty are listed at the top. The workbook has the same rows and columns, a frozen header and an autofilter, and a
+`Columns` sheet with each column's source and share empty; text over Excel's 32,767-character limit is cut with a
+visible `[TRUNCATED: ...]` marker (`scripts/export/table_workbook.py`, shared with `dedup.xlsx`).
 
 ### Organisation timeline dashboard
 
@@ -3100,8 +3119,8 @@ The dashboards used to be built from the live database, the quality gate to read
 separately, and the risk matrices to be written before any gate. Now the step takes **one
 consistent snapshot** (SQLite backup API), keeps a compressed copy under
 `instance/snapshots/`, runs the gate on it, builds `dashboard/index.html`,
-`ai_incidents.html`, `entities.html`, `timelines.html`, `dedup.html`, `close_pairs.html`, `supplier_incidents.html`,
-`data_dictionary.html`, `recurrence.html` and
+`ai_incidents.html`, `entities.html`, `entity_events_detail.html` and `.xlsx`, `timelines.html`, `dedup.html` and
+`dedup.xlsx`, `close_pairs.html`, `supplier_incidents.html`, `data_dictionary.html`, `recurrence.html` and
 the `risk_matrix/` workbooks from it into a staging folder, stamps each with the snapshot
 id, writes `dashboard/publication.json` (hashes of every output and of the inputs outside
 the database) and moves them all into place together. A blocked gate, a failing builder or

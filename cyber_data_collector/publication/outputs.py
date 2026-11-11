@@ -13,9 +13,9 @@ disagree, and a blocked run could still have replaced the matrices.
    with the snapshot id, and stop - leaving every previous output untouched -
    if it blocks (the snapshot is kept, marked ``blocked``);
 3. build every output from the snapshot into a staging folder:
-   ``index.html``, ``ai_incidents.html``, ``entities.html``, ``timelines.html``,
-   ``dedup.html``, ``close_pairs.html``, ``supplier_incidents.html``, ``data_dictionary.html``,
-   ``recurrence.html`` and the ``risk_matrix/`` workbooks;
+   ``index.html``, ``ai_incidents.html``, ``entities.html``, ``entity_events_detail.html`` (and ``.xlsx``),
+   ``timelines.html``, ``dedup.html`` (and ``dedup.xlsx``), ``close_pairs.html``, ``supplier_incidents.html``,
+   ``data_dictionary.html``, ``recurrence.html`` and the ``risk_matrix/`` workbooks;
 4. stamp each one with the snapshot id and write ``publication.json`` (hashes
    of every output, the snapshot, the quality run, the inputs outside the
    database, the snapshots the recurrence analyses used);
@@ -327,6 +327,25 @@ def build_entities(ctx: BuildContext) -> List[Path]:
     return [path]
 
 
+def build_entity_events_detail(ctx: BuildContext) -> List[Path]:
+    """``entity_events_detail.html`` and ``.xlsx``: the rows of ``entities.html`` with every entity and event attribute."""
+    from scripts import build_entity_dashboard as entities
+    from scripts import build_entity_events_detail as module
+    from scripts.export.table_workbook import describe
+
+    conn = entities._connect(ctx.db)
+    try:
+        rows = module.load_rows(conn)
+        note = entities.population_note(conn, entities.summarise(rows))
+    finally:
+        conn.close()
+    page = ctx.dashboard_dir / "entity_events_detail.html"
+    page.write_text(module.build_html(rows, note), encoding="utf-8")
+    workbook = ctx.dashboard_dir / "entity_events_detail.xlsx"
+    logger.info("entity_events_detail.xlsx: %s", describe(module.build_xlsx(rows, workbook)))
+    return [page, workbook]
+
+
 def build_timelines(ctx: BuildContext) -> List[Path]:
     from scripts import build_timeline_dashboard as module
 
@@ -351,7 +370,11 @@ def build_dedup(ctx: BuildContext) -> List[Path]:
         conn.close()
     path = ctx.dashboard_dir / "dedup.html"
     path.write_text(module.build_html(data), encoding="utf-8")
-    return [path]
+    workbook = ctx.dashboard_dir / "dedup.xlsx"
+    from scripts.export.table_workbook import describe
+
+    logger.info("dedup.xlsx: %s", describe(module.build_xlsx(data, workbook)))
+    return [path, workbook]
 
 
 def build_close_pairs(ctx: BuildContext) -> List[Path]:
@@ -434,6 +457,7 @@ def build_risk_matrices(ctx: BuildContext) -> List[Path]:
 DEFAULT_BUILDERS: Dict[str, Callable[[BuildContext], List[Path]]] = {
     "dashboard": build_dashboard,
     "entities": build_entities,
+    "entity_events_detail": build_entity_events_detail,
     "timelines": build_timelines,
     "dedup": build_dedup,
     "close_pairs": build_close_pairs,

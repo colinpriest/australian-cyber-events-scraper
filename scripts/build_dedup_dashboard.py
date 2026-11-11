@@ -505,10 +505,72 @@ def build_html(data: Dict[str, Any]) -> str:
             .replace("__GENERATED__", html.escape(data["stats"]["generated_at"])))
 
 
+# --- Excel: the page's events, and their nested records and decisions as rows ------------------------------
+
+DEFAULT_XLSX = "dashboard/dedup.xlsx"
+EVENTS_SHEET = "Events"
+LINEAGE_SHEET = "Records and decisions"
+
+# (label, key in collect()'s event payload, width)
+EVENT_COLUMNS = (
+    ("Event id", "id", 38), ("Title", "title", 50), ("Event date", "date", 12),
+    ("Organisation (shown)", "entity", 30), ("Stored victim name", "stored_entity", 30), ("Vendor", "vendor", 24),
+    ("Roles stale", "roles_stale", 11), ("Records affected", "records_affected", 14), ("Severity", "severity", 12),
+    ("Attack type", "event_type", 20), ("Data sources", "sources", 12), ("Source records", "member_count", 12),
+    ("Human override", "overridden", 12), ("Dedup method", "method", 22),
+    ("Lowest certainty (current decisions)", "min_certainty", 14),
+)
+LINEAGE_COLUMNS = (
+    ("Event id", 38), ("Event title", 40), ("Kind", 10), ("Enriched record id", 38),
+    # a source record folded into the event
+    ("Contribution", 12), ("Similarity", 11), ("Record title", 50), ("Record date", 12),
+    ("Record organisation", 28), ("Source type", 16), ("Source URL", 50),
+    # a decision on the ledger
+    ("Action", 14), ("Decided by", 16), ("Certainty", 10), ("Method", 22), ("Reasoning", 60),
+    ("Superseded", 11), ("Decided at", 20), ("Evidence (JSON)", 60),
+)
+
+
+def workbook_sheets(data: Dict[str, Any]):
+    """The page's data as two tables: one row per event; one row per source record or decision of an event.
+
+    The page nests each event's ancestry (its records) and its decisions; here each is a row naming its event,
+    with ``Kind`` = ``record`` or ``decision`` and the other kind's columns empty.
+    """
+    from scripts.export.table_workbook import Sheet
+
+    flags = {"roles_stale", "overridden"}          # roles_stale is falsy-but-not-False when nothing is stale
+    events = [[("yes" if ev.get(key) else "no") if key in flags else ev.get(key) for _, key, _ in EVENT_COLUMNS]
+              for ev in data["events"]]
+    lineage: List[List[Any]] = []
+    for ev in data["events"]:
+        for m in ev["members"]:
+            lineage.append([ev["id"], ev["title"], "record", m.get("enriched_event_id"), m.get("contribution"),
+                            m.get("similarity"), m.get("title"), (m.get("date") or "")[:10] or None, m.get("entity"),
+                            m.get("source_type"), m.get("url")] + [None] * 8)
+        for d in ev["decisions"]:
+            evidence = d.get("evidence")
+            lineage.append([ev["id"], ev["title"], "decision", d.get("enriched_event_id")] + [None] * 7 + [
+                d.get("action"), d.get("decided_by"), d.get("certainty"), d.get("method"), d.get("reasoning"),
+                "yes" if d.get("superseded") else "no", d.get("created_at"),
+                json.dumps(evidence, ensure_ascii=False, default=str, sort_keys=True) if evidence else None])
+    return [Sheet(EVENTS_SHEET, [c[0] for c in EVENT_COLUMNS], events, [c[2] for c in EVENT_COLUMNS]),
+            Sheet(LINEAGE_SHEET, [c[0] for c in LINEAGE_COLUMNS], lineage, [c[1] for c in LINEAGE_COLUMNS])]
+
+
+def build_xlsx(data: Dict[str, Any], path: Path):
+    """``dedup.xlsx``: the events of :func:`collect` and their records and decisions (see :func:`workbook_sheets`)."""
+    from scripts.export.table_workbook import write_workbook
+
+    return write_workbook(path, workbook_sheets(data))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Build the deduplication review dashboard")
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--out", default=DEFAULT_OUT)
+    parser.add_argument("--xlsx", default=None,
+                        help=f"also write the page's data to this workbook (e.g. {DEFAULT_XLSX})")
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args(argv)
 
@@ -522,6 +584,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(build_html(data), encoding="utf-8")
+    if args.xlsx:
+        from scripts.export.table_workbook import describe
+
+        logger.info("Wrote %s: %s", args.xlsx, describe(build_xlsx(data, Path(args.xlsx))))
 
     stats = data["stats"]
     logger.info("Wrote %s", out)
