@@ -19,6 +19,12 @@ The charts are redrawn with matplotlib from the data ``build_static_dashboard.py
 * the prepared data must equal, value for value, the data embedded in the published ``index.html``;
 * after writing, every chart's totals are read back from its xlsx and compared with the data.
 
+After the charts of ``index.html`` come two figures from ``dashboard/supplier_comparison.html``
+(``scripts/build_supplier_comparison.py``), computed on the same snapshot: the histogram of records
+affected and the distribution of attack types, each for supplier events against non-supplier events.
+Their xlsx also holds the events behind the chart (sheet ``events``), and the recomputed chart must be
+found, tooltip for tooltip, in the published page.
+
 Any mismatch stops the export (exit 1) instead of writing figures that differ from the page.
 The live database is never opened: the snapshot is decompressed into a temporary folder.
 
@@ -63,6 +69,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from cyber_data_collector.publication import snapshot as snapshots  # noqa: E402
 from cyber_data_collector.reporting.population import dashboard_period  # noqa: E402
+from scripts import build_supplier_comparison as supplier  # noqa: E402
 from scripts.build_static_dashboard import assemble_dashboard_data  # noqa: E402
 
 logger = logging.getLogger("export_paper_figures")
@@ -138,6 +145,13 @@ PAGE_VISUALISATIONS = [
 ]
 DUPLICATES = {"oaicSectorRatioChart": "oaicSectorsChart"}
 
+# The figures taken from supplier_comparison.html, after those of index.html.
+SUPPLIER_PAGE = "supplier_comparison.html"
+SUPPLIER_FIGURES = ["supplierRecordsHistogram", "supplierAttackTypeChart"]
+# The supplier page's two series colours (its light theme).
+SUPPLIER_COLOUR = "#eb6834"
+NON_SUPPLIER_COLOUR = "#2a78d6"
+
 
 class ExportError(RuntimeError):
     """The figures cannot be shown to match the published dashboard."""
@@ -159,6 +173,10 @@ class Figure:
     rows: List[List[Any]]
     notes: List[Tuple[str, Any]]
     totals: Dict[str, float] = field(default_factory=dict)   # data-sheet column -> total from the data
+    source_page: str = "index.html"                           # the published page the chart is on
+    period: Optional[str] = None                              # its reporting period, when not index.html's
+    # Further sheets of the xlsx: sheet name -> (columns, rows). The supplier figures list their events.
+    extra_sheets: Dict[str, Tuple[List[str], List[List[Any]]]] = field(default_factory=dict)
 
 
 def hsl(h: float, s: float, light: float) -> str:
@@ -1523,6 +1541,228 @@ def correlation_figure(corr: Dict[str, Any]) -> Figure:
 # --------------------------------------------------------------------------------------------------------
 # Inputs: the published snapshot and the published page
 # --------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------
+# Supplier vs non-supplier figures (supplier_comparison.html)
+# --------------------------------------------------------------------------------------------------------
+def _percent(n: int, whole: int) -> float:
+    return 100.0 * n / whole if whole else 0.0
+
+
+def _supplier_notes(c: "supplier.Comparison", r: "supplier.TestResult") -> List[Tuple[str, Any]]:
+    """The notes both supplier figures carry: the groups, the unit, the test and the incident check."""
+    again = next(x for x in c.sensitivity if x.key == r.key)
+    n_supplier = len(c.supplier_events)
+    notes: List[Tuple[str, Any]] = [
+        ("Supplier event", "An Active event linked to a supplier incident (as a customer's event or the supplier's "
+                           "own event) or recording a vendor or a service provider; every other Active event of "
+                           "the reporting period is a non-supplier event"),
+        ("Unit", "The event (an event with several victim organisations is counted once)"),
+        ("Supplier events in the reporting period", n_supplier),
+        ("Non-supplier events in the reporting period", len(c.events) - n_supplier),
+        ("Test", r.method if r.ran else f"not run: {r.reason}"),
+    ]
+    if r.ran:
+        notes += [
+            ("Test statistic", supplier.fmt_statistic(r)),
+            ("Degrees of freedom", r.dof),
+            ("p-value", r.p),
+            (f"Holm-adjusted p-value (across the {c.family} tests of the page)", r.holm_p),
+            ("Effect size", supplier.fmt_effect(r)),
+            ("Conclusion", supplier.verdict(r)),
+            ("Conclusion sentence (generated)", supplier.conclusion(r, c.family)),
+        ]
+        if again.ran:
+            notes += [
+                ("Check, one event per supplier incident: Holm-adjusted p-value", again.holm_p),
+                ("Check, one event per supplier incident: effect size", supplier.fmt_effect(again)),
+                ("Check, one event per supplier incident: conclusion", supplier.verdict(again)),
+            ]
+    return notes
+
+
+def supplier_figures(c: "supplier.Comparison") -> List[Figure]:
+    """The two figures taken from ``supplier_comparison.html``: records affected and attack type by group."""
+    sup, oth = c.records
+    period = f"{c.period.start_iso} to {c.period.end_iso}"
+    group_of = {True: supplier.SUPPLIER, False: supplier.OTHER}
+    edge = "#1f2937"
+
+    # ---- supplierRecordsHistogram ----------------------------------------------------------------------
+    decades, bands, a, b = supplier.histogram_parts(sup, oth)
+    rec = next(r for r in c.results if r.key == supplier.RECORDS_KEY)
+    rec_title = "Records Affected: Supplier vs Non-Supplier Events"
+    rec_sub = (f"Share of each group's events that state a records-affected figure "
+               f"({sup.known} of {sup.events} supplier, {oth.known} of {oth.events} non-supplier)")
+    rec_footer = (f"{supplier.verdict(rec).capitalize()}: Mann-Whitney U test, Holm-adjusted p = "
+                  f"{supplier.fmt_p(rec.holm_p)}, {rec.effect_name} = {rec.effect:.3f}" if rec.ran
+                  else f"Not tested: {rec.reason}")
+
+    def draw_records():
+        fig, ax = new_figure(rec_title, rec_sub)
+        x = np.arange(decades)
+        w = 0.4
+        for offset, counts, summary, colour, hatch in (
+                (-w / 2, a, sup, SUPPLIER_COLOUR, HATCHES[0]), (w / 2, b, oth, NON_SUPPLIER_COLOUR, HATCHES[1])):
+            shares = [_percent(n, summary.known) for n in counts]
+            ax.bar(x + offset, shares, w, label=f"{summary.group} (n = {summary.known})", color=alpha(colour, 0.85),
+                   edgecolor=edge, linewidth=0.3, hatch=hatch)
+            for i, (n, share) in enumerate(zip(counts, shares)):
+                if n:
+                    ax.text(i + offset, share, f"{share:.0f}%", ha="center", va="bottom", fontsize=6.5)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{compact(10 ** k)} to\n<{compact(10 ** (k + 1))}" for k in range(decades)], fontsize=7.5)
+        ax.set_xlabel("Records affected (order-of-magnitude band)", fontsize=9)
+        ax.set_ylabel("Share of the group's events (%)", fontsize=9)
+        style_axes(ax)
+        legend(ax, ncol=2)
+        return finish(fig, top=0.86, footer=rec_footer)
+
+    rec_rows = [[band, 10 ** k, 10 ** (k + 1), n_s, _percent(n_s, sup.known), n_o, _percent(n_o, oth.known)]
+                for k, (band, n_s, n_o) in enumerate(zip(bands, a, b))]
+    rec_events = [[e["event_id"], e["event_date"], group_of[supplier.is_supplier(e)], e["records"]]
+                  for e in c.events if e["records"] is not None]
+    rec_figure = Figure(
+        "supplierRecordsHistogram", rec_title,
+        "The share of supplier events and of non-supplier events in each order-of-magnitude band of records "
+        "affected, over the events of each group that state a records-affected figure; a supplier event is an "
+        "Active event linked to a supplier incident or recording a vendor or service provider.",
+        draw_records,
+        [("Records affected (x axis)", "x axis",
+          "Order-of-magnitude band of the event's records-affected figure: from the lower bound up to, not "
+          "including, ten times it (1 to 9, 10 to 99, ...)."),
+         ("Share of the group's events (%)", "y axis",
+          "Events of the group in the band as a percentage of the group's events that state a figure; each "
+          "group's bars sum to 100%."),
+         (supplier.SUPPLIER, "series",
+          "Active events linked to a supplier incident (as a customer's event or the supplier's own event) or "
+          "recording a vendor or a service provider."),
+         (supplier.OTHER, "series", "Every other Active event of the reporting period."),
+         ("records_affected_band", "data column", "The band, as whole records (1,000 to 9,999)."),
+         ("band_from / band_below", "data columns", "Lower bound of the band (included) and upper bound (excluded)."),
+         ("supplier_events / non_supplier_events", "data columns", "Events of the group in the band."),
+         ("supplier_percent / non_supplier_percent", "data columns",
+          "The same as a percentage of the group's events with a figure (the plotted heights)."),
+         ("events (sheet)", "raw data",
+          "One row per event with a records-affected figure: event id, event date, group and the figure.")],
+        ["records_affected_band", "band_from", "band_below", "supplier_events", "supplier_percent",
+         "non_supplier_events", "non_supplier_percent"],
+        rec_rows,
+        [("Supplier events with a records-affected figure", sup.known),
+         ("Supplier events with no figure (left out)", sup.missing),
+         ("Non-supplier events with a records-affected figure", oth.known),
+         ("Non-supplier events with no figure (left out)", oth.missing),
+         ("Median records affected, supplier events", supplier.quartiles(sup.values)[1] if sup.values else None),
+         ("Median records affected, non-supplier events", supplier.quartiles(oth.values)[1] if oth.values else None),
+         *_supplier_notes(c, rec)],
+        {"supplier_events": sup.known, "non_supplier_events": oth.known,
+         "supplier_percent": 100.0 if sup.known else 0.0, "non_supplier_percent": 100.0 if oth.known else 0.0},
+        source_page=SUPPLIER_PAGE, period=period,
+        extra_sheets={"events": (["deduplicated_event_id", "event_date", "group", "records_affected"], rec_events)},
+    )
+
+    # ---- supplierAttackTypeChart -----------------------------------------------------------------------
+    tab = next(t for t in c.tabulations if t.attribute.key == "attack_type")
+    att = next(r for r in c.results if r.key == "attack_type")
+    known_s, known_o = sum(tab.supplier), sum(tab.other)
+    pooled = {name for group in att.pooled for name in group}
+    att_title = "Attack Type: Supplier vs Non-Supplier Events"
+    att_sub = (f"Share of each group's events with a recorded attack type "
+               f"({known_s} supplier, {known_o} non-supplier)")
+    att_footer = (f"{supplier.verdict(att).capitalize()}: {att.method.lower()}, Holm-adjusted p = "
+                  f"{supplier.fmt_p(att.holm_p)}, {att.effect_name} = {att.effect:.3f}" if att.ran
+                  else f"Not tested: {att.reason}")
+
+    def draw_attack():
+        fig, ax = new_figure(att_title, att_sub, size=(FIG_W, max(FIG_H, 1.6 + 0.3 * len(tab.labels))))
+        y = np.arange(len(tab.labels))
+        h = 0.4
+        for offset, counts, whole, name, colour, hatch in (
+                (-h / 2, tab.supplier, known_s, supplier.SUPPLIER, SUPPLIER_COLOUR, HATCHES[0]),
+                (h / 2, tab.other, known_o, supplier.OTHER, NON_SUPPLIER_COLOUR, HATCHES[1])):
+            shares = [_percent(n, whole) for n in counts]
+            ax.barh(y + offset, shares, h, label=f"{name} (n = {whole})", color=alpha(colour, 0.85),
+                    edgecolor=edge, linewidth=0.3, hatch=hatch)
+            for i, share in enumerate(shares):
+                ax.text(share, i + offset, f" {share:.1f}%", ha="left", va="center", fontsize=6.5)
+        ax.set_yticks(y)
+        ax.set_yticklabels(tab.labels, fontsize=8)
+        ax.invert_yaxis()
+        ax.set_xlabel("Share of the group's events (%)", fontsize=9)
+        ax.margins(x=0.08)
+        style_axes(ax)
+        ax.grid(False, axis="y")
+        ax.grid(axis="x", color="#e5e7eb", linewidth=0.6)
+        legend(ax, ncol=2)
+        return finish(fig, top=0.86, footer=att_footer)
+
+    att_rows = [[name, n_s, _percent(n_s, known_s), n_o, _percent(n_o, known_o), "yes" if name in pooled else "no"]
+                for name, n_s, n_o in zip(tab.labels, tab.supplier, tab.other)]
+    att_events = [[e["event_id"], e["event_date"], group_of[supplier.is_supplier(e)],
+                   e["values"]["attack_type"][0] or f"({e['values']['attack_type'][1]})"] for e in c.events]
+    left_out = [(f"{why}: supplier / non-supplier events left out", f"{n_s} / {n_o}")
+                for why, n_s, n_o in tab.left_out]
+    att_figure = Figure(
+        "supplierAttackTypeChart", att_title,
+        "The percentage distribution of attack types among supplier events and among non-supplier events, over "
+        "the events of each group with a recorded attack type; a supplier event is an Active event linked to a "
+        "supplier incident or recording a vendor or service provider.",
+        draw_attack,
+        [("Attack type (y axis)", "y axis",
+          "DeduplicatedEvents.event_type of the event, largest category (both groups together) first."),
+         ("Share of the group's events (%)", "x axis",
+          "Events of the group with the attack type as a percentage of the group's events with a recorded "
+          "attack type; each group's bars sum to 100%."),
+         (supplier.SUPPLIER, "series",
+          "Active events linked to a supplier incident (as a customer's event or the supplier's own event) or "
+          "recording a vendor or a service provider."),
+         (supplier.OTHER, "series", "Every other Active event of the reporting period."),
+         ("supplier_events / non_supplier_events", "data columns", "Events of the group with the attack type."),
+         ("supplier_percent / non_supplier_percent", "data columns",
+          "The same as a percentage of the group's events with a recorded attack type (the plotted lengths)."),
+         ("pooled_for_test", "data column",
+          "yes when the category was pooled with other sparse categories for the chi-squared test (expected "
+          "counts too small); the chart shows every category unpooled."),
+         ("events (sheet)", "raw data",
+          "One row per event of the reporting period: event id, event date, group and attack type (in brackets "
+          "when not recorded, which the chart leaves out).")],
+        ["attack_type", "supplier_events", "supplier_percent", "non_supplier_events", "non_supplier_percent",
+         "pooled_for_test"],
+        att_rows,
+        [("Supplier events with a recorded attack type", known_s),
+         ("Non-supplier events with a recorded attack type", known_o),
+         *left_out,
+         ("Expected counts and pooling", supplier.pooling_note(att)),
+         *_supplier_notes(c, att)],
+        {"supplier_events": known_s, "non_supplier_events": known_o,
+         "supplier_percent": 100.0 if known_s else 0.0, "non_supplier_percent": 100.0 if known_o else 0.0},
+        source_page=SUPPLIER_PAGE, period=period,
+        extra_sheets={"events": (["deduplicated_event_id", "event_date", "group", "attack_type"], att_events)},
+    )
+    return [rec_figure, att_figure]
+
+
+def verify_supplier_page(c: "supplier.Comparison", page: Path, pub: Dict[str, Any]) -> None:
+    """The published supplier page must come from this snapshot and hold the charts recomputed here.
+
+    The page embeds no data block, so the check is on the charts themselves: the histogram and the
+    attack-type bars built from the recomputed comparison - every bar's size and its tooltip with the
+    count, the group total and the percentage - must appear verbatim in the published page.
+    """
+    if not page.is_file():
+        raise ExportError(f"no {page}: publish the dashboards first")
+    text = page.read_text(encoding="utf-8")
+    stamped = re.search(r'<meta name="data-snapshot" content="([^"]+)"', text)
+    if not stamped or stamped.group(1) != pub["snapshot_id"]:
+        raise ExportError(f"{page.name} is from snapshot {stamped.group(1) if stamped else '(none)'}, not the "
+                          f"published {pub['snapshot_id']}; republish first")
+    attack = next(t for t in c.tabulations if t.attribute.key == "attack_type")
+    for name, chart in (("records-affected histogram", supplier.records_histogram(*c.records)),
+                        ("attack-type chart", supplier.bar_chart(attack))):
+        if chart not in text:
+            raise ExportError(f"the {name} recomputed from the snapshot differs from the one in the published "
+                              f"{page.name}; republish first")
+
+
 def file_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -1644,6 +1884,17 @@ def write_xlsx(path: Path, fig: Figure, nn: str, provenance: List[Tuple[str, Any
         width = max([len(str(col))] + [len(str(r[i - 1])) for r in fig.rows if r[i - 1] is not None][:200])
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = min(max(width + 2, 10), 60)
     ws.freeze_panes = "B2"
+    for name, (columns, sheet_rows) in fig.extra_sheets.items():
+        extra = wb.create_sheet(name)
+        extra.append(columns)
+        for c in extra[1]:
+            c.font = Font(bold=True)
+        for row in sheet_rows:
+            extra.append([cell(v) for v in row])
+        for i, col in enumerate(columns, start=1):
+            width = max([len(str(col))] + [len(str(r[i - 1])) for r in sheet_rows[:200] if r[i - 1] is not None])
+            extra.column_dimensions[openpyxl.utils.get_column_letter(i)].width = min(max(width + 2, 10), 60)
+        extra.freeze_panes = "A2"
     notes = wb.create_sheet("notes")
     notes.append(["Item", "Value"])
     for c in notes[1]:
@@ -1752,17 +2003,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             os.chdir(root)          # the OAIC dataset is read relative to the project root
             try:
                 data = assemble_dashboard_data(str(db), period)
+                # The supplier page's window ends on the day the snapshot was taken (publication/outputs.py).
+                taken = str(pub.get("snapshot_taken_at") or pub["published_at"])[:10]
+                conn = supplier.connect_read_only(db)
+                try:
+                    comparison = supplier.collect(conn, dashboard_period(taken))
+                finally:
+                    conn.close()
             finally:
                 os.chdir(cwd)
                 gc.collect()        # the builder's sqlite connections close on collection; Windows locks the copy
         verify_against_page(data, page)
         print("Prepared data equals the data embedded in the published index.html (31 data blocks).")
+        verify_supplier_page(comparison, root / "dashboard" / SUPPLIER_PAGE, pub)
+        print(f"The supplier charts recomputed from the snapshot are the ones in the published {SUPPLIER_PAGE}.")
         figures = build_figures(data, pub)
         print(f"\nThe page has {len(PAGE_VISUALISATIONS)} visualisations; {len(DUPLICATES)} duplicate "
-              f"({', '.join(f'{k} = {v}' for k, v in DUPLICATES.items())}), so {len(figures)} figures:")
+              f"({', '.join(f'{k} = {v}' for k, v in DUPLICATES.items())}), so {len(figures)} figures; "
+              f"{len(SUPPLIER_FIGURES)} more come from {SUPPLIER_PAGE}:")
+        figures += supplier_figures(comparison)
         for k, f in enumerate(figures, start=1):
             print(f"  {k:02d}  {f.title}  [{f.page_id}]")
-        expected_ids = [p for p in PAGE_VISUALISATIONS if p not in DUPLICATES]
+        expected_ids = [p for p in PAGE_VISUALISATIONS if p not in DUPLICATES] + SUPPLIER_FIGURES
         if [f.page_id for f in figures] != expected_ids:
             raise ExportError("figure order does not follow the page")
         if args.list:
@@ -1774,11 +2036,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for p in stale:
             p.unlink()
         stamp = datetime.fromisoformat(pub.get("snapshot_taken_at") or pub["published_at"])
-        provenance = [("Source", "Australian cyber events database, published dashboard index.html"),
-                      ("Snapshot id", pub["snapshot_id"]), ("Snapshot sha-256", pub.get("snapshot_sha256")),
-                      ("Published at", pub["published_at"]),
-                      ("Reporting period", f"{period.start_iso} to {period.end_iso}"),
-                      ("Code version at publication", pub.get("code_version"))]
+        def provenance_of(f: Figure) -> List[Tuple[str, Any]]:
+            return [("Source", f"Australian cyber events database, published dashboard {f.source_page}"),
+                    ("Snapshot id", pub["snapshot_id"]), ("Snapshot sha-256", pub.get("snapshot_sha256")),
+                    ("Published at", pub["published_at"]),
+                    ("Reporting period", f.period or f"{period.start_iso} to {period.end_iso}"),
+                    ("Code version at publication", pub.get("code_version"))]
+
         print()
         for k, f in enumerate(figures, start=1):
             nn = f"{k:02d}"
@@ -1786,7 +2050,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             (out_dir / f"figure{nn}-description.txt").write_text(f.description + "\n", encoding="utf-8")
             (out_dir / f"figure{nn}-data-dictionary.txt").write_text(dictionary_text(f, nn), encoding="utf-8")
             xlsx = out_dir / f"figure{nn}-data.xlsx"
-            write_xlsx(xlsx, f, nn, provenance, stamp)
+            write_xlsx(xlsx, f, nn, provenance_of(f), stamp)
             checked = check_totals(xlsx, f)
             print(f"figure{nn}: totals match ({'; '.join(f'{c} {e:g}' for c, e, _ in checked)})")
         print("\nCross-checks:")

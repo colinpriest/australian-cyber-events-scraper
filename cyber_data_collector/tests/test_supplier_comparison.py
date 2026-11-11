@@ -255,8 +255,16 @@ def test_a_sparse_two_by_two_table_uses_fishers_exact_test():
     assert r.tested_labels == ["No-AI", sc.POOLED_LABEL] and r.exact
     assert r.method == "Fisher's exact test (2 x 2)"
     assert r.p == pytest.approx(stats.fisher_exact([[50, 1], [200, 9]])[1])
-    assert r.statistic_name == "chi-squared" and r.dof == 1        # a statistic without a direction
-    assert "Fisher's exact test" in sc.pooling_note(r)
+    # An exact test has no statistic and no df: the row must not report another test's chi-squared.
+    assert r.statistic is None and r.dof is None and r.statistic_name == ""
+    assert sc.fmt_statistic(r) == "none (exact test)"
+    assert r.effect_name == "Cramér's V" and 0 <= r.effect <= 1
+    r.holm_p = r.p
+    sentence = sc.conclusion(r, family=9)
+    assert "Fisher's exact test (2 x 2): exact p = " in sentence and "chi-squared" not in sentence
+    row = sc.tests_table([r], family=9)
+    assert "<td class=n>none (exact test)</td><td class=n>-</td>" in row and "chi-squared" not in row
+    assert "Fisher's exact test" in sc.pooling_note(r) and "no test statistic" in sc.pooling_note(r)
 
 
 def test_empty_categories_are_dropped_and_untestable_tables_say_why():

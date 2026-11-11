@@ -254,7 +254,7 @@ class TestResult:
     sparse_after: Optional[float] = None
     min_expected: Optional[float] = None
     residuals: Dict[str, float] = field(default_factory=dict)  # supplier row, adjusted standardised
-    exact: bool = False                          # the p-value is Fisher's exact, not from the chi-squared statistic
+    exact: bool = False                          # Fisher's exact test: an exact p-value and no test statistic
     # ranks
     superiority: Optional[float] = None         # P(supplier > non-supplier) + half the ties; says which way
 
@@ -298,18 +298,20 @@ def categorical_test(key: str, label: str, labels: Sequence[str], supplier: Sequ
     result.tested_supplier, result.tested_other = a, b
     result.sparse_after = sparse_share(expected)
     result.min_expected = float(expected.min())
-    result.statistic_name, result.statistic, result.dof = "chi-squared", chi2, len(groups) - 1
     result.effect_name = "Cramér's V"
     result.effect = math.sqrt(chi2 / n)            # two groups: min(rows, columns) - 1 = 1
     row_share, col_share = observed.sum(axis=1) / n, observed.sum(axis=0) / n
     adjusted = (observed - expected) / np.sqrt(expected * np.outer(1 - row_share, 1 - col_share))
     result.residuals = {name: float(z) for name, z in zip(result.tested_labels, adjusted[0])}
     if len(groups) == 2 and is_sparse(expected):
-        # The statistic stays Pearson's chi-squared (it has no direction); only the p-value is exact.
+        # An exact test has no test statistic and no degrees of freedom: the row reports neither (a
+        # chi-squared statistic beside "Fisher's exact test" would name one test and report another). The
+        # effect size is still Cramér's V, the phi coefficient of the 2 x 2 table.
         result.method, result.exact = "Fisher's exact test (2 x 2)", True
         result.p = float(stats.fisher_exact(observed, alternative="two-sided")[1])
     else:
         result.method = "Chi-squared test of homogeneity"
+        result.statistic_name, result.statistic, result.dof = "chi-squared", chi2, len(groups) - 1
         result.p = float(stats.chi2.sf(chi2, result.dof))
     return result
 
@@ -373,6 +375,8 @@ def fmt_short(value: float) -> str:
 def fmt_statistic(r: TestResult) -> str:
     if not r.ran:
         return "-"
+    if r.exact:
+        return "none (exact test)"
     if r.statistic_name == "U":
         return f"U = {r.statistic:,.0f}"
     return f"chi-squared = {r.statistic:.2f}"
@@ -417,9 +421,10 @@ def join_words(items: Sequence[str]) -> str:
 # --- generated sentences ---------------------------------------------------------------------------------
 
 def _evidence(r: TestResult) -> str:
+    if r.exact:
+        return f"{r.method}: exact p = {fmt_p(r.p)}, Holm-adjusted p = {fmt_p(r.holm_p)}"
     dof = f", {r.dof} df" if r.dof is not None else ""
-    exact = "exact " if r.exact else ""
-    return f"{r.method}: {fmt_statistic(r)}{dof}, {exact}p = {fmt_p(r.p)}, Holm-adjusted p = {fmt_p(r.holm_p)}"
+    return f"{r.method}: {fmt_statistic(r)}{dof}, p = {fmt_p(r.p)}, Holm-adjusted p = {fmt_p(r.holm_p)}"
 
 
 def conclusion(r: TestResult, family: int) -> str:
@@ -480,8 +485,8 @@ def pooling_note(r: TestResult) -> str:
     else:
         parts.append(f"Expected counts: {before} (smallest {r.min_expected:.1f}).")
     if r.exact:
-        parts.append("The 2 x 2 table still fails the expected-count rule, so the p-value is from Fisher's "
-                     "exact test, not from the chi-squared statistic.")
+        parts.append("The 2 x 2 table still fails the expected-count rule, so it is tested with Fisher's exact "
+                     "test, which gives an exact p-value and has no test statistic.")
     return " ".join(parts)
 
 
@@ -1139,7 +1144,8 @@ def bin_label(k: int, decades: int, top: float) -> str:
     return f"{fmt_count(10 ** k)} to {fmt_count(upper)}"
 
 
-def _histogram_parts(supplier: RecordsSummary, other: RecordsSummary) -> Tuple[int, List[str], List[int], List[int]]:
+def histogram_parts(supplier: RecordsSummary, other: RecordsSummary) -> Tuple[int, List[str], List[int], List[int]]:
+    """(powers of ten on the axis, bin labels, supplier counts, non-supplier counts) of the records histogram."""
     decades = log_decades(supplier, other)
     top = max([v for s in (supplier, other) for v in s.values], default=1.0)
     labels = [bin_label(k, decades, top) for k in range(decades)]
@@ -1153,7 +1159,7 @@ def records_histogram(supplier: RecordsSummary, other: RecordsSummary) -> str:
     height is the share of the group's events with a count that fall in the bin (the bars of one group sum to
     100%); the count is in the tooltip and in :func:`histogram_table`.
     """
-    decades, labels, a, b = _histogram_parts(supplier, other)
+    decades, labels, a, b = histogram_parts(supplier, other)
     shares = [n / supplier.known for n in a if supplier.known] + [n / other.known for n in b if other.known]
     scale = max(shares, default=0.0)
     bins = []
@@ -1172,7 +1178,7 @@ def records_histogram(supplier: RecordsSummary, other: RecordsSummary) -> str:
 
 def histogram_table(supplier: RecordsSummary, other: RecordsSummary) -> str:
     """The histogram's numbers: events and share of the group's events with a count, per power of ten."""
-    _, labels, a, b = _histogram_parts(supplier, other)
+    _, labels, a, b = histogram_parts(supplier, other)
     rows = [f"<tr><td>{_E(label)}</td><td class=n>{n_s:,}</td><td class=n>{fmt_pct(n_s, supplier.known)}</td>"
             f"<td class=n>{n_o:,}</td><td class=n>{fmt_pct(n_o, other.known)}</td></tr>"
             for label, n_s, n_o in zip(labels, a, b)]
@@ -1317,8 +1323,9 @@ def methods_text(c: Comparison) -> List[str]:
         f"{MIN_EXPECTED:g}, or one is under {MIN_ANY_EXPECTED:g}, the category with the smallest total is pooled "
         "until the rule holds or two categories remain - with its smaller neighbour for ordered categories "
         f"(size band, severity, ASD category, half-year), into one \"{POOLED_LABEL}\" group otherwise. A 2 x 2 "
-        "table that still fails the rule takes its p-value from Fisher's exact test (two-sided); the statistic "
-        "shown is still Pearson's chi-squared. The pooled categories "
+        "table that still fails the rule is tested with Fisher's exact test (two-sided), which gives an exact "
+        "p-value and has no test statistic or degrees of freedom; its effect size is still Cramér's V (the phi "
+        "coefficient of the 2 x 2 table). The pooled categories "
         "are named under each chart; the charts and tables show every category unpooled.",
         "Unknown and missing values are left out of each test and reported per group under each chart.",
         f"Records affected: a two-sided Mann-Whitney U test on the events with a count. Its effect size is the "

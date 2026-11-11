@@ -3028,6 +3028,12 @@ python scripts/export_paper_figures.py                 # dashboard/Figures: the 
 (vector), with `figureNN-description.txt`, `figureNN-data-dictionary.txt` and `figureNN-data.xlsx` (the
 plotted data, and a `notes` sheet with the chart's exclusions and the snapshot it came from). The page has
 31 visualisations and gives 30 figures, because the sector ratio chart plots the sector chart's two series.
+Two more follow from `supplier_comparison.html`, computed on the same snapshot: figure 31, the histogram of
+records affected for supplier against non-supplier events (one bin per power of ten), and figure 32, the two
+groups' attack-type distributions. Their xlsx also lists the events behind the chart (sheet `events`) and
+carries the test, its Holm-adjusted p-value, the effect size and the generated conclusion in `notes`; the
+export stops unless the recomputed charts are found, bar for bar and tooltip for tooltip, in the published
+page.
 The data is recomputed from the snapshot named in `dashboard/publication.json` over the publication's
 period. The run stops (exit 1) unless that data equals the data embedded in the published page and the OAIC
 dataset matches the publication's hash. Every chart's totals are read back from its xlsx. Reruns give
@@ -3186,7 +3192,8 @@ supplier events with non-supplier events attribute by attribute and tests each d
   Mann-Whitney U test for records affected. UNKNOWN and missing values are left out of the test and counted per group.
   When more than 20% of expected counts are under 5 (or one is under 1), the category with the smallest total is
   pooled until the rule holds or two categories remain: with its smaller neighbour for ordered categories, into one
-  pooled group otherwise. A 2 x 2 table that still fails takes its p-value from Fisher's exact test. The pooled
+  pooled group otherwise. A 2 x 2 table that still fails is tested with Fisher's exact test (an exact p-value; no test
+  statistic or df is shown). The pooled
   categories are named under the chart. p-values are Holm-adjusted across the tests that ran.
 * **Wording:** every sentence of the conclusions is generated from the numbers. A result that is not significant after
   Holm adjustment is "no evidence of a difference", with no direction, whatever its raw p-value. A significant one is
