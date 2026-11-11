@@ -25,6 +25,13 @@ affected and the distribution of attack types, each for supplier events against 
 Their xlsx also holds the events behind the chart (sheet ``events``), and the recomputed chart must be
 found, tooltip for tooltip, in the published page.
 
+Last comes one figure from ``dashboard/recurrence.html`` (``scripts/recurrence_size_plot.py``): the
+recurrence rate of each organisation size band, with the box and whiskers of that rate when the band's
+organisations are resampled. It is drawn from the main recurrence run's ``recurrent_event_spells.csv``
+under ``analysis/recurrent_timing``; the run must be computed on the published snapshot, and the band
+rates must be the ones the published page shows. Its xlsx also lists the organisations (sheet
+``organisations``).
+
 Any mismatch stops the export (exit 1) instead of writing figures that differ from the page.
 The live database is never opened: the snapshot is decompressed into a temporary folder.
 
@@ -70,6 +77,7 @@ if str(REPO_ROOT) not in sys.path:
 from cyber_data_collector.publication import snapshot as snapshots  # noqa: E402
 from cyber_data_collector.reporting.population import dashboard_period  # noqa: E402
 from scripts import build_supplier_comparison as supplier  # noqa: E402
+from scripts import recurrence_size_plot as size_plot  # noqa: E402
 from scripts.build_static_dashboard import assemble_dashboard_data  # noqa: E402
 
 logger = logging.getLogger("export_paper_figures")
@@ -148,6 +156,11 @@ DUPLICATES = {"oaicSectorRatioChart": "oaicSectorsChart"}
 # The figures taken from supplier_comparison.html, after those of index.html.
 SUPPLIER_PAGE = "supplier_comparison.html"
 SUPPLIER_FIGURES = ["supplierRecordsHistogram", "supplierAttackTypeChart"]
+
+# The figure taken from recurrence.html, after the supplier figures: the right panel of its size chart.
+RECURRENCE_PAGE = "recurrence.html"
+RECURRENCE_RUN = Path("analysis") / "recurrent_timing"
+RECURRENCE_FIGURES = ["recurrenceSizeBandRates"]
 # The supplier page's two series colours (its light theme).
 SUPPLIER_COLOUR = "#eb6834"
 NON_SUPPLIER_COLOUR = "#2a78d6"
@@ -1741,6 +1754,166 @@ def supplier_figures(c: "supplier.Comparison") -> List[Figure]:
     return [rec_figure, att_figure]
 
 
+# --------------------------------------------------------------------------------------------------------
+# Recurrence rate by organisation size band (recurrence.html)
+# --------------------------------------------------------------------------------------------------------
+def read_recurrence_run(run_dir: Path, pub: Dict[str, Any]) -> Tuple["pd.DataFrame", Dict[str, Any], Dict[str, Any]]:
+    """The main recurrence run's spells, summary and inputs; the run must be on the published snapshot."""
+    import pandas as pd
+
+    spells, summary, inputs = (run_dir / "recurrent_event_spells.csv", run_dir / "analysis_summary.json",
+                               run_dir / "analysis_inputs.json")
+    for path in (spells, summary, inputs):
+        if not path.is_file():
+            raise ExportError(f"no {path}: run scripts/analyze_recurrent_timing.py on the published snapshot first")
+    inputs_json = json.loads(inputs.read_text(encoding="utf-8"))
+    if inputs_json.get("snapshot_id") != pub["snapshot_id"]:
+        raise ExportError(f"the recurrence run in {run_dir} is on snapshot {inputs_json.get('snapshot_id')}, not "
+                          f"the published {pub['snapshot_id']}; rerun the analyses on the published snapshot")
+    return pd.read_csv(spells), json.loads(summary.read_text(encoding="utf-8")), inputs_json
+
+
+def recurrence_size_parts(spells: "pd.DataFrame") -> Tuple["pd.DataFrame", Dict[str, np.ndarray], List[Dict[str, Any]]]:
+    """Organisations, resampled band rates and band rows, exactly as the page computes them."""
+    orgs = size_plot.organisation_rates(spells)
+    resampled = size_plot.bootstrap_rates(orgs)
+    rows = size_plot.band_table(orgs, resampled)
+    if not rows:
+        raise ExportError("no organisation with a known size and follow-up in the recurrence spells")
+    return orgs, resampled, rows
+
+
+def verify_recurrence_page(rows: List[Dict[str, Any]], page: Path, pub: Dict[str, Any]) -> None:
+    """The published recurrence page must come from this snapshot and show these band rates."""
+    import html as html_lib
+
+    if not page.is_file():
+        raise ExportError(f"no {page}: publish the dashboards first")
+    text = page.read_text(encoding="utf-8")
+    stamped = re.search(r'<meta name="data-snapshot" content="([^"]+)"', text)
+    if not stamped or stamped.group(1) != pub["snapshot_id"]:
+        raise ExportError(f"{page.name} is from snapshot {stamped.group(1) if stamped else '(none)'}, not the "
+                          f"published {pub['snapshot_id']}; republish first")
+    if f'alt="{html_lib.escape(size_plot.alt_text(rows))}"' not in text:
+        raise ExportError(f"the size-band rates recomputed from the recurrence run ({size_plot.alt_text(rows)}) "
+                          f"are not the ones in the published {page.name}; republish first")
+
+
+def recurrence_size_figure(spells: "pd.DataFrame", summary: Dict[str, Any], inputs: Dict[str, Any]) -> Figure:
+    """The right panel of recurrence.html's size chart: each size band's overall recurrence rate."""
+    orgs, resampled, rows = recurrence_size_parts(spells)
+    bands = [row["band"] for row in rows]
+    stats = {band: size_plot.box_stats(resampled, band) for band in bands}
+    unknown = orgs[orgs["size"] == "UNKNOWN"]
+    executive = summary.get("executive_summary") or {}
+    size_model = executive.get("size_model") or {}
+    ratios = size_model.get("rate_ratio_vs_small") or {}
+    answer = next((q.get("answer") for q in executive.get("questions", []) if q.get("key") == "size"), None)
+    if not ratios or answer is None:
+        raise ExportError("the recurrence run's analysis_summary.json has no size model in its executive summary")
+    title = "Recurrence Rate by Organisation Size Band"
+    subtitle = ("Repeats per 100 organisation-years of follow-up (unadjusted); box and whiskers: middle 50% and "
+                "95% of the rate when each band's organisations are resampled")
+    steps = ", ".join(f"{band} {ratios[band]:.1f}" for band in bands if band != "SMALL" and band in ratios)
+    p = size_model.get("bootstrap_p")
+    footer = (f"Adjusted (monotone model with elapsed-time bands, prior event number and a calendar trend): "
+              f"{steps} times SMALL; bootstrap p = {p:.3f}. Organisations of unknown size ({len(unknown)}) are "
+              f"not shown." if p is not None else None)
+
+    def draw():
+        fig, ax = new_figure(title, subtitle)
+        data = [resampled[band] for band in bands]
+        ax.boxplot(data, positions=range(len(bands)), widths=0.5, whis=(2.5, 97.5), showfliers=False,
+                   patch_artist=True,
+                   boxprops={"facecolor": size_plot.ACCENT_FILL, "edgecolor": size_plot.ACCENT, "linewidth": 1},
+                   medianprops={"color": size_plot.ACCENT, "linewidth": 2},
+                   whiskerprops={"color": size_plot.ACCENT, "linewidth": 1},
+                   capprops={"color": size_plot.ACCENT, "linewidth": 1})
+        highest = max(row["high"] for row in rows)
+        for i, row in enumerate(rows):
+            ax.text(i, row["high"] + highest * 0.02, f"{row['rate']:.1f}", ha="center", va="bottom", fontsize=9)
+        ax.set_ylim(0, highest * 1.14)
+        ax.set_xticks(range(len(bands)))
+        ax.set_xticklabels([f"{row['band']}\n{row['organisations']} organisations\n{row['repeats']} repeats"
+                            for row in rows], fontsize=8)
+        ax.set_ylabel("Repeats per 100 organisation-years", fontsize=9)
+        style_axes(ax)
+        return finish(fig, top=0.84, footer=footer)
+
+    data_rows = [[row["band"], row["organisations"], row["with_repeat"], row["repeats"], round(row["years"], 4),
+                  round(row["rate"], 4), round(row["low"], 4), round(row["high"], 4),
+                  round(stats[row["band"]]["box_low"], 4), round(stats[row["band"]]["box_median"], 4),
+                  round(stats[row["band"]]["box_high"], 4), round(row["org_q3"], 4), ratios.get(row["band"])]
+                 for row in rows]
+    org_rows = [[int(r.entity_id), r.size, int(r.repeats), round(float(r.years), 4), round(float(r.rate), 4),
+                 "yes" if r.size in bands else "no (unknown size)"]
+                for r in orgs.sort_values(["size", "entity_id"]).itertuples()]
+    dictionary = [
+        ("Organisation size band (x axis)", "x axis",
+         "The victim organisation's size band, SMALL (fewer than 20 employees or under A$10m revenue), MEDIUM "
+         "(20-199 or A$10m-100m), LARGE (200-4,999 or A$100m-1b) or HUGE (5,000+ or over A$1b), reconciled "
+         "across the names one organisation is stored under."),
+        ("Repeats per 100 organisation-years", "y axis",
+         "The band's recurrence rate: its organisations' repeat incidents divided by their years of follow-up "
+         "after an incident, times 100. Unadjusted."),
+        ("Number above each box", "label", "The band's overall rate (column rate_per_100_org_years)."),
+        ("Box", "group spread",
+         "The middle 50% (25th to 75th percentile) of the band's rate over 4,000 resamples of the band's "
+         "organisations with replacement; it shows how sure the rate is, not how organisations differ."),
+        ("Line in the box", "group spread", "The median of the resampled rates."),
+        ("Whiskers", "group spread", "The 2.5th to 97.5th percentiles of the resampled rates (a 95% interval)."),
+        ("organisations / repeats (axis labels)", "group size",
+         "Organisations in the band with follow-up, and the repeat incidents among them."),
+        ("band", "data column", "Size band."),
+        ("organisations", "data column", "Victim organisations in the band with follow-up after an incident."),
+        ("organisations_with_repeat", "data column", "Of those, organisations with at least one repeat incident."),
+        ("repeats", "data column", "Repeat incidents: a later incident of the same organisation."),
+        ("follow_up_years", "data column", "Total follow-up of the band's organisations, in years (365.25 days)."),
+        ("rate_per_100_org_years", "data column", "repeats / follow_up_years x 100 (the number plotted above each box)."),
+        ("interval_low / interval_high", "data columns", "Whisker ends: 2.5th and 97.5th percentiles of the resampled rate."),
+        ("box_low / box_median / box_high", "data columns", "25th, 50th and 75th percentiles of the resampled rate."),
+        ("upper_quartile_of_organisation_rates", "data column",
+         "75th percentile of the band's organisations' own rates (0 where at least three quarters have no repeat)."),
+        ("adjusted_rate_ratio_vs_small", "data column",
+         "The band's rate relative to SMALL in the adjusted monotone model of the recurrence analysis "
+         "(elapsed-time bands, prior event number and a calendar trend held)."),
+        ("organisations (sheet)", "raw data",
+         "One row per organisation with follow-up: entity id, size band, repeats, years of follow-up, its own rate "
+         "and whether it is plotted (unknown size is not)."),
+    ]
+    notes = [
+        ("Unit", "A victim organisation's follow-up after each recorded incident (a spell); a repeat is its next "
+                 "incident. Events before 2020 are not analysed."),
+        ("Adjustment", "None in the plotted rates. Size also stands in for visibility, attack exposure and the value "
+                       "of targets, which are not measured separately."),
+        ("Adjusted effect and test (generated, executive summary)", answer),
+        ("Adjusted rate ratios vs SMALL", "; ".join(f"{k} {v:.3f}" for k, v in ratios.items())),
+        ("Bootstrap p-value of the adjusted size effect", p),
+        ("Organisations of unknown size (not plotted)", len(unknown)),
+        ("Repeats among organisations of unknown size", int(unknown["repeats"].sum())),
+        ("Resamples per band", size_plot.BOOTSTRAP_REPLICATES),
+        ("Resampling seed", size_plot.BOOTSTRAP_SEED),
+        ("Recurrence run", str(RECURRENCE_RUN).replace("\\", "/")),
+        ("Recurrence run censor date", inputs.get("censor_date")),
+        ("Recurrence run recorded at", inputs.get("recorded_at")),
+    ]
+    totals = {"organisations": sum(r["organisations"] for r in rows), "repeats": sum(r["repeats"] for r in rows)}
+    return Figure(
+        RECURRENCE_FIGURES[0], title,
+        "The recurrence rate of cyber incidents (repeat incidents per 100 organisation-years of follow-up) for "
+        "victim organisations in each size band, with the uncertainty of each band's rate from resampling its "
+        "organisations; unadjusted.",
+        draw, dictionary,
+        ["band", "organisations", "organisations_with_repeat", "repeats", "follow_up_years", "rate_per_100_org_years",
+         "interval_low", "interval_high", "box_low", "box_median", "box_high", "upper_quartile_of_organisation_rates",
+         "adjusted_rate_ratio_vs_small"],
+        data_rows, notes, totals, source_page=RECURRENCE_PAGE,
+        period=f"2020-01-01 to {inputs.get('censor_date')} (recurrence follow-up, censored at the last ingest)",
+        extra_sheets={"organisations": (["entity_id", "size_band", "repeats", "follow_up_years",
+                                         "rate_per_100_org_years", "plotted"], org_rows)},
+    )
+
+
 def verify_supplier_page(c: "supplier.Comparison", page: Path, pub: Dict[str, Any]) -> None:
     """The published supplier page must come from this snapshot and hold the charts recomputed here.
 
@@ -2017,14 +2190,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("Prepared data equals the data embedded in the published index.html (31 data blocks).")
         verify_supplier_page(comparison, root / "dashboard" / SUPPLIER_PAGE, pub)
         print(f"The supplier charts recomputed from the snapshot are the ones in the published {SUPPLIER_PAGE}.")
+        spells, run_summary, run_inputs = read_recurrence_run(root / RECURRENCE_RUN, pub)
+        verify_recurrence_page(recurrence_size_parts(spells)[2], root / "dashboard" / RECURRENCE_PAGE, pub)
+        print(f"The size-band rates from the recurrence run (snapshot {run_inputs['snapshot_id']}) are the ones in "
+              f"the published {RECURRENCE_PAGE}.")
         figures = build_figures(data, pub)
         print(f"\nThe page has {len(PAGE_VISUALISATIONS)} visualisations; {len(DUPLICATES)} duplicate "
               f"({', '.join(f'{k} = {v}' for k, v in DUPLICATES.items())}), so {len(figures)} figures; "
               f"{len(SUPPLIER_FIGURES)} more come from {SUPPLIER_PAGE}:")
         figures += supplier_figures(comparison)
+        figures.append(recurrence_size_figure(spells, run_summary, run_inputs))
         for k, f in enumerate(figures, start=1):
             print(f"  {k:02d}  {f.title}  [{f.page_id}]")
-        expected_ids = [p for p in PAGE_VISUALISATIONS if p not in DUPLICATES] + SUPPLIER_FIGURES
+        expected_ids = [p for p in PAGE_VISUALISATIONS if p not in DUPLICATES] + SUPPLIER_FIGURES + RECURRENCE_FIGURES
         if [f.page_id for f in figures] != expected_ids:
             raise ExportError("figure order does not follow the page")
         if args.list:

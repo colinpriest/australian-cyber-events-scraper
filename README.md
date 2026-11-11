@@ -3033,7 +3033,12 @@ records affected for supplier against non-supplier events (one bin per power of 
 groups' attack-type distributions. Their xlsx also lists the events behind the chart (sheet `events`) and
 carries the test, its Holm-adjusted p-value, the effect size and the generated conclusion in `notes`; the
 export stops unless the recomputed charts are found, bar for bar and tooltip for tooltip, in the published
-page.
+page. Figure 33 is the right panel of `recurrence.html`'s size chart: each organisation size band's recurrence
+rate per 100 organisation-years (unadjusted), with the box and whiskers of that rate when the band's
+organisations are resampled, drawn from the main recurrence run (`analysis/recurrent_timing`) by the page's own
+code (`recurrence_size_plot.py`). Its xlsx lists the organisations (sheet `organisations`) and carries the
+adjusted size effect and its test from the run's executive summary; the export stops unless the run is on the
+published snapshot and the published page shows the same band rates.
 The data is recomputed from the snapshot named in `dashboard/publication.json` over the publication's
 period. The run stops (exit 1) unless that data equals the data embedded in the published page and the OAIC
 dataset matches the publication's hash. Every chart's totals are read back from its xlsx. Reruns give

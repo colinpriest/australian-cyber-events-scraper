@@ -95,6 +95,18 @@ def band_table(orgs: pd.DataFrame, resampled: Dict[str, np.ndarray]) -> List[Dic
     return rows
 
 
+def alt_text(rows: List[Dict[str, Any]]) -> str:
+    """The figure's alt text on the page; the paper-figure export checks the published page holds it."""
+    return "Recurrence rate by organisation size: " + ", ".join(
+        f"{row['band']} {row['rate']:.1f} per 100 organisation-years" for row in rows)
+
+
+def box_stats(resampled: Dict[str, np.ndarray], band: str) -> Dict[str, float]:
+    """The right panel's box (25th, 50th, 75th percentiles) and whiskers (2.5th, 97.5th) for one band."""
+    p = np.percentile(resampled[band], [2.5, 25, 50, 75, 97.5])
+    return dict(zip(("whisker_low", "box_low", "box_median", "box_high", "whisker_high"), map(float, p)))
+
+
 def _style(ax: Any) -> None:
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -167,8 +179,7 @@ def section_html(spells: pd.DataFrame) -> str:
     if not rows:
         raise ValueError("No organisation with a known size and follow-up in the recurrence spells.")
     encoded = base64.b64encode(plot_png(orgs, resampled, rows)).decode("ascii")
-    alt = "Recurrence rate by organisation size: " + ", ".join(
-        f"{row['band']} {row['rate']:.1f} per 100 organisation-years" for row in rows)
+    alt = alt_text(rows)
     body = "".join(
         f"<tr><td>{html.escape(row['band'])}</td><td>{row['organisations']}</td><td>{row['with_repeat']}</td>"
         f"<td>{row['repeats']}</td><td>{row['years']:,.0f}</td><td>{row['rate']:.1f}</td>"
