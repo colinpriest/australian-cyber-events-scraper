@@ -3832,7 +3832,41 @@ python scripts/export/export_events_excel.py --exclude-unknown-records --limit 1
 # Full database export (all columns)
 python scripts/export/export_cyber_events.py --format csv --output events.csv --detailed
 python scripts/export/export_cyber_events.py --format excel --output events.xlsx --detailed --anonymize
+
+# Every table of the database, one table per sheet (default: the latest published snapshot)
+python scripts/export/export_database_excel.py
+python scripts/export/export_database_excel.py --snapshot-id <id> --out exports/db.xlsx
+python scripts/export/export_database_excel.py --db PATH
 ```
+
+`export_database_excel.py` writes every table, with every column and row, to
+`exports/database_<snapshot id>.xlsx` (gitignored). Its default input is the
+published snapshot `dashboard/publication.json` names (it fails if that differs
+from the newest published snapshot retained in `instance/snapshots/`; pass
+`--snapshot-id` to choose), so the workbook matches the published dashboards; the
+snapshot is decompressed to a temporary folder and checked against its hash.
+Every database is opened read-only. The first sheet, `Index`, records the source
+(snapshot id, hash, when taken and published) and lists each table with its
+sheet(s), row and column counts and notes. Each table sheet has a bold header,
+frozen panes and an autofilter. Excel's limits are handled explicitly, every case
+counted on the Index and printed at the end, never silently:
+
+| Limit | Handling |
+|---|---|
+| sheet names: 31 characters, unique, none of `[]:*?/\`, no leading/trailing `'`, not `History` | the table gets a mapped name (cut, characters replaced, `~n` tag), noted on the Index |
+| 1,048,576 rows a sheet, header included | the table continues on `<name> (2)`, `<name> (3)`, ..., each with a header |
+| 32,767 characters a cell (UTF-16 units) | the value is cut and ends `... [TRUNCATED: shown of total characters shown]` |
+| control characters illegal in XLSX (and U+FFFE/U+FFFF) | removed |
+| BLOBs (embedding vectors) | written as `[BLOB: n bytes not exported]` |
+| integers beyond 2^53, non-finite reals | written as text, so no digit is lost |
+| text starting with `=` | written as text, never a formula |
+| text that is not valid UTF-8 | decoded with U+FFFD |
+
+Views are listed on the Index, not exported. The workbook is written in openpyxl's
+write-only mode to a temporary file and moved into place, so a failure leaves the
+previous workbook (or none). Write-only mode streams rows, but every distinct
+string stays in the shared-strings table until the save, so memory grows with the
+amount of distinct text, not the row count.
 
 An anonymised column never carries the original text. A failed anonymisation
 (LLM error, empty answer, an answer still naming the victim or attacker or

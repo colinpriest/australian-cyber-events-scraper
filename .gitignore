@@ -25,6 +25,7 @@ instance/
 *.sql
 
 # Generated exports and reports
+exports/
 *.xlsx
 *.csv
 # ...except the committed statistical analysis outputs, which are results, not exports
