@@ -5189,6 +5189,22 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
     # One explicit reporting window for every chart: 2020-01-01 to the build date,
     # inclusive (cyber_data_collector.reporting.population).
     reporting_period = dashboard_period()
+    data = assemble_dashboard_data(db_path, reporting_period)
+    if check_only:
+        return ''
+    return write_dashboard_file(data, reporting_period, db_path, out_dir)
+
+
+def assemble_dashboard_data(db_path: str, reporting_period: ReportingPeriod) -> Dict[str, Any]:
+    """Every chart's prepared data, reconciled to the reporting population.
+
+    The data ``build_html`` embeds in index.html. ``scripts/export_paper_figures.py``
+    calls it with the published snapshot and the publication's reporting period, so
+    the paper's figures are drawn from exactly what the published page shows.
+
+    Raises:
+        ReconciliationError: if any chart total disagrees with the population.
+    """
     start_date = reporting_period.start_iso
     end_date = reporting_period.end_iso
 
@@ -5296,10 +5312,14 @@ def build_dashboard_file(db_path: str = 'instance/cyber_events.db',
                 reporting_period.clipped_to(series_end_date), monthly_counts),
             context="dashboard",
         )
+    return data
 
-    if check_only:
-        return ''
 
+def write_dashboard_file(data: Dict[str, Any], reporting_period: ReportingPeriod,
+                         db_path: str, out_dir: str) -> str:
+    """Write index.html (and the AI incident list it links to) from assembled data."""
+    start_date = reporting_period.start_iso
+    end_date = reporting_period.end_iso
     out_dir_path = Path(out_dir)
     out_dir_path.mkdir(parents=True, exist_ok=True)
     out_file = out_dir_path / 'index.html'
